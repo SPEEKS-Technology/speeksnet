@@ -55869,7 +55869,10 @@ function _pqHtml() {
     // Train The Checker is RETIRED from the screen (Ethan, 2026-10-14: "we don't
     // need it anymore"). pqTrainOpen and the trainer stay in the file, and his
     // 395 labels stay in pq_photo_labels — framing is to be revisited.
-    const train = '';
+    // Confirm Shots (2026-10-16) takes its place: the gold set's shot labels.
+    const train = _pqcMayUse() ? `<div class="pqt-entry">
+        <button type="button" class="pqt-btn" onclick="pqConfirmOpen()">Confirm Shots</button>
+        <span>Say which shot each photo is — the answer key a cheaper model is tested against.</span></div>` : '';
     return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : '') + train,
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
@@ -56132,6 +56135,265 @@ function _pqTrainRender() {
     }
     el.innerHTML = `<div class="pqt-box">${_pqTrainHtml()}</div>`;
 }
+
+// ============================================================================
+// CONFIRM SHOTS — Ethan says which shot each photo is (2026-10-16)
+// ============================================================================
+// The answer key for a local vision model. The gold set (scripts/pq-gold/)
+// found no human shot labels in the database: the trainer above judged framing
+// beside the model's shot and could not say the shot was wrong. Here a graded
+// listing's photos come up one at a time with the saved grade's label
+// prefilled. The label is kept or changed, and the whole listing is saved to
+// pq_shot_labels (0148) when its last photo is answered.
+//
+// ⚠️ ONE KEY PER PHOTO. Most labels are right, so Enter keeps the label and
+// moves on; a listing that is right throughout is Shift+Enter, once. A wrong
+// label is one key: 1–9, 0 for the sheet's first ten shots, A S D F G H J K L ;
+// for the next ten, X = Extra, B = Box. Shift with a shot key ADDS it (one photo
+// can be two shots: front AND lens open). ← goes back. Flags are optional, and
+// click only, so they can't cost a keystroke on the common path.
+// ⚠️ DM / CEO ONLY — the server enforces it too. Nothing here calls a model.
+// The queue order (busiest sheet with the least gold first) is the server's.
+let _pqc = null;
+const _PQC_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'];
+const _PQC_FLAGS = [['screen_on', 'Screen On'], ['label_legible', 'Label Legible'], ['blurry', 'Blurry'],
+                    ['turned', 'Turned'], ['cropped', 'Cropped']];
+const _pqcMayUse = () => ['district manager', 'ceo'].includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+
+async function pqConfirmOpen(sheet) {
+    if (!_pqcMayUse()) return;
+    _pqc = { sheet: sheet || '', data: null, li: 0, pi: 0, busy: true, err: null, skip: new Set(), saved: 0, started: Date.now() };
+    document.addEventListener('keydown', _pqcKey);
+    _pqcRender();
+    await _pqcLoad();
+}
+window.pqConfirmOpen = pqConfirmOpen;
+
+async function _pqcLoad(sheet) {
+    const c = _pqc;
+    if (!c) return;
+    if (sheet !== undefined) c.sheet = sheet;
+    c.busy = true; c.err = null; _pqcRender();
+    try {
+        const d = await _pqFetch(`?view=confirm&sheet=${encodeURIComponent(c.sheet)}&skip=${encodeURIComponent([...c.skip].join(','))}`);
+        if (_pqc !== c) return;
+        for (const id of d.misaligned || []) c.skip.add(id);
+        // Each photo starts from the grade's label; `seen` marks it answered.
+        for (const l of d.listings || []) {
+            l.pickedSheet = l.sheet;
+            for (const p of l.photos) { p.shots = [...p.said]; p.flags = new Set(); p.seen = false; }
+        }
+        c.data = d; c.sheet = d.sheet || ''; c.li = 0; c.pi = 0;
+    } catch (e) { c.err = e.message || String(e); }
+    c.busy = false;
+    _pqcRender();
+}
+
+function pqConfirmClose() {
+    document.removeEventListener('keydown', _pqcKey);
+    _pqc = null;
+    const el = document.getElementById('pqConfirmOverlay');
+    if (el) el.remove();
+}
+window.pqConfirmClose = pqConfirmClose;
+
+const _pqcListing = () => _pqc && _pqc.data && _pqc.data.listings[_pqc.li];
+// The shots offered for a listing: its sheet's, then Extra and Box, the two
+// labels the grading prompt uses for anything that is not a sheet shot.
+function _pqcChoices(l) {
+    const g = (_pqc.data.guide || {})[l.pickedSheet];
+    const shots = g ? g.shots.map(s => s.label) : [];
+    return [...new Set(shots)];
+}
+
+function pqConfirmPick(i, add) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    const p = l.photos[_pqc.pi];
+    const label = i === 'x' ? 'Extra' : i === 'b' ? 'Box' : _pqcChoices(l)[i];
+    if (!p || !label) return;
+    if (add) p.shots = p.shots.includes(label) ? p.shots.filter(s => s !== label) : [...p.shots, label];
+    else p.shots = [label];
+    if (!p.shots.length) p.shots = [label];
+    // Replacing a label answers the photo; adding one waits for Enter, because
+    // a second shot is usually followed by a third look.
+    if (add) { _pqcRender(); return; }
+    pqConfirmNext();
+}
+window.pqConfirmPick = pqConfirmPick;
+
+function pqConfirmFlag(k) {
+    const l = _pqcListing();
+    const p = l && l.photos[_pqc.pi];
+    if (!p || _pqc.busy) return;
+    p.flags.has(k) ? p.flags.delete(k) : p.flags.add(k);
+    _pqcRender();
+}
+window.pqConfirmFlag = pqConfirmFlag;
+
+function pqConfirmGo(i) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    _pqc.pi = Math.max(0, Math.min(l.photos.length - 1, i));
+    _pqcRender();
+}
+window.pqConfirmGo = pqConfirmGo;
+
+// Keep this photo's label and move on; past the last photo, save the listing.
+async function pqConfirmNext(all) {
+    const c = _pqc;
+    const l = _pqcListing();
+    if (!l || c.busy) return;
+    if (all) l.photos.forEach(p => { p.seen = true; });
+    else l.photos[c.pi].seen = true;
+    // The next unanswered photo after this one, else the first one left.
+    const after = l.photos.findIndex((p, i) => i > c.pi && !p.seen);
+    const open = after >= 0 ? after : l.photos.findIndex(p => !p.seen);
+    if (open >= 0) { c.pi = open; _pqcRender(); return; }
+    if (l.photos.some(p => !p.shots.length)) { c.err = 'Every photo needs a shot.'; _pqcRender(); return; }
+    c.busy = true; _pqcRender();
+    const r = await _pqPost({ action: 'confirm-shots', store: l.store, productId: l.productId, sheet: l.pickedSheet,
+        modelSheet: l.sheet, model: l.model, stamp: l.stamp,
+        photos: l.photos.map(p => ({ n: p.n, src: p.src, said: p.said, shots: p.shots, flags: [...p.flags] })) });
+    if (_pqc !== c) return;
+    c.busy = false;
+    if (!r.ok) { c.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqcRender(); return; }
+    c.saved++; c.err = null;
+    const st = (c.data.sheets || []).find(s => s.slug === l.pickedSheet);
+    if (st) { st.confirmed++; st.need = Math.max(0, st.need - 1); }
+    const was = (c.data.sheets || []).find(s => s.slug === l.sheet);
+    if (was) was.left = Math.max(0, was.left - 1);
+    c.data.total = (c.data.total || 0) + 1;
+    c.li++; c.pi = 0;
+    if (c.li >= c.data.listings.length) { await _pqcLoad(); return; }
+    _pqcRender();
+}
+window.pqConfirmNext = pqConfirmNext;
+
+function pqConfirmSkip() {
+    const c = _pqc;
+    const l = _pqcListing();
+    if (!l || c.busy) return;
+    c.skip.add(l.productId);
+    c.li++; c.pi = 0;
+    if (c.li >= c.data.listings.length) { _pqcLoad(); return; }
+    _pqcRender();
+}
+window.pqConfirmSkip = pqConfirmSkip;
+
+function pqConfirmSheet(slug) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy || !_pqc.data.guide[slug]) return;
+    l.pickedSheet = slug;
+    _pqcRender();
+}
+window.pqConfirmSheet = pqConfirmSheet;
+
+function _pqcKey(e) {
+    const c = _pqc;
+    if (!c || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // Shift turns 1 into ! on most layouts; e.code still says which key it was.
+    const code = (e.code || '').replace(/^Digit/, '').replace(/^Key/, '').toLowerCase().replace('semicolon', ';');
+    const slot = _PQC_KEYS.indexOf(e.shiftKey ? code : k);
+    if (k === 'Escape') pqConfirmClose();
+    else if (k === 'Enter') pqConfirmNext(e.shiftKey);
+    else if (k === 'ArrowRight') pqConfirmNext(false);
+    else if (k === 'ArrowLeft' || k === 'Backspace') pqConfirmGo(c.pi - 1);
+    else if ((e.shiftKey ? code : k) === 'x') pqConfirmPick('x', e.shiftKey);
+    else if ((e.shiftKey ? code : k) === 'b') pqConfirmPick('b', e.shiftKey);
+    else if (slot >= 0) pqConfirmPick(slot, e.shiftKey);
+    else return;
+    e.preventDefault();
+}
+
+function _pqcHtml() {
+    const c = _pqc;
+    const d = c.data;
+    const mins = Math.max(1, Math.round((Date.now() - c.started) / 60000));
+    const head = `<div class="pqt-head">
+        <div><div class="pqt-eyebrow">Picture Quality · Gold Set</div>
+             <div class="pqt-title">Confirm Shots</div></div>
+        <div class="pqt-count">${d ? `${d.total || 0} Listings Confirmed` : ''}${c.saved ? ` · ${c.saved} This Session (${mins} Min)` : ''}</div>
+        <button type="button" class="pqt-x" onclick="pqConfirmClose()" aria-label="Close">×</button>
+      </div>`;
+    const err = c.err ? `<div class="pqt-err">${_ecEsc(c.err)}</div>` : '';
+    if (!d) return head + err + `<div class="pqt-empty">${c.busy ? 'Loading listings…' : ''}</div>`;
+    // Progress per sheet, busiest-with-least-gold first, each a way in.
+    const target = d.target || 40;
+    const sheetBtn = s => `<button type="button" class="pqc-sheet${s.slug === c.sheet ? ' pqc-sheet-on' : ''}"
+        onclick="_pqcLoad('${_ecEsc(s.slug)}')" ${c.busy || !s.left ? 'disabled' : ''}
+        title="${s.graded} graded · ${s.left} left to confirm">
+        <span class="pqc-sheet-name">${_ecEsc(s.name)}</span>
+        <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * s.confirmed / Math.min(target, s.graded || 1)))}%"></span></span>
+        <span class="pqc-sheet-n">${s.confirmed}/${Math.min(target, s.graded)}</span></button>`;
+    const top = (d.sheets || []).slice(0, 8), more = (d.sheets || []).slice(8);
+    const sheets = `<div class="pqc-sheets">${top.map(sheetBtn).join('')}</div>`
+        + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '');
+    const l = _pqcListing();
+    if (!l) {
+        return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
+            : 'Nothing left to confirm here — every graded listing on this sheet that still matches its grade has an answer. Pick another sheet above.'}</div>`;
+    }
+    const p = l.photos[c.pi];
+    const choices = _pqcChoices(l);
+    const guide = d.guide[l.pickedSheet] || { name: l.pickedSheet, shots: [] };
+    const ex = guide.shots.find(s => p.shots.includes(s.label) && s.img);
+    const offSheet = p.shots.filter(s => !choices.includes(s) && s !== 'Extra' && s !== 'Box');
+    const sheetOpts = Object.entries(d.guide).sort((a, b) => a[1].name.localeCompare(b[1].name))
+        .map(([slug, g]) => `<option value="${_ecEsc(slug)}"${slug === l.pickedSheet ? ' selected' : ''}>${_ecEsc(g.name)}</option>`).join('');
+    const chip = (label, key, i) => `<button type="button" class="pqc-chip${p.shots.includes(label) ? ' pqc-chip-on' : ''}"
+        onclick="pqConfirmPick(${typeof i === 'number' ? i : `'${i}'`}, event.shiftKey)" ${c.busy ? 'disabled' : ''}>${_ecEsc(label)}${key ? ` <kbd>${_ecEsc(key.toUpperCase())}</kbd>` : ''}</button>`;
+    const thumbs = l.photos.map((q, i) => `<button type="button" class="pqc-thumb${i === c.pi ? ' pqc-thumb-on' : ''}${q.seen ? ' pqc-thumb-done' : ''}"
+        onclick="pqConfirmGo(${i})" title="${_ecEsc(q.shots.join(', '))}">
+        <img src="${_ecEsc(q.img)}" alt="" loading="lazy"><span class="pqc-thumb-n">${q.n}</span>
+        <span class="pqc-thumb-l">${_ecEsc(q.shots.join(' + ') || '—')}${q.shots.join('|') !== q.said.join('|') ? ' ✎' : ''}</span></button>`).join('');
+    return head + err + sheets + `
+      <div class="pqc-listing">
+        <div class="pqc-title">${_ecEsc(l.title || '')}</div>
+        <div class="pqc-meta"><span class="lh-sku">${_ecEsc(l.sku || '')}</span> · ${_ecEsc(l.store)} · listing ${c.li + 1} of ${d.listings.length}
+          <label class="pqc-sheet-pick">Sheet <select onchange="pqConfirmSheet(this.value)" ${c.busy ? 'disabled' : ''}>${sheetOpts}</select></label>
+          ${l.pickedSheet !== l.sheet ? '<span class="pqc-warn">Changed From The Grade</span>' : ''}</div>
+      </div>
+      <div class="pqt-pair">
+        <figure class="pqt-fig">
+          <div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt="Listing photo ${p.n}"></div>
+          <figcaption><b>Photo ${p.n} of ${l.photos.length}</b> · the grade said: ${_ecEsc(p.said.join(' + ') || 'nothing')}</figcaption>
+        </figure>
+        <figure class="pqt-fig">
+          <div class="pqt-frame">${ex ? `<img src="${_ecEsc(ex.img)}" alt="Guide example">`
+            : `<span class="pqt-noex">${p.shots.some(s => s === 'Extra' || s === 'Box') ? 'Not a sheet shot' : 'No example photo for this shot'}</span>`}</div>
+          <figcaption><b>Now: ${_ecEsc(p.shots.join(' + ') || '—')}</b>${offSheet.length ? ` <span class="pqc-warn">Not On This Sheet</span>` : ''}<br>${_ecEsc(guide.name)}</figcaption>
+        </figure>
+      </div>
+      <div class="pqc-chips">${choices.map((s, i) => chip(s, _PQC_KEYS[i], i)).join('')}${chip('Extra', 'x', 'x')}${chip('Box', 'b', 'b')}</div>
+      <div class="pqc-flags">${_PQC_FLAGS.map(([k, label]) => `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFlag('${k}')" ${c.busy ? 'disabled' : ''}>${label}</button>`).join('')}</div>
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(false)" ${c.busy ? 'disabled' : ''}>Keep <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${c.busy ? 'disabled' : ''}
+            title="Every photo not yet answered keeps the label it shows">All Right — Save Listing <kbd>Shift+Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmSkip()" ${c.busy ? 'disabled' : ''}>Skip Listing</button>
+      </div>
+      <div class="pqt-ask">A shot key replaces the label and moves on; with Shift it adds a second shot. ← goes back.</div>
+      <div class="pqc-thumbs">${thumbs}</div>`;
+}
+
+function _pqcRender() {
+    if (!_pqc) return;
+    let el = document.getElementById('pqConfirmOverlay');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pqConfirmOverlay';
+        el.className = 'pqt-overlay';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Confirm Shots');
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pqt-box">${_pqcHtml()}</div>`;
+}
+
 window.pqSetTier = pqSetTier;
 
 // One strip of photos, in the order given, numbered by their CURRENT position so

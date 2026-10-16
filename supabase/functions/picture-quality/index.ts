@@ -1403,6 +1403,122 @@ async function saveLabel(scope: Scope, body: any) {
   return json({ ok: true });
 }
 
+// ============================================================================
+// CONFIRM SHOTS — a person says which shot each photo is (2026-10-16)
+// ============================================================================
+// ⚠️ WHY. The gold set for a local vision model (scripts/pq-gold/) found no human
+// shot label anywhere. The trainer above graded FRAMING beside the model's shot
+// and gave no way to say the shot was wrong. An approved Quick Fix accepts a
+// grade as a whole. A model meant only to match the perception layer ("the
+// model reports, the code decides") must be scored on labels a PERSON made. So
+// Ethan confirms or corrects the saved grade's label on every photo of a
+// listing, and the rows go to pq_shot_labels (0148).
+//
+// DM / CEO ONLY, whatever the feature override says. These labels are the
+// answer key, and they're only worth anything if one trained eye makes them.
+//
+// THE QUEUE fills the sheets with the most graded listings and the thinnest
+// gold first: need = min(TARGET, graded) − confirmed, ties going to the busier
+// sheet. That way video-games (100+ graded) fills before a two-listing sheet.
+// Inside a sheet the newest grade comes first (Opus, today's rules).
+//
+// ONLY ALIGNED LISTINGS. A saved grade numbers photos as they were when graded;
+// if today's listing has a different number of photos, a prefilled label would
+// sit on the wrong photo, so the listing is left out. An approved order or
+// deletion renumbered its report (renumberRow), so it still lines up.
+//
+// FREE. No model call. Photos are read live through the Admin API (Shopify
+// CDN, never a Supabase transform); guide examples are /object/public/.
+const CONFIRM_TARGET = 40;
+const CONFIRM_FLAGS = ["screen_on", "label_legible", "blurry", "turned", "cropped"];
+const confirmer = (scope: Scope) => ["district manager", "ceo"].includes(scope.role);
+
+async function confirmView(scope: Scope, want: string, skip: Set<string>) {
+  if (!confirmer(scope)) return { error: "forbidden", detail: "Confirm Shots is for the DM and CEO" };
+  const graded: any[] = await rows(`picture_quality_reviews?report=not.is.null&sheet_slug=not.is.null`
+    + `&store_code=in.(${scope.stores.join(",")})`
+    + `&select=store_code,product_id,sku,title,sheet_slug,model,stamp,reviewed_at,photos:report->photos`
+    + `&order=reviewed_at.desc&limit=10000`);
+  // sb() throws on a missing table; before 0148 is applied, say so plainly.
+  const doneRows = await rows(`pq_shot_labels?select=product_id,sheet_slug&limit=50000`).catch(() => null);
+  if (!Array.isArray(doneRows)) return { error: "no_table", detail: "pq_shot_labels is not in the database yet (migration 0148)" };
+  const done = new Set(doneRows.map((r: any) => r.product_id));
+  const confirmedBySheet = new Map<string, Set<string>>();
+  for (const r of doneRows) {
+    if (!confirmedBySheet.has(r.sheet_slug)) confirmedBySheet.set(r.sheet_slug, new Set());
+    confirmedBySheet.get(r.sheet_slug)!.add(r.product_id);
+  }
+  const sheets = await loadSheets();
+  const nameOf = new Map(sheets.map(s => [s.slug, s.name]));
+  const bySheet = new Map<string, any[]>();
+  for (const g of graded) {
+    if (!Array.isArray(g.photos) || !g.photos.length) continue;
+    if (!bySheet.has(g.sheet_slug)) bySheet.set(g.sheet_slug, []);
+    bySheet.get(g.sheet_slug)!.push(g);
+  }
+  const stats = [...bySheet].map(([slug, list]) => {
+    const confirmed = confirmedBySheet.get(slug)?.size || 0;
+    return { slug, name: nameOf.get(slug) || slug, graded: list.length, confirmed,
+             left: list.filter(g => !done.has(g.product_id) && !skip.has(g.product_id)).length,
+             need: Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed) };
+  }).sort((a, b) => b.need - a.need || b.graded - a.graded);
+  const pick = stats.find(s => s.slug === want && s.left) || stats.find(s => s.need && s.left) || stats.find(s => s.left);
+  const listings: any[] = [];
+  const misaligned: string[] = [];
+  if (pick) {
+    const todo = bySheet.get(pick.slug)!.filter(g => !done.has(g.product_id) && !skip.has(g.product_id));
+    // Six at a time: each is part of one Admin API read, and six is roughly ten
+    // minutes of work.
+    for (let i = 0; i < todo.length && listings.length < 6; i += 12) {
+      const chunk = todo.slice(i, i + 12);
+      const live = new Map<string, Listing>();
+      for (const st of [...new Set(chunk.map(g => g.store_code))]) {
+        const { shop, token } = await shopFor(st);
+        for (const l of await fetchListings(shop, token, chunk.filter(g => g.store_code === st).map(g => g.product_id))) live.set(l.id, l);
+      }
+      for (const g of chunk) {
+        if (listings.length >= 6) break;
+        const l = live.get(g.product_id);
+        if (!l || l.photos.length !== g.photos.length) { misaligned.push(g.product_id); continue; }
+        listings.push({ store: g.store_code, productId: g.product_id, sku: g.sku || l.sku, title: l.title || g.title,
+          sheet: g.sheet_slug, model: g.model, stamp: g.stamp, reviewedAt: g.reviewed_at,
+          photos: l.photos.map((p, k) => ({ n: k + 1, src: p.src.split("?")[0], img: p.url, w: p.width, h: p.height,
+            said: (g.photos.find((x: any) => x.n === k + 1)?.shots || []).map(String) })) });
+      }
+    }
+  }
+  const guide: Record<string, { name: string; shots: { label: string; cond: string | null; img: string | null }[] }> = {};
+  for (const s of sheets) guide[s.slug] = { name: s.name, shots: s.shots.map(x => ({ label: x.label, cond: x.cond, img: x.img ? guideUrl(x.img) : null })) };
+  // `misaligned`: sold or re-shot since the grade. Handed back so the page skips
+  // them rather than being offered them again.
+  return { target: CONFIRM_TARGET, sheets: stats, sheet: pick?.slug || null, misaligned,
+           listings, guide, flags: CONFIRM_FLAGS, total: done.size };
+}
+
+async function saveShots(scope: Scope, body: any) {
+  if (!confirmer(scope)) return json({ error: "forbidden", detail: "Confirm Shots is for the DM and CEO" }, 403);
+  const store = String(body.store || "").toUpperCase();
+  if (!scope.stores.includes(store)) return json({ error: "forbidden" }, 403);
+  const productId = String(body.productId || "");
+  const sheet = String(body.sheet || "");
+  const photos = Array.isArray(body.photos) ? body.photos.slice(0, 60) : [];
+  if (!productId || !sheet || !photos.length) return json({ error: "productId, sheet and photos required" }, 400);
+  const clean = (a: unknown, max: number) => (Array.isArray(a) ? a : []).map(x => String(x).trim().slice(0, 80)).filter(Boolean).slice(0, max);
+  const now = new Date().toISOString();
+  const out = photos.map((p: any) => ({
+    store_code: store, product_id: productId, sheet_slug: sheet, model_sheet: body.modelSheet || null,
+    photo_src: String(p.src || "").split("?")[0], photo_n: Number(p.n) || 0,
+    shots: clean(p.shots, 4), model_shots: clean(p.said, 6),
+    flags: clean(p.flags, 5).filter(f => CONFIRM_FLAGS.includes(f)),
+    model: body.model || null, review_stamp: body.stamp || null, confirmed_by: scope.name, confirmed_at: now,
+  }));
+  if (out.some((r: any) => !r.photo_src || !r.photo_n || !r.shots.length)) return json({ error: "every photo needs src, n and at least one shot" }, 400);
+  await sb("pq_shot_labels?on_conflict=product_id,photo_src", {
+    method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(out),
+  });
+  return json({ ok: true, saved: out.length });
+}
+
 // decided_note is "dismissed: why" or "reorder denied: why" — the answer, then
 // the person's words. Split back apart for the screen and the ask.
 function splitNote(s: unknown) {
@@ -1678,6 +1794,8 @@ async function handlePost(req: Request, scope: Scope) {
   // never the rule fixed.
   // A training label (see trainView) — one photo graded by a person.
   if (action === "label") return await saveLabel(scope, body);
+  // Confirm Shots (see confirmView): one listing's photos, labelled by a person.
+  if (action === "confirm-shots") return await saveShots(scope, body);
   if (action === "triaged") {
     const keys = Array.isArray(body.keys) ? body.keys.slice(0, 200) : [];
     let n = 0;
@@ -1758,7 +1876,7 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const view = url.searchParams.get("view") || "";
 
-    if (req.method === "POST" || view === "review" || view === "counts" || view === "feedback" || view === "train") {
+    if (req.method === "POST" || view === "review" || view === "counts" || view === "feedback" || view === "train" || view === "confirm") {
       const scope = await scopeFor(req.headers.get("x-user-pin") || "");
       if (!scope) return json({ error: "unauthorized", detail: "no matching user, or Picture Quality is not switched on for you" }, 401);
       if (req.method === "POST") {
@@ -1790,6 +1908,11 @@ Deno.serve(async (req: Request) => {
       if (view === "feedback") {
         const days = Math.min(Math.max(Number(url.searchParams.get("days") || 30), 1), 180);
         return json({ scope, ...(await feedbackView(scope, days)) });
+      }
+      if (view === "confirm") {
+        const d: any = await confirmView(scope, url.searchParams.get("sheet") || "",
+          new Set((url.searchParams.get("skip") || "").split(",").filter(Boolean)));
+        return json(d, d.error ? (d.error === "forbidden" ? 403 : 409) : 200);
       }
       if (view === "train") return json(await trainView(scope, (url.searchParams.get("store") || "").toUpperCase(),
         Math.max(0, Number(url.searchParams.get("skip") || 0))));

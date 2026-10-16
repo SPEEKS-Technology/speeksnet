@@ -1,0 +1,141 @@
+// CONFIRM SHOTS — the gold set's shot-label screen (2026-10-16).
+//
+//   powershell -File scripts/browser-check.ps1 pq-confirm-check.js
+//
+// One key per photo is the whole point: Enter keeps the grade's label and moves
+// on, a shot key replaces it (and moves on), Shift+shot adds a second one, and
+// Shift+Enter saves a listing that is right throughout. DM/CEO only. The photos
+// shown are Shopify CDN / object URLs — never a Supabase /render/image/
+// transform (100 a cycle on Pro).
+
+// Stubbed ONCE, before anything runs: a save goes through _pqPost, and a
+// per-test stub would be gone by the time an awaited call reached it.
+var pqcPosts = [];
+_pqPost = function (payload) { pqcPosts.push(payload); return Promise.resolve({ ok: true, status: 200, body: { ok: true } }); };
+_pqFetch = function () { return Promise.resolve(pqcData()); };
+
+function pqcData() {
+    return {
+        target: 40, total: 3, sheet: 'video-games', misaligned: ['gid://shopify/Product/9'], flags: [],
+        sheets: [{ slug: 'video-games', name: 'Video Games', graded: 106, confirmed: 3, left: 50, need: 37 },
+                 { slug: 'lenses', name: 'Lenses', graded: 16, confirmed: 0, left: 16, need: 16 }],
+        guide: {
+            'video-games': { name: 'Video Games', shots: [
+                { label: 'Front of Game', cond: null, img: 'https://x.supabase.co/storage/v1/object/public/picture-guide/a.jpg' },
+                { label: 'Back of Game', cond: null, img: null },
+                { label: 'Opened Case', cond: null, img: null }] },
+            'lenses': { name: 'Lenses', shots: [{ label: 'Front of Lens', cond: null, img: null }] },
+        },
+        listings: [{ store: 'OVL', productId: 'gid://shopify/Product/1', sku: 'SKU-1', title: 'Game One', sheet: 'video-games',
+                     model: 'claude-opus-5-5', stamp: 'pq-v18:abc',
+                     photos: [1, 2, 3].map(function (n) {
+                         return { n: n, src: 'https://cdn.shopify.com/s/files/1/p' + n + '.jpg', img: 'https://cdn.shopify.com/s/files/1/p' + n + '.jpg?width=1200',
+                                  w: 1080, h: 1080, said: [['Front of Game'], ['Back of Game'], ['Extra']][n - 1] };
+                     }) }],
+    };
+}
+function pqcKey(key, shift) {
+    var code = /^[0-9]$/.test(key) ? 'Digit' + key : /^[a-z]$/i.test(key) ? 'Key' + key.toUpperCase() : key;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: shift && /^[0-9]$/.test(key) ? '!' : key, code: code, shiftKey: !!shift, bubbles: true }));
+}
+function pqcAs(role) { sessionStorage.setItem('speeksUserRole', role); }
+
+t('a store manager gets no entry and no screen', function () {
+    pqcAs('manager');
+    if (_pqcMayUse()) return 'manager may use it';
+    pqConfirmOpen();
+    var el = document.getElementById('pqConfirmOverlay');
+    pqConfirmClose();
+    return !el || 'overlay opened for a manager';
+});
+
+t('the DM and the CEO may use it', function () {
+    pqcAs('District Manager'); var dm = _pqcMayUse();
+    pqcAs('CEO'); var ceo = _pqcMayUse();
+    return (dm && ceo) || 'dm ' + dm + ', ceo ' + ceo;
+});
+
+// Measured with the real stylesheet: on a phone, nothing in the box may be
+// wider than the box (long sheet names, a long title, twelve thumbnails).
+t('at 390px nothing in the Confirm Shots box runs past its edge', function () {
+    var d = pqcData();
+    d.sheets = d.sheets.concat([1, 2, 3, 4, 5, 6, 7, 8].map(function (i) {
+        return { slug: 's' + i, name: 'Small/Medium Miscellaneous Items Sheet ' + i, graded: 20, confirmed: 2, left: 18, need: 18 };
+    }));
+    var l = d.listings[0];
+    l.title = 'Sony PlayStation 5 Slim Digital Edition 1TB Console With Two DualSense Controllers And Every Cable In The Box';
+    l.photos = [];
+    for (var n = 1; n <= 12; n++) l.photos.push({ n: n, src: 'https://cdn.shopify.com/p' + n + '.jpg', img: '', w: 1080, h: 1080, said: ['Opposite Side Of The Console Lying Down'] });
+    l.pickedSheet = l.sheet;
+    l.photos.forEach(function (p) { p.shots = p.said.slice(); p.flags = new Set(); p.seen = false; });
+    _pqc = { sheet: d.sheet, data: d, li: 0, pi: 0, busy: false, err: null, skip: new Set(), saved: 0, started: Date.now() };
+    var host = document.createElement('div');
+    host.style.cssText = 'width:390px;position:absolute;left:0;top:0;';
+    host.innerHTML = '<div class="pqt-box" style="width:100%;box-sizing:border-box">' + _pqcHtml() + '</div>';
+    document.body.appendChild(host);
+    var box = host.firstChild.getBoundingClientRect();
+    var bad = [];
+    host.querySelectorAll('*').forEach(function (el) {
+        var r = el.getBoundingClientRect();
+        if (r.width && (r.right > box.right + 1 || r.left < box.left - 1)) bad.push((el.className || el.tagName) + ' ' + Math.round(r.width) + 'px');
+    });
+    host.remove();
+    _pqc = null;
+    return !bad.length || 'past the edge: ' + bad.slice(0, 5).join(', ');
+});
+
+// The rest drive the real screen end to end, in order, inside one promise:
+// promise checks start together, so separate ones would share _pqc.
+t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', function () {
+    pqcAs('district manager');
+    pqcPosts = [];
+    return pqConfirmOpen().then(function () {
+        var el = document.getElementById('pqConfirmOverlay');
+        if (!el) return 'no overlay';
+        var html = el.innerHTML;
+        if (/render\/image/.test(html)) return 'a Supabase transform URL is on the page';
+        if (html.indexOf('Video Games') < 0 || html.indexOf('3/40') < 0) return 'sheet progress missing';
+        if (_pqc.skip.has('gid://shopify/Product/9') !== true) return 'misaligned listing not skipped';
+        var on = el.querySelector('.pqc-chip-on');
+        if (!on || on.textContent.indexOf('Front of Game') < 0) return 'photo 1 not prefilled with the grade';
+        pqcKey('Enter');                       // photo 1: keep
+        if (_pqc.pi !== 1) return 'Enter did not move on (pi ' + _pqc.pi + ')';
+        pqcKey('3');                           // photo 2: Back of Game → Opened Case
+        var p2 = _pqc.data.listings[0].photos[1];
+        if (p2.shots.join() !== 'Opened Case') return 'key 3 gave ' + p2.shots.join();
+        if (_pqc.pi !== 2) return 'a shot key did not move on';
+        pqcKey('1', true);                     // photo 3: Extra + Front of Game
+        var p3 = _pqc.data.listings[0].photos[2];
+        if (p3.shots.join() !== 'Extra,Front of Game') return 'Shift+1 gave ' + p3.shots.join();
+        if (_pqc.pi !== 2) return 'Shift+key moved on';
+        pqConfirmFlag('label_legible');
+        if (document.getElementById('pqConfirmOverlay').innerHTML.indexOf('✎') < 0) return 'changed label has no pencil';
+        pqcKey('Enter');                       // last photo → save
+        return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+            if (pqcPosts.length !== 1) return pqcPosts.length + ' saves';
+            var b = pqcPosts[0];
+            if (b.action !== 'confirm-shots' || b.store !== 'OVL' || b.sheet !== 'video-games') return 'payload head ' + JSON.stringify(b).slice(0, 120);
+            var got = b.photos.map(function (p) { return p.shots.join('+'); }).join('|');
+            if (got !== 'Front of Game|Opened Case|Extra+Front of Game') return 'saved ' + got;
+            if (b.photos[2].flags.join() !== 'label_legible') return 'flags ' + b.photos[2].flags.join();
+            if (b.photos[1].said.join() !== 'Back of Game') return 'model label not sent';
+            if (b.photos.some(function (p) { return /\?/.test(p.src); })) return 'src kept its query string';
+            return true;
+        });
+    }).then(function (r) {
+        if (r !== true) { pqConfirmClose(); return r; }
+        // The save emptied the queue, so it reloaded the next lot (the stub
+        // returns the same listing): Shift+Enter now saves it whole.
+        pqcPosts = [];
+        pqcKey('Enter', true);
+        return new Promise(function (res) { setTimeout(res, 0); }).then(function () {
+            var ok = pqcPosts.length === 1 && pqcPosts[0].photos.map(function (p) { return p.shots.join(); }).join('|') === 'Front of Game|Back of Game|Extra';
+            // A changed sheet changes the offered shots.
+            pqConfirmSheet('lenses');
+            var lens = document.getElementById('pqConfirmOverlay').innerHTML.indexOf('Front of Lens') >= 0;
+            pqConfirmClose();
+            if (!ok) return 'Shift+Enter saved ' + JSON.stringify(pqcPosts.map(function (b) { return b.photos.map(function (p) { return p.shots; }); }));
+            return lens || 'sheet change did not change the chips';
+        });
+    });
+});
