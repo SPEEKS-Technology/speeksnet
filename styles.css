@@ -24854,3 +24854,83 @@ select.dd-native {
 #calendarDropdown .scal-company.scal-company-ro { grid-template-columns: minmax(0, 1fr); }
 #calendarDropdown .scal-company-ro .scal-clist { border-right: 0; }
 #calendarDropdown .scal-company-ro .scal-crow { grid-template-columns: 60px minmax(0, 1fr) minmax(0, 240px); }
+
+/* --- the custody form and the itemized pickup (2026-10-16) ---------------- */
+/* The phone-QR popout: a card over a dimmed page, closed by Close, Escape or a
+   tap outside. It only ever carries the site's sign-in address. */
+.b2b-qrpop {
+    position: fixed; inset: 0; z-index: 10050; display: grid; place-items: center;
+    background: rgba(16, 24, 34, .45); padding: 16px;
+}
+.b2b-qrpop-card {
+    width: min(340px, 100%); display: flex; flex-direction: column; align-items: center; gap: 12px;
+    padding: 20px; background: #fff; border-radius: 16px; text-align: center;
+    box-shadow: 0 18px 48px rgba(16, 24, 34, .28);
+}
+.b2b-qrpop-card b { font-size: 16px; font-weight: 800; color: #1a1c1e; }
+.b2b-qrpop-card p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--b2b-muted); }
+.b2b-qrpop-qr {
+    width: 200px; height: 200px; display: grid; place-items: center;
+    border: 1px solid var(--b2b-line); border-radius: 12px; padding: 8px; background: #fff;
+}
+.b2b-qrpop-qr svg { width: 100%; height: 100%; display: block; }
+.b2b-qrpop-url { font-size: 11px; color: var(--b2b-faint); word-break: break-all; }
+.b2b-cam-card { width: min(420px, 100%); }
+.b2b-cam-card video { width: 100%; max-height: 50vh; border-radius: 12px; background: #000; object-fit: cover; }
+.b2b-cam-msg { font-size: 12.5px; color: var(--b2b-muted); min-height: 1.5em; }
+
+/* The itemized list: folded until asked for, then the entry row and the list. */
+.b2b-mf {
+    margin-top: 14px; padding: 12px 14px; border: 1px solid var(--b2b-line);
+    border-radius: 12px; background: var(--b2b-surface);
+}
+.b2b-mf-toggle { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; color: var(--b2b-muted); line-height: 1.5; cursor: pointer; }
+.b2b-mf-toggle input { margin-top: 3px; flex: none; }
+.b2b-mf-toggle b { color: #1a1c1e; }
+.b2b-mf-body { margin-top: 12px; }
+.b2b-mf-entry { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 72px auto auto; gap: 8px; align-items: center; }
+.b2b-mf-entry .form-input-lg { margin: 0; min-width: 0; }
+@media (max-width: 720px) {
+    /* A phone gets the scan field full width -- it is the one in use all day. */
+    .b2b-mf-entry { grid-template-columns: minmax(0, 1fr) 72px; }
+    .b2b-mf-entry #b2bMfDesc, .b2b-mf-entry #b2bMfSerial { grid-column: 1 / -1; }
+}
+.b2b-mf-empty { font-size: 12px; color: var(--b2b-faint); padding: 8px 2px 0; }
+.b2b-mf-sum { font-size: 12px; color: var(--b2b-muted); margin: 10px 2px 6px; }
+.b2b-mf-sum b { color: #1a1c1e; }
+.b2b-mf-rows { max-height: 320px; overflow-y: auto; border: 1px solid var(--b2b-line-2); border-radius: 10px; background: #fff; }
+.b2b-mf-row {
+    display: grid; grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr) 44px 28px;
+    gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--b2b-line-2); font-size: 12.5px;
+}
+.b2b-mf-row:last-child { border-bottom: 0; }
+.b2b-mf-n { color: var(--b2b-faint); font-size: 11px; }
+.b2b-mf-what, .b2b-mf-ser { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b2b-mf-what i { color: var(--b2b-faint); }
+.b2b-mf-q { text-align: right; color: var(--b2b-muted); font-weight: 700; }
+.b2b-mf-x {
+    width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--b2b-line);
+    background: #fff; color: var(--b2b-muted); cursor: pointer; font-size: 15px; line-height: 1;
+}
+
+/* The custody document, as the client reads it before signing. The same facts,
+   list and wording go into the PDF. */
+.b2b-cdoc { border: 1px solid var(--b2b-line); border-radius: 12px; background: #fff; padding: 16px 18px; }
+.b2b-cdoc-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+              padding-bottom: 10px; border-bottom: 1px solid var(--b2b-line); }
+.b2b-cdoc-h b { display: block; font-size: 18px; font-weight: 800; color: #1a1c1e; }
+.b2b-cdoc-h span { font-size: 11.5px; color: var(--b2b-muted); }
+.b2b-cdoc-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 10px 16px; margin: 12px 0; }
+.b2b-cdoc-facts span, .b2b-cdoc-sec > span {
+    display: block; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--b2b-faint);
+}
+.b2b-cdoc-facts b { font-size: 13.5px; color: #1a1c1e; }
+.b2b-cdoc-sec { margin-top: 10px; }
+.b2b-cdoc-sec p { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: #1a1c1e; white-space: pre-wrap; }
+.b2b-cdoc-tbl { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 12.5px; }
+.b2b-cdoc-tbl th { text-align: left; font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--b2b-faint);
+                   border-bottom: 1px solid var(--b2b-line); padding: 4px 6px; }
+.b2b-cdoc-tbl td { padding: 5px 6px; border-bottom: 1px solid var(--b2b-line-2); word-break: break-word; }
+/* Bigger than body copy: this is the sentence being signed. */
+.b2b-cdoc-terms { margin: 14px 0 0; font-size: 14px; line-height: 1.55; color: #1a1c1e; }
+.b2b-sum-link { font-weight: 700; color: var(--sage-professional, #1f9d57); }

@@ -10407,11 +10407,11 @@ async function pgRemoveShotPhoto(shotId) {
 function initOperations() {
     if (!document.querySelector('.ops-wrap')) return;
     const hash = (window.location.hash || '').replace('#', '');
-    // #b2b-sign-<dealId> is the B2B signing QR: open the B2B tab, and park the
-    // id for b2bLoad() to act on once the deals are actually here. The deal
-    // cannot be looked up yet -- this runs before the first fetch.
-    const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
-    if (sign) _b2bPendingSign = sign[1];
+    // #b2b-sign-<dealId> was the old phone-signing QR. That route was removed on
+    // 2026-10-16 (Nick: "The phone thing really just wasnt working") -- the B2B
+    // module runs on the phone itself now. A link or QR still printed somewhere
+    // lands on the B2B tab rather than on SPEEKS Connect.
+    const sign = /^b2b-sign-/.test(hash);
     // #categories is the feed card's destination: the Categories view inside
     // SPEEKS Connect, which is a view of a tab rather than a tab of its own.
     // #photos is the no-pictures card's: the same view, on the Picture Quality
@@ -20030,7 +20030,7 @@ const B2B_INTAKE = {
         go:    'Sign &amp; Mark Picked Up',
         was:   'Picked up',
         items: 'Items Picked Up',
-        hint:  'A general description is enough here — the itemized list comes later, at pricing.',
+        hint:  'A general description is enough — or switch on Itemized pickup below to scan each unit.',
         ack:   'The client confirms the items above were collected by SPEEKS Technology on the date shown.',
     },
     walkin: {
@@ -20043,7 +20043,7 @@ const B2B_INTAKE = {
         go:    'Sign &amp; Take It In',
         was:   'Brought in',
         items: 'What They Brought In',
-        hint:  'A general description is enough here — the itemized list comes later, at pricing.',
+        hint:  'A general description is enough — or switch on Itemized pickup below to scan each unit.',
         ack:   'The client confirms the items above were left with SPEEKS Technology today.',
     },
 };
@@ -20867,14 +20867,6 @@ async function b2bLoad() {
         _b2bClients = clients;
         _b2bPrevals = prevals;
         b2bRender();
-        // A signing QR was scanned. Consume it before opening, so a refresh
-        // doesn't reopen the pad over a deal that has since been signed off.
-        if (_b2bPendingSign) {
-            const id = _b2bPendingSign;
-            _b2bPendingSign = null;
-            try { history.replaceState(null, '', location.pathname + '#b2b'); } catch (_) {}
-            b2bOpenSign(id);
-        }
     } catch (e) {
         body.innerHTML = `<div class="status-message" style="color:var(--red-alert);">Couldn't load B2B deals. ${escapeHtml(e.message)}</div>`;
     } finally {
@@ -21524,11 +21516,18 @@ async function _b2bSyncOpenDeal(ping) {
     const deal = _b2bModalDeal;
     if (!deal) return;
 
-    // The pickup screen has no grid, but it is the one waiting on a phone: the
-    // QR is on screen precisely so someone can sign somewhere else. Reopen it so
-    // the signature appears without anybody refreshing.
-    if (deal.stage === 'pickup' && document.getElementById('b2bSignQR')) {
+    // The pickup screen has no grid, but the same pickup can be open on a phone
+    // at the client's door and on a desktop at the store. When the custody form
+    // is signed (or the signature skipped) on one, reopen the other so it shows
+    // -- and ONLY then: this device's own manifest saves ping too, and reopening
+    // on every one of those would yank the scanner field out from under a run
+    // of scans.
+    if (deal.stage === 'pickup' && document.getElementById('b2bPuDesc')) {
         if (ping && ping.deal && ping.deal !== deal.id) return;
+        const before = [deal.custody_path, deal.signature_path, deal.signature_skipped_by].join('|');
+        await b2bRefresh();
+        const fresh = _b2bDealById(deal.id);
+        if (!fresh || [fresh.custody_path, fresh.signature_path, fresh.signature_skipped_by].join('|') === before) return;
         // Capture BEFORE the reopen. This path re-renders the pickup screen from
         // a poll or a realtime ping, and nothing on that screen is saved yet --
         // without this the description, client name and date the operator has
@@ -21536,9 +21535,7 @@ async function _b2bSyncOpenDeal(ping) {
         // the fields" report (the poll skips while the tab is hidden, so it
         // lands the moment you come back from the print window).
         _b2bCapturePickupDraft(deal.id);
-        await b2bRefresh();
-        const fresh = _b2bDealById(deal.id);
-        if (fresh && (fresh.signature_path || fresh.signature_skipped_by)) b2bOpenDeal('pickup', deal.id);
+        b2bOpenDeal('pickup', deal.id);
         return;
     }
 
@@ -24647,6 +24644,13 @@ function _b2bSummary(deal) {
     if (deal.quote_sent_at) rows.push(['Quote sent', _b2bDate(deal.quote_sent_at)]);
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
+    // The signed custody form (2026-10-16), from every stage after pickup -- it
+    // is the proof of what was handed over, and the question it answers ("did
+    // they release the 40 laptops or 38?") comes up at pricing and listing, not
+    // only at the door. The pickup screen carries its own buttons.
+    if (deal.custody_path && deal.stage !== 'pickup') {
+        rows.push(['Custody form', `<a class="b2b-sum-link" href="${_b2bCustodyUrl(deal, true)}">Download PDF</a>`]);
+    }
     if (deal.delivered_by || deal.received_by) {
         // Reads in the order it happened: who handed it over, then who took it in.
         // A walk-in has no first half -- nobody collected it -- so it only ever
@@ -24665,15 +24669,24 @@ function _b2bSummary(deal) {
 
 function _b2bStagePickup(deal) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    // Restore anything typed before a same-device signing round-trip.
-    const draft = (_b2bPickupDraft && _b2bPickupDraft.id === deal.id) ? _b2bPickupDraft : null;
+    // A signed custody form fixes these four: they are printed on a document the
+    // client signed, so the fields show what was signed and are read-only until
+    // the signature is taken again (b2bRetakeCustody). save_custody stored them
+    // on the deal, which is also how a pickup signed on a phone at the client's
+    // door is finished at the store without retyping.
+    const custody = !!deal.custody_path;
+    const lock = custody ? 'readonly' : '';
+    // Restore anything typed before a same-device round-trip (the custody form,
+    // a skip, a sync) -- never over a signed form's values.
+    const draft = (!custody && _b2bPickupDraft && _b2bPickupDraft.id === deal.id) ? _b2bPickupDraft : null;
     const puDesc = draft ? (draft.desc || '') : (deal.pickup_desc || '');
     const puName = draft ? (draft.name || '') : (deal.signed_by || '');
     const recv   = draft ? (draft.recv || '') : (deal.received_by || '');
-    // Only ever from the draft: the field is deliberately blank on a fresh open
-    // (see the comment on the input below), so there is no deal value to fall
-    // back to here -- restoring it is purely about not losing a typed answer.
-    const puDate = draft ? (draft.date || '') : '';
+    // From the draft, or from a signed form. Otherwise deliberately blank on a
+    // fresh open (see the comment on the input below) -- the date is only on the
+    // deal before sign-off when a custody form put it there.
+    const puDate = draft ? (draft.date || '') : (custody ? (deal.pickup_date || '') : '');
+    _b2bManifestFor(deal);
     // A pickup that already knows where it is holding was raised by that store,
     // and signing it off drops it straight into pricing there -- there is no
     // routing stage in between, so this screen is the only place its custody
@@ -24691,13 +24704,13 @@ function _b2bStagePickup(deal) {
             ${_b2bSummary(deal)}
             ${_b2bPrevalOriginNote(deal)}
             <label class="form-label-caps">${w.items}</label>
-            <textarea id="b2bPuDesc" class="form-input-lg" rows="3"
+            <textarea id="b2bPuDesc" class="form-input-lg" rows="3" ${lock}
                 placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(puDesc)}</textarea>
             <p class="b2b-hint">${w.hint}</p>
             <div class="${walkIn ? '' : 'b2b-grid2'}" style="margin-top:14px;">
                 <div>
                     <label class="form-label-caps">Client Name *</label>
-                    <input id="b2bPuSigned" class="form-input-lg" value="${escapeHtml(puName)}" placeholder="Full name of whoever released the items">
+                    <input id="b2bPuSigned" class="form-input-lg" ${lock} value="${escapeHtml(puName)}" placeholder="Full name of whoever released the items">
                 </div>
                 ${walkIn ? '' : `
                 <div>
@@ -24708,7 +24721,7 @@ function _b2bStagePickup(deal) {
                          answer that looks like a considered one. Blank forces the
                          choice; the required check below catches it. max stops a
                          collection being dated into the future. -->
-                    <input id="b2bPuDate" type="date" class="form-input-lg" max="${today}" value="${escapeHtml(puDate)}">
+                    <input id="b2bPuDate" type="date" class="form-input-lg" ${lock} max="${today}" value="${escapeHtml(puDate)}">
                 </div>`}
             </div>
             ${walkIn ? `
@@ -24717,27 +24730,27 @@ function _b2bStagePickup(deal) {
             : holding ? `
             <div style="margin-top:14px;">
                 <label class="form-label-caps">Received By</label>
-                <input id="b2bPuRecv" class="form-input-lg" value="${escapeHtml(recv)}"
+                <input id="b2bPuRecv" class="form-input-lg" ${lock} value="${escapeHtml(recv)}"
                     placeholder="Who took these in at ${escapeHtml(holding)}">
                 <p class="b2b-hint">A deal picked up by corp records this when it is dropped at
                     its pricing location. This one never leaves ${escapeHtml(holding)}, so it is
                     recorded here instead.</p>
             </div>` : ''}
+            ${_b2bManifestBlock(deal)}
             ${_b2bSignBlock(deal)}
             <label class="b2b-ack">
                 <input type="checkbox" id="b2bPuAck" onchange="document.getElementById('b2bPuGo').disabled=!this.checked">
                 <span>${w.ack}</span>
             </label>`,
         after: () => {
-            // Only worth drawing when there is nothing signed yet.
-            if (!deal.signature_path && !deal.signature_skipped_by) {
-                _b2bPaintQR(document.getElementById('b2bSignQR'), _b2bSignUrl(deal.id));
-            }
             _b2bPickupDraft = null;   // consumed into the inputs above
         },
         footer: `
             <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
                 onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
+            <!-- The scanned list reports here ("already on the list", a failed
+                 save); without it _b2bSay falls back to alert() mid-scan. -->
+            <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">${w.go}</button>`,
@@ -24753,6 +24766,11 @@ async function b2bSignPickup(id) {
     const dateEl = document.getElementById('b2bPuDate');
     if (!signed) return alert("Enter the name of the person releasing the items.");
     if (dateEl && !dateEl.value) return alert('Pick the date the items were collected.');
+    // The scanned list becomes pricing lines server-side, so whatever is still
+    // waiting to save has to land first.
+    if (_b2bManifest.dealId === id && !_b2bModalDeal?.custody_path) {
+        try { await _b2bManifestSaveNow(); } catch (_) { return; }
+    }
     await _b2bPost({
         action: 'sign_pickup', id, signed_by: signed, pickup_date: dateEl?.value,
         pickup_desc: document.getElementById('b2bPuDesc')?.value.trim(),
@@ -25180,19 +25198,31 @@ function _b2bLineNetHtml(it) {
     return `<span class="b2b-f-mgn${pct < 0 ? ' bad' : ''}" id="b2bNm-${it.id}" title="Net margin — value − offer − shipping − selling fees + data wipe (${_b2bMoney(f.net, 2)})">${pct}%</span>`;
 }
 
-// What the pickup screen shows for the signature: the QR to collect one, the
-// signature once collected, or the bypass once someone has recorded why there
-// isn't going to be one.
+// What the pickup screen shows for the client's sign-off: the custody form to
+// sign, the signed form once it exists, or the bypass once someone has recorded
+// why there isn't going to be one.
+//
+// THE CUSTODY FORM (Nick, 2026-10-16) replaced the bare signature pad: "Client
+// should read a document stating they are accepting that we are taking custody
+// of said items and then when they sign the signature is placed into the
+// document and saved as a pdf downloadable file." The old QR-to-a-phone route
+// went with it ("The phone thing really just wasnt working") -- B2B runs on the
+// phone now, so the phone opens this same screen. "Use a phone" is just a QR to
+// the site's sign-in (b2bPhoneQR).
 function _b2bSignBlock(deal) {
-    if (deal.signature_path) {
-        const who = [deal.signature_by, deal.signature_at ? _b2bDate(deal.signature_at) : '']
-            .filter(Boolean).join(' · ');
+    if (deal.custody_path) {
+        const who = [deal.signed_by, deal.custody_at ? _b2bDate(deal.custody_at) : ''].filter(Boolean).join(' · ');
         return `
-            <div class="b2b-note ok b2b-signed">
-                <span class="b2b-note-k">Signed by the client${who ? ` — captured by ${escapeHtml(who)}` : ''}</span>
-                <img class="b2b-sig-img" alt="Client signature"
-                    src="${B2B_URL}?signature=${encodeURIComponent(deal.id)}&v=${encodeURIComponent(deal.signature_at || '')}">
-                <button class="b2b-mini" onclick="b2bRetakeSign('${deal.id}')">Take it again</button>
+            <div class="b2b-note ok b2b-signed" id="b2bCustodyDone">
+                <span class="b2b-note-k">Custody form signed${who ? ` — ${escapeHtml(who)}` : ''}</span>
+                ${deal.signature_path ? `<img class="b2b-sig-img" alt="Client signature"
+                    src="${B2B_URL}?signature=${encodeURIComponent(deal.id)}&v=${encodeURIComponent(deal.signature_at || '')}">` : ''}
+                <div class="b2b-signq-acts">
+                    <a class="b2b-btn b2b-btn-secondary" target="_blank" rel="noopener"
+                        href="${_b2bCustodyUrl(deal)}">View PDF</a>
+                    <a class="b2b-btn b2b-btn-secondary" href="${_b2bCustodyUrl(deal, true)}">Download</a>
+                    <button class="b2b-mini" onclick="b2bRetakeCustody('${deal.id}')">Take it again</button>
+                </div>
             </div>`;
     }
     if (deal.signature_skipped_by) {
@@ -25202,15 +25232,22 @@ function _b2bSignBlock(deal) {
                 ${escapeHtml(deal.signature_skipped_reason || '')}
             </div>`;
     }
+    // A signature from before custody forms existed: valid for the sign-off
+    // (the server accepts it), but there is no document behind it. Offered the
+    // form rather than hidden, since the PDF is the point.
+    const legacy = deal.signature_path ? `
+        <p class="b2b-hint">A signature is on file from before custody forms existed, so there is no PDF.
+            Have the client sign the form below to get one, or complete the sign-off as it is.</p>` : '';
     return `
-        <div class="b2b-signq">
-            <div class="b2b-signq-qr" id="b2bSignQR"><span class="b2b-signq-wait">Drawing code…</span></div>
+        <div class="b2b-signq b2b-custody-ask" id="b2bCustodyAsk">
             <div class="b2b-signq-txt">
-                <b>Have the client sign</b>
-                <p>Sign right here on this device — hand it to the client — or scan the
-                   code to sign on a phone instead.</p>
+                <b>Custody form</b>
+                <p>The client reads the custody form — what was collected, by whom, and when — and signs it.
+                   The signed copy is saved on this deal as a PDF.</p>
+                ${legacy}
                 <div class="b2b-signq-acts">
-                    <button class="b2b-btn b2b-btn-primary" onclick="b2bSignHere('${deal.id}')">Sign on this device</button>
+                    <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenCustody('${deal.id}')">Review &amp; Sign Custody Form</button>
+                    <button class="b2b-mini" onclick="b2bPhoneQR()">Use a phone</button>
                     ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
                                       : '<span class="b2b-signq-note">A CEO, MOCD or DM can sign off without one.</span>'}
                 </div>
@@ -25218,15 +25255,23 @@ function _b2bSignBlock(deal) {
         </div>`;
 }
 
-// Reopening the pad on the desktop is not useful -- it is the phone that has the
-// client in front of it -- so this just clears the way for another scan.
-function b2bRetakeSign(id) {
-    if (!confirm('Take the signature again?\n\nYou can re-sign on this device or with the phone. '
-        + 'The signature already on file stays until a new one replaces it.')) return;
-    const deal = _b2bDealById(id);
-    // Same unsaved-form problem as skipping: this reopens the screen.
-    _b2bCapturePickupDraft(id);
-    if (deal) { deal.signature_path = null; b2bOpenDeal('pickup', id); }
+function _b2bCustodyUrl(deal, download) {
+    return `${B2B_URL}?custody=${encodeURIComponent(deal.id)}${download ? '&dl=1' : ''}&v=${encodeURIComponent(deal.custody_at || '')}`;
+}
+
+// Taking it again clears the signed form (and its signature) on the deal, which
+// unlocks the fields and the scanned list. The earlier PDF and signature stay in
+// their buckets -- evidence is never overwritten -- they just stop being current.
+async function b2bRetakeCustody(id) {
+    if (!confirm('Take the custody signature again?\n\nThe details and the scanned list unlock so they can be '
+        + 'corrected, and the client signs a fresh form. The earlier signed copy is kept on file.')) return;
+    try {
+        await _b2bSend({ action: 'reset_custody', id, user: _b2bUser() });
+        await b2bRefresh();
+        b2bOpenDeal('pickup', id);
+    } catch (e) {
+        alert(`Couldn't reopen the form: ${e.message}`);
+    }
 }
 
 async function b2bSkipSign(id) {
@@ -25241,7 +25286,7 @@ async function b2bSkipSign(id) {
         // server and reopens the pickup screen from the stored row, so the
         // description, the client's name and the received-by all vanished --
         // typed, unsaved, and gone the moment you explained why there was no
-        // signature. b2bSignHere has always done this for the same reason.
+        // signature. The custody form does the same before it opens.
         _b2bCapturePickupDraft(id);
         await _b2bSend({ action: 'skip_signature', id, reason: reason.trim() });
         await b2bRefresh();
@@ -25251,18 +25296,13 @@ async function b2bSkipSign(id) {
     }
 }
 
-// --- signature capture -----------------------------------------------------
-// The pickup screen shows a QR. A staff member scans it with their own phone,
-// which opens THIS app at #b2b-sign-<dealId>, signs in with their PIN if the
-// phone hasn't already, and hands the phone to the client to sign.
-//
-// Nothing here is public. The phone is an ordinary signed-in session, which is
-// why there is no token to mint, no anonymous write path, and no second shell
-// to keep in step with this one.
-
-// A deal id waiting for the pane to finish loading. The deep link arrives before
-// _b2bDeals exists, so the hash is parked here and b2bLoad() picks it up.
-let _b2bPendingSign = null;
+// --- the phone ---------------------------------------------------------------
+// Until 2026-10-16 the pickup screen showed a QR that opened a signature pad on
+// a phone (#b2b-sign-<deal>). Nick: "The phone thing really just wasnt working,
+// Remove the whole current system for that and just have a popout where you CAN
+// scan a qr code that just opens speeksnet." So B2B now runs on the phone, the
+// pickup is opened there like anywhere else, and the QR below is only a way to
+// get a phone onto the site's sign-in without typing the address.
 
 // qrcode-generator from CDN, the same way _rtEnsureClient loads supabase-js and
 // the XLSX loader loads its own. Hand-rolling this is not the same proposition
@@ -25291,10 +25331,38 @@ function _b2bEnsureQR() {
     return _b2bQrLoading;
 }
 
-function _b2bSignUrl(dealId) {
-    const base = location.href.replace(/#.*$/, '').replace(/[^/]*$/, '');
-    return `${base}operations.html#b2b-sign-${dealId}`;
+// The site's front door, wherever this copy is being served from -- the live
+// site, or a local checkout while it is being tested.
+function _b2bSiteUrl() {
+    return location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '') + 'index.html';
 }
+
+// A popout with a QR to the sign-in page. Nothing deal-specific rides in it:
+// the phone signs in with its own PIN and opens the pickup from Business-to-
+// Business like any other device would.
+function b2bPhoneQR() {
+    b2bPhoneQRClose();
+    const url = _b2bSiteUrl();
+    const pop = document.createElement('div');
+    pop.id = 'b2bPhonePop';
+    pop.className = 'b2b-qrpop';
+    pop.innerHTML = `
+        <div class="b2b-qrpop-card" role="dialog" aria-modal="true" aria-labelledby="b2bPhonePopT">
+            <b id="b2bPhonePopT">Open SPEEKSNET on a phone</b>
+            <div class="b2b-qrpop-qr" id="b2bPhoneQr"><span class="b2b-signq-wait">Drawing code…</span></div>
+            <p>Scan with the phone's camera, sign in with your PIN, then open this pickup under
+               Operations → Business-to-Business.</p>
+            <span class="b2b-mono b2b-qrpop-url">${escapeHtml(url)}</span>
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bPhoneQRClose()">Close</button>
+        </div>`;
+    pop.addEventListener('click', (ev) => { if (ev.target === pop) b2bPhoneQRClose(); });
+    document.body.appendChild(pop);
+    _b2bPaintQR(document.getElementById('b2bPhoneQr'), url);
+}
+function b2bPhoneQRClose() { document.getElementById('b2bPhonePop')?.remove(); }
+document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && document.getElementById('b2bPhonePop')) { ev.stopPropagation(); b2bPhoneQRClose(); }
+}, true);
 
 // Draws into whatever element is passed, so the caller owns the layout.
 async function _b2bPaintQR(el, text) {
@@ -25315,13 +25383,9 @@ async function _b2bPaintQR(el, text) {
     }
 }
 
-// --- the phone's side ------------------------------------------------------
+// --- the custody form ----------------------------------------------------------
 
 let _b2bSigCtx = null, _b2bSigDrawn = false;
-// True when the pad was opened straight on the pickup device (not the phone
-// deep-link), so saving returns to the pickup screen instead of the phone's
-// "hand it back" dead-end.
-let _b2bSignOnDevice = false;
 
 // Whatever's typed on the pickup screen, kept across anything that re-renders it
 // so a round-trip doesn't wipe an already-entered name/description/date.
@@ -25347,47 +25411,306 @@ function _b2bCapturePickupDraft(id) {
         date: document.getElementById('b2bPuDate')?.value,
     };
 }
-function b2bSignHere(id) {
-    _b2bCapturePickupDraft(id);
-    b2bOpenSign(id, true);
+// --- the itemized pickup -----------------------------------------------------
+// Nick, 2026-10-14: "for pickup sheet create optional itemized system with
+// serial number scan entry optional as well". 2026-10-16: for the more secure
+// clients; what is scanned "becomes pricing lines and is put on the document
+// for signing custody". Haydn, 2026-09-21: "Being able to scan in serials would
+// be nice too."
+//
+// Optional, so it starts folded. "What it is" STAYS filled between scans: a run
+// of forty identical laptops is forty scans, not forty descriptions. A scanner
+// is a keyboard that presses Enter, so the serial field is the whole loop.
+//
+// Saved to the deal as it is built (save_pickup_manifest), so the phone at the
+// door and the desktop at the store see one list. sign_pickup turns it into
+// pricing lines -- grouped by description, serials joined -- and the custody PDF
+// prints it.
+let _b2bManifest = { dealId: null, rows: [], open: false, desc: '' };
+let _b2bManifestTimer = null;
+
+function _b2bManifestFor(deal) {
+    const fromDeal = (Array.isArray(deal.pickup_manifest) ? deal.pickup_manifest : [])
+        .map(r => ({ serial: String(r.serial || ''), desc: String(r.desc || ''), qty: Math.max(1, Number(r.qty) || 1) }))
+        // Stored in scan order; held newest-first here, the way the screen lists it.
+        .reverse();
+    // A different deal, or nothing of ours still waiting to save: the deal's
+    // copy is the truth (another device may have added to it).
+    if (_b2bManifest.dealId !== deal.id) {
+        _b2bManifest = { dealId: deal.id, rows: fromDeal, open: fromDeal.length > 0, desc: '' };
+    } else if (!_b2bManifestTimer && !_b2bBusyLine('mf:' + deal.id)) {
+        _b2bManifest.rows = fromDeal;
+        if (fromDeal.length) _b2bManifest.open = true;
+    }
 }
 
-function b2bOpenSign(dealId, onDevice) {
-    const deal = _b2bDealById(dealId);
-    if (!deal) return alert("That deal is no longer open for signing.");
-    if (deal.stage !== 'pickup') {
-        return alert(`${deal.ref} has already been signed off.`);
+function _b2bManifestBlock(deal) {
+    const m = _b2bManifest;
+    const locked = !!deal.custody_path;
+    if (locked && !m.rows.length) return '';     // signed without one: nothing to show
+    const camera = typeof window.BarcodeDetector === 'function';
+    return `
+        <div class="b2b-mf ${m.open ? 'open' : ''}" id="b2bMf">
+            <label class="b2b-mf-toggle">
+                <input type="checkbox" ${m.open ? 'checked' : ''} ${locked || m.rows.length ? 'disabled' : ''}
+                    onchange="b2bManifestToggle(this.checked)">
+                <span><b>Itemized pickup</b> — optional, for secure clients. Scan each unit; the list becomes
+                    pricing lines and prints on the custody form.</span>
+            </label>
+            <div class="b2b-mf-body" ${m.open ? '' : 'hidden'}>
+                ${locked ? '<p class="b2b-hint">Part of the signed custody form. Take the signature again to change it.</p>' : `
+                <div class="b2b-mf-entry">
+                    <input id="b2bMfDesc" class="form-input-lg" autocomplete="off" value="${escapeHtml(m.desc)}"
+                        placeholder="What it is — e.g. Dell Latitude 5440" oninput="_b2bManifest.desc=this.value">
+                    <input id="b2bMfSerial" class="form-input-lg b2b-mono" autocomplete="off" autocapitalize="characters"
+                        spellcheck="false" placeholder="Scan or type a serial"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();b2bManifestAdd();}">
+                    <input id="b2bMfQty" type="number" min="1" value="1" class="form-input-lg b2b-mf-qty"
+                        aria-label="Quantity" title="How many — for a row with no serial, such as a box of cables">
+                    <button class="b2b-btn b2b-btn-secondary" onclick="b2bManifestAdd()">Add</button>
+                    ${camera ? `<button class="b2b-btn b2b-btn-secondary" onclick="b2bManifestCamera()">Scan with camera</button>` : ''}
+                </div>
+                <p class="b2b-hint">"What it is" stays filled in between scans, so a run of the same model is one scan each.</p>`}
+                <div id="b2bMfList">${_b2bManifestList(locked)}</div>
+            </div>
+        </div>`;
+}
+
+function _b2bManifestList(locked) {
+    const rows = _b2bManifest.rows;
+    if (!rows.length) return '<div class="b2b-mf-empty">Nothing scanned yet.</div>';
+    const units = rows.reduce((n, r) => n + (Number(r.qty) || 1), 0);
+    const kinds = new Set(rows.map(r => r.desc.trim().toLowerCase())).size;
+    return `
+        <div class="b2b-mf-sum"><b>${units}</b> unit${units === 1 ? '' : 's'} · ${kinds} kind${kinds === 1 ? '' : 's'}</div>
+        <div class="b2b-mf-rows">
+            ${rows.map((r, i) => `
+            <div class="b2b-mf-row">
+                <span class="b2b-mf-n">${rows.length - i}</span>
+                <span class="b2b-mf-what">${r.desc ? escapeHtml(r.desc) : '<i>Not described</i>'}</span>
+                <span class="b2b-mf-ser b2b-mono">${r.serial ? escapeHtml(r.serial) : '—'}</span>
+                <span class="b2b-mf-q">×${Number(r.qty) || 1}</span>
+                ${locked ? '' : `<button class="b2b-mf-x" aria-label="Remove" onclick="b2bManifestRemove(${i})">×</button>`}
+            </div>`).join('')}
+        </div>`;
+}
+
+function _b2bRepaintManifest() {
+    const el = document.getElementById('b2bMfList');
+    if (el) el.innerHTML = _b2bManifestList(false);
+}
+
+function b2bManifestToggle(on) {
+    _b2bManifest.open = !!on;
+    const body = document.querySelector('#b2bMf .b2b-mf-body');
+    if (body) body.hidden = !on;
+    document.getElementById('b2bMf')?.classList.toggle('open', !!on);
+    if (on) document.getElementById('b2bMfDesc')?.focus();
+}
+
+// Newest first on screen (the one just scanned is the one you look for); the
+// stored order is scan order reversed back on save, so the PDF and the pricing
+// lines run in the order things came off the shelf.
+function b2bManifestAdd(serialIn) {
+    const deal = _b2bModalDeal;
+    if (!deal || deal.custody_path) return;
+    const serEl = document.getElementById('b2bMfSerial');
+    const serial = String(serialIn != null ? serialIn : (serEl?.value || '')).replace(/,/g, ' ').trim();
+    const desc = String(document.getElementById('b2bMfDesc')?.value || _b2bManifest.desc || '').trim();
+    const qty = serial ? 1 : Math.max(1, parseInt(document.getElementById('b2bMfQty')?.value, 10) || 1);
+    if (!serial && !desc) { _b2bSay('Scan a serial or say what it is.', true); serEl?.focus(); return; }
+    if (serial && _b2bManifest.rows.some(r => r.serial.toLowerCase() === serial.toLowerCase())) {
+        _b2bSay(`${serial} is already on the list.`, true);
+        if (serEl) { serEl.select(); serEl.focus(); }
+        return;
     }
+    if (_b2bManifest.rows.length >= 2000) return _b2bSay('The list is limited to 2,000 rows.', true);
+    _b2bManifest.desc = desc;
+    _b2bManifest.rows.unshift({ serial, desc, qty });
+    if (serEl && serialIn == null) { serEl.value = ''; serEl.focus(); }
+    const q = document.getElementById('b2bMfQty'); if (q) q.value = '1';
+    _b2bRepaintManifest();
+    _b2bManifestQueueSave();
+    return true;
+}
+
+function b2bManifestRemove(i) {
+    if (!_b2bModalDeal || _b2bModalDeal.custody_path) return;
+    _b2bManifest.rows.splice(i, 1);
+    _b2bRepaintManifest();
+    _b2bManifestQueueSave();
+}
+
+function _b2bManifestQueueSave() {
+    clearTimeout(_b2bManifestTimer);
+    _b2bManifestTimer = setTimeout(() => { _b2bManifestTimer = null; _b2bManifestSaveNow(); }, 600);
+}
+// Resolves once whatever is pending has reached the server -- the custody form
+// waits on it, because the PDF and the pricing lines must be the same list.
+function _b2bManifestSaveNow() {
+    const id = _b2bManifest.dealId;
+    if (!id) return Promise.resolve();
+    if (_b2bManifestTimer) { clearTimeout(_b2bManifestTimer); _b2bManifestTimer = null; }
+    const manifest = _b2bManifest.rows.slice().reverse();
+    return _b2bEnqueue('mf:' + id, () => _b2bSend({ action: 'save_pickup_manifest', id, manifest, user: _b2bUser() }))
+        .catch(e => { _b2bSay(`Couldn't save the scanned list: ${e.message}`, true); throw e; });
+}
+
+// Camera scanning, where the browser has a barcode reader built in (Chrome on
+// Android, most current phones). A hardware scanner or typing works everywhere,
+// so the button simply is not drawn where this would not.
+let _b2bCamStream = null;
+async function b2bManifestCamera() {
+    if (typeof window.BarcodeDetector !== 'function') return;
+    b2bManifestCameraClose();
+    const pop = document.createElement('div');
+    pop.id = 'b2bCamPop';
+    pop.className = 'b2b-qrpop';
+    pop.innerHTML = `
+        <div class="b2b-qrpop-card b2b-cam-card" role="dialog" aria-modal="true">
+            <b>Point the camera at a barcode</b>
+            <video id="b2bCamVid" playsinline muted></video>
+            <span class="b2b-cam-msg" id="b2bCamMsg">Each new code is added to the list.</span>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bManifestCameraClose()">Done</button>
+        </div>`;
+    document.body.appendChild(pop);
+    try {
+        _b2bCamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    } catch (e) {
+        document.getElementById('b2bCamMsg').textContent = "Couldn't open the camera — " + (e.message || 'permission refused') + '.';
+        return;
+    }
+    const vid = document.getElementById('b2bCamVid');
+    if (!vid) return b2bManifestCameraClose();
+    vid.srcObject = _b2bCamStream;
+    await vid.play().catch(() => {});
+    const det = new window.BarcodeDetector();
+    const seen = new Set();
+    const tick = async () => {
+        if (!document.getElementById('b2bCamPop')) return;
+        try {
+            const codes = await det.detect(vid);
+            for (const c of codes) {
+                const v = String(c.rawValue || '').trim();
+                if (!v || seen.has(v)) continue;
+                seen.add(v);
+                const ok = b2bManifestAdd(v);
+                const msg = document.getElementById('b2bCamMsg');
+                if (msg) msg.textContent = ok ? `Added ${v}` : `${v} is already on the list`;
+                if (ok && navigator.vibrate) navigator.vibrate(60);
+            }
+        } catch (_) { /* a frame it could not read; try the next */ }
+        setTimeout(tick, 250);
+    };
+    tick();
+}
+function b2bManifestCameraClose() {
+    if (_b2bCamStream) { _b2bCamStream.getTracks().forEach(t => t.stop()); _b2bCamStream = null; }
+    document.getElementById('b2bCamPop')?.remove();
+}
+
+// What the custody form says, gathered once when it is opened so the screen the
+// client reads, the PDF and what is saved on the deal are all the same facts.
+//
+// ⚠️ THE WORDING IS NICK'S TO APPROVE. It says only what was asked -- that the
+// client accepts we are taking custody of the listed items -- and makes no
+// promise about price, ownership or payment, which the quote covers later.
+const B2B_CUSTODY_TITLE = 'Custody Acknowledgement';
+const B2B_CUSTODY_TERMS = 'By signing below, the client representative named on this form confirms that '
+    + 'the items listed were released to SPEEKS Technology (PayMore franchisee, Kansas City & St. Louis) '
+    + 'on the date shown, and accepts that SPEEKS Technology has taken custody of them as of that date.';
+
+let _b2bCustody = null;
+// A signed document carries the year: "Oct 15" is fine on a board, not on a
+// form someone may need to produce a year from now.
+function _b2bLongDate(day) {
+    if (!day) return '';
+    return new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+function _b2bCustodyData(deal) {
+    const w = _b2bIntake(deal);
+    const val = (id) => String(document.getElementById(id)?.value || '').trim();
+    return {
+        id: deal.id, ref: deal.ref || '',
+        company: deal.client?.company || '',
+        name: val('b2bPuSigned'),
+        date: w.key === 'walkin' ? new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) : val('b2bPuDate'),
+        desc: val('b2bPuDesc'),
+        recv: val('b2bPuRecv'),
+        store: deal.pricing_store || '',
+        staff: _b2bUser(),
+        // Scan order, oldest first -- the order it came off the shelf.
+        rows: _b2bManifest.rows.slice().reverse(),
+        walkIn: w.key === 'walkin',
+    };
+}
+
+function _b2bCustodyDocHtml(d) {
+    const units = d.rows.reduce((n, r) => n + (Number(r.qty) || 1), 0);
+    const facts = [
+        ['Client', d.company],
+        ['Released by', d.name],
+        [d.walkIn ? 'Brought in' : 'Collected', _b2bLongDate(d.date)],
+        ['Reference', d.ref],
+        d.store ? ['Held at', d.store] : null,
+        d.recv ? ['Received by', d.recv] : null,
+    ].filter(Boolean);
+    return `
+        <div class="b2b-cdoc">
+            <div class="b2b-cdoc-h">
+                <div><b>${escapeHtml(B2B_CUSTODY_TITLE)}</b>
+                    <span>SPEEKS Technology · PayMore franchisee</span></div>
+                <span class="b2b-mono">${escapeHtml(d.ref)}</span>
+            </div>
+            <div class="b2b-cdoc-facts">
+                ${facts.map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(v || '—')}</b></div>`).join('')}
+            </div>
+            ${d.desc ? `<div class="b2b-cdoc-sec"><span>Items</span><p>${escapeHtml(d.desc)}</p></div>` : ''}
+            ${d.rows.length ? `
+            <div class="b2b-cdoc-sec"><span>Itemized — ${units} unit${units === 1 ? '' : 's'}</span>
+                <table class="b2b-cdoc-tbl">
+                    <thead><tr><th>#</th><th>Item</th><th>Serial</th><th>Qty</th></tr></thead>
+                    <tbody>${d.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(r.desc || '—')}</td>
+                        <td class="b2b-mono">${escapeHtml(r.serial || '—')}</td><td>${Number(r.qty) || 1}</td></tr>`).join('')}</tbody>
+                </table></div>` : ''}
+            <p class="b2b-cdoc-terms">${escapeHtml(B2B_CUSTODY_TERMS)}</p>
+        </div>`;
+}
+
+// Open the form for the client to read and sign. Everything it prints has to be
+// there first: who released the goods, when, and what -- a custody form with a
+// blank where the items go is not worth the signature on it.
+async function b2bOpenCustody(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+    const d = _b2bCustodyData(deal);
+    if (!d.name) { alert("Enter the name of the person releasing the items first — it goes on the form."); return; }
+    if (!d.walkIn && !d.date) { alert('Pick the date the items were collected first — it goes on the form.'); return; }
+    if (!d.desc && !d.rows.length) { alert('Describe the items, or scan them, first — that is what the client is signing for.'); return; }
+    _b2bCapturePickupDraft(id);
+    try { await _b2bManifestSaveNow(); } catch (_) { return; }
+    _b2bCustody = d;
     _b2bModalDeal = deal;
     _b2bSigDrawn = false;
-    _b2bSignOnDevice = !!onDevice;
     _b2bShowDeal({
         stage: 'pickup',
         eyebrow: deal.ref,
-        title: 'Client Signature',
-        sub: onDevice ? 'Hand the device to the client to sign.' : 'Hand the phone to the client.',
+        title: 'Custody Form',
+        sub: 'Hand the device to the client to read and sign.',
         wide: true,
         body: `
-            <div class="b2b-sign-who">
-                <b>${escapeHtml(deal.client?.company || '')}</b>
-                ${deal.pickup_date ? `<span>Collected ${escapeHtml(_b2bDate(deal.pickup_date))}</span>` : ''}
-            </div>
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Items collected</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
-            <!-- Word for word the acknowledgement the pickup screen already
-                 asks staff to tick. The client is signing that sentence, so it
-                 has to be the sentence, not a paraphrase of it. -->
-            <p class="b2b-sign-ack">The client confirms the items above were collected by
-                SPEEKS Technology on the date shown.</p>
+            ${_b2bCustodyDocHtml(d)}
             <div class="b2b-sign-pad">
                 <canvas id="b2bSigPad" width="900" height="320"></canvas>
                 <span class="b2b-sign-hint" id="b2bSigHint">Sign here</span>
             </div>
-            <div class="b2b-sign-name">${escapeHtml(deal.signed_by || 'Signature')}</div>`,
+            <div class="b2b-sign-name">${escapeHtml(d.name)}</div>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bOpenDeal('pickup','${deal.id}')">Back</button>
             <button class="kpi-cancel-btn" onclick="b2bClearSign()">Clear</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bSigSave"
-                onclick="b2bSaveSign('${deal.id}',this)">Save Signature</button>`,
+                onclick="b2bSignCustody('${deal.id}',this)">Sign Custody Form</button>`,
         after: _b2bInitSigPad,
     });
 }
@@ -25446,26 +25769,174 @@ function b2bClearSign() {
     document.getElementById('b2bSigHint')?.classList.remove('gone');
 }
 
-async function b2bSaveSign(id, btn) {
+// Signing: the signature goes on the deal (capture_signature), then into the
+// PDF, then the PDF and the facts printed on it go on the deal (save_custody).
+// Back to the pickup screen after, which now shows the signed form.
+async function b2bSignCustody(id, btn) {
     if (!_b2bSigDrawn) return _b2bSay('Ask the client to sign first.', true);
     const cv = document.getElementById('b2bSigPad');
-    if (!cv) return;
+    const d = _b2bCustody;
+    if (!cv || !d || d.id !== id) return;
+    const png = cv.toDataURL('image/png');
+    const signedAt = new Date();
     await _b2bBusy(btn, 'Saving…', async () => {
-        await _b2bPost({ action: 'capture_signature', id, image: cv.toDataURL('image/png') },
-            "Couldn't save the signature");
-        closeAllModals();
-        await b2bRefresh();
-        if (_b2bSignOnDevice) {
-            // Signed on the pickup device itself -- go straight back to the pickup
-            // screen, where the signature now shows and the sign-off can finish.
-            _b2bSignOnDevice = false;
-            b2bOpenDeal('pickup', id);
-        } else {
-            // The phone's job is done in one screen; say so rather than dropping the
-            // person back onto a board they did not come here for.
-            alert('Signature saved. You can hand the phone back.');
+        try {
+            await _b2bSend({ action: 'capture_signature', id, image: png, user: _b2bUser() });
+            // A JPEG copy for the PDF: the PNG is lossless and, embedded raw,
+            // made a one-page form over a megabyte. On a white pad JPEG is
+            // indistinguishable. The PNG stays the signature of record.
+            const pdf = await _b2bCustodyPdf(d, cv.toDataURL('image/jpeg', 0.9), signedAt);
+            await _b2bSend({
+                action: 'save_custody', id, pdf, user: _b2bUser(),
+                signed_by: d.name, pickup_date: d.walkIn ? undefined : d.date,
+                pickup_desc: d.desc, received_by: d.recv || undefined,
+            });
+        } catch (e) {
+            _b2bSay(`Couldn't save the custody form: ${e.message}`, true);
+            return;
         }
+        _b2bCustody = null;
+        _b2bPickupDraft = null;
+        await b2bRefresh();
+        b2bOpenDeal('pickup', id);
     });
+}
+
+// jsPDF from CDN, loaded the first time a form is signed -- the same way the QR
+// library and SheetJS are, so nobody who never signs one pays for it.
+let _b2bPdfLoading = null;
+function _b2bEnsureJsPdf() {
+    if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+    if (_b2bPdfLoading) return _b2bPdfLoading;
+    const srcs = [
+        'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+        'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
+    ];
+    _b2bPdfLoading = new Promise((resolve, reject) => {
+        const tryNext = (i) => {
+            if (i >= srcs.length) { _b2bPdfLoading = null; return reject(new Error('the PDF library could not load')); }
+            const s = document.createElement('script');
+            s.src = srcs[i];
+            s.onload = () => (window.jspdf && window.jspdf.jsPDF) ? resolve(window.jspdf.jsPDF) : tryNext(i + 1);
+            s.onerror = () => tryNext(i + 1);
+            document.head.appendChild(s);
+        };
+        tryNext(0);
+    });
+    return _b2bPdfLoading;
+}
+
+// The PDF: the same facts, list and wording the client just read on screen,
+// with their signature placed under it. US Letter, plain type -- a document to
+// be printed and filed, not a brochure.
+async function _b2bCustodyPdf(d, sigImg, signedAt) {
+    const JsPDF = await _b2bEnsureJsPdf();
+    const doc = new JsPDF({ unit: 'pt', format: 'letter', compress: true });
+    const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+    const M = 54, R = W - M, BOTTOM = H - 64;
+    let y = M;
+    const ensure = (h) => { if (y + h > BOTTOM) { doc.addPage(); y = M; return true; } return false; };
+    const ink = () => doc.setTextColor(26, 28, 30);
+    const muted = () => doc.setTextColor(100, 112, 130);
+
+    // Heading
+    ink(); doc.setFont('helvetica', 'bold'); doc.setFontSize(20);
+    doc.text(B2B_CUSTODY_TITLE, M, y + 6);
+    doc.setFont('courier', 'bold'); doc.setFontSize(12);
+    doc.text(d.ref, R, y + 6, { align: 'right' });
+    y += 24;
+    muted(); doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+    doc.text('SPEEKS Technology · PayMore franchisee, Kansas City & St. Louis', M, y);
+    y += 14;
+    doc.setDrawColor(210, 216, 224); doc.line(M, y, R, y);
+    y += 22;
+
+    // Facts, two to a row
+    const facts = [
+        ['Client', d.company], ['Released by', d.name],
+        [d.walkIn ? 'Brought in' : 'Collected', _b2bLongDate(d.date)], ['Reference', d.ref],
+    ];
+    if (d.store) facts.push(['Held at', d.store]);
+    if (d.recv) facts.push(['Received by', d.recv]);
+    facts.push(['Prepared by', d.staff]);
+    const colW = (R - M) / 2;
+    for (let i = 0; i < facts.length; i += 2) {
+        ensure(34);
+        [facts[i], facts[i + 1]].forEach((f, j) => {
+            if (!f) return;
+            const x = M + j * colW;
+            muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+            doc.text(String(f[0]).toUpperCase(), x, y);
+            ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
+            doc.text(doc.splitTextToSize(String(f[1] || '—'), colW - 12)[0], x, y + 14);
+        });
+        y += 34;
+    }
+
+    // Items
+    if (d.desc) {
+        y += 4; ensure(40);
+        muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+        doc.text('ITEMS', M, y); y += 13;
+        ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5);
+        for (const line of doc.splitTextToSize(d.desc, R - M)) { ensure(14); doc.text(line, M, y); y += 14; }
+        y += 8;
+    }
+
+    // Itemized list, header repeated on every page it runs onto
+    if (d.rows.length) {
+        const units = d.rows.reduce((n, r) => n + (Number(r.qty) || 1), 0);
+        const cols = [M, M + 30, M + 290, R - 30];
+        const head = () => {
+            muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+            ['#', 'ITEM', 'SERIAL', 'QTY'].forEach((t, i) => doc.text(t, cols[i], y));
+            y += 6; doc.setDrawColor(210, 216, 224); doc.line(M, y, R, y); y += 12;
+        };
+        ensure(50);
+        muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+        doc.text(`ITEMIZED — ${units} UNIT${units === 1 ? '' : 'S'}`, M, y); y += 16;
+        head();
+        d.rows.forEach((r, i) => {
+            if (ensure(14)) head();
+            ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+            doc.text(String(i + 1), cols[0], y);
+            doc.text(doc.splitTextToSize(r.desc || '—', 250)[0], cols[1], y);
+            doc.setFont('courier', 'normal');
+            doc.text(doc.splitTextToSize(r.serial || '—', 190)[0], cols[2], y);
+            doc.setFont('helvetica', 'normal');
+            doc.text(String(Number(r.qty) || 1), cols[3], y);
+            y += 14;
+        });
+        y += 8;
+    }
+
+    // The statement, then the signature under it -- kept together on one page.
+    const terms = doc.splitTextToSize(B2B_CUSTODY_TERMS, R - M);
+    ensure(terms.length * 15 + 170);
+    y += 6;
+    ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
+    terms.forEach(line => { doc.text(line, M, y); y += 15; });
+    y += 18;
+    doc.addImage(sigImg, 'JPEG', M, y, 270, 96);
+    y += 100;
+    doc.setDrawColor(26, 28, 30); doc.line(M, y, M + 300, y);
+    y += 14;
+    ink(); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+    doc.text(d.name, M, y);
+    y += 14;
+    muted(); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+    const when = signedAt.toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'medium', timeStyle: 'short' });
+    doc.text(`Signed ${when} CT${d.company ? ` on behalf of ${d.company}` : ''}`, M, y);
+
+    // Footer on every page
+    const n = doc.getNumberOfPages();
+    for (let p = 1; p <= n; p++) {
+        doc.setPage(p);
+        muted(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
+        doc.text(`${d.ref} · ${B2B_CUSTODY_TITLE}`, M, H - 32);
+        doc.text(`Page ${p} of ${n}`, R, H - 32, { align: 'right' });
+    }
+    return doc.output('datauristring');
 }
 
 // --- moving a deal between stores ------------------------------------------
@@ -42661,7 +43132,7 @@ function _recipientsFor(key, fallback) {
 }
 
 // ---- the DM/CEO management tool ----
-// FOUR groups, not one per report. Eleven bars for twenty lists meant most of
+// FOUR groups, not one per report. Eleven bars for twenty lists (now forty-odd) meant most of
 // the panel was bars, and half of them opened onto a single address box. They
 // are grouped by what the mail IS — a scheduled performance report, an
 // operations report, an alert that fires only when something is wrong, or a
@@ -42674,7 +43145,13 @@ const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const EMAIL_LIST_GROUPS = [
     {
         title: 'Store Performance Reports',
-        desc: 'Monday morning performance emails, sent automatically.',
+        // Checked against the senders 2026-10-16 (Nick asked for a full check
+        // that this tool is accurate). Every scheduled report falls back to a
+        // built-in address when its list is empty, and only b2b_quote_ready used
+        // to say so -- so clearing a list looked like switching a report off.
+        desc: 'Monday morning performance emails, sent automatically. An empty list does not stop '
+            + 'one: it falls back to the built-in address (a store\'s report to its usual manager, '
+            + 'leadership to Ethan and Paul).',
         lists: [
             { key: 'weekly_leadership', label: 'Leadership Report', desc: 'The district-wide roll-up.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} Manager Report` })),
@@ -42683,14 +43160,16 @@ const EMAIL_LIST_GROUPS = [
     {
         title: 'Operations Reports',
         desc: 'Scheduled reports on how the stores are running, plus the mail the '
-            + 'site sends on someone else\'s behalf.',
+            + 'site sends on someone else\'s behalf. Emptying a scheduled report\'s list does not '
+            + 'stop it — it goes to its built-in address instead.',
         lists: [
             { key: 'unlisted_report', label: 'Unlisted Inventory Weekly Update',
               desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
             { key: 'cash_report', label: 'Cash On Hand',
-              desc: '7am closing-cash table, read off each store\'s Day End Report.' },
+              desc: 'Shortly after 6:05am, at the end of the morning sales import (9am if that '
+                  + 'import failed) — closing cash per store, read off each Day End Report.' },
             { key: 'processed_report', label: 'Processed Stats',
-              desc: '8:10am — how many items each store listed yesterday and what '
+              desc: '6:15am — how many items each store listed yesterday and what '
                   + 'they were worth, off the Day End Report.' },
             { key: 'record_watch_leadership', label: 'Company Records — Leadership',
               desc: '6:40am, only on a morning a store broke or came within 5% of a record: daily '
@@ -42710,7 +43189,8 @@ const EMAIL_LIST_GROUPS = [
     },
     {
         title: 'System Alerts',
-        desc: 'Silent unless something is broken or a decision is waiting.',
+        desc: 'Silent unless something is broken or a decision is waiting. An empty list still '
+            + 'sends, to the built-in address.',
         lists: [
             { key: 'connect_alerts', label: 'SPEEKS Connect Errors',
               desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.' },
@@ -42730,7 +43210,8 @@ const EMAIL_LIST_GROUPS = [
                   + 'times its manager has been told.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `refund_mismatch_${s}`, label: `Refund Mismatch — ${s}`,
               desc: '8:20am. Refunded on eBay but not Shopify, or the reverse, for 3 days '
-                  + '(1 day at month end). Raised again every 3 days until fixed. '
+                  + '(1 day at month end). On every morning\'s mail until fixed. Left empty, it '
+                  + `goes to the ${s} Manager Report list instead. `
                   + 'Being retired: Claims & Disputes below covers mismatches too.' })),
             // Claims & Disputes. These take over from the two refund-mismatch
             // lists above — a mismatch is one of four kinds of held money, and
@@ -42742,13 +43223,13 @@ const EMAIL_LIST_GROUPS = [
             { key: 'claims_disputes_dm', label: 'Claims & Disputes — District Manager',
               desc: '8:20am, a count per store of what still needs a person, plus missed reply '
                   + 'windows (said once) and anyone who marked something resolved that the site '
-                  + 'disagrees with. 4:00pm again only when a deadline falls today and the store '
-                  + 'still has not answered it.' },
+                  + 'disagrees with. 4:00pm again only when a deadline falls today or tomorrow and '
+                  + 'the store still has not answered it.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `claims_disputes_${s}`, label: `Claims & Disputes — ${s}`,
               desc: '8:20am. Everything eBay or Shopify is waiting on this store for — cases, '
-                  + 'payment disputes, chargebacks, item-not-received and mismatches — soonest '
-                  + 'deadline first. 4:00pm again only if something closes today and is still '
-                  + 'unanswered.' })),
+                  + 'payment disputes, chargebacks, item-not-received, mismatches and unpaid '
+                  + 'Shopify orders — soonest deadline first. 4:00pm again only if something is due '
+                  + 'today or tomorrow and is still unanswered.' })),
         ],
     },
     {
@@ -42769,13 +43250,13 @@ async function openEmailRecipients() {
 }
 
 // ---- the collapsible list, its search, and which bar is open ----
-// Four groups over twenty lists: fully expanded this ran several screens and
+// Four groups over forty-odd lists: fully expanded this ran several screens and
 // the one you came for was never the one on screen. One group open at a time,
 // same shape as the Margin Guide rebuttal accordion.
 //
 // The search matches ADDRESSES as well as report names on purpose — you
 // usually arrive here knowing the person you want to remove, not which of the
-// twenty lists they happen to sit on.
+// forty-odd lists they happen to sit on.
 let _erOpen = null;     // title of the open group, or null for all closed
 let _erQuery = '';
 
@@ -43058,12 +43539,12 @@ const FEATURE_CATALOG = [
     // board has no inbox; it is on the ordinary nav now and would otherwise be
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
-    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multistore-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-claims-store',        label: 'Claims & Disputes (Store)',     tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
     { key: 'tool-claims-oversight',    label: 'Claims & Disputes (Oversight)', tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
-    { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
@@ -43127,8 +43608,12 @@ const FEATURE_CATALOG = [
     // their manager, cost and margin included, is the decision these panels were
     // built around. Those rows exist so a store that would rather not can switch
     // them off, not as a default-off gate.
-    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
-    { key: 'widget-command-center',    label: 'Command Center (Whole Card)',   tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    // The two Command Center keys gate different elements (index.html): the CARD
+    // itself, and the dashboard ROW it sits in. The old labels ("Whole Widget" /
+    // "Whole Card") could not be told apart; switch both together, or you get an
+    // empty row or a card with nowhere to show. (Feature Access check, 2026-10-16.)
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (Card)',          tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-command-center',    label: 'Command Center (Dashboard Row)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
     // now — so the switch is gone too rather than left as a control that does
@@ -43183,15 +43668,17 @@ const FEATURE_CATALOG = [
     { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-marginguide',   label: 'Margin Guide (Tab)',            tab: 'widgets', group: 'Operations', def: 'all' },
-    // The editor behind the Margin Guide's "Edit" button. Listed so it can
-    // be delegated or pulled back without a code change; mgCanEditLadder() gates it
-    // in JS as well, and the edge function enforces the same roles on every write.
-    { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // The editor behind the Margin Guide's "Edit" button. It can be PULLED BACK
+    // here, but not handed out: mgCanEditLadder() checks MG_EDIT_ROLES (DM, CEO,
+    // MOCD) first and the edge function enforces the same roles on every write,
+    // so granting it to anyone else draws nothing. MOCD added to def to match.
+    { key: 'tool-margin-manage',       label: 'Margin Guide — Edit (DM/CEO/MOCD only)', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-ops-pictureguide',  label: 'Picture Guide (Tab)',           tab: 'widgets', group: 'Operations', def: 'all' },
     // The editor behind the Picture Guide's "Edit" button. Same shape as
-    // tool-margin-manage: pgCanEdit() gates it in JS and the edge function
-    // enforces the same roles on every write, so this is only who SEES it.
-    { key: 'tool-picture-manage',      label: 'Picture Guide — Edit',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // tool-margin-manage: pgCanEdit() checks PG_EDIT_ROLES (DM, CEO) and the edge
+    // function enforces the same roles on every write, so this can only take it
+    // away -- granting it to anyone else draws nothing.
+    { key: 'tool-picture-manage',      label: 'Picture Guide — Edit (DM/CEO only)',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
@@ -43229,7 +43716,10 @@ const FEATURE_CATALOG = [
     // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
     // picture-quality function, for the same reason ec-view-titles must match.
     { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
-    { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
+    // LENDS the corp hat to someone outside the corp roles. DM, CEO and MOCD have
+    // corp powers by role whatever this says (_b2bIsCorp), which is why only the
+    // DM column is on and switching CEO/MOCD off does nothing.
+    { key: 'cap-b2b-corp',             label: 'B2B Corp Powers (Lend To Others)',           tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // Live bench intake: the capture tool on a machine being tested posts its
     // own specs into the open deal. `def: []` is the whole point -- it ships off
     // for everyone, including CEO and DM, and is turned on per role or per person
@@ -43492,6 +43982,14 @@ const _SECTION_TABS = {
 // READ-ONLY form for everyone, DM included (Ethan, 2026-09-20). See pgCanEdit().
 const _TABLET_SECTION_TABS = new Set(['widget-ops-pictureguide']);
 
+// THE PHONE'S ONE EXCEPTION (2026-10-16). Nick: "have on mobile the b2b module
+// enabled now" -- the pickup and its custody form are done at the client's door,
+// on a phone. The B2B tab itself carries no data-mobile cut any more; this is
+// the other half, the Operations link that reaches it, which IS cut on a phone
+// and stays cut for anyone who cannot see B2B (they would land on an empty
+// page). A link opts in with data-phone="show", and only these keys count.
+const _PHONE_SECTION_TABS = new Set(['widget-ops-b2b']);
+
 function _applySectionNavVisibility(userRoleClass, userName) {
     const compact = _isMobileLayout();
     const tablet = compact && typeof _isTabletLayout === 'function' && _isTabletLayout();
@@ -43511,9 +44009,12 @@ function _applySectionNavVisibility(userRoleClass, userName) {
         // without this line is set to display:none a few microseconds later by a
         // function that never heard of the attribute.
         const earnedBack = link.getAttribute('data-tablet') === 'show' && tablet;
-        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && compact && !earnedBack;
+        const phoneBack = link.getAttribute('data-phone') === 'show' && compact && !tablet;
+        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && compact && !earnedBack && !phoneBack;
         const keys = earnedBack
-            ? _SECTION_TABS[href].filter(k => _TABLET_SECTION_TABS.has(k))
+            ? _SECTION_TABS[href].filter(k => _TABLET_SECTION_TABS.has(k) || _PHONE_SECTION_TABS.has(k))
+            : phoneBack
+            ? _SECTION_TABS[href].filter(k => _PHONE_SECTION_TABS.has(k))
             : _SECTION_TABS[href];
         const vis = !cutOnMobile
             && keys.some(k => _featureEffectiveVisible(k, userRoleClass, userName));

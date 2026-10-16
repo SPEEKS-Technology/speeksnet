@@ -172,7 +172,9 @@ t('2.3 a repeat scan bumps the listing units', function () {
 // it deleted signing client name and all of the item pickup field."
 t('2.2 pickup draft capture is shared, not open-coded', function () {
     if (typeof _b2bCapturePickupDraft !== 'function') return 'helper missing';
-    var callers = ['b2bSignHere', 'b2bSkipSign', 'b2bRetakeSign', 'b2bPrintHoldingLabel'];
+    // b2bSignHere and b2bRetakeSign went with the QR signing route (2026-10-16);
+    // the custody form is now the round-trip that has to hold the form.
+    var callers = ['b2bOpenCustody', 'b2bSkipSign', 'b2bPrintHoldingLabel'];
     var missing = callers.filter(function (fn) {
         return window[fn].toString().indexOf('_b2bCapturePickupDraft') === -1;
     });
@@ -3028,4 +3030,92 @@ t('oct 4.1 the sent quote no longer uses the side-by-side split', function () {
     var sent = src.slice(0, src.indexOf('_b2bGridMode'));
     if (sent.indexOf('_b2bReviewSplit(') > -1) return 'still renders the split';
     return (sent.indexOf('_b2bQuoteStatus(') > -1 && sent.indexOf('b2b-qdoc-fold') > -1) || 'status or folded client copy missing';
+});
+
+// --- October 2026 batch: pickup custody form, itemized pickup, phone -------
+// Nick, 2026-10-16: the QR-to-a-phone signing route is gone; B2B runs on the
+// phone; signing produces a custody PDF; an optional scanned list becomes
+// pricing lines and prints on the form.
+function _pkDeal(o) {
+    return Object.assign({ id: 'pk1', ref: 'PK-001', stage: 'pickup', pricing_store: 'WSP', intake_kind: 'pickup',
+        client: { company: 'Pickup Co' }, pickup_manifest: [], custody_path: null, signature_path: null }, o || {});
+}
+t('oct 6 the old QR signing route is gone', function () {
+    var gone = ['b2bOpenSign', 'b2bSignHere', 'b2bSaveSign', '_b2bSignUrl'].filter(function (n) { return typeof window[n] === 'function'; });
+    if (gone.length) return 'still defined: ' + gone.join(', ');
+    var src = _srcOf(_b2bSignBlock);
+    return (src.indexOf('b2bSignQR') === -1 && src.indexOf('b2b-sign-') === -1) || 'the sign block still draws the phone QR';
+});
+t('oct 6 an unsigned pickup offers the custody form, the phone QR and (corp) the skip', function () {
+    var h = _asRole('ceo', 'CORP', function () { return _b2bSignBlock(_pkDeal()); });
+    if (h.indexOf("b2bOpenCustody('pk1')") === -1) return 'no custody form button';
+    if (h.indexOf('b2bPhoneQR()') === -1) return 'no Use a phone';
+    return h.indexOf("b2bSkipSign('pk1')") > -1 || 'corp lost the skip';
+});
+t('oct 6 a signed pickup offers the PDF and a retake', function () {
+    var h = _b2bSignBlock(_pkDeal({ custody_path: 'pk1/1.pdf', custody_at: '2026-10-16T18:00:00Z', signed_by: 'Dana', signature_path: 'x.png' }));
+    if (h.indexOf('custody=pk1') === -1) return 'no PDF link';
+    if (h.indexOf('&dl=1') === -1) return 'no download link';
+    return h.indexOf("b2bRetakeCustody('pk1')") > -1 || 'no retake';
+});
+t('oct 6 the phone QR points at the site sign-in, nothing deal-specific', function () {
+    var u = _b2bSiteUrl();
+    return (/index\.html$/.test(u) && u.indexOf('#') === -1) || u;
+});
+t('oct 6.3 scans are held newest-first and saved in scan order', function () {
+    _b2bManifest = { dealId: null, rows: [], open: false, desc: '' };
+    _b2bManifestFor(_pkDeal({ id: 'pk2', pickup_manifest: [{ serial: 'A', desc: 'X', qty: 1 }, { serial: 'B', desc: 'X', qty: 1 }] }));
+    if (_b2bManifest.rows.map(function (r) { return r.serial; }).join() !== 'B,A') return 'not newest-first: ' + JSON.stringify(_b2bManifest.rows);
+    var keepD = _b2bModalDeal; _b2bModalDeal = _pkDeal({ id: 'pk2' });
+    try {
+        b2bManifestAdd('C');
+        return _b2bManifest.rows.slice().reverse().map(function (r) { return r.serial; }).join() === 'A,B,C' || 'save order wrong';
+    } finally { _b2bModalDeal = keepD; clearTimeout(_b2bManifestTimer); _b2bManifestTimer = null; }
+});
+t('oct 6.3 a serial already on the list is refused', function () {
+    _b2bManifest = { dealId: 'pk3', rows: [{ serial: 'S1', desc: 'X', qty: 1 }], open: true, desc: 'X' };
+    var keepD = _b2bModalDeal; _b2bModalDeal = _pkDeal({ id: 'pk3' });
+    try {
+        var r = b2bManifestAdd('s1');
+        return (r !== true && _b2bManifest.rows.length === 1) || 'a duplicate (case-insensitive) went on the list';
+    } finally { _b2bModalDeal = keepD; clearTimeout(_b2bManifestTimer); _b2bManifestTimer = null; }
+});
+t('oct 6.3 a signed form locks the list', function () {
+    _b2bManifest = { dealId: 'pk4', rows: [], open: true, desc: 'X' };
+    var keepD = _b2bModalDeal; _b2bModalDeal = _pkDeal({ id: 'pk4', custody_path: 'x.pdf' });
+    try {
+        b2bManifestAdd('NEW');
+        if (_b2bManifest.rows.length) return 'added to a signed list';
+        _b2bManifest.rows = [{ serial: 'A', desc: 'X', qty: 1 }];
+        var h = _b2bManifestBlock(_b2bModalDeal);
+        return (h.indexOf('b2bMfSerial') === -1 && h.indexOf('b2bManifestRemove') === -1) || 'a signed list can still be edited';
+    } finally { _b2bModalDeal = keepD; }
+});
+t('oct 6.2 the custody document carries the facts, the list and the statement', function () {
+    var h = _b2bCustodyDocHtml({ ref: 'PK-001', company: 'Pickup Co', name: 'Dana Whitlock', date: '2026-10-15', desc: '2 pallets',
+        recv: 'Jon', store: 'WSP', staff: 'Nick', walkIn: false,
+        rows: [{ serial: 'S1', desc: 'Dell', qty: 1 }, { serial: '', desc: 'Cables', qty: 3 }] });
+    var need = ['Pickup Co', 'Dana Whitlock', 'October 15, 2026', 'PK-001', '2 pallets', 'S1', 'Cables', '4 units', B2B_CUSTODY_TERMS];
+    var miss = need.filter(function (s) { return h.indexOf(escapeHtml(s)) === -1; });
+    return miss.length === 0 || 'missing: ' + miss.join(' | ');
+});
+t('oct 6.2 the form will not open without the facts it prints', function () {
+    var host = document.createElement('div');
+    host.innerHTML = '<textarea id="b2bPuDesc"></textarea><input id="b2bPuSigned"><input id="b2bPuDate">';
+    document.body.appendChild(host);
+    var alerts = [], keepA = window.alert; window.alert = function (m) { alerts.push(m); };
+    try {
+        _b2bManifest = { dealId: 'pk5', rows: [], open: false, desc: '' };
+        var keepDeals = _b2bDeals; _b2bDeals = [_pkDeal({ id: 'pk5' })];
+        b2bOpenCustody('pk5');
+        _b2bDeals = keepDeals;
+        return (alerts.length === 1 && /name/i.test(alerts[0])) || 'opened with no client name: ' + JSON.stringify(alerts);
+    } finally { window.alert = keepA; host.remove(); }
+});
+t('oct 6.1 the B2B module is reachable on a phone for people who have it', function () {
+    if (!_PHONE_SECTION_TABS.has('widget-ops-b2b')) return 'B2B is not a phone section tab';
+    return _srcOf(_applySectionNavVisibility).indexOf("'data-phone'") > -1 || 'the nav pass ignores data-phone';
+});
+t('oct 6 the pickup footer has a message line, so scans never alert()', function () {
+    return _srcOf(_b2bStagePickup).indexOf('id="b2bDealMsg"') > -1 || 'no b2bDealMsg on the pickup screen';
 });
