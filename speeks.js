@@ -55790,8 +55790,8 @@ const _PQ_TIERS = [
 // rows go at the end. A row with NOTHING LEFT goes away (Ethan, the same
 // evening, looking at the done cards: "When they are good now, shouldn't they
 // just go away?") — the rest keep their order, so nothing jumps.
-// RECHECK STAYS ON THE ROW, IN ITS SLOT (Ethan, 2026-10-16): greyed with a
-// "Reviewing…" line while it runs, then "✓ Passed On Recheck" — or "Rechecked —
+// RECHECK STAYS ON THE ROW, IN ITS SLOT (Ethan, 2026-10-16): "Checking…" on
+// the button while it runs, then "✓ Passed On Recheck" — or "Rechecked —
 // still needs:" over the new findings. No popup, and the row does not jump to
 // another tab. A pass shows the row as it WAS, its findings struck through.
 // Held in _pqPlaces.rechecked, so it is this page's only: "a passed on recheck
@@ -56296,8 +56296,10 @@ function _pqRow(r, done, rc) {
     const passed = !!rc && rc.verdict === 'pass' && !checking;
     const busy = _pqBusy.has(id) || passed;
     const rcAt = rc ? `${_pqDay(rc.at.toISOString())}, ${rc.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
-    const rcLine = checking
-        ? `<div class="pq-reviewing" role="status"><span class="pq-spin" aria-hidden="true"></span>Reviewing The Photos… About 1–2 Minutes</div>`
+    // While it runs, only the buttons say so — "Checking…" and Dismiss, both
+    // disabled. The greyed row and its "Reviewing…" line were tried and taken
+    // back the same day (Ethan, 2026-10-16: "I like your original design").
+    const rcLine = checking ? ''
         : passed ? `<div class="pq-passed" role="status">✓ Passed On Recheck — ${_ecEsc(rcAt)}</div>`
         : rc ? `<div class="pq-rechecked" role="status">Rechecked ${_ecEsc(rcAt)} — Still Needs:</div>` : '';
     const photos = r.photos || [];
@@ -56359,7 +56361,7 @@ function _pqRow(r, done, rc) {
     // NEW: graded by the nightly random sample in the last 3 days — outlined all
     // the way round so the reviewer can find the fresh ones (Ethan, 2026-10-15).
     const isNew = !!r.sample && Date.now() - new Date(r.sample).getTime() < 3 * 86400000;
-    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}${isNew ? ' pq-row-new' : ''}${checking ? ' pq-row-checking' : ''}${passed ? ' pq-row-passed' : ''}"${checking ? ' aria-busy="true"' : ''}>
+    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}${isNew ? ' pq-row-new' : ''}${passed ? ' pq-row-passed' : ''}"${checking ? ' aria-busy="true"' : ''}>
       <div class="lt-main">
         <div class="pq-title">${isNew ? '<span class="pq-new-tag" title="Graded by the nightly random sample">New</span>' : ''}${_ecEsc(r.title || 'Untitled Listing')}</div>
         <div class="pq-sheet">Checked ${_pqDay(r.reviewedAt)} Against: <b>${_ecEsc(r.sheetName || '—')}</b></div>

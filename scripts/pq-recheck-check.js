@@ -2,7 +2,8 @@
 //
 //   powershell -File scripts/browser-check.ps1 pq-recheck-check.js
 //
-// While Recheck runs the row is greyed with a "Reviewing…" line; afterwards it
+// While Recheck runs only the buttons change — "Checking…" and Dismiss, both
+// disabled; no greyed row (tried and taken back the same day). Afterwards it
 // stays in its slot in the tab it was pressed from — "✓ Passed On Recheck" over
 // the old, struck-through findings, or "Rechecked — Still Needs:" over the new
 // ones. All of it lives in _pqPlaces.rechecked, so a reload clears it ("a
@@ -19,11 +20,20 @@ function pqReset(rows) {
     _pqPlace('retake', rows); _pqPlace('fix', rows); _pqPlace('pass', rows);
 }
 
-t('while checking, the row is greyed with a Reviewing line', function () {
-    _pqChecking.add('A');
-    var h = _pqRow(pqFake('A', 'retake'), null, null);
-    _pqChecking.delete('A');
-    return (h.indexOf('pq-row-checking') >= 0 && h.indexOf('pq-reviewing') >= 0 && h.indexOf('Reviewing The Photos') >= 0) || 'no greyed/reviewing markup';
+t('while checking, only the buttons change: Checking… and Dismiss, both disabled, on every tab that has Recheck', function () {
+    var bad = [];
+    ['retake', 'fix'].forEach(function (v) {
+        _pqChecking.add('A'); _pqBusy.add('A');
+        var h = _pqRow(pqFake('A', v), null, null);
+        _pqChecking.delete('A'); _pqBusy.delete('A');
+        var d = document.createElement('div'); d.innerHTML = h;
+        var btns = [].slice.call(d.querySelectorAll('.pq-acts button'));
+        var chk = btns.find(function (b) { return b.textContent.trim() === 'Checking…'; });
+        var dis = btns.find(function (b) { return b.textContent.trim() === 'Dismiss'; });
+        if (!chk || !chk.disabled || !dis || !dis.disabled) bad.push(v + ': buttons');
+        if (/pq-row-checking|pq-reviewing|Reviewing The Photos/.test(h)) bad.push(v + ': greyed row is back');
+    });
+    return bad.length ? bad.join('; ') : true;
 });
 
 t('a pass stays in its slot in the tab it was pressed from, as it was', function () {

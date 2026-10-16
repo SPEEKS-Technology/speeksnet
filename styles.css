@@ -19818,20 +19818,14 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 /* A row approved here stays in its place, saying what was done (Ethan, 2026-10-15). */
 .pq-done { font-size: 11.5px; font-weight: 800; color: #1f7a3d; background: #e8f5ec;
     border-radius: 8px; padding: 7px 10px; margin-top: 6px; }
-/* RECHECK on the row (Ethan, 2026-10-16): greyed while it runs, with its own
-   line; then green "Passed On Recheck" over the struck-through findings, or the
-   new findings under "Rechecked — Still Needs". Gone on refresh. */
-.pq-row-checking .lt-main > :not(.pq-reviewing), .pq-row-checking .lt-side { opacity: .45; }
-.pq-row-checking { background: var(--cb-wash, #f4f3f0); }
-.pq-reviewing, .pq-passed, .pq-rechecked { display: flex; align-items: center; gap: 8px;
+/* RECHECK on the row (Ethan, 2026-10-16): while it runs only the buttons change
+   ("Checking…", both disabled — the greyed row was taken back the same day);
+   then green "Passed On Recheck" over the struck-through findings, or the new
+   findings under "Rechecked — Still Needs". Gone on refresh. */
+.pq-passed, .pq-rechecked { display: flex; align-items: center; gap: 8px;
     font-size: 11.5px; font-weight: 800; border-radius: 8px; padding: 7px 10px; margin-top: 6px; }
-.pq-reviewing { color: #3d4652; background: #e7eaee; }
 .pq-passed { color: #1f7a3d; background: #e8f5ec; }
 .pq-rechecked { color: #8a5a00; background: var(--cb-gold-tint, #fdf3e1); }
-.pq-spin { flex: none; width: 12px; height: 12px; border-radius: 50%;
-    border: 2px solid #9aa3ad; border-top-color: transparent; animation: pq-spin .8s linear infinite; }
-@keyframes pq-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pq-spin { animation: none; border-top-color: #9aa3ad; } }
 .pq-why-fixed > li, .pq-why-fixed > li b { text-decoration: line-through; color: var(--cb-faint); }
 .pq-row-passed .pq-acts { display: none; }
 /* Patch Notes: Add New and Edit Previous are the same width (Ethan, 2026-09-30). */
