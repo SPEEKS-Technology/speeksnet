@@ -38,10 +38,15 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
    numbered from the same base, so there are two each of `0004`–`0009` and
-   `0044`–`0054`. **The current max is `0139`** — new migrations start at `0140`.
-   (This line goes stale fast; `ls supabase/migrations | sort | tail -1` is the
-   authority. It said `0093` on 2026-09-20 when the real max was `0095`.)
-   Never derive the next number by incrementing what you happen to be looking at.
+   `0044`–`0054`. **The current max is `0149`** (2026-10-16) — new migrations
+   start at `0150`.
+   **The checkout is not the authority any more — the database is.** Unmerged
+   branches apply migrations too: on 2026-10-16 pre-release's highest file was
+   `0140` while Ethan's `Main-November-Update-2` had already applied `0141`–`0147`,
+   so two new files went in as 0141/0142 and had to be renamed to 0148/0149. Check
+   `list_migrations` (Supabase MCP) *and* `git ls-tree` on the other open branches
+   before picking a number. Never derive the next number by incrementing what you
+   happen to be looking at.
 
 5. **Migrations are applied through the Supabase MCP `apply_migration`,** not a
    CLI runner. The files in `supabase/migrations/` are the provenance record. The

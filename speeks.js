@@ -24903,7 +24903,7 @@ function b2bRowMenuClose() {
 // because collapsing the controls must not collapse what they were telling you.
 function _b2bRowActsBtn(it, ok) {
     const recycled = Number(it.recycled_qty) || 0;
-    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const short = _b2bLabelOwed(it) ? _b2bLabelsShort(it) : 0;
     const printed = Number(it.label_printed_qty) || 0;
     const labelState = short > 0 ? 'b2b-rowacts-todo' : (printed > 0 ? 'b2b-rowacts-done' : '');
     const bits = [];
@@ -24929,6 +24929,7 @@ function b2bRowActions(ev, itemId) {
     const scrap = _b2bIsScrap(it);
     const ok = _b2bSatisfied(it);
     const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const owed = _b2bLabelOwed(it);
     const printed = Number(it.label_printed_qty) || 0;
 
     // The same disabled rules the buttons carried, in one place rather than
@@ -24950,12 +24951,13 @@ function b2bRowActions(ev, itemId) {
     el.innerHTML = [
         `<div class="b2b-rowmenu-head">${escapeHtml(_b2bItemName(it))}
             <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}</span></div>`,
-        row('Print labels', short > 0
+        row('Print labels', owed
                 ? `${short} of ${qty} still to print`
-                : (printed > 0 ? 'All printed — reprint' : `${qty === 1 ? 'One label' : 'It asks how many'}`),
+                : (short > 0 ? `${printed} of ${qty} printed — print more`
+                    : (printed > 0 ? 'All printed — reprint' : `${qty === 1 ? 'One label' : 'It asks how many'}`)),
             `b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')`,
             { hide: !it.sku, ico: B2B_ICO_BARCODE,
-              cls: short > 0 ? 'todo' : (printed > 0 ? 'done' : '') }),
+              cls: owed ? 'todo' : (printed > 0 ? 'done' : '') }),
         row('Recycle one out', ok ? 'Every unit is accounted for' : `${qty - recycled} left on this line`,
             `b2bRecycleUnit('${it.id}')`,
             { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' }),
@@ -25010,7 +25012,7 @@ function _b2bLabelBtn(it, cls) {
     // The button carries its own state so nothing has to nag or auto-open: amber
     // while any unit still needs a label, green once they are all printed. No
     // print is ever forced -- the colour is the whole reminder.
-    const short = _b2bLabelsShort(it);
+    const short = _b2bLabelOwed(it) ? _b2bLabelsShort(it) : 0;
     const state = short > 0 ? 'b2b-label-todo' : ((Number(it.label_printed_qty) || 0) > 0 ? 'b2b-label-done' : '');
     const tip = short > 0
         ? `${short} of ${n} label${n === 1 ? '' : 's'} not printed yet — click to print`
@@ -26162,7 +26164,17 @@ function _b2bLabelsShort(it) {
     if (_b2bIsPreval()) return 0;
     return Math.max(0, (Number(it.quantity) || 1) - (Number(it.label_printed_qty) || 0));
 }
-function _b2bUnlabelled() { return _b2bModalItems.filter(it => _b2bLabelsShort(it) > 0); }
+// Whether a line still OWES a label -- which is not the same question as how
+// many of its units are untagged. Nick, 2026-10-16: one label per unit is the
+// norm, "but only require 1 to be printed incase of edge cases where there a ton
+// in a single organized container". So a line with any label printed is tagged:
+// no amber, no submit warning, out of Print All's outstanding set. The per-unit
+// count (_b2bLabelsShort) still drives the DEFAULT of how many to print, because
+// one per unit is still what usually happens.
+function _b2bLabelOwed(it) {
+    return !!(it && it.sku) && !_b2bIsPreval() && !(Number(it.label_printed_qty) > 0);
+}
+function _b2bUnlabelled() { return _b2bModalItems.filter(_b2bLabelOwed); }
 
 // What a line costs us in certified wipes.
 function _b2bWipeTotal(it) {
@@ -26644,12 +26656,14 @@ async function b2bCopyItem(id, btn) {
     // MOCD: finishing a line and hitting copy drops you straight into the next
     // one, and the unit you just described walks off the bench untagged. Offered
     // here rather than enforced -- a printer that is down must not stop pricing.
-    const short = _b2bLabelsShort(src);
-    if (short > 0 && !_b2bIsPreval() && src.sku) {
-        if (confirm(`Print ${short} label${short === 1 ? '' : 's'} for "${_b2bItemName(src)}" first?\n\n`
+    // Asked only while the line owes its first label; the count is left to the
+    // print dialog, which defaults to one per unit but takes 1 for a lot kept
+    // together in one container.
+    if (_b2bLabelOwed(src)) {
+        if (confirm(`Print labels for "${_b2bItemName(src)}" first?\n\n`
             + 'Tag it now and it cannot be the box nobody can identify later. '
             + 'Cancel to carry on without printing.')) {
-            b2bPrintLabels(_b2bEditParent()?.id, id, short);
+            b2bPrintLabels(_b2bEditParent()?.id, id);
         }
     }
     await _b2bBusy(btn, '', async () => {
@@ -27487,12 +27501,12 @@ async function b2bSubmitPricing(id, btn) {
     // down would strand the whole pallet. So this is the last moment it can be
     // said, said plainly, with the count -- and the decision stays with whoever
     // is holding the goods.
+    // A line is tagged once ANY label is printed (see _b2bLabelOwed), so this
+    // names lines with none at all rather than counting untagged units.
     const short = _b2bUnlabelled();
     const shortNote = short.length
-        ? `\n\n${short.reduce((n, it) => n + _b2bLabelsShort(it), 0)} unit${
-            short.reduce((n, it) => n + _b2bLabelsShort(it), 0) === 1 ? '' : 's'} across ${
-            short.length} line${short.length === 1 ? '' : 's'} have no label printed yet:\n  · ${
-            short.slice(0, 8).map(it => `${_b2bItemName(it)} (${_b2bLabelsShort(it)})`).join('\n  · ')}${
+        ? `\n\n${short.length} line${short.length === 1 ? ' has' : 's have'} no label printed yet:\n  · ${
+            short.slice(0, 8).map(it => _b2bItemName(it)).join('\n  · ')}${
             short.length > 8 ? `\n  · …and ${short.length - 8} more` : ''}\n\nYou can still submit.`
         : '';
     if (!confirm('Submit this pricing? SKUs get assigned now so labels can be printed, '
@@ -27560,10 +27574,41 @@ function _b2bWhereLine(deal) {
 let _b2bReviewFull = false;
 function b2bReviewFull(on) { _b2bReviewFull = !!on; b2bOpenDeal('quote', _b2bModalDeal.id); }
 
+// Where a sent quote stands, in one line: how long the client has had it, how
+// many times it went, what we offered, and who priced it. The send control
+// stays here (Copy Quote is the whole send route), so a resend is where the
+// "sent" facts are. Days are the stores' days (Central), like every other age.
+function _b2bQuoteStatus(deal) {
+    const t = _b2bItemTotals();
+    const sentDay = deal.quote_sent_at ? _b2bCentralDay(deal.quote_sent_at) : '';
+    const days = sentDay ? Math.max(0, _b2bDayDiff(sentDay, _b2bCentralDay(new Date()))) : null;
+    const facts = [
+        days === null ? 'Not sent yet'
+            : `With the client <b>${days === 0 ? 'since today' : `${days} day${days === 1 ? '' : 's'}`}</b>`,
+        deal.quote_send_count ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}` : '',
+        `Offer <b>${_b2bMoney(t.offer, 2)}</b> on ${t.units} unit${t.units === 1 ? '' : 's'}`,
+        deal.priced_by ? `Priced by ${escapeHtml(deal.priced_by)}` : '',
+    ].filter(Boolean);
+    return `
+        <div class="b2b-sendbar b2b-qstatus${days !== null && days >= 7 ? ' urgent' : ''}">
+            <span class="b2b-qstatus-facts">${facts.map(f => `<span>${f}</span>`).join('')}</span>
+            <!-- One button, because Copy Quote is the whole route: it copies
+                 the quote AND records the send. The address field, Open In
+                 Email and Sent By Hand all went on 2026-09-10. -->
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                data-tip="Copies the quote and records it as sent — paste it into Gmail, Outlook or anywhere else">Copy Quote</button>
+        </div>`;
+}
+
 // The lines, as something to check rather than something to fill in. Offer is
 // the one editable cell -- it is the number being approved, and a typo there is
 // the one correction not worth a whole round trip through pricing.
-function _b2bReviewLines() {
+//
+// `full` (the sent quote, full width) leads with the line number (2026-10-16),
+// so a row there is the same "0003" as on the label, the pricing sheet and the
+// listing sheet. Approval's half-width split leaves it off: that column is
+// already the tightest on the screen.
+function _b2bReviewLines(full) {
     if (!_b2bModalItems.length) {
         return '<div class="b2b-empty sm"><div class="b2b-empty-t">No lines on this quote</div></div>';
     }
@@ -27575,6 +27620,7 @@ function _b2bReviewLines() {
         const spec  = _b2bQuoteDesc(it);
         return `
         <div class="b2b-rvw-row ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}" data-rvw="${it.id}">
+            ${full ? `<div class="b2b-rvw-line b2b-mono">${escapeHtml(_b2bLineNo(it))}</div>` : ''}
             <div class="b2b-rvw-what">
                 <div class="b2b-rvw-name">${escapeHtml(_b2bItemName(it))}
                     ${it.condition ? `<span class="b2b-chip b2b-chip-${_b2bCondChip(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
@@ -27602,7 +27648,7 @@ function _b2bReviewLines() {
     return `
         <div class="b2b-rvw">
             <div class="b2b-rvw-head">
-                <span>Item</span><span class="c">Qty</span><span class="r">Value ea.</span>
+                ${full ? '<span>Line</span>' : ''}<span>Item</span><span class="c">Qty</span><span class="r">Value ea.</span>
                 <span class="r">Offer ea.</span><span class="r" title="Gross margin — resale value − our offer">Margin</span>
                 <span class="r" title="Our freight cost per unit — never shown to the client">Ship</span>
                 <span class="r" title="Net margin — value − offer − shipping − selling fees + data wipe">Net</span>
@@ -27651,8 +27697,13 @@ function b2bReviewOffer(id) {
 function _b2bRepaintReview(focusId) {
     const el = document.getElementById('b2bReviewLines');
     if (!el) return;
-    el.innerHTML = _b2bReviewLines();
+    el.innerHTML = _b2bReviewLines(el.classList.contains('b2b-rvw-full'));
     _b2bPaintTotals();
+    if (_b2bModalDeal && document.getElementById('b2bReviewLines')?.classList.contains('b2b-rvw-full')) {
+        // The sent-quote status line carries the offer total.
+        const st = document.querySelector('.b2b-qstatus');
+        if (st) st.outerHTML = _b2bQuoteStatus(_b2bModalDeal);
+    }
     // Found by id, never by position: a recycle or no-residual line renders a
     // dash instead of a field, so the inputs and the items are different-length
     // lists and any index into one is the wrong line in the other.
@@ -27816,32 +27867,51 @@ function _b2bStageQuote(deal) {
         ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
         : 'Not sent yet';
 
-    // Default view for a SENT quote: the same calm split as approval -- offers
-    // editable on the left over the P&L, the client's document on the right.
-    // The full spreadsheet is the one-click escape hatch below (_b2bReviewFull).
+    // Default view for a SENT quote ("Out For Quote").
+    //
+    // Nick, 2026-09-29: "Out for Quote screen is a horrendous view of the items
+    // and lack of information", and 2026-10-16: compare it with any other view --
+    // it "looks bad as well as has a serious lack of information if you are
+    // trying to look at the deal at a glance".
+    //
+    // It used approval's split: the lines crushed into the left ~45% (names
+    // wrapping to three lines, chips stacked) beside a second copy of the same
+    // lines in the client's document, with the numbers below two full-width
+    // panels. A sent quote is not being proofread against its document any more
+    // -- it is being WAITED ON -- so it now reads like the pricing screen it came
+    // from: what state it is in, the P&L across the full width, every line at
+    // full width (line numbers included, so it lines up with labels and listing),
+    // then the evidence, the notes, and the client's copy folded away. Offers stay
+    // editable here, exactly as before. Approval keeps its split (_b2bStageReview)
+    // -- that screen IS a proofread.
+    //
+    // Built from the pieces the other stages already use (_b2bTotalsBar,
+    // _b2bReviewLines, the panels) so the coming stage-consistency pass has one
+    // fewer bespoke layout to fold in.
     if (!_b2bReviewFull) {
         return _b2bShowDeal({
             delDeal: deal,
             stage: deal.stage,
             eyebrow: deal.ref,
-            title: 'Quote',
-            sub: 'Adjust an offer if you need to while the client decides. Accepting locks the offers in as our cost.',
+            title: 'Out For Quote',
+            sub: 'Waiting on the client. Adjust an offer if you need to — accepting locks the offers in as our cost.',
             full: true,
             body: `
             ${_b2bSummary(deal)}
             ${_b2bWhereLine(deal)}
-            <div class="b2b-sendbar">
-                <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
-                <!-- One button, because Copy Quote is the whole route: it copies
-                     the quote AND records the send. The address field, Open In
-                     Email and Sent By Hand all went on 2026-09-10. -->
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
-                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <span class="b2b-sendbar-hint">Puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
+            ${_b2bQuoteStatus(deal)}
+            ${_b2bTotalsBar(true)}
+            <div class="b2b-rvw-cap b2b-rvw-cap-full">
+                <span>Quote lines</span>
+                <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
             </div>
+            <div id="b2bReviewLines" class="b2b-rvw-full">${_b2bReviewLines(true)}</div>
             ${_b2bProofPanel(deal)}
             ${_b2bNotesPanel(deal)}
-            ${_b2bReviewSplit(deal, 'Quote lines')}`,
+            <details class="b2b-sec b2b-qdoc-fold">
+                <summary class="b2b-sec-h"><span>The quote as the client sees it</span></summary>
+                <div class="b2b-qdoc-fold-body"><div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div></div>
+            </details>`,
             footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
@@ -28912,6 +28982,43 @@ function _b2bListProgress() {
         </div>`;
 }
 
+// SORTING THE LISTING SHEET BY PROJECTED VALUE.
+//
+// Eli, 2026-09-25: "We should be able to sort by value." Nick: on the listing
+// view, by projected value, "so they can know which items to prioritize". Two
+// value columns can answer that -- Value ea (what one unit should sell for) and
+// Line total (the whole pile) -- so both headers sort, highest first on the first
+// click, and the Line header puts it back in line order.
+//
+// View-only on purpose: sort_order is what arranges the client's quote, so the
+// listing sheet must never write it. Kept for the session rather than per deal,
+// because whoever sorts by value is going to want it on the next pallet too.
+// Recycle lines have no resale value and sink to the bottom either way; ties
+// keep line order so the sheet does not shuffle between repaints.
+let _b2bListSort = { key: 'line', dir: 'desc' };
+function b2bListSortBy(key) {
+    if (key === 'line' || !['value', 'total'].includes(key)) _b2bListSort = { key: 'line', dir: 'desc' };
+    else if (_b2bListSort.key === key) _b2bListSort.dir = _b2bListSort.dir === 'desc' ? 'asc' : 'desc';
+    else _b2bListSort = { key, dir: 'desc' };
+    _b2bRepaintListing();
+}
+function _b2bListSorted(items) {
+    const list = (items || []).slice();
+    if (_b2bListSort.key === 'line') return list;
+    const worth = (it) => {
+        if (_b2bIsScrap(it)) return null;
+        const v = Number(it.value) || 0;
+        return _b2bListSort.key === 'total' ? v * (Number(it.quantity) || 1) : v;
+    };
+    const sign = _b2bListSort.dir === 'asc' ? 1 : -1;
+    return list.map((it, i) => ({ it, i, w: worth(it) }))
+        .sort((a, b) => {
+            if (a.w === null || b.w === null) return (a.w === null) - (b.w === null) || a.i - b.i;
+            return (a.w - b.w) * sign || a.i - b.i;
+        })
+        .map(x => x.it);
+}
+
 // The listing sheet is the pricing grid's read-only twin: one dense row per
 // line showing everything the lister needs to build the Shopify listing --
 // specs, serials, condition, value and cost -- with the list / recycle / label
@@ -28924,16 +29031,25 @@ function _b2bListRows() {
     // The three required specs get their own columns (as on the pricing sheet);
     // the optional ones (GPU, battery) ride under the item name.
     const reqSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
+    const sortHd = (key, label) => {
+        const on = _b2bListSort.key === key;
+        // Line order is the resting state, not a direction -- no arrow on it.
+        const arrow = on && key !== 'line' ? (_b2bListSort.dir === 'asc' ? '▲' : '▼') : '';
+        return `<button type="button" class="b2b-lsort ${on ? 'on' : ''}" onclick="b2bListSortBy('${key}')"
+            aria-label="Sort by ${escapeHtml(label)}${on ? (_b2bListSort.dir === 'asc' ? ', lowest first' : ', highest first') : ''}"
+            data-tip="${key === 'line' ? 'Back to line order' : `Sort by ${escapeHtml(label.toLowerCase())}`}">${escapeHtml(label)}${
+            arrow ? `<i aria-hidden="true">${arrow}</i>` : ''}</button>`;
+    };
     const head = `
         <div class="b2b-prow b2b-phead">
-            <span>Line</span><span>Item</span>
+            <span>${sortHd('line', 'Line')}</span><span>Item</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Serials</span>
-            <span class="r">Value ea</span><span class="r">Cost ea</span><span class="r">Line total</span>
+            <span class="r">${sortHd('value', 'Value ea')}</span><span class="r">Cost ea</span><span class="r">${sortHd('total', 'Line total')}</span>
             <span class="c">Listed</span><span></span>
         </div>`;
 
-    const rows = _b2bModalItems.map(it => {
+    const rows = _b2bListSorted(_b2bModalItems).map(it => {
         const qty = Number(it.quantity) || 1;
         const listed = Number(it.listed_qty) || 0;
         const recycled = Number(it.recycled_qty) || 0;
@@ -29957,7 +30073,8 @@ function b2bPrintLabels(dealId, itemId, count) {
                         `How many labels for "${_b2bItemName(it)}"?\n\n`
                         + `${qty} unit${qty === 1 ? '' : 's'} on the line`
                         + `${printed ? `, ${printed} label${printed === 1 ? '' : 's'} printed so far` : ', none printed yet'}`
-                        + `${short ? ` — ${short} still untagged` : ''}.`, String(left));
+                        + `${short ? ` — ${short} still untagged` : ''}.\n\n`
+                        + 'One per unit is usual; 1 is enough for a lot kept together in one container.', String(left));
                     if (raw === null) return;
                     n = parseInt(raw, 10) || 0;
                 }
@@ -29995,16 +30112,30 @@ function b2bPrintLabels(dealId, itemId, count) {
     // there was nothing on the box itself saying "this must not be listed".
     // Styled for a mono thermal printer rather than with colour: recycle is
     // knocked out of solid black, no-residual is boxed, a purchase is plain.
-    const DISP_LABEL = { purchase: 'Purchased', no_residual: 'No Residual Value', recycle: 'Recycle' };
+    //
+    // "Purchase", not "Purchased" -- the disposition names what the line IS, the
+    // same noun as the other two (Nick, 2026-09-28).
+    //
+    // QTY is the LINE's quantity, printed on every unit's label (Jon Rodriguez,
+    // 2026-09-25; Nick: "just a number like 'QTY:'"). A lot kept in one container
+    // may carry a single label, and that label then has to say how many units
+    // it stands for. It sits on the handling line rather than taking a row of its
+    // own, so the barcode keeps its height and it survives the 0.75in stock,
+    // which drops the description.
+    const DISP_LABEL = { purchase: 'Purchase', no_residual: 'No Residual Value', recycle: 'Recycle' };
     const DISP_CLASS = { purchase: 'buy', no_residual: 'nrv', recycle: 'rec' };
     const cells = labels.map(it => {
         const d = _b2bDispOf(it);
+        const qty = Math.max(1, Number(it.quantity) || 1);
         return `
         <div class="lb">
             ${_b2bBarcodeSvg(it.sku)}
             <div class="sku">${escapeHtml(it.sku)}</div>
             <div class="desc">${escapeHtml(_b2bItemName(it))}</div>
-            <div class="disp ${DISP_CLASS[d] || 'buy'}">${escapeHtml(DISP_LABEL[d] || DISP_LABEL.purchase)}</div>
+            <div class="foot">
+                <span class="disp ${DISP_CLASS[d] || 'buy'}">${escapeHtml(DISP_LABEL[d] || DISP_LABEL.purchase)}</span>
+                <span class="qty">QTY: ${qty}</span>
+            </div>
         </div>`;
     }).join('');
 
@@ -30040,9 +30171,13 @@ function b2bPrintLabels(dealId, itemId, count) {
   /* No colour: these go to a mono thermal printer, so the three outcomes are
      told apart by weight and inversion instead. Recycle is the one that must be
      unmissable -- it means do not list this -- so it takes the solid block. */
-  .lb .disp { margin-top: 0.025in; font-size: 7.5pt; font-weight: 800;
+  .lb .foot { margin-top: 0.025in; display: flex; align-items: center; justify-content: center;
+              gap: 0.08in; max-width: 100%; }
+  .lb .disp { font-size: 7.5pt; font-weight: 800;
               letter-spacing: .06em; text-transform: uppercase; line-height: 1.1;
-              max-width: 100%; white-space: nowrap; overflow: hidden; }
+              min-width: 0; white-space: nowrap; overflow: hidden; }
+  .lb .qty { flex: none; font-family: 'Consolas','SFMono-Regular',monospace; font-size: 8pt;
+             font-weight: 700; line-height: 1.1; color: #000; }
   .lb .disp.buy { color: #000; }
   .lb .disp.nrv { color: #000; border: 1pt solid #000; padding: 0 0.045in; border-radius: 2pt; }
   .lb .disp.rec { background: #000; color: #fff; padding: 0.008in 0.055in; border-radius: 2pt; }
@@ -30054,7 +30189,8 @@ function b2bPrintLabels(dealId, itemId, count) {
   body.sm .lb .bc { height: 0.30in; }
   body.sm .lb .sku { font-size: 9pt; }
   body.sm .lb .desc { display: none; }
-  body.sm .lb .disp { font-size: 7pt; margin-top: 0.02in; }
+  body.sm .lb .foot { margin-top: 0.02in; }
+  body.sm .lb .disp { font-size: 7pt; }
 
   @media print {
     body { background: #fff; }
@@ -30069,7 +30205,7 @@ function b2bPrintLabels(dealId, itemId, count) {
     <b>${escapeHtml(deal.ref)}</b>
     <button id="b1" class="on" onclick="setSize(false)">2.25 × 1 in</button>
     <button id="b2" onclick="setSize(true)">2.25 × 0.75 in</button>
-    <span>${labels.length} label${labels.length === 1 ? '' : 's'} — one per unit</span>
+    <span>${labels.length} label${labels.length === 1 ? '' : 's'}</span>
     <button class="go" onclick="window.print()">Print</button>
   </div>
   <div class="sheet">${cells}</div>
@@ -30173,6 +30309,189 @@ function closeB2BAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
+// THE NOTIFICATION REWORK (Nick, 2026-10-16).
+//
+// "Notifications for stores should be daily reminders of when a given b2b needs
+// to be finished pricing (always 1 week due date from when entering this
+// stage). Once its in the listing stage, It should be a weekly notification of
+// all combined unlisted B2B value for that location from all the deals they
+// have. For corp it should be similar, but have a notification bell/
+// notification settings in which they can turn off the notifications. ... their
+// weekly notification lists all unlisted B2B value from all stores and gives
+// information about which stores have what and how much. These weekly reports
+// should land on monday for all."
+//
+// So three cards where there was one:
+//   * B2B Pricing Due  -- every deal in pricing you price (corp: every deal),
+//     with its due date. Live for as long as the deal is in pricing, which is
+//     what "daily" means on a feed. A store cannot snooze it; corp can.
+//   * Unlisted B2B Value -- from Monday, the week's figure; "Mark read" puts it
+//     away until next Monday. Corp's lists every store.
+//   * B2B Deals Waiting -- the old card, now for every OTHER stage (pickup,
+//     routing, approval, the quote). Pricing and listing have a cadence of
+//     their own above, and repeating them here would be the same nag twice.
+//
+// The email half is the notify digest, off the same rules and the same view
+// (b2b_unlisted_value), so the inbox and the feed agree. Corp's on-site
+// switches are user_notify_prefs.feed_muted, edited in Settings ->
+// Notifications; the notify function refuses them for anyone else.
+const B2B_PRICING_DUE_DAYS = 7;
+
+// A day in Central time, as YYYY-MM-DD. The stores' day, not the browser's or
+// UTC's -- a deal that entered pricing at 8pm entered it that day.
+function _b2bCentralDay(ts) {
+    const d = ts instanceof Date ? ts : new Date(ts);
+    if (isNaN(d)) return '';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+// Whole days between two YYYY-MM-DD strings, at UTC noon so DST cannot tip it.
+function _b2bDayDiff(from, to) {
+    return Math.round((new Date(`${to}T12:00:00Z`) - new Date(`${from}T12:00:00Z`)) / 86400000);
+}
+function _b2bAddDays(day, n) {
+    const d = new Date(`${day}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+// When a deal in pricing is due: one week from the day it ENTERED pricing
+// (stage_changed_at), so a deal sent back from approval starts a fresh week.
+// Same rule as collectDue in the notify function.
+function _b2bPricingDue(deal, today) {
+    const entered = _b2bCentralDay(deal.stage_changed_at || deal.updated_at || deal.created_at);
+    if (!entered) return null;
+    const dueOn = _b2bAddDays(entered, B2B_PRICING_DUE_DAYS);
+    const left = _b2bDayDiff(today || _b2bCentralDay(new Date()), dueOn);
+    return { entered, dueOn, left, late: left < 0 };
+}
+function _b2bDueWords(due) {
+    if (!due) return '';
+    const n = Math.abs(due.left);
+    if (due.late) return `${n} day${n === 1 ? '' : 's'} overdue`;
+    if (due.left === 0) return 'due today';
+    return `due ${_b2bDate(due.dueOn)} (${n} day${n === 1 ? '' : 's'} left)`;
+}
+// The Monday that starts the week containing `day` (YYYY-MM-DD).
+function _b2bWeekMonday(day) {
+    const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
+    return _b2bAddDays(day, dow === 0 ? -6 : 1 - dow);
+}
+
+// Corp's on-site mutes, fetched once per page. Stores have none to fetch -- the
+// server clears the list for anyone who is not corp -- so they skip the call.
+let _b2bFeedMutedP = null;
+function _b2bFeedMuted() {
+    if (!_b2bIsCorp() || !sessionStorage.getItem('speeksUserPin')) return Promise.resolve(new Set());
+    if (typeof _nsData !== 'undefined' && _nsData && Array.isArray(_nsData.feed_muted)) {
+        return Promise.resolve(new Set(_nsData.feed_muted));
+    }
+    if (!_b2bFeedMutedP) {
+        _b2bFeedMutedP = fetch(`${NOTIFY_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': sessionStorage.getItem('speeksUserPin') || '' } })
+            .then(r => r.json())
+            .then(j => new Set(Array.isArray(j && j.feed_muted) ? j.feed_muted : []))
+            .catch(() => { _b2bFeedMutedP = null; return new Set(); });
+    }
+    return _b2bFeedMutedP;
+}
+
+// The two new cards' state-carriers. Feed-only, on the same contract as
+// _plBubbleEl: never visible (both ids are in the retired-bubble rule in
+// styles.css), live while display is not 'none', copy in data-summary.
+function _b2bFeedEl(id) {
+    let b = document.getElementById(id);
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = id;
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = `<span id="${id}Text"></span>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _b2bFeedSet(id, live, data) {
+    const b = _b2bFeedEl(id);
+    if (!b) return;
+    const t = document.getElementById(id + 'Text');
+    if (t) {
+        Object.keys(t.dataset).forEach(k => { delete t.dataset[k]; });
+        if (live) Object.entries(data || {}).forEach(([k, v]) => { if (v != null && v !== '') t.dataset[k] = String(v); });
+        t.textContent = live ? (data && data.summary) || '' : '';
+    }
+    b.style.display = live ? 'flex' : 'none';
+}
+
+// Pricing due: the deals in pricing this person prices -- their store's, via
+// _b2bActionFor -- or, for corp, every one. Soonest due first.
+function _b2bPricingCard(deals, muted) {
+    if (muted.has('b2b_pricing_due')) return _b2bFeedSet('b2bPricingAlertBubble', false);
+    const today = _b2bCentralDay(new Date());
+    const list = deals.filter(d => d.stage === 'pricing' && (_b2bIsCorp() || _b2bActionFor(d)))
+        .map(d => ({ d, due: _b2bPricingDue(d, today) }))
+        .filter(x => x.due)
+        .sort((a, b) => a.due.left - b.due.left);
+    if (!list.length) return _b2bFeedSet('b2bPricingAlertBubble', false);
+    const late = list.filter(x => x.due.late).length;
+    const shown = list.slice(0, 3).map(x => `${x.d.ref}${
+        _b2bIsCorp() && x.d.pricing_store ? ` (${x.d.pricing_store})` : ''} ${_b2bDueWords(x.due)}${
+        x.d.sendback_note ? ' · sent back' : ''}`);
+    _b2bFeedSet('b2bPricingAlertBubble', true, {
+        summary: shown.join(' · ') + (list.length > 3 ? ` · +${list.length - 3} more` : ''),
+        // Today's date is in the identity, so a corp snooze lasts the day and the
+        // reminder comes back tomorrow -- "daily" -- or sooner if the list moves.
+        sig: today + '|' + list.map(x => `${x.d.id}:${x.due.dueOn}`).join(','),
+        late: late ? String(late) : '',
+        count: String(list.length),
+    });
+}
+
+// Unlisted value: from Monday, until read. Read is remembered per person per
+// week in this browser -- a convenience, not a record; the email is the record.
+function _b2bUnlistedReadKey() {
+    return 'speeksB2bUnlistedRead_' + (sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase();
+}
+async function _b2bUnlistedCard(muted) {
+    const role = _b2bRole();
+    if (muted.has('b2b_unlisted') || (!_b2bIsCorp() && !B2B_STORE_ROLES.includes(role))) {
+        return _b2bFeedSet('b2bUnlistedAlertBubble', false);
+    }
+    const monday = _b2bWeekMonday(_b2bCentralDay(new Date()));
+    let read = '';
+    try { read = localStorage.getItem(_b2bUnlistedReadKey()) || ''; } catch (_) {}
+    if (read === monday) return _b2bFeedSet('b2bUnlistedAlertBubble', false);
+
+    const rows = await _b2bGet(`unlisted=1&store=${encodeURIComponent(_b2bFetchScope())}`);
+    const summary = _b2bUnlistedSummary(rows, _b2bIsCorp());
+    if (!summary) return _b2bFeedSet('b2bUnlistedAlertBubble', false);
+    _b2bFeedSet('b2bUnlistedAlertBubble', true, { summary, sig: monday, week: monday });
+}
+// "$17,975 unlisted across 72 units on 10 deals — SPFN-001 $6,585 · ..." for a
+// store; per-store totals, biggest first, for corp. '' when nothing is waiting.
+function _b2bUnlistedSummary(rows, corp) {
+    const list = (rows || []).filter(r => Number(r.unlisted_units) > 0);
+    if (!list.length) return '';
+    const money = n => _b2bMoney(Number(n) || 0);
+    const total = list.reduce((n, r) => n + (Number(r.unlisted_value) || 0), 0);
+    const units = list.reduce((n, r) => n + (Number(r.unlisted_units) || 0), 0);
+    const deals = new Set(list.map(r => r.deal_id)).size;
+    const head = `${money(total)} unlisted across ${units} unit${units === 1 ? '' : 's'} on ${deals} deal${deals === 1 ? '' : 's'}`;
+    if (corp) {
+        const by = new Map();
+        list.forEach(r => by.set(r.store, (by.get(r.store) || 0) + (Number(r.unlisted_value) || 0)));
+        return `${head} — ` + [...by].sort((a, b) => b[1] - a[1]).map(([s, v]) => `${s} ${money(v)}`).join(' · ');
+    }
+    const top = list.slice().sort((a, b) => (Number(b.unlisted_value) || 0) - (Number(a.unlisted_value) || 0));
+    return `${head} — ` + top.slice(0, 3).map(r => `${r.ref} ${money(r.unlisted_value)}`).join(' · ')
+        + (top.length > 3 ? ` · +${top.length - 3} more` : '');
+}
+function b2bUnlistedRead(ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    const t = document.getElementById('b2bUnlistedAlertBubbleText');
+    const week = (t && t.dataset.week) || _b2bWeekMonday(_b2bCentralDay(new Date()));
+    try { localStorage.setItem(_b2bUnlistedReadKey(), week); } catch (_) {}
+    _b2bFeedSet('b2bUnlistedAlertBubble', false);
+    try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
+}
+
 // Runs on every page, so it has to be cheap and quiet: one scoped read, and it
 // bails immediately for anyone whose role has no B2B duties at all.
 async function checkB2BReminders() {
@@ -30183,7 +30502,12 @@ async function checkB2BReminders() {
     try {
         const deals = (await _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=0`))
             .map(_b2bShapeDeal).filter(_b2bInScope);
-        const mine = deals.filter(_b2bActionFor);
+        const muted = await _b2bFeedMuted();
+        _b2bPricingCard(deals, muted);
+        // Its own try: the weekly card failing must not take the others with it.
+        _b2bUnlistedCard(muted).catch(() => {});
+        // Pricing and listing have their own cards now (see the banner above).
+        const mine = deals.filter(d => d.stage !== 'pricing' && d.stage !== 'listing').filter(_b2bActionFor);
         if (!mine.length) { b.style.display = 'none'; return; }
 
         // Lead with the oldest, since that's the one actually holding things up.
@@ -49074,6 +49398,9 @@ function _samReminderCfg() {
     const _rcReplyOnly = !!(_rcT && _rcT.dataset && _rcT.dataset.replyonly);
     // Same flag, same meaning as the claims one below — see checkRecycleReminders.
     const _rcDel = (_rcT && _rcT.dataset && _rcT.dataset.del) || '';
+    // B2B pricing: stamped by _b2bPricingCard off the same list as its snippet.
+    const _b2bPrT = document.getElementById('b2bPricingAlertBubbleText');
+    const _b2bPricingLate = !!(_b2bPrT && _b2bPrT.dataset && _b2bPrT.dataset.late);
     // Claims: is a manager waiting on the DM to approve a deletion? 'only' when
     // that is all there is, 'mixed' when claims are ageing too. Stamped by
     // checkAgingClaimsDM, so it is never set for a manager.
@@ -49141,6 +49468,19 @@ function _samReminderCfg() {
           title: 'Store Goals to Set', urgency: 2, due: 'Set', cls: 'sam-due-amber',
           noSnooze: true, action: "openGpGoals()" },
         { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
+        // The rework's two cards (see the banner over checkB2BReminders). Pricing
+        // turns red once anything is overdue; a store cannot snooze it, corp can
+        // (and can switch it off in Settings). Unlisted value is a weekly report,
+        // so it is news with a "Mark read", not a task with a due badge.
+        { key: 'b2bPricing', id: 'b2bPricingAlertBubble', text: 'b2bPricingAlertBubbleText',
+          title: _b2bPricingLate ? 'B2B Pricing Overdue' : 'B2B Pricing Due',
+          urgency: _b2bPricingLate ? 2 : 1, due: _b2bPricingLate ? 'Overdue' : 'Due',
+          cls: _b2bPricingLate ? 'sam-due-red' : 'sam-due-amber',
+          noSnooze: !(typeof _b2bIsCorp === 'function' && _b2bIsCorp()),
+          action: "window.location.href='operations.html#b2b'" },
+        { key: 'b2bUnlisted', id: 'b2bUnlistedAlertBubble', text: 'b2bUnlistedAlertBubbleText',
+          title: 'Unlisted B2B Value', urgency: 0, due: '', cls: 'sam-due-grey', noDue: true,
+          readAction: "b2bUnlistedRead(event)", action: "window.location.href='operations.html#b2b'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.
@@ -54529,12 +54869,32 @@ function renderNotifySettings(d) {
     // than silently muted.
     const muted = new Set(d.muted || []);
 
+    // ON THE SITE -- corp only (the function sends an empty list to everyone
+    // else). Above the email block and outside it on purpose: these govern the
+    // feed cards, not mail, so the email master switch must not grey them out.
+    // Nick, 2026-10-16: corp can turn the B2B cards off; stores always get them.
+    const feed = Array.isArray(d.feed) ? d.feed : [];
+    const feedOff = new Set(d.feed_muted || []);
+    const feedHtml = feed.length ? `
+      <div class="ns-feed">
+        <div class="ns-label">On the site</div>
+        <div class="ns-hint">Cards in your feed. Switching one off here hides it for you only.</div>
+        <div class="ns-cats">
+          ${feed.map(f => `
+            <label class="ns-cat">
+              <input type="checkbox" class="ns-feed-box" data-feed="${_samEsc(f.key)}" ${feedOff.has(f.key) ? '' : 'checked'}>
+              <span class="ns-cat-copy"><b>${_samEsc(f.label)}</b><i>${_samEsc(f.blurb)}</i></span>
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="ns-label ns-label-gap">By email</div>` : '';
+
     // Master switch first, then the address, then what to hear about — in that
     // order because the address is meaningless without the switch and the
     // categories are meaningless without both. The block below the switch dims
     // when it is off, so the state reads at a glance instead of being inferred
     // from a row of ticked boxes that aren't doing anything.
-    body.innerHTML = `
+    body.innerHTML = `${feedHtml}
       <div class="ns-master ${on ? 'is-on' : ''}">
         <label class="ns-switch">
           <input type="checkbox" id="nsEnabled" ${on ? 'checked' : ''} onchange="_nsSyncEnabled()">
@@ -54667,6 +55027,11 @@ function _nsForm() {
     const muted = [];
     document.querySelectorAll('#notifySettingsBody .ns-sub-box')
         .forEach(b => { if (!b.checked) muted.push(b.dataset.sub); });
+    // Sent only when the on-site block is drawn (corp), so a store's save never
+    // touches the column at all.
+    const feedBoxes = document.querySelectorAll('#notifySettingsBody .ns-feed-box');
+    const feedMuted = feedBoxes.length
+        ? [...feedBoxes].filter(b => !b.checked).map(b => b.dataset.feed) : null;
     return {
         enabled: en.checked,
         email: (mail.value || '').trim().toLowerCase(),
@@ -54683,6 +55048,7 @@ function _nsForm() {
         cadence: 'instant',
         categories,
         muted,
+        ...(feedMuted ? { feed_muted: feedMuted } : {}),
     };
 }
 
@@ -54695,6 +55061,7 @@ function _nsDirty() {
     const p = _nsData.prefs;
     if (f.enabled !== !!p.enabled) return true;
     if (f.email !== String(p.email || '').trim().toLowerCase()) return true;
+    if (f.feed_muted && f.feed_muted.slice().sort().join() !== (_nsData.feed_muted || []).slice().sort().join()) return true;
     return Object.keys(f.categories).some(k => f.categories[k] !== (p['cat_' + k] !== false));
 }
 
@@ -54739,6 +55106,13 @@ async function saveNotifySettings() {
         if (_nsData) {
             _nsData.prefs = { ...(_nsData.prefs || {}), enabled: f.enabled, email: f.email, cadence: f.cadence };
             Object.keys(f.categories).forEach(k => { _nsData.prefs['cat_' + k] = f.categories[k]; });
+            if (f.feed_muted) _nsData.feed_muted = f.feed_muted.slice();
+        }
+        // The feed reads the on-site switches through _b2bFeedMuted; drop its
+        // cached copy and repaint so a card switched off goes now, not next page.
+        if (f.feed_muted && typeof checkB2BReminders === 'function') {
+            _b2bFeedMutedP = null;
+            checkB2BReminders().then(() => { try { renderActionFeed(); } catch (_) {} });
         }
         _setRefreshStateHints();
     } catch (e) {

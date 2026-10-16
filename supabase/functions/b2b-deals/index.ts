@@ -609,7 +609,8 @@ async function notifyStage(n: {
   priority?: "normal" | "high";
 }) {
   await queueNotification({
-    category: "requests",
+    // Its own category since 0148 (Nick's notification rework, 2026-10-16).
+    category: "b2b",
     kind: n.kind,
     title: n.title,
     body: n.body,
@@ -2895,7 +2896,7 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         const ref = `${deal.client?.acronym || "B2B"}-${pad(deal.deal_no, 3)}`;
         await queueNotification({
-          category: "requests",
+          category: "b2b",
           kind: "b2b_delete_request",
           title: `Delete request — B2B deal ${ref}`,
           body: `${who || "Someone"} asked to delete deal ${ref}${deal.client?.company ? ` (${deal.client.company})` : ""}. Nothing is removed until you approve it.`,
@@ -3023,6 +3024,27 @@ Deno.serve(async (req: Request) => {
         tq = tq.or(`from_store.in.(${tStores.join(",")}),to_store.in.(${tStores.join(",")})`);
       }
       const { data, error } = await tq.order("created_at", { ascending: true }).limit(1000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?unlisted=1[&store=<CODE,...>] → B2B value still waiting to be listed,
+    // per deal per listing store, biggest first.
+    //
+    // For the Monday "Unlisted B2B value" card (Nick, 2026-10-16). It reads
+    // b2b_unlisted_value (0148), the same view the notify digest mails from,
+    // so the card and the email can never disagree about a figure. Scoped like
+    // every other read here: a store gets its own rows, corp asks for ALL.
+    if (url.searchParams.get("unlisted")) {
+      const raw = String(url.searchParams.get("store") || "ALL").toUpperCase();
+      const uStores = raw === "ALL" ? [] : storeList(raw, STORES);
+      if (raw !== "ALL" && !uStores.length) {
+        return jsonResponse({ success: false, error: "Unknown store." }, 400);
+      }
+      let uq = supabase.from("b2b_unlisted_value")
+        .select("deal_id, ref, company, store, listing_since, open_lines, unlisted_units, unlisted_value");
+      if (uStores.length) uq = uq.in("store", uStores);
+      const { data, error } = await uq.order("unlisted_value", { ascending: false }).limit(1000);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
       return jsonResponse({ success: true, data: data || [] });
     }
