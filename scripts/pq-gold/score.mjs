@@ -7,6 +7,8 @@
 //   STALE=1 …     # also score labels whose photos changed since (normally skipped)
 //   DECIDE=1 …    # verdict by rules.ts decide() even when the output carries one
 //   JSON=1 …      # machine-readable result on stdout
+//   TRUST=1 …     # leave out flags that were the model's prefilled guess and
+//                 # were never touched (they may be agreement without looking)
 //
 // FREE and offline: reads two files, calls nothing.
 //
@@ -170,8 +172,10 @@ for (const g of goldFile.listings) {
     const mp = byN.get(p.n);
     if (!mp) continue;
     const got = modelFlags(mp, o.report), want = new Set(p.flags);
+    const skipK = new Set(process.env.TRUST ? p.model_untouched || [] : []);
     for (const b of [...bs, tierB("explicit")]) {
       for (const k of PHOTO_FLAGS) {
+        if (skipK.has(k)) continue;
         if (got.has(k) && want.has(k)) b.flags[k].tp++; else if (got.has(k)) b.flags[k].fp++; else if (want.has(k)) b.flags[k].fn++;
       }
       const wr = p.repeat_of ?? null, gr = mp.repeats ?? null;

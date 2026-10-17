@@ -1442,11 +1442,113 @@ const CONFIRM_FLAGS = ["crooked", "off_center", "too_small", "cut_off", "turned"
 const CONFIRM_FACTS = ["lead_unclear", "serial_hidden", "new_claim_wrong", "units_apart", "flat_package"];
 const confirmer = (scope: Scope) => ["district manager", "ceo"].includes(scope.role);
 
+// WHAT ETHAN SAID about particular listings, gathered 2026-10-16 for Confirm
+// Shots so he never has to judge one of these again from scratch. Sources: his
+// calibration key (scripts/picture-quality-calibrate.mjs, 09-24..10-08) and his
+// store reviews, which were written into the grading prompt and rules.ts
+// comments as "STORE item: photo N …". Keyed by the bare product number. Shown
+// on the listing as "You said", NOT applied as labels: most of these were about
+// an older grade, a re-grade has followed many of them, and an approved
+// deletion renumbers the photos. Only listings that matched ONE product are
+// here; the five WSP AirPods, two TeamGroup sticks and two Pentax 50s are left
+// out because there's no telling which one he meant.
+const ETHAN_SAID: Record<string, { at: string; said: string }[]> = {
+  // --- calibration key ---
+  "15210666066086": [{ at: "2026-09-25", said: "Flag: pair shots must show both speakers; reorder; title should read PDWR52BTBK Bluetooth." }],
+  "15220477886630": [{ at: "2026-09-25", said: "Flag: photo 5 looks fake; opposite side, lens closed and top are missing." }],
+  "8212164968550": [{ at: "2026-09-25", said: "Pass: the settings screen and the top side are both there." }],
+  "8211779977318": [{ at: "2026-09-25", said: "Should use the Point and Shoot sheet." }],
+  "8015504113766": [{ at: "2026-10-08", said: "Pass: the blurry edge-on shots are fine; photo 5 is the pins on the stand, not too small. Top and bottom are photos 1 and 6." }],
+  "8172635422822": [{ at: "2026-09-25", said: "Pass: the serial is under the battery cover, so it isn't needed." }],
+  "7699563577446": [{ at: "2026-09-25", said: "Pass: correct." }],
+  "8035957506150": [{ at: "2026-09-25", said: "Flag: not square." }],
+  "8228554080358": [{ at: "2026-10-08", said: "Flag: top and bottom not to standard; crooked and not centred. Back and front were shot in different setups." }],
+  "8166421790822": [{ at: "2026-09-25", said: "Pass: no box; the box shots were only an example." }],
+  "8168794882150": [{ at: "2026-09-25", said: "Pass: all the box sides were shown." },
+                    { at: "2026-10-11", said: "Photo 4 is not a repeat of photo 1, and the bridge isn't missing." }],
+  "8106562322534": [{ at: "2026-10-01", said: "Pass: a sealed game is fine with front + back (Video Games sheet, not New In Box)." }],
+  "8229239717990": [{ at: "2026-10-08", said: "Flag: not full frame at times, some crooked." }],
+  "15397692375142": [{ at: "2026-10-08", said: "Pass on angle: the corner shots are there to show the four sides." },
+                     { at: "2026-10-13", said: "Photos 7 and 8 repeat photo 6 (the same lit screen); photo 12 repeats photo 3." }],
+  "15228973154406": [{ at: "2026-10-08", said: "Pass: corner shots at another angle still show the sides." }],
+  "15397640667238": [{ at: "2026-10-08", said: "Flag: many photos not centred, some crooked (not photo 8's angle)." }],
+  "15397643092070": [{ at: "2026-10-08", said: "Flag: many photos not centred, some crooked (not photo 7's angle)." }],
+  "15228995240038": [{ at: "2026-10-08", said: "Flag: photo 1 small and off-centre, and more photos off-centre or crooked." }],
+  "15228973383782": [{ at: "2026-10-08", said: "Flag: 5 and 6 repeat 1 and 2; use those spots for the top and bottom of the box." }],
+  "15228971024486": [{ at: "2026-10-08", said: "Flag: 5 and 6 repeat 1 and 2; use those spots for the top and bottom of the box." }],
+  "15228968894566": [{ at: "2026-10-08", said: "Flag: missing Storage and Software Information." }],
+  // --- OVL reviews ---
+  "15397670846566": [{ at: "2026-10-13", said: "Photo 4, the beige underside, is the Bottom (it was called a side, and the bottom missing)." }],
+  "15418383564902": [{ at: "2026-10-14", said: "Photo 4 has the lens out and photo 1 in, so not a repeat. Photos 10 and 11 (charger, then charger + battery) are one arrangement, a repeat, and they show items the listing says are NOT included." }],
+  "15423933972582": [{ at: "2026-10-16", said: "Photo 2 is photo 1's label side again, flipped: a repeat, not a closeup. Photo 3 is the back lying back, seen from above: wrong angle." }],
+  "15418467024998": [{ at: "2026-10-13", said: "Photos 4 and 6 are the case front and back again, flat (repeats). An opened case won't always stay on the stand; that's fine." }],
+  "15418617888870": [{ at: "2026-10-13", said: "Photos 1, 9 and 11 straight on, and 2, 3 and 10 angled, are the same setup, not a different spot." }],
+  "15415678042214": [{ at: "2026-10-13", said: "Photo 4 repeats photo 3, and photo 6 repeats photo 5." }],
+  "15423912935526": [{ at: "2026-10-16", said: "Photo 3 stands on end where the example lies lengthways: turned." }],
+  "15423855132774": [{ at: "2026-10-16", said: "Photo 1: the CPU sits a quarter turn round, its print reads sideways: turned." }],
+  "15415726440550": [{ at: "2026-10-13", said: "Photos 3 and 4, stood on edge on the stand, are right (not turned)." }],
+  "15415652909158": [{ at: "2026-10-13", said: "Photos 2 to 5 are closeups of areas (I/O, RAM slots, socket), not sides; edges running out of frame aren't cut off." }],
+  "15418608910438": [{ at: "2026-10-13", said: "The serial closeup is there (it was called missing). Sold without a keyboard, so no keyboard shot is needed." }],
+  "15415765172326": [{ at: "2026-10-13", said: "A Windows laptop, not a Chromebook. Photo 2's orientation was a model miss." }],
+  // --- WSP reviews ---
+  "15859327107238": [{ at: "2026-10-15", said: "Photo 17 repeats photo 14." }],
+  "15860184842406": [{ at: "2026-10-15", said: "Photo 1: the table's front edge shows along the bottom: off backdrop." }],
+  "15859418562726": [{ at: "2026-10-15", said: "Photo 1: the table's front edge shows along the bottom: off backdrop." }],
+  "15859349094566": [{ at: "2026-10-15", said: "Photo 2 is on the stand, not a different spot." }],
+  "15860167835814": [{ at: "2026-10-15", said: "Photo 1 is on the stand, not a different spot." }],
+  "15859421184166": [{ at: "2026-10-15", said: "Photos 3 to 7 are the console itself (its sides and top), not the box." }],
+  "15873198882982": [{ at: "2026-10-16", said: "Photo 1: the milky wash over the home screen is the lightbox reflected: reflection." }],
+  "15859477479590": [{ at: "2026-10-15", said: "Photo 5 (folded) is the Bottom; it was called a different spot, and missing." }],
+  "15859423215782": [{ at: "2026-10-15", said: "Photos 6, 7 and 8 repeat photo 5 (the back sensor)." }],
+  // --- LEE reviews ---
+  "15211507810477": [{ at: "2026-10-15", said: "Photo 4, \"CPU\", is a spec screen and belongs with the other screens." }],
+  "15216866295981": [{ at: "2026-10-15", said: "Photo 3 is cut off: the opened case should show whole." }],
+  "15216882548909": [{ at: "2026-10-15", said: "Photo 3 is cut off. The listing says new but the photos show it opened (\"missing the plastic\" is standard wording)." }],
+  "15211642683565": [{ at: "2026-10-15", said: "A QTY listing: one of each view is enough; each remote's sides shot one after another are repeats." }],
+  "15211574984877": [{ at: "2026-10-15", said: "Photo 3 was photo 1 again, closer (since deleted)." }],
+  "15216697475245": [{ at: "2026-10-15", said: "Photos 3 and 4 (live preview and menu) are not repeats. Photo 5, laid flat beside stand photos, is a different spot; the stand wins." }],
+  "15216617029805": [{ at: "2026-10-15", said: "Photos 3 and 4 are a repeat (the ring in its case from nearly the same angle). Smart rings use Small/Medium Misc." }],
+  "15212789858477": [{ at: "2026-10-15", said: "The repeat in the odd spot is the one to delete: the stand photo 3, not 4." }],
+  "15211639668909": [{ at: "2026-10-15", said: "Photo 4, the game laid out with its manual and inserts, is fine off the stand." }],
+  "15211659460781": [{ at: "2026-10-15", said: "A second opened case (2 discs) is not a repeat." }],
+  "15211509907629": [{ at: "2026-10-15", said: "A coiled cord is fine." }],
+  "15211493621933": [{ at: "2026-10-15", said: "A kit: no side, top or bottom shots required, and no different-spot finding; the leading box photos stay first." }],
+  // --- MPL reviews ---
+  "15419922481472": [{ at: "2026-10-14", said: "Photos 5 and 6 lie on the barrel: turned." }],
+  "15419929067840": [{ at: "2026-10-14", said: "Three barrel views: the Opposite Side is missing." }],
+  "15420038676800": [{ at: "2026-10-14", said: "Four barrel views, two of them lying (turned), so nothing is missing." }],
+  "15428035313984": [{ at: "2026-10-16", said: "The back-of-box label closeup isn't the Back of Box view." }],
+  "15428298408256": [{ at: "2026-10-16", said: "The closing box and accessory photos keep the store's order." }],
+  "15420708356416": [{ at: "2026-10-14", said: "A server accelerator uses Small/Medium Misc, not Graphics Cards." }],
+};
+
+// The model's answer on every field Confirm Shots asks, read off a saved
+// report, so the screen can PREFILL them and the person only corrects (Ethan,
+// 2026-10-16: "give me everything you need from me"). Named as the flags.
+function modelAnswers(g: any) {
+  const groups = (Array.isArray(g.setups) ? g.setups : []).filter((x: any) => Array.isArray(x) && x.length);
+  const main = groups.length > 1 ? groups.slice().sort((a: any[], b: any[]) => b.length - a.length)[0] : null;
+  const photos = (g.photos || []).map((p: any) => {
+    const flags = new Set<string>([...(p.framing_problems || []),
+      ...(p.issues || []).filter((i: any) => i.severity === "major").map((i: any) => i.type)]);
+    if (p.whole_item === false) flags.add("closeup");
+    if (main && !main.includes(p.n)) flags.add("different_spot");
+    return { n: p.n, flags: [...flags].filter(x => CONFIRM_FLAGS.includes(x)),
+             repeatOf: Number.isInteger(p.repeats) && p.repeats >= 1 && p.repeats < p.n ? p.repeats : null };
+  });
+  return { photos, facts: {
+    lead_unclear: g.lead_ok === false, serial_hidden: g.serial === "hidden_behind_cover",
+    new_claim_wrong: g.new_claim_wrong === true, units_apart: g.units_together === false,
+    flat_package: g.flat_package === true, main_flaw_shown: g.main_flaw?.shown || null } };
+}
+
 async function confirmView(scope: Scope, want: string, skip: Set<string>) {
   if (!confirmer(scope)) return { error: "forbidden", detail: "Confirm Shots is for the DM and CEO" };
   const graded: any[] = await rows(`picture_quality_reviews?report=not.is.null&sheet_slug=not.is.null`
     + `&store_code=in.(${scope.stores.join(",")})`
-    + `&select=store_code,product_id,sku,title,sheet_slug,model,stamp,reviewed_at,photos:report->photos`
+    + `&select=store_code,product_id,sku,title,sheet_slug,model,stamp,reviewed_at,status,decided_note,photos:report->photos`
+    + `,setups:report->setups,lead_ok:report->lead_ok,serial:report->serial,new_claim_wrong:report->new_claim_wrong`
+    + `,units_together:report->units_together,flat_package:report->flat_package,main_flaw:report->main_flaw`
     + `&order=reviewed_at.desc&limit=10000`);
   // sb() throws on a missing table; before 0148 is applied, say so plainly.
   const doneRows = await rows(`pq_shot_labels?select=product_id,sheet_slug&limit=50000`).catch(() => null);
@@ -1459,6 +1561,16 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
   }
   const sheets = await loadSheets();
   const nameOf = new Map(sheets.map(s => [s.slug, s.name]));
+  // His Train The Checker grades (0141), by photo address: his own framing calls.
+  const framed = new Map<string, Map<string, any>>();
+  for (const r of await rows(`pq_photo_labels?select=product_id,photo_src,label,problems&limit=10000`)) {
+    if (!framed.has(r.product_id)) framed.set(r.product_id, new Map());
+    framed.get(r.product_id)!.set(r.photo_src, r);
+  }
+  const num = (id: string) => String(id).split("/").pop() || "";
+  // Anything he has already said about a listing: a comment, a framing grade, or
+  // an approved fix. Those listings are the quickest to finish, so they go first.
+  const known = (g: any) => !!ETHAN_SAID[num(g.product_id)] || framed.has(g.product_id) || g.status === "applied";
   const bySheet = new Map<string, any[]>();
   for (const g of graded) {
     if (!Array.isArray(g.photos) || !g.photos.length) continue;
@@ -1475,7 +1587,8 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
   const listings: any[] = [];
   const misaligned: string[] = [];
   if (pick) {
-    const todo = bySheet.get(pick.slug)!.filter(g => !done.has(g.product_id) && !skip.has(g.product_id));
+    const todo = bySheet.get(pick.slug)!.filter(g => !done.has(g.product_id) && !skip.has(g.product_id))
+      .sort((a, b) => Number(known(b)) - Number(known(a)));   // stable: newest first within each
     // Six at a time: each is part of one Admin API read, and six is roughly ten
     // minutes of work.
     for (let i = 0; i < todo.length && listings.length < 6; i += 12) {
@@ -1491,6 +1604,12 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
         if (!l || l.photos.length !== g.photos.length) { misaligned.push(g.product_id); continue; }
         listings.push({ store: g.store_code, productId: g.product_id, sku: g.sku || l.sku, title: l.title || g.title,
           sheet: g.sheet_slug, model: g.model, stamp: g.stamp, reviewedAt: g.reviewed_at,
+          // PREFILL (2026-10-16). youSaid: his comments. accepted: he approved a
+          // Quick Fix built on these labels. modelSays: the grade's answer on
+          // every flag and fact. Each photo's `framing` is his own grade.
+          youSaid: ETHAN_SAID[num(g.product_id)] || [],
+          accepted: g.status === "applied" ? String(g.decided_note || "approved") : null,
+          modelSays: modelAnswers(g),
           // What the listing SAYS, for the listing-level questions: the
           // cosmetic sentences about this unit (PayMore's template wording
           // left out, the way decide() reads them), the functional notes,
@@ -1503,7 +1622,9 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
           functional: String(l.functional || "").slice(0, 400), included: String(l.included || "").slice(0, 300),
           condition: String(l.condition || "").slice(0, 120),
           photos: l.photos.map((p, k) => ({ n: k + 1, src: p.src.split("?")[0], img: p.url, w: p.width, h: p.height,
-            said: (g.photos.find((x: any) => x.n === k + 1)?.shots || []).map(String) })) });
+            said: (g.photos.find((x: any) => x.n === k + 1)?.shots || []).map(String),
+            framing: (() => { const x = framed.get(g.product_id)?.get(p.src.split("?")[0]);
+                              return x ? { label: x.label, problems: x.problems || [] } : null; })() })) });
       }
     }
   }
@@ -1537,6 +1658,11 @@ async function saveShots(scope: Scope, body: any) {
       .filter((x: any) => x && typeof x.text === "string" && x.text.trim())
       .map((x: any) => ({ text: String(x.text).trim().slice(0, 400), system: x.system === true, real: x.real === true })),
     needed: clean(lf.needed, 12),
+    // Where each answer started (2026-10-16): per photo, the source of the shot
+    // label and of each flag that was prefilled ("you" = his old grade, "model"
+    // = the grade's guess), and what he changed. The scorer reads it to keep
+    // untouched model guesses out of the trusted numbers.
+    ...(lf.prefill && typeof lf.prefill === "object" && JSON.stringify(lf.prefill).length < 20000 ? { prefill: lf.prefill } : {}),
   } : null;
   const out = photos.map((p: any) => ({
     store_code: store, product_id: productId, sheet_slug: sheet, model_sheet: body.modelSheet || null,

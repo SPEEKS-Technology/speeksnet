@@ -56213,7 +56213,8 @@ const _pqcMayUse = () => ['district manager', 'ceo'].includes((sessionStorage.ge
 
 async function pqConfirmOpen(sheet) {
     if (!_pqcMayUse()) return;
-    _pqc = { sheet: sheet || '', data: null, li: 0, pi: 0, busy: true, err: null, skip: new Set(), saved: 0, started: Date.now() };
+    _pqc = { sheet: sheet || '', data: null, li: 0, pi: 0, busy: true, err: null, skip: new Set(), saved: 0, started: Date.now(),
+             grid: true, zoom: null };
     document.addEventListener('keydown', _pqcKey);
     _pqcRender();
     await _pqcLoad();
@@ -56237,7 +56238,7 @@ async function _pqcLoad(sheet) {
             // Older queue payloads only had unitNotes; read those as the code's flaws.
             if (!Array.isArray(l.notes)) l.notes = (l.unitNotes || []).map(text => ({ text, unit: true }));
             l.flip = new Set();
-            for (const p of l.photos) { p.shots = [...p.said]; p.flags = new Set(); p.repeatOf = null; p.seen = false; }
+            _pqcPrefill(l);
         }
         c.data = d; c.sheet = d.sheet || ''; c.li = 0; c.pi = 0;
     } catch (e) { c.err = e.message || String(e); }
@@ -56278,20 +56279,21 @@ function pqConfirmPick(i, add) {
 }
 window.pqConfirmPick = pqConfirmPick;
 
-function pqConfirmFlag(k) {
+function pqConfirmFlag(k, i) {
     const l = _pqcListing();
-    const p = l && l.photos[_pqc.pi];
-    if (!p || _pqc.busy) return;
-    p.flags.has(k) ? p.flags.delete(k) : p.flags.add(k);
+    const p = l && l.photos[i == null ? _pqc.pi : i];
+    if (!p || _pqc.busy || !k) return;
+    if (p.flags.has(k)) { p.flags.delete(k); delete p.flagFrom[k]; }
+    else { p.flags.add(k); p.flagFrom[k] = 'you'; }
     _pqcRender();
 }
 window.pqConfirmFlag = pqConfirmFlag;
 
 // This photo repeats an earlier one (the model's `repeats`; it drives Approve
 // Deletion). Only an EARLIER photo can be named, the way the model reports it.
-function pqConfirmRepeat(v) {
+function pqConfirmRepeat(v, i) {
     const l = _pqcListing();
-    const p = l && l.photos[_pqc.pi];
+    const p = l && l.photos[i == null ? _pqc.pi : i];
     if (!p || _pqc.busy) return;
     const n = Number(v);
     p.repeatOf = Number.isInteger(n) && n >= 1 && n < p.n ? n : null;
@@ -56345,7 +56347,8 @@ async function pqConfirmNext(all) {
         // "not_applicable" by the prompt's own definition, so it is still a label.
         main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : 'not_applicable',
         // Every sentence with the code's call and the person's: unclicked = agreed.
-        sentences: _pqcNotes(l).map(n => ({ text: n.text, system: !!n.unit, real: !!n.real })) };
+        sentences: _pqcNotes(l).map(n => ({ text: n.text, system: !!n.unit, real: !!n.real })),
+        prefill: _pqcProvenance(l) };
     c.busy = true; _pqcRender();
     const r = await _pqPost({ action: 'confirm-shots', store: l.store, productId: l.productId, sheet: l.pickedSheet,
         modelSheet: l.sheet, model: l.model, stamp: l.stamp, checked: true, listing: facts,
@@ -56388,6 +56391,13 @@ function _pqcKey(e) {
     const c = _pqc;
     if (!c || e.ctrlKey || e.metaKey || e.altKey) return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    if (c.grid) {
+        if (e.key === 'Escape') { if (c.zoom != null) pqConfirmZoom(null); else pqConfirmClose(); }
+        else if (e.key === 'Enter') pqConfirmNext(true);
+        else return;
+        e.preventDefault();
+        return;
+    }
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     // Shift turns 1 into ! on most layouts; e.code still says which key it was.
     const code = (e.code || '').replace(/^Digit/, '').replace(/^Key/, '').toLowerCase().replace('semicolon', ';');
@@ -56401,6 +56411,176 @@ function _pqcKey(e) {
     else if (slot >= 0) pqConfirmPick(slot, e.shiftKey);
     else return;
     e.preventDefault();
+}
+
+// ---------------------------------------------------------------------------
+// THE WHOLE LISTING AT ONCE, EVERYTHING PREFILLED (Ethan, 2026-10-16: "this is
+// a lot and kind of hard to judge one photo at a time … give me everything you
+// need from me"). Every photo is a card with its label and flags, the guide's
+// shots sit below with what's covered, and one Save (Enter) confirms the lot.
+// Answers start from the best source there is:
+//   green "you": his own earlier call (a Train The Checker grade on that photo;
+//                a shot label from a Quick Fix he approved)
+//   grey  "model": the saved grade's guess
+// and he only corrects. ⚠️ A prefilled guess nobody looks at hard turns into a
+// "yes", which drifts the answer key toward the model. So where every answer
+// STARTED is saved beside it (listing.prefill). The scorer can then leave
+// untouched model guesses out of the numbers it trusts.
+// His comments on the listing ("You said …") are shown, not applied: most were
+// about an older grade, and a deletion renumbers photos.
+const _PQC_FRAMING_KEYS = ['off_center', 'crooked', 'too_small', 'blurry', 'cut_off', 'dirty_backdrop', 'clutter', 'reflection', 'different_spot'];
+const _pqcFlagName = k => { for (const [, list] of _PQC_FLAGS) for (const [key, label] of list) if (key === k) return label; return k; };
+
+function _pqcPrefill(l) {
+    const ms = l.modelSays || { photos: [], facts: {} };
+    for (const p of l.photos) {
+        p.shots = [...p.said];
+        p.shotsFrom = l.accepted ? 'accepted' : 'model';
+        p.flags = new Set(); p.flagFrom = {}; p.seen = false;
+        // His own framing grade on this exact photo outranks the model on those
+        // nine kinds; "fine" means none of them.
+        if (p.framing) for (const k of (p.framing.label === 'problem' ? p.framing.problems : []))
+            if (_PQC_FRAMING_KEYS.includes(k)) { p.flags.add(k); p.flagFrom[k] = 'earlier'; }
+        const m = (ms.photos || []).find(x => x.n === p.n) || { flags: [], repeatOf: null };
+        for (const k of m.flags || []) {
+            if (p.framing && _PQC_FRAMING_KEYS.includes(k)) continue;
+            if (!p.flags.has(k)) { p.flags.add(k); p.flagFrom[k] = 'model'; }
+        }
+        p.repeatOf = m.repeatOf || null;
+        p.pre = { shots: [...p.shots], flags: { ...p.flagFrom }, repeatOf: p.repeatOf };
+    }
+    const mf = ms.facts || {};
+    l.facts = { lead_unclear: !!mf.lead_unclear, serial_hidden: !!mf.serial_hidden, new_claim_wrong: !!mf.new_claim_wrong,
+                units_apart: !!mf.units_apart, flat_package: !!mf.flat_package,
+                main_flaw_shown: ['yes', 'partly', 'no', 'not_applicable'].includes(mf.main_flaw_shown) ? mf.main_flaw_shown : null,
+                needed: [] };
+    l.preFacts = { ...l.facts };
+}
+
+// What started where, and what was changed: saved with the listing.
+function _pqcProvenance(l) {
+    return {
+        accepted: l.accepted || null,
+        photos: l.photos.map(p => {
+            const pre = p.pre || { shots: [], flags: {}, repeatOf: null };
+            const now = [...p.flags];
+            return { n: p.n, shots: p.shotsFrom || 'model', shotsChanged: p.shots.join('|') !== pre.shots.join('|'),
+                     flags: pre.flags,
+                     added: now.filter(k => !(k in pre.flags)), removed: Object.keys(pre.flags).filter(k => !p.flags.has(k)),
+                     repeatChanged: (p.repeatOf || null) !== (pre.repeatOf || null) };
+        }),
+        facts: { from: 'model', changed: Object.keys(l.preFacts || {}).filter(k => k !== 'needed' && (l.preFacts || {})[k] !== l.facts[k]) },
+    };
+}
+
+function pqConfirmMode(grid) {
+    if (!_pqc) return;
+    _pqc.grid = !!grid; _pqc.zoom = null;
+    _pqcRender();
+}
+window.pqConfirmMode = pqConfirmMode;
+
+function pqConfirmZoom(i) {
+    if (!_pqc) return;
+    _pqc.zoom = i == null ? null : Number(i);
+    _pqcRender();
+}
+window.pqConfirmZoom = pqConfirmZoom;
+
+// slot 0 replaces the photo's main label; slot 1 sets ('' clears) a second one.
+function pqConfirmSetShot(i, slot, label) {
+    const l = _pqcListing();
+    const p = l && l.photos[i];
+    if (!p || _pqc.busy) return;
+    if (slot === 0) { if (label) p.shots = [label, ...p.shots.slice(1).filter(x => x !== label)]; }
+    else p.shots = label ? [p.shots[0], label].filter(Boolean) : p.shots.slice(0, 1);
+    _pqcRender();
+}
+window.pqConfirmSetShot = pqConfirmSetShot;
+
+function _pqcGridHtml(l) {
+    const c = _pqc;
+    const busy = c.busy ? 'disabled' : '';
+    const choices = [..._pqcChoices(l), 'Extra', 'Box'];
+    const guide = (c.data.guide || {})[l.pickedSheet] || { name: l.pickedSheet, shots: [] };
+    const opts = (cur, blank) => (blank ? `<option value="">${blank}</option>` : '')
+        + [...new Set([...(cur && !choices.includes(cur) ? [cur] : []), ...choices])]
+            .map(x => `<option value="${_ecEsc(x)}"${x === cur ? ' selected' : ''}>${_ecEsc(x)}${choices.includes(x) ? '' : ' (not on sheet)'}</option>`).join('');
+    const allFlags = _PQC_FLAGS.flatMap(([g, list]) => list.map(([k, label]) => [g, k, label]));
+    const sheetOpts = Object.entries(c.data.guide).sort((a, b) => a[1].name.localeCompare(b[1].name))
+        .map(([slug, g]) => `<option value="${_ecEsc(slug)}"${slug === l.pickedSheet ? ' selected' : ''}>${_ecEsc(g.name)}</option>`).join('');
+
+    const said = [
+        ...(l.youSaid || []).map(x => `<div class="pqc-you"><b>You said</b> <span>${_ecEsc(String(x.at || '').slice(5))}</span> ${_ecEsc(x.said)}</div>`),
+        ...(l.accepted ? [`<div class="pqc-you"><b>You approved</b> ${_ecEsc(l.accepted)}: these shot labels were accepted then.</div>`] : []),
+    ].join('');
+
+    const cards = l.photos.map((p, i) => {
+        const chips = [...p.flags].map(k => `<button type="button" class="pqc-fchip pqc-from-${p.flagFrom[k] || 'you'}"
+            title="${p.flagFrom[k] === 'model' ? 'The model\'s guess' : p.flagFrom[k] === 'earlier' ? 'Your earlier grade' : 'Added now'} — click to remove"
+            onclick="pqConfirmFlag('${k}', ${i})" ${busy}>${_ecEsc(_pqcFlagName(k))} ×</button>`).join('');
+        const addFlag = `<select class="pqc-add" onchange="pqConfirmFlag(this.value, ${i})" ${busy}>
+            <option value="">+ Flag</option>
+            ${_PQC_FLAGS.map(([g, list]) => `<optgroup label="${g}">${list.filter(([k]) => !p.flags.has(k))
+                .map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</optgroup>`).join('')}
+          </select>`;
+        const changed = p.shots.join('|') !== (p.pre ? p.pre.shots.join('|') : '');
+        return `<div class="pqc-card${changed ? ' pqc-card-changed' : ''}">
+          <button type="button" class="pqc-card-img" onclick="pqConfirmZoom(${i})" title="Look closer">
+            <img src="${_ecEsc(p.img)}" alt="Photo ${p.n}" loading="lazy"><span class="pqc-thumb-n">${p.n}</span></button>
+          <select class="pqc-shot pqc-from-${changed ? 'you' : p.shotsFrom === 'accepted' ? 'earlier' : 'model'}"
+            onchange="pqConfirmSetShot(${i}, 0, this.value)" ${busy}>${opts(p.shots[0], p.shots[0] ? '' : '— pick a shot —')}</select>
+          ${p.shots[1] ? `<select class="pqc-shot pqc-shot2" onchange="pqConfirmSetShot(${i}, 1, this.value)" ${busy}>
+              ${opts(p.shots[1], '— no second shot —')}</select>`
+            : `<select class="pqc-add" onchange="pqConfirmSetShot(${i}, 1, this.value)" ${busy}>${opts('', '+ Second Shot')}</select>`}
+          <div class="pqc-fchips">${chips}${addFlag}</div>
+          ${p.n > 1 ? `<select class="pqc-add${p.repeatOf ? ' pqc-add-on' : ''}" onchange="pqConfirmRepeat(this.value, ${i})" ${busy}>
+              <option value="">Not a repeat</option>
+              ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Same shot as photo ${q.n}</option>`).join('')}
+            </select>` : ''}
+        </div>`;
+    }).join('');
+
+    // What the labels cover, against the sheet: a missing shot is visible at a glance.
+    const have = new Set(l.photos.flatMap(p => p.shots).map(x => x.toLowerCase()));
+    const always = [...new Map(guide.shots.filter(x => !x.cond).map(x => [x.label, x])).values()];
+    const strip = always.map(x => `<div class="pqc-gshot${have.has(x.label.toLowerCase()) ? '' : ' pqc-gshot-miss'}">
+        ${x.img ? `<img src="${_ecEsc(x.img)}" alt="" loading="lazy">` : '<span class="pqc-gshot-none"></span>'}
+        <span>${have.has(x.label.toLowerCase()) ? '✓' : '✗ Missing'} ${_ecEsc(x.label)}</span></div>`).join('');
+
+    let zoom = '';
+    if (c.zoom != null && l.photos[c.zoom]) {
+        const p = l.photos[c.zoom];
+        const ex = guide.shots.find(x => p.shots.includes(x.label) && x.img);
+        zoom = `<div class="pqc-zoom" onclick="pqConfirmZoom(null)" title="Click to close">
+          <div class="pqt-pair">
+            <figure class="pqt-fig"><div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt=""></div>
+              <figcaption><b>Photo ${p.n}</b> · ${_ecEsc(p.shots.join(' + ') || '—')}</figcaption></figure>
+            <figure class="pqt-fig"><div class="pqt-frame">${ex ? `<img src="${_ecEsc(ex.img)}" alt="">` : '<span class="pqt-noex">No example photo</span>'}</div>
+              <figcaption><b>Guide:</b> ${_ecEsc(ex ? ex.label : (p.shots[0] || '—'))}</figcaption></figure>
+          </div></div>`;
+    }
+
+    return `${zoom}
+      <div class="pqc-listing">
+        <div class="pqc-title">${_ecEsc(l.title || '')}</div>
+        <div class="pqc-meta"><span class="lh-sku">${_ecEsc(l.sku || '')}</span> · ${_ecEsc(l.store)} · listing ${c.li + 1} of ${c.data.listings.length}
+          <label class="pqc-sheet-pick">Sheet <select onchange="pqConfirmSheet(this.value)" ${busy}>${sheetOpts}</select></label>
+          ${l.pickedSheet !== l.sheet ? '<span class="pqc-warn">Changed From The Grade</span>' : ''}</div>
+      </div>
+      ${said ? `<div class="pqc-yous">${said}</div>` : ''}
+      <div class="pqc-legend"><span class="pqc-fchip pqc-from-earlier">Your earlier call</span>
+        <span class="pqc-fchip pqc-from-model">The model's guess</span><span class="pqc-fchip pqc-from-you">Changed now</span>
+        Fix what's wrong, then Save. Click a photo to see it beside the guide. Mark only what a buyer would notice.</div>
+      <div class="pqc-grid">${cards}</div>
+      <div class="pqc-guide"><div class="pqc-flaghead">${_ecEsc(guide.name)} <span>— the sheet's shots, against your labels</span></div>
+        <div class="pqc-gstrip">${strip}</div></div>
+      ${_pqcListingPanel(l)}
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${busy}>Save Listing <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmSkip()" ${busy}>Skip Listing</button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmMode(false)">One Photo At A Time</button>
+      </div>`;
 }
 
 function _pqcHtml() {
@@ -56431,6 +56611,7 @@ function _pqcHtml() {
         return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
             : 'Nothing left to confirm here — every graded listing on this sheet that still matches its grade has an answer. Pick another sheet above.'}</div>`;
     }
+    if (c.grid) return head + err + sheets + _pqcGridHtml(l);
     const p = l.photos[c.pi];
     const choices = _pqcChoices(l);
     const guide = d.guide[l.pickedSheet] || { name: l.pickedSheet, shots: [] };
@@ -56481,6 +56662,7 @@ function _pqcHtml() {
         <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${c.busy ? 'disabled' : ''}
             title="Every photo not yet answered keeps the label it shows">All Right — Save Listing <kbd>Shift+Enter</kbd></button>
         <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmSkip()" ${c.busy ? 'disabled' : ''}>Skip Listing</button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmMode(true)">Whole Listing View</button>
       </div>
       <div class="pqt-ask">A shot key replaces the label and moves on; with Shift it adds a second shot. ← goes back.</div>
       <div class="pqc-thumbs">${thumbs}</div>`;
@@ -56512,7 +56694,7 @@ function _pqcListingPanel(l) {
         ...(String(l.included || '').trim() ? [['Included', l.included]] : []),
     ];
     return `<div class="pqc-flagbox pqc-listbox">
-      <div class="pqc-flaghead">This Listing <span>— asked once; blank means no</span></div>
+      <div class="pqc-flaghead">This Listing <span>— asked once; starts from the model's guess; blank means no</span></div>
       ${notes ? `<div class="pqc-notes">${notes}</div>` : ''}
       ${said.length ? `<div class="pqc-said">${said.map(([k, x]) => `<div><b>${k}:</b> ${_ecEsc(x)}</div>`).join('')}</div>` : ''}
       <div class="pqc-flags">

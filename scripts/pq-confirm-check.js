@@ -58,6 +58,36 @@ t('Main Flaw Shown: asked for a unit flaw line or a broken title, never for func
     return true;
 });
 
+t('whole listing: your grade beats the model on framing, the model fills the rest, and where each answer started is saved', function () {
+    var l = { title: 'Game', sheet: 'video-games', pickedSheet: 'video-games', accepted: null, notes: [], flip: new Set(),
+              modelSays: { photos: [{ n: 1, flags: ['crooked', 'reflection', 'closeup'], repeatOf: null }, { n: 2, flags: ['off_center'], repeatOf: 1 }],
+                           facts: { lead_unclear: true, main_flaw_shown: 'not_applicable' } },
+              photos: [{ n: 1, said: ['Front of Game'], framing: { label: 'problem', problems: ['too_small'] } },
+                       { n: 2, said: ['Back of Game'], framing: null }] };
+    _pqcPrefill(l);
+    var p1 = l.photos[0], p2 = l.photos[1];
+    // Photo 1: his grade says too small and nothing else of the framing kinds, so
+    // the model's "crooked" and "reflection" are dropped; "closeup" isn't framing, so it stays.
+    var f1 = Array.from(p1.flags).sort().join();
+    if (f1 !== 'closeup,too_small') return 'photo 1 flags ' + f1;
+    if (p1.flagFrom.too_small !== 'earlier' || p1.flagFrom.closeup !== 'model') return 'photo 1 sources ' + JSON.stringify(p1.flagFrom);
+    if (Array.from(p2.flags).join() !== 'off_center' || p2.flagFrom.off_center !== 'model' || p2.repeatOf !== 1) return 'photo 2 prefill';
+    if (l.facts.lead_unclear !== true || l.facts.main_flaw_shown !== 'not_applicable') return 'facts prefill ' + JSON.stringify(l.facts);
+    _pqc = { data: { listings: [l], guide: { 'video-games': { name: 'Video Games', shots: [{ label: 'Front of Game', cond: null, img: null }, { label: 'Back of Game', cond: null, img: null }] } } },
+             li: 0, pi: 0, busy: false, grid: true, zoom: null };
+    pqConfirmFlag('off_center', 1);            // he removes the model's guess
+    pqConfirmFlag('blurry', 0);                // and adds one himself
+    pqConfirmSetShot(1, 0, 'Front of Game');   // and fixes a label
+    pqConfirmFact('lead_unclear');
+    var pv = _pqcProvenance(l);
+    _pqc = null;
+    var e1 = pv.photos[0], e2 = pv.photos[1];
+    if (e1.added.join() !== 'blurry' || e1.removed.length || e1.flags.too_small !== 'earlier') return 'photo 1 provenance ' + JSON.stringify(e1);
+    if (e2.removed.join() !== 'off_center' || !e2.shotsChanged || e2.shots !== 'model') return 'photo 2 provenance ' + JSON.stringify(e2);
+    if (pv.facts.changed.join() !== 'lead_unclear') return 'facts provenance ' + JSON.stringify(pv.facts);
+    return true;
+});
+
 t('the DM and the CEO may use it', function () {
     pqcAs('District Manager'); var dm = _pqcMayUse();
     pqcAs('CEO'); var ceo = _pqcMayUse();
@@ -85,19 +115,23 @@ t('at 390px nothing in the Confirm Shots box runs past its edge', function () {
                { text: 'This console is in good pre-owned condition, showing light to moderate signs of use such as small scuffs, scratches, or dings across the top panel.', unit: false }];
     l.flip = new Set([1]);
     l.facts = { lead_unclear: true, serial_hidden: false, new_claim_wrong: true, units_apart: false, flat_package: false, main_flaw_shown: 'partly', needed: [] };
-    l.photos.forEach(function (p) { p.shots = p.said.slice(); p.flags = new Set(['reflection', 'off_center']); p.repeatOf = null; p.seen = false; });
-    _pqc = { sheet: d.sheet, data: d, li: 0, pi: 0, busy: false, err: null, skip: new Set(), saved: 0, started: Date.now() };
+    l.photos.forEach(function (p) { p.shots = p.said.slice(); p.flags = new Set(['reflection', 'off_center']); p.flagFrom = { reflection: 'model', off_center: 'earlier' };
+                                    p.repeatOf = null; p.seen = false; p.pre = { shots: p.shots.slice(), flags: {}, repeatOf: null }; });
+    l.youSaid = [{ at: '2026-10-15', said: 'Photos 3 to 7 are the console itself (its sides and top), not the box, and photo 12 repeats photo 3 from a slightly different angle.' }];
+    var bad = [];
+    [false, true].forEach(function (grid) {
+    _pqc = { sheet: d.sheet, data: d, li: 0, pi: 0, busy: false, err: null, skip: new Set(), saved: 0, started: Date.now(), grid: grid, zoom: grid ? 0 : null };
     var host = document.createElement('div');
     host.style.cssText = 'width:390px;position:absolute;left:0;top:0;';
     host.innerHTML = '<div class="pqt-box" style="width:100%;box-sizing:border-box">' + _pqcHtml() + '</div>';
     document.body.appendChild(host);
     var box = host.firstChild.getBoundingClientRect();
-    var bad = [];
     host.querySelectorAll('*').forEach(function (el) {
         var r = el.getBoundingClientRect();
-        if (r.width && (r.right > box.right + 1 || r.left < box.left - 1)) bad.push((el.className || el.tagName) + ' ' + Math.round(r.width) + 'px');
+        if (r.width && (r.right > box.right + 1 || r.left < box.left - 1)) bad.push((grid ? 'grid ' : 'one ') + (el.className || el.tagName) + ' ' + Math.round(r.width) + 'px');
     });
     host.remove();
+    });
     _pqc = null;
     return !bad.length || 'past the edge: ' + bad.slice(0, 5).join(', ');
 });
@@ -108,6 +142,8 @@ t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', f
     pqcAs('district manager');
     pqcPosts = [];
     return pqConfirmOpen().then(function () {
+        if (_pqc.grid !== true) return 'the whole-listing view is not the default';
+        pqConfirmMode(false);                  // this test drives the one-photo view
         var el = document.getElementById('pqConfirmOverlay');
         if (!el) return 'no overlay';
         var html = el.innerHTML;

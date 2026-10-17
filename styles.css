@@ -19858,6 +19858,52 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     font: inherit; font-size: 10.5px; font-weight: 700; color: #475569; cursor: pointer; white-space: nowrap;
 }
 .pqc-note-b:disabled { opacity: .45; cursor: default; }
+/* Confirm Shots, whole-listing view (2026-10-16). Every photo is a card, and
+   where each answer came from is its colour: green = Ethan's earlier call,
+   grey = the model's guess, blue = changed now. The guide strip underneath
+   marks each sheet shot covered or missing. */
+.pqc-yous { margin: 0 0 10px; display: flex; flex-direction: column; gap: 4px; }
+.pqc-you {
+    padding: 6px 9px; border-radius: 8px; background: #f0fdf4; border: 1px solid #bbf7d0;
+    font-size: 12px; color: #14532d; line-height: 1.4; overflow-wrap: anywhere;
+}
+.pqc-you span { font-size: 10.5px; font-weight: 700; color: #4d7c0f; }
+.pqc-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 11.5px; color: #64748b; }
+.pqc-fchip {
+    display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; border: 1px solid #cbd5e1;
+    background: #fff; font: inherit; font-size: 10.5px; font-weight: 700; color: #475569; cursor: pointer; white-space: nowrap;
+}
+.pqc-from-earlier { border-color: #86efac; background: #f0fdf4; color: #166534; }
+.pqc-from-model { border-color: #cbd5e1; background: #f1f5f9; color: #475569; }
+.pqc-from-you { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.pqc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.pqc-card {
+    display: flex; flex-direction: column; gap: 5px; padding: 6px; min-width: 0;
+    border: 1px solid #e2e8f0; border-radius: 10px; background: #fff;
+}
+.pqc-card-changed { border-color: #93c5fd; }
+.pqc-card-img { position: relative; padding: 0; border: 0; background: #f8fafc; border-radius: 6px; cursor: zoom-in; }
+.pqc-card-img img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: contain; border-radius: 6px; }
+.pqc-shot, .pqc-add { width: 100%; min-width: 0; font: inherit; font-size: 11.5px; padding: 3px 4px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; }
+.pqc-shot { font-weight: 700; }
+.pqc-shot.pqc-from-earlier { border-color: #86efac; background: #f0fdf4; }
+.pqc-shot.pqc-from-model { border-color: #cbd5e1; background: #f8fafc; }
+.pqc-shot.pqc-from-you { border-color: #93c5fd; background: #eff6ff; }
+.pqc-add { color: #64748b; border-style: dashed; }
+.pqc-add-on { color: #b45309; border-style: solid; border-color: #f59e0b; background: #fffbeb; font-weight: 700; }
+.pqc-fchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.pqc-fchips .pqc-add { width: auto; flex: 1 1 90px; }
+.pqc-guide { margin-top: 12px; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.pqc-gstrip { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; margin-top: 6px; }
+.pqc-gshot { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 10.5px; font-weight: 700; color: #166534; line-height: 1.25; overflow-wrap: anywhere; }
+.pqc-gshot img, .pqc-gshot-none { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; }
+.pqc-gshot-none { display: block; }
+.pqc-gshot-miss { color: #b91c1c; }
+.pqc-gshot-miss img, .pqc-gshot-miss .pqc-gshot-none { border-color: #fca5a5; opacity: .7; }
+.pqc-zoom {
+    position: sticky; top: 0; z-index: 2; margin: -4px 0 12px; padding: 10px; border-radius: 10px;
+    background: #fff; border: 2px solid #2563eb; box-shadow: 0 10px 30px rgba(15, 23, 42, .25); cursor: zoom-out;
+}
 /* Even halves, but never narrower than the label — "Approve Deletion" was
    clipped to "Approve Deletio" by min-width: 0 (Ethan, 2026-10-11). Too narrow
    for both, and Dismiss drops to its own line instead of anything being cut. */

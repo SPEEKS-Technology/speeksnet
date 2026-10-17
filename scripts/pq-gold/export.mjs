@@ -158,6 +158,11 @@ for (const r of rows) {
   for (const c of confirmed) {
     const p = livePhotos ? photos.find(x => fileKey(x.url) === fileKey(c.src)) : photos.find(x => x.url === c.src);
     if (!p) { unconfirmed++; continue; }
+    // Where his answer started (whole-listing view, 2026-10-16): a flag that was
+    // the MODEL's prefilled guess and that he left alone is listed, so the
+    // scorer's TRUST=1 can leave it out (agreeing without looking is not a label).
+    const prov = (c.listing?.prefill?.photos || []).find((x) => x.n === c.n);
+    if (prov) p.model_untouched = Object.entries(prov.flags || {}).filter(([k, v]) => v === "model" && !(prov.removed || []).includes(k)).map(([k]) => k);
     // "cropped" is 0148's name for cut_off. flags_checked (0149): blank = NO.
     Object.assign(p, { shots: c.shots, shots_from: "confirmed", shots_tier: "explicit",
                        flags: (c.flags || []).map(x => x === "cropped" ? "cut_off" : x), flags_checked: !!c.checked,
