@@ -104,6 +104,20 @@ t('More For Training asks the server for the reopened queue; plain Confirm Shots
     return /More For Training/.test(trainNote) || 'no More For Training heading';
 });
 
+t('a finished sheet shows ticked off in the Done row, not hidden in More Sheets', function () {
+    var sheets = [{ slug: 'item-lots', name: 'Item Lots', graded: 3, confirmed: 3, judged: 0, left: 0, need: 0 }];
+    for (var i = 0; i < 9; i++) sheets.push({ slug: 's' + i, name: 'Sheet ' + i, graded: 20, confirmed: 1, judged: 0, left: 19, need: 19 });
+    _pqc = { sheet: 's0', data: { target: 40, total: 3, sheets: sheets, guide: {}, listings: [] }, li: 0, pi: 0, busy: false, forTraining: true, started: Date.now(), saved: 0 };
+    var h = _pqcHtml();
+    _pqc = null;
+    var d = document.createElement('div'); d.innerHTML = h;
+    var done = d.querySelector('.pqc-done');
+    if (!done || done.textContent.indexOf('Item Lots 3/3') < 0) return 'no Done row with Item Lots 3/3';
+    var hidden = d.querySelector('.pqc-more');
+    if (hidden && hidden.textContent.indexOf('Item Lots') >= 0) return 'Item Lots still in More Sheets';
+    return true;
+});
+
 t('the DM and the CEO may use it', function () {
     pqcAs('District Manager'); var dm = _pqcMayUse();
     pqcAs('CEO'); var ceo = _pqcMayUse();

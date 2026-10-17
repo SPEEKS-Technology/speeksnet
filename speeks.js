@@ -56615,9 +56615,17 @@ function _pqcHtml() {
         <span class="pqc-sheet-name">${_ecEsc(s.name)}</span>
         <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * (s.confirmed + (c.forTraining ? 0 : s.judged || 0)) / Math.min(target, s.graded || 1)))}%"></span></span>
         <span class="pqc-sheet-n">${Math.min(s.confirmed + (c.forTraining ? 0 : s.judged || 0), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span></button>`;
-    const top = (d.sheets || []).slice(0, 8), more = (d.sheets || []).slice(8);
+    // A FINISHED sheet gets a ✓ in its own row (Ethan, 2026-10-17: "it just
+    // isn't showing as checked off"). It used to sink into the collapsed "More
+    // Sheets" list, so a sheet he'd just finished seemed to vanish.
+    const count = s => s.confirmed + (c.forTraining ? 0 : s.judged || 0);
+    const isDone = s => count(s) >= Math.min(target, s.graded);
+    const doneSheets = (d.sheets || []).filter(isDone), active = (d.sheets || []).filter(s => !isDone(s));
+    const top = active.slice(0, 8), more = active.slice(8);
     const sheets = `<div class="pqc-sheets">${top.map(sheetBtn).join('')}</div>`
-        + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '');
+        + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '')
+        + (doneSheets.length ? `<div class="pqc-done"><span class="pqc-done-h">✓ Done (${doneSheets.length})</span>${doneSheets.map(s =>
+            `<span class="pqc-done-s" title="${s.confirmed} confirmed by you of ${s.graded} graded">✓ ${_ecEsc(s.name)} ${Math.min(count(s), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span>`).join('')}</div>` : '');
     const l = _pqcListing();
     if (!l) {
         return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
