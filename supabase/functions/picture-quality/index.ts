@@ -138,6 +138,21 @@ async function sb(path: string, init: RequestInit = {}) {
   return res;
 }
 const rows = async (path: string) => await (await sb(path)).json();
+// EVERY row, a page at a time. PostgREST returns at most 1,000 rows per request
+// whatever `limit` asks for (Supabase's max-rows), and pq_shot_labels passed
+// 1,000 photos on 2026-10-17: Ethan's newest labels (handheld consoles, gaming
+// laptops) fell past the cut, so their sheets read 0/3 and his finished
+// listings were open to be offered again. `path` must carry its own `order`, so
+// the pages are stable.
+async function allRows(path: string) {
+  const out: any[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const page = await rows(`${path}&limit=1000&offset=${offset}`);
+    if (!Array.isArray(page)) throw new Error(`read failed: ${path}`);
+    out.push(...page);
+    if (page.length < 1000) return out;
+  }
+}
 
 function secretOk(url: URL): boolean {
   const given = url.searchParams.get("secret") || "";
@@ -949,7 +964,7 @@ async function sweepCandidates(store: string, shop: string, token: string, limit
   }
   const ids = [...new Set(cat.map(c => String(c.product_id || "")).filter(Boolean)
     .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`))];
-  const seen = await rows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp,sheet_slug&limit=10000`);
+  const seen = await allRows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp,sheet_slug&order=product_id`);
   const bySeen = new Map(seen.map((r: any) => [r.product_id, r]));
   const fresh = ids.filter(id => !bySeen.has(id));
   // Graded under an older recipe first: those rows are HIDDEN from the queue
@@ -1057,10 +1072,10 @@ async function batchSweep(store: string, limit: number, days: number, model: str
   // model or rules change; Ethan's review queue after the Opus switch, 10-13).
   // A random handful, not the newest (Ethan's nightly sample, 10-13).
   if (random) ids = ids.map(id => [Math.random(), id] as const).sort((a, b) => a[0] - b[0]).map(x => x[1]);
-  if (regrade) ids = [...new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open&select=product_id&limit=10000`))
+  if (regrade) ids = [...new Set<string>((await allRows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open&select=product_id&order=product_id`))
     .map((r: any) => String(r.product_id) as string))];
   const flying = await inFlight(store);
-  const seen = new Map<string, string>((await rows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp&limit=10000`))
+  const seen = new Map<string, string>((await allRows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp&order=product_id`))
     .map((r: any) => [String(r.product_id), String(r.stamp || "")]));
   const sheets = await loadSheets();
   const standard = new Map<string, number>();
@@ -1345,7 +1360,7 @@ async function trainView(scope: Scope, asked: string, skip = 0) {
   const store = scope.stores.includes(asked) ? asked : scope.stores[0];
   const graded: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&report=not.is.null`
     + `&select=product_id,sheet_slug,photo_count,report->photos&order=reviewed_at.desc&limit=200`);
-  const labelled: any[] = await rows(`pq_photo_labels?store_code=eq.${store}&select=product_id,photo_src,label,problems&limit=10000`);
+  const labelled: any[] = await allRows(`pq_photo_labels?store_code=eq.${store}&select=product_id,photo_src,label,problems&order=id`);
   const seen = new Set(labelled.map(r => `${r.product_id}|${r.photo_src}`));
   const { shop, token } = await shopFor(store);
   const sheets = await loadSheets();
@@ -1582,15 +1597,15 @@ function modelAnswers(g: any) {
 // out at CONFIRM_TARGET of his own.
 async function confirmView(scope: Scope, want: string, skip: Set<string>, more = false) {
   if (!confirmer(scope)) return { error: "forbidden", detail: "Confirm Shots is for the DM and CEO" };
-  const graded: any[] = await rows(`picture_quality_reviews?report=not.is.null&sheet_slug=not.is.null`
+  const graded: any[] = await allRows(`picture_quality_reviews?report=not.is.null&sheet_slug=not.is.null`
     + `&store_code=in.(${scope.stores.join(",")})`
     + `&select=store_code,product_id,sku,title,sheet_slug,model,stamp,reviewed_at,status,decided_note,photos:report->photos`
     + `,setups:report->setups,lead_ok:report->lead_ok,serial:report->serial,new_claim_wrong:report->new_claim_wrong`
     + `,units_together:report->units_together,flat_package:report->flat_package,main_flaw:report->main_flaw`
     + `,batch:report->>batch,sample:report->>sample,redecided:report->>redecided`
-    + `&order=reviewed_at.desc&limit=10000`);
+    + `&order=reviewed_at.desc,product_id`);
   // sb() throws on a missing table; before 0148 is applied, say so plainly.
-  const doneRows = await rows(`pq_shot_labels?select=product_id,sheet_slug&limit=50000`).catch(() => null);
+  const doneRows = await allRows(`pq_shot_labels?select=product_id,sheet_slug&order=id`).catch(() => null);
   if (!Array.isArray(doneRows)) return { error: "no_table", detail: "pq_shot_labels is not in the database yet (migration 0148)" };
   const done = new Set(doneRows.map((r: any) => r.product_id));
   const confirmedBySheet = new Map<string, Set<string>>();
@@ -1602,7 +1617,7 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
   const nameOf = new Map(sheets.map(s => [s.slug, s.name]));
   // His Train The Checker grades (0141), by photo address: his own framing calls.
   const framed = new Map<string, Map<string, any>>();
-  for (const r of await rows(`pq_photo_labels?select=product_id,photo_src,label,problems&limit=10000`)) {
+  for (const r of await allRows(`pq_photo_labels?select=product_id,photo_src,label,problems&order=id`)) {
     if (!framed.has(r.product_id)) framed.set(r.product_id, new Map());
     framed.get(r.product_id)!.set(r.photo_src, r);
   }
@@ -2113,8 +2128,8 @@ Deno.serve(async (req: Request) => {
       if (view === "counts") {
         // Current recipe only — the same rule as the queue, so the All Stores
         // card and the tab it opens can never disagree about the count.
-        const open = await rows(`picture_quality_reviews?status=eq.open&verdict=in.(retake,fix,reorder)`
-          + `&stamp=like.${RECIPE}:*&store_code=in.(${scope.stores.join(",")})&select=store_code,verdict&limit=10000`);
+        const open = await allRows(`picture_quality_reviews?status=eq.open&verdict=in.(retake,fix,reorder)`
+          + `&stamp=like.${RECIPE}:*&store_code=in.(${scope.stores.join(",")})&select=store_code,verdict&order=product_id`);
         const counts: Record<string, Record<string, number>> = {};
         for (const r of open) (counts[r.store_code] ||= {})[r.verdict] = ((counts[r.store_code] || {})[r.verdict] || 0) + 1;
         return json({ scope, counts });
