@@ -56214,7 +56214,11 @@ const _pqcMayUse = () => ['district manager', 'ceo'].includes((sessionStorage.ge
 async function pqConfirmOpen(sheet) {
     if (!_pqcMayUse()) return;
     _pqc = { sheet: sheet || '', data: null, li: 0, pi: 0, busy: true, err: null, skip: new Set(), saved: 0, started: Date.now(),
-             grid: true, zoom: null };
+             // One photo at a time is the default again (Ethan, 2026-10-16, after
+             // trying the whole-listing view: "can you go back to the original
+             // form of me grading one picture at a time?"). The whole-listing
+             // view stays behind its button. The prefill stays in both.
+             grid: false, zoom: null };
     document.addEventListener('keydown', _pqcKey);
     _pqcRender();
     await _pqcLoad();
@@ -56648,7 +56652,10 @@ function _pqcHtml() {
       <div class="pqc-flagbox">
         <div class="pqc-flaghead">This Photo <span>— mark only what a buyer would notice; blank means no</span></div>
         ${_PQC_FLAGS.map(([group, list]) => `<div class="pqc-flags"><span class="pqc-flaggroup">${group}</span>${list.map(([k, label]) =>
-            `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' : ''}"
+            // An "on" flag says where it came from, as in the whole-listing view:
+            // amber = his own, grey = the model's guess, green = his earlier grade.
+            `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' + (p.flagFrom && p.flagFrom[k] === 'model' ? ' pqc-flag-model' : p.flagFrom && p.flagFrom[k] === 'earlier' ? ' pqc-flag-earlier' : '') : ''}"
+              title="${p.flags.has(k) ? (p.flagFrom && p.flagFrom[k] === 'model' ? "The model’s guess — click to remove" : p.flagFrom && p.flagFrom[k] === 'earlier' ? 'Your earlier grade — click to remove' : 'Click to remove') : 'Click to add'}"
               onclick="pqConfirmFlag('${k}')" ${c.busy ? 'disabled' : ''}>${label}</button>`).join('')}</div>`).join('')}
         ${p.n > 1 ? `<div class="pqc-flags"><span class="pqc-flaggroup">Repeat</span>
           <label class="pqc-repeat">Same shot as <select onchange="pqConfirmRepeat(this.value)" ${c.busy ? 'disabled' : ''}>

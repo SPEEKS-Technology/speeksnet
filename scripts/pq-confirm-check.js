@@ -142,8 +142,7 @@ t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', f
     pqcAs('district manager');
     pqcPosts = [];
     return pqConfirmOpen().then(function () {
-        if (_pqc.grid !== true) return 'the whole-listing view is not the default';
-        pqConfirmMode(false);                  // this test drives the one-photo view
+        if (_pqc.grid !== false) return 'one photo at a time is not the default';
         var el = document.getElementById('pqConfirmOverlay');
         if (!el) return 'no overlay';
         var html = el.innerHTML;
