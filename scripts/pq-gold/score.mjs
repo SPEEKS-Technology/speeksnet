@@ -77,6 +77,15 @@ const FRAMING = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dir
 const PHOTO_FLAGS = ["crooked", "off_center", "too_small", "cut_off", "turned", "wrong_angle", "blurry", "too_dark_or_glare",
   "reflection", "clutter", "dirty_backdrop", "loose_cord", "not_on_stand", "different_spot", "closeup", "personal_info",
   "stock_photo", "fake_or_edited", "wrong_item"];
+// serial and screen_never_on follow from his Serial Legible / Screen On flags.
+// A blank one is a real "no" only if the flag was in use: on 2026-10-16 neither
+// was clicked on any of 483 photos, so every listing scored as "serial not
+// shown" / "screen never on" and the model looked wrong on all of them. They are
+// scored only once someone has used the flag. And screen_never_on only on a sheet
+// whose item has a screen: the model's field means "an item WITH a display that
+// is never shown on" (index.ts), so a game or a controller is never a "true".
+const USED = new Set(goldFile.listings.flatMap(g => g.photos.flatMap(p => p.flags_checked ? p.flags || [] : [])));
+const hasScreen = g => (g.guide || []).some(s => /screen|lcd|home\/lock|display/i.test(s.label));
 const FACTS = ["lead_ok", "serial", "main_flaw_shown", "new_claim_wrong", "units_together", "flat_package", "screen_never_on"];
 // The same facts, read off a model's photo: framing problems, the MAJOR issues
 // (rules.ts acts on no others), closeup = whole_item false, and different_spot =
@@ -193,12 +202,13 @@ for (const g of goldFile.listings) {
     const fl = g.photos.filter(p => p.flags_checked);
     const want = {
       lead_ok: !g.facts.lead_unclear,
-      serial: fl.some(p => p.flags.includes("label_legible")) ? "shown" : g.facts.serial_hidden ? "hidden_behind_cover" : "not_shown",
+      serial: !USED.has("label_legible") ? null
+        : fl.some(p => p.flags.includes("label_legible")) ? "shown" : g.facts.serial_hidden ? "hidden_behind_cover" : "not_shown",
       main_flaw_shown: g.facts.main_flaw_shown,
       new_claim_wrong: !!g.facts.new_claim_wrong,
       units_together: !g.facts.units_apart,
       flat_package: !!g.facts.flat_package,
-      screen_never_on: fl.length === g.photos.length ? !fl.some(p => p.flags.includes("screen_on")) : null,
+      screen_never_on: USED.has("screen_on") && hasScreen(g) && fl.length === g.photos.length ? !fl.some(p => p.flags.includes("screen_on")) : null,
     };
     const r = o.report;
     const got = { lead_ok: r.lead_ok, serial: r.serial, main_flaw_shown: r.main_flaw?.shown, new_claim_wrong: r.new_claim_wrong,
