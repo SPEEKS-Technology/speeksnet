@@ -79,6 +79,28 @@ const KEY_FACTS = {
 };
 
 // --- read the raw rows ---------------------------------------------------------
+// --- the store reviews (Ethan, 2026-10-16) -------------------------------------
+// "When I did all of my reviews, I said if not mentioned all is good." A grade
+// whose photos were looked at before one of his store reviews, and that he
+// neither mentioned nor dismissed, is a REVIEWED label: his approval by silence
+// of the whole row as it was on screen (the shots under each guide slot, the
+// findings, the verdict). Not of every flag: a flag that raised no finding was
+// never on screen, so reviewed rows carry no flags. The review times and the
+// listings he mentioned live in the picture-quality function (STORE_REVIEWS,
+// ETHAN_SAID), read from its source here so there is one copy.
+const fnSrc = fs.readFileSync(path.join(scripts, "..", "supabase", "functions", "picture-quality", "index.ts"), "utf8");
+const block = name => { const i = fnSrc.indexOf(`const ${name}`); return i < 0 ? "" : fnSrc.slice(i, fnSrc.indexOf("\n};", i)); };
+const MENTIONED = new Set([...block("ETHAN_SAID").matchAll(/^\s*"(\d+)":/gm)].map(m => m[1]));
+const REVIEWS = Object.fromEntries([...block("STORE_REVIEWS").matchAll(/(\w{3}): \{ full: "([^"]+)", nightly: (?:"([^"]+)"|null) \}/g)]
+  .map(m => [m[1], { full: Date.parse(m[2]), nightly: m[3] ? Date.parse(m[3]) : null }]));
+if (!Object.keys(REVIEWS).length) console.warn("⚠️  STORE_REVIEWS not found in the picture-quality source: no reviewed tier");
+function reviewedBySilence(r) {
+  const rv = REVIEWS[r.store], g = r.graded;
+  if (!rv || !g?.look_at || g.status === "dismissed" || MENTIONED.has(tail(r.product_id))) return false;
+  const look = Date.parse(g.look_at);
+  return look < rv.full || (!!g.sample && rv.nightly != null && look < rv.nightly);
+}
+
 const raw = JSON.parse(fs.readFileSync(rawPath, "utf8"));
 const rows = (Array.isArray(raw) ? raw : raw.rows || raw.result || [])
   .map(r => r && r.g !== undefined ? r.g : r).map(r => typeof r === "string" ? JSON.parse(r) : r).filter(Boolean);
@@ -119,7 +141,11 @@ for (const r of rows) {
   const confirmed = r.confirmed || [];   // Confirm Shots (0148): the primary source
   if (r.graded?.report) baseline.push({ store: r.store, product_id: r.product_id, sheet: r.sheet, model: r.graded.model,
     stamp: r.graded.stamp, verdict: r.graded.verdict, report: r.graded.report });
-  if (!key && !kind && !framing.length && !facts && !confirmed.length) continue;   // no human signal: not gold
+  // A store review stands in only where nothing more direct exists.
+  const viaReview = !accepted && !!r.graded?.report && reviewedBySilence(r);
+  const fromGrade = accepted || viaReview;
+  const gTier = accepted ? "accepted" : "reviewed", gFrom = accepted ? kind : "store_review";
+  if (!key && !kind && !framing.length && !facts && !confirmed.length && !viaReview) continue;   // no human signal: not gold
 
   const warnings = [];
   const live = await storefront(r.store, r.handle);
@@ -143,12 +169,13 @@ for (const r of rows) {
     : confirmed.length ? confirmed.map(c => ({ n: c.n, url: c.src, width: null, height: null }))
     : framing.map(f => ({ n: null, url: f.src, width: null, height: null }));
 
-  // ACCEPTED shot labels: the graded report's, when he approved a fix built on them.
-  if (accepted) {
+  // ACCEPTED / REVIEWED shot labels: the graded report's, when he approved a
+  // fix built on them, or passed the row in a store review without a word.
+  if (fromGrade) {
     for (const g of r.graded.report.photos || []) {
       const p = aligned ? photos[g.n - 1] : null;
       if (!p) continue;
-      p.shots = g.shots; p.shots_from = kind; p.shots_tier = "accepted";
+      p.shots = g.shots; p.shots_from = gFrom; p.shots_tier = gTier;
       p.whole_item = g.whole_item;
     }
   }
@@ -198,6 +225,9 @@ for (const r of rows) {
   if (kind === "dismissed") verdict = { value: "pass", from: "dismissed", tier: "explicit", why: r.decision.note, at: r.decision.at };
   else if (accepted && (!verdict || verdict.tier !== "explicit"))
     verdict = { value: "pass", from: kind, tier: "accepted", why: r.decision.note, at: r.decision.at, ...(aligned ? {} : { stale: "photos changed since" }) };
+  else if (viaReview && !verdict)
+    verdict = { value: ["retake", "fix"].includes(r.graded.verdict) ? "flag" : "pass", from: "store_review", tier: "reviewed",
+                why: `passed over in his ${r.store} review (grade: ${r.graded.verdict})`, ...(aligned ? {} : { stale: "photos changed since" }) };
 
   // MISSING SHOTS. When every photo of the listing is confirmed, the missing
   // list follows from his labels: the sheet's ALWAYS shots (no condition) that
@@ -216,13 +246,13 @@ for (const r of rows) {
     missing = { ...(facts.missing ? { exact: facts.missing } : {}), ...(facts.includes ? { includes: facts.includes } : {}),
                 ...(facts.not ? { not: facts.not } : {}), from: "calibration_key", tier: "explicit",
                 ...(verdict?.stale ? { stale: verdict.stale } : {}) };
-  } else if (accepted) {
-    missing = { exact: r.graded.report.missing_shots || [], from: kind, tier: "accepted", ...(aligned ? {} : { stale: "photos changed since" }) };
+  } else if (fromGrade) {
+    missing = { exact: r.graded.report.missing_shots || [], from: gFrom, tier: gTier, ...(aligned ? {} : { stale: "photos changed since" }) };
   }
 
   const sheet = cSheet ? { value: cSheet, from: "confirmed", tier: "explicit" }
               : facts?.sheet ? { value: facts.sheet, from: "calibration_key", tier: "explicit" }
-              : accepted ? { value: r.sheet, from: kind, tier: "accepted" } : null;
+              : fromGrade ? { value: r.sheet, from: gFrom, tier: gTier } : null;
 
   gold.push({
     store: r.store, product_id: r.product_id, sku: r.sku, title: r.title || key?.name || null,

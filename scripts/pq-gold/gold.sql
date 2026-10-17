@@ -134,7 +134,13 @@ select jsonb_build_object(
   -- (the baseline to score, and the source of ACCEPTED labels when decided).
   'graded', case when r.product_id is null then null else jsonb_build_object(
       'model', r.model, 'reviewed_at', r.reviewed_at, 'stamp', r.stamp,
-      'photo_count', r.photo_count, 'verdict', r.verdict,
+      'photo_count', r.photo_count, 'verdict', r.verdict, 'status', r.status,
+      -- When the photos were LOOKED AT, for the store-review tier: a batch's
+      -- finish time, or reviewed_at for a live grade never re-decided (a
+      -- redecide rewrites reviewed_at and keeps the old look). Null = unknown.
+      'look_at', coalesce((select b.finished_at from pq_batches b where b.batch_id = r.report->>'batch'),
+                          case when not (r.report ? 'redecided') then r.reviewed_at end),
+      'sample', r.report ? 'sample',
       'findings', (select coalesce(jsonb_agg(jsonb_build_object('code', f->>'code', 'photo', f->'photo', 'shot', f->>'shot')), '[]')
                    from jsonb_array_elements(r.findings) f),
       'report', r.report - array['summary','title_notes','looks','firstLook','secondLook','costs','batch','cache',

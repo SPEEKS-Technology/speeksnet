@@ -112,7 +112,9 @@ for (const g of goldFile.listings) {
   bs.forEach(b => b.listings++);
   if (!o) { absent++; continue; }
   bs.forEach(b => b.scored++);
-  const hasAccepted = g.photos.some(p => p.shots_tier === "accepted") || [g.verdict, g.missing, g.sheet_gold].some(x => x?.tier === "accepted");
+  // accepted AND reviewed labels are a saved grade's own answers: scoring that grade against them is circular.
+  const fromGrade = t => t === "accepted" || t === "reviewed";
+  const hasAccepted = g.photos.some(p => fromGrade(p.shots_tier)) || [g.verdict, g.missing, g.sheet_gold].some(x => fromGrade(x?.tier));
   if (hasAccepted && o.stamp && g.graded?.stamp && o.stamp === g.graded.stamp) circular++;
   const byN = new Map((o.report.photos || []).map(p => [p.n, p]));
   const usable = x => x && tierOk(x.tier) && (STALE || !x.stale);
@@ -240,12 +242,12 @@ const line = (name, b) => `${name.padEnd(36)}${b.listings ? `${String(b.scored).
 if (process.env.JSON) { console.log(JSON.stringify(Object.fromEntries(tallies), null, 1)); process.exit(0); }
 console.log(`gold ${goldArg || "scripts/pq-gold/gold.json"} (${goldFile.made?.slice(0, 10)}) · model output ${outPath} · tier ${TIER}${STALE ? " · incl. stale" : ""}`);
 if (absent) console.log(`${absent} gold listing(s) absent from the model output (counted as listings, not scored)`);
-if (circular) console.log(`⚠️  ${circular} listing(s) were scored with the SAME grade their accepted labels came from — accepted-tier numbers are circular for them; read TIER=explicit.`);
+if (circular) console.log(`⚠️  ${circular} listing(s) were scored with the SAME grade their accepted labels came from — reviewed/accepted-tier numbers are circular for them; read TIER=explicit.`);
 console.log("");
 const all = tallies.get("ALL");
 if (!all) { console.log("no gold listings"); process.exit(0); }
 console.log(line("ALL", all));
-for (const t of ["explicit", "accepted"]) if (tallies.has(`tier:${t}`)) console.log(line(`  tier ${t}`, tallies.get(`tier:${t}`)));
+for (const t of ["explicit", "reviewed", "accepted"]) if (tallies.has(`tier:${t}`)) console.log(line(`  tier ${t}`, tallies.get(`tier:${t}`)));
 console.log(`  verdict misses: ${all.verdict.flagAsPass} flag→pass (missed), ${all.verdict.passAsFlag} pass→flag (too strict), ${all.verdict.none} no verdict`);
 console.log(`  shot labels: ${pr(all.shot)}  · sheet ${pct(all.sheet.agree, all.sheet.n)} of ${all.sheet.n}`);
 console.log(`  framing (trainer labels, OVL): ${FRAMING.map(k => `${k} ${pr(all.framing[k])} (${all.framing[k].tp + all.framing[k].fn} real)`).join(" · ")}`);

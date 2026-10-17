@@ -1522,6 +1522,35 @@ const ETHAN_SAID: Record<string, { at: string; said: string }[]> = {
   "15420708356416": [{ at: "2026-10-14", said: "A server accelerator uses Small/Medium Misc, not Graphics Cards." }],
 };
 
+// WHEN ETHAN REVIEWED EACH STORE (2026-10-16): "when I did all of my reviews, I
+// said if not mentioned all is good". A grade whose photos were LOOKED AT before
+// one of these reviews, and that he neither mentioned (ETHAN_SAID) nor dismissed,
+// was approved by silence, and he is never asked about it again. Times are the
+// review commits (UTC). "full" = the whole store's queue after its Opus re-grade
+// (BAL 112ef4a, MPL a57fbaf, OVL bfd7c0c, WSP 465dcb0, LEE 61254ed, round 2).
+// "nightly" = his 10-16 pass over the New (sample) rows of the first nightly run
+// (OVL e94de97, WSP 8a8848b, MPL 9bcbfa7; LEE "nothing wrong" the same hour). No
+// BAL nightly review was recorded, so BAL's samples don't count.
+// ⚠️ NOT reviewed_at. "Re-apply today's rules" (redecide) rewrites reviewed_at and
+// keeps the old look at the photos, so the LOOK time is the batch's finish time
+// or, for a live grade never re-decided, reviewed_at. A live grade re-decided
+// later has no known look time and doesn't count.
+// Also exported to scripts/pq-gold/export.mjs, which reads this block's text.
+const STORE_REVIEWS: Record<string, { full: string; nightly: string | null }> = {
+  BAL: { full: "2026-10-14T19:30:00Z", nightly: null },
+  MPL: { full: "2026-10-14T22:35:00Z", nightly: "2026-10-16T18:05:00Z" },
+  OVL: { full: "2026-10-15T02:07:00Z", nightly: "2026-10-16T17:45:00Z" },
+  WSP: { full: "2026-10-15T18:08:00Z", nightly: "2026-10-16T17:52:00Z" },
+  LEE: { full: "2026-10-16T01:22:00Z", nightly: "2026-10-16T18:05:00Z" },
+};
+function reviewedBySilence(g: any, batchDone: Map<string, string>): boolean {
+  const rv = STORE_REVIEWS[g.store_code];
+  if (!rv || g.status === "dismissed" || ETHAN_SAID[String(g.product_id).split("/").pop() || ""]) return false;
+  const look = (g.batch && batchDone.get(g.batch)) || (!g.redecided ? g.reviewed_at : null);
+  if (!look) return false;
+  return look < rv.full || (!!g.sample && !!rv.nightly && look < rv.nightly);
+}
+
 // The model's answer on every field Confirm Shots asks, read off a saved
 // report, so the screen can PREFILL them and the person only corrects (Ethan,
 // 2026-10-16: "give me everything you need from me"). Named as the flags.
@@ -1549,6 +1578,7 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
     + `&select=store_code,product_id,sku,title,sheet_slug,model,stamp,reviewed_at,status,decided_note,photos:report->photos`
     + `,setups:report->setups,lead_ok:report->lead_ok,serial:report->serial,new_claim_wrong:report->new_claim_wrong`
     + `,units_together:report->units_together,flat_package:report->flat_package,main_flaw:report->main_flaw`
+    + `,batch:report->>batch,sample:report->>sample,redecided:report->>redecided`
     + `&order=reviewed_at.desc&limit=10000`);
   // sb() throws on a missing table; before 0148 is applied, say so plainly.
   const doneRows = await rows(`pq_shot_labels?select=product_id,sheet_slug&limit=50000`).catch(() => null);
@@ -1570,7 +1600,14 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
   const num = (id: string) => String(id).split("/").pop() || "";
   // Anything he has already said about a listing: a comment, a framing grade, or
   // an approved fix. Those listings are the quickest to finish, so they go first.
-  const known = (g: any) => !!ETHAN_SAID[num(g.product_id)] || framed.has(g.product_id) || g.status === "applied";
+  const batchDone = new Map<string, string>((await rows(`pq_batches?select=batch_id,finished_at&finished_at=not.is.null&limit=1000`))
+    .map((b: any) => [String(b.batch_id), new Date(b.finished_at).toISOString()]));
+  // ANYTHING HE HAS ALREADY JUDGED is left out of his queue (Ethan, 2026-10-16:
+  // "I only need to be shown the ones I have never touched"): a comment, a
+  // framing grade, an approved fix, a dismissal, or a grade he passed over in a
+  // store review without a word. Those are gold already (scripts/pq-gold/).
+  const known = (g: any) => !!ETHAN_SAID[num(g.product_id)] || framed.has(g.product_id) || g.status === "applied"
+    || g.status === "dismissed" || reviewedBySilence({ ...g, reviewed_at: new Date(g.reviewed_at).toISOString() }, batchDone);
   const bySheet = new Map<string, any[]>();
   for (const g of graded) {
     if (!Array.isArray(g.photos) || !g.photos.length) continue;
@@ -1579,16 +1616,17 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
   }
   const stats = [...bySheet].map(([slug, list]) => {
     const confirmed = confirmedBySheet.get(slug)?.size || 0;
-    return { slug, name: nameOf.get(slug) || slug, graded: list.length, confirmed,
-             left: list.filter(g => !done.has(g.product_id) && !skip.has(g.product_id)).length,
-             need: Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed) };
+    // Judged another way (a review, a comment, an approved fix) and not confirmed here.
+    const judged = list.filter(g => !done.has(g.product_id) && known(g)).length;
+    return { slug, name: nameOf.get(slug) || slug, graded: list.length, confirmed, judged,
+             left: list.filter(g => !done.has(g.product_id) && !known(g) && !skip.has(g.product_id)).length,
+             need: Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed - judged) };
   }).sort((a, b) => b.need - a.need || b.graded - a.graded);
   const pick = stats.find(s => s.slug === want && s.left) || stats.find(s => s.need && s.left) || stats.find(s => s.left);
   const listings: any[] = [];
   const misaligned: string[] = [];
   if (pick) {
-    const todo = bySheet.get(pick.slug)!.filter(g => !done.has(g.product_id) && !skip.has(g.product_id))
-      .sort((a, b) => Number(known(b)) - Number(known(a)));   // stable: newest first within each
+    const todo = bySheet.get(pick.slug)!.filter(g => !done.has(g.product_id) && !known(g) && !skip.has(g.product_id));
     // Six at a time: each is part of one Admin API read, and six is roughly ten
     // minutes of work.
     for (let i = 0; i < todo.length && listings.length < 6; i += 12) {

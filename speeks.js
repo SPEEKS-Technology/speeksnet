@@ -56599,17 +56599,17 @@ function _pqcHtml() {
     const target = d.target || 40;
     const sheetBtn = s => `<button type="button" class="pqc-sheet${s.slug === c.sheet ? ' pqc-sheet-on' : ''}"
         onclick="_pqcLoad('${_ecEsc(s.slug)}')" ${c.busy || !s.left ? 'disabled' : ''}
-        title="${s.graded} graded · ${s.left} left to confirm">
+        title="${s.graded} graded · ${s.confirmed} confirmed here · ${s.judged || 0} judged already (a review, a comment, an approved fix) · ${s.left} never seen">
         <span class="pqc-sheet-name">${_ecEsc(s.name)}</span>
-        <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * s.confirmed / Math.min(target, s.graded || 1)))}%"></span></span>
-        <span class="pqc-sheet-n">${s.confirmed}/${Math.min(target, s.graded)}</span></button>`;
+        <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * (s.confirmed + (s.judged || 0)) / Math.min(target, s.graded || 1)))}%"></span></span>
+        <span class="pqc-sheet-n">${Math.min(s.confirmed + (s.judged || 0), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span></button>`;
     const top = (d.sheets || []).slice(0, 8), more = (d.sheets || []).slice(8);
     const sheets = `<div class="pqc-sheets">${top.map(sheetBtn).join('')}</div>`
         + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '');
     const l = _pqcListing();
     if (!l) {
         return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
-            : 'Nothing left to confirm here — every graded listing on this sheet that still matches its grade has an answer. Pick another sheet above.'}</div>`;
+            : "Nothing left here that you haven't already judged. Pick another sheet above."}</div>`;
     }
     if (c.grid) return head + err + sheets + _pqcGridHtml(l);
     const p = l.photos[c.pi];
