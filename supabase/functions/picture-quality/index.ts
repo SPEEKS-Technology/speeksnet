@@ -1571,7 +1571,16 @@ function modelAnswers(g: any) {
     flat_package: g.flat_package === true, main_flaw_shown: g.main_flaw?.shown || null } };
 }
 
-async function confirmView(scope: Scope, want: string, skip: Set<string>) {
+// MORE FOR TRAINING (2026-10-17). The first local-model run trained only on
+// what Ethan confirmed himself (he chose to keep Opus's answers out of
+// training), and it was weak exactly where he had confirmed little: Misc,
+// lots, RAM, headphones, lenses, controllers. A grade he passed over in a store
+// review is gold for MEASURING, but it is still Opus's answer, so it can't be
+// trained on until he confirms it. `more` reopens those listings, and the ones
+// he commented on (the hard cases), weakest sheet first: the sheets with the
+// fewest of his own confirmations, ties to the busier sheet. A sheet drops
+// out at CONFIRM_TARGET of his own.
+async function confirmView(scope: Scope, want: string, skip: Set<string>, more = false) {
   if (!confirmer(scope)) return { error: "forbidden", detail: "Confirm Shots is for the DM and CEO" };
   const graded: any[] = await rows(`picture_quality_reviews?report=not.is.null&sheet_slug=not.is.null`
     + `&store_code=in.(${scope.stores.join(",")})`
@@ -1618,15 +1627,19 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
     const confirmed = confirmedBySheet.get(slug)?.size || 0;
     // Judged another way (a review, a comment, an approved fix) and not confirmed here.
     const judged = list.filter(g => !done.has(g.product_id) && known(g)).length;
+    const open = (g: any) => !done.has(g.product_id) && !skip.has(g.product_id) && g.status !== "dismissed" && (more || !known(g));
     return { slug, name: nameOf.get(slug) || slug, graded: list.length, confirmed, judged,
-             left: list.filter(g => !done.has(g.product_id) && !known(g) && !skip.has(g.product_id)).length,
-             need: Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed - judged) };
-  }).sort((a, b) => b.need - a.need || b.graded - a.graded);
+             left: list.filter(open).length,
+             need: more ? Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed)
+                        : Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed - judged) };
+  }).sort((a, b) => more ? (Number(!b.need) - Number(!a.need)) || (a.confirmed - b.confirmed) || (b.graded - a.graded)
+                         : (b.need - a.need) || (b.graded - a.graded));
   const pick = stats.find(s => s.slug === want && s.left) || stats.find(s => s.need && s.left) || stats.find(s => s.left);
   const listings: any[] = [];
   const misaligned: string[] = [];
   if (pick) {
-    const todo = bySheet.get(pick.slug)!.filter(g => !done.has(g.product_id) && !known(g) && !skip.has(g.product_id));
+    const todo = bySheet.get(pick.slug)!.filter(g => !done.has(g.product_id) && !skip.has(g.product_id)
+      && g.status !== "dismissed" && (more || !known(g)));
     // Six at a time: each is part of one Admin API read, and six is roughly ten
     // minutes of work.
     for (let i = 0; i < todo.length && listings.length < 6; i += 12) {
@@ -1670,7 +1683,7 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
   for (const s of sheets) guide[s.slug] = { name: s.name, shots: s.shots.map(x => ({ label: x.label, cond: x.cond, img: x.img ? guideUrl(x.img) : null })) };
   // `misaligned`: sold or re-shot since the grade. Handed back so the page skips
   // them rather than being offered them again.
-  return { target: CONFIRM_TARGET, sheets: stats, sheet: pick?.slug || null, misaligned,
+  return { more, target: CONFIRM_TARGET, sheets: stats, sheet: pick?.slug || null, misaligned,
            listings, guide, flags: CONFIRM_FLAGS, total: done.size };
 }
 
@@ -2112,7 +2125,7 @@ Deno.serve(async (req: Request) => {
       }
       if (view === "confirm") {
         const d: any = await confirmView(scope, url.searchParams.get("sheet") || "",
-          new Set((url.searchParams.get("skip") || "").split(",").filter(Boolean)));
+          new Set((url.searchParams.get("skip") || "").split(",").filter(Boolean)), url.searchParams.get("more") === "1");
         return json(d, d.error ? (d.error === "forbidden" ? 403 : 409) : 200);
       }
       if (view === "train") return json(await trainView(scope, (url.searchParams.get("store") || "").toUpperCase(),

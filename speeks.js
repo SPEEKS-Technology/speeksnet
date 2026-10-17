@@ -55874,7 +55874,9 @@ function _pqHtml() {
     // OVL Quick Fixes and Ethan could not find it (2026-10-16).
     const train = _pqcMayUse() ? `<div class="pqt-entry pqt-entry-top">
         <button type="button" class="pqt-btn" onclick="pqConfirmOpen()">Confirm Shots</button>
-        <span>Say which shot each photo is — the answer key a cheaper model is tested against.</span></div>` : '';
+        <button type="button" class="pqt-btn" onclick="pqConfirmOpen('', true)"
+          title="Listings you passed in your store reviews, weakest sheets first: confirming them makes them training material">More For Training</button>
+        <span>Say which shot each photo is — the answer key a cheaper model is tested and trained on.</span></div>` : '';
     return head(train + tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
@@ -56211,9 +56213,14 @@ function _pqcAsks(l) {
 }
 const _pqcMayUse = () => ['district manager', 'ceo'].includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 
-async function pqConfirmOpen(sheet) {
+// forTraining (2026-10-17): the "More For Training" queue. It reopens listings
+// he passed in a store review, weakest sheets first. They count as gold for
+// measuring, but they're Opus's answers, and he trains only on his own; see
+// confirmView's `more`.
+async function pqConfirmOpen(sheet, forTraining) {
     if (!_pqcMayUse()) return;
     _pqc = { sheet: sheet || '', data: null, li: 0, pi: 0, busy: true, err: null, skip: new Set(), saved: 0, started: Date.now(),
+             forTraining: !!forTraining,
              // One photo at a time is the default again (Ethan, 2026-10-16, after
              // trying the whole-listing view: "can you go back to the original
              // form of me grading one picture at a time?"). The whole-listing
@@ -56231,7 +56238,7 @@ async function _pqcLoad(sheet) {
     if (sheet !== undefined) c.sheet = sheet;
     c.busy = true; c.err = null; _pqcRender();
     try {
-        const d = await _pqFetch(`?view=confirm&sheet=${encodeURIComponent(c.sheet)}&skip=${encodeURIComponent([...c.skip].join(','))}`);
+        const d = await _pqFetch(`?view=confirm&sheet=${encodeURIComponent(c.sheet)}&skip=${encodeURIComponent([...c.skip].join(','))}${c.forTraining ? '&more=1' : ''}`);
         if (_pqc !== c) return;
         for (const id of d.misaligned || []) c.skip.add(id);
         // Each photo starts from the grade's label; `seen` marks it answered.
@@ -56592,8 +56599,9 @@ function _pqcHtml() {
     const d = c.data;
     const mins = Math.max(1, Math.round((Date.now() - c.started) / 60000));
     const head = `<div class="pqt-head">
-        <div><div class="pqt-eyebrow">Picture Quality · Gold Set</div>
-             <div class="pqt-title">Confirm Shots</div></div>
+        <div><div class="pqt-eyebrow">Picture Quality · Gold Set${c.forTraining ? ' · More For Training' : ''}</div>
+             <div class="pqt-title">Confirm Shots</div>
+             ${c.forTraining ? '<div class="pqc-trainnote">You passed these in a store review. Confirming them is what lets the model train on them, so fix anything Opus got wrong.</div>' : ''}</div>
         <div class="pqt-count">${d ? `${d.total || 0} Listings Confirmed` : ''}${c.saved ? ` · ${c.saved} This Session (${mins} Min)` : ''}</div>
         <button type="button" class="pqt-x" onclick="pqConfirmClose()" aria-label="Close">×</button>
       </div>`;
@@ -56605,15 +56613,17 @@ function _pqcHtml() {
         onclick="_pqcLoad('${_ecEsc(s.slug)}')" ${c.busy || !s.left ? 'disabled' : ''}
         title="${s.graded} graded · ${s.confirmed} confirmed here · ${s.judged || 0} judged already (a review, a comment, an approved fix) · ${s.left} never seen">
         <span class="pqc-sheet-name">${_ecEsc(s.name)}</span>
-        <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * (s.confirmed + (s.judged || 0)) / Math.min(target, s.graded || 1)))}%"></span></span>
-        <span class="pqc-sheet-n">${Math.min(s.confirmed + (s.judged || 0), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span></button>`;
+        <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * (s.confirmed + (c.forTraining ? 0 : s.judged || 0)) / Math.min(target, s.graded || 1)))}%"></span></span>
+        <span class="pqc-sheet-n">${Math.min(s.confirmed + (c.forTraining ? 0 : s.judged || 0), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span></button>`;
     const top = (d.sheets || []).slice(0, 8), more = (d.sheets || []).slice(8);
     const sheets = `<div class="pqc-sheets">${top.map(sheetBtn).join('')}</div>`
         + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '');
     const l = _pqcListing();
     if (!l) {
         return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
-            : "Nothing left here that you haven't already judged. Pick another sheet above."}</div>`;
+            : c.forTraining ? 'Nothing left to confirm on this sheet. Pick another sheet above.'
+            : `Nothing left here that you haven't already judged. Pick another sheet above, or
+               <button type="button" class="pqt-btn" onclick="pqConfirmClose(); pqConfirmOpen('', true)">More For Training</button>`}</div>`;
     }
     if (c.grid) return head + err + sheets + _pqcGridHtml(l);
     const p = l.photos[c.pi];

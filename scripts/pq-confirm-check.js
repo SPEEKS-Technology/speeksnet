@@ -88,6 +88,22 @@ t('whole listing: your grade beats the model on framing, the model fills the res
     return true;
 });
 
+t('More For Training asks the server for the reopened queue; plain Confirm Shots does not', function () {
+    pqcAs('district manager');
+    var paths = [], real = _pqFetch;
+    _pqFetch = function (p) { paths.push(p); return new Promise(function () {}); };   // never settles: only the request is checked
+    pqConfirmOpen('', true);
+    var trainNote = (document.getElementById('pqConfirmOverlay') || {}).innerHTML || '';
+    pqConfirmClose();
+    pqConfirmOpen();
+    pqConfirmClose();
+    _pqFetch = real;
+    if (paths.length !== 2) return paths.length + ' requests';
+    if (paths[0].indexOf('&more=1') < 0) return 'More For Training sent ' + paths[0];
+    if (paths[1].indexOf('more=') >= 0) return 'plain Confirm Shots sent ' + paths[1];
+    return /More For Training/.test(trainNote) || 'no More For Training heading';
+});
+
 t('the DM and the CEO may use it', function () {
     pqcAs('District Manager'); var dm = _pqcMayUse();
     pqcAs('CEO'); var ceo = _pqcMayUse();
