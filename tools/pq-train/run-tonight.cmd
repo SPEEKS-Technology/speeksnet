@@ -1,11 +1,13 @@
 @echo off
 rem ==========================================================================
 rem Picture Quality local model: the overnight run. Double-click it, or run it
-rem from a terminal, at bedtime. About 2.5 to 3 hours on the RTX 5080 laptop:
-rem   1. scores the UNTRAINED model on the held-out photos   (~30-45 min, skipped
-rem      when runs\baseline\scores.txt already exists)
-rem   2. trains it on Ethan's own labels, 3 epochs            (~1 h 45 min)
-rem   3. scores the trained model on the same photos          (~30-45 min)
+rem from a terminal, at bedtime. Round 1 (397 photos) took 1 h 20 min; round 2
+rem (1,759 photos, 2026-10-17) should take about 3.5 to 4 hours on the RTX 5080:
+rem   1. scores the UNTRAINED model on the held-out photos   (~15-20 min, skipped
+rem      when runs\baseline\scores.txt already exists; after the test set is
+rem      rebuilt, rename runs\baseline so it is scored again)
+rem   2. trains it on Ethan's own labels, 3 epochs            (~17 s a step; round 2 ~3 h)
+rem   3. scores the trained model on the same photos          (~15-20 min)
 rem Results: C:\Users\User\pq-train\runs\  (baseline\scores.txt, run-<time>\scores.txt)
 rem Full log: C:\Users\User\pq-train\runs\tonight.log
 rem
