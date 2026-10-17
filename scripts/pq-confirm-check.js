@@ -115,7 +115,11 @@ t('a finished sheet shows ticked off in the Done row, not hidden in More Sheets'
     if (!done || done.textContent.indexOf('Item Lots 3/3') < 0) return 'no Done row with Item Lots 3/3';
     var hidden = d.querySelector('.pqc-more');
     if (hidden && hidden.textContent.indexOf('Item Lots') >= 0) return 'Item Lots still in More Sheets';
-    return true;
+    // A sheet with nothing left to confirm is done even one short (a dismissed listing, or photos changed since the grade).
+    _pqc = { sheet: 's0', data: { target: 40, total: 3, sheets: [{ slug: 'camcorders', name: 'Camcorders', graded: 2, confirmed: 1, judged: 0, left: 0, need: 1 }], guide: {}, listings: [] },
+             li: 0, pi: 0, busy: false, forTraining: true, started: Date.now(), saved: 0 };
+    var h2 = _pqcHtml(); _pqc = null;
+    return h2.replace(/<[^>]+>/g, '').indexOf('Camcorders 1/2 (rest can’t be confirmed)') >= 0 || 'camcorders 1/2 not shown as done';
 });
 
 t('the DM and the CEO may use it', function () {

@@ -56619,13 +56619,18 @@ function _pqcHtml() {
     // isn't showing as checked off"). It used to sink into the collapsed "More
     // Sheets" list, so a sheet he'd just finished seemed to vanish.
     const count = s => s.confirmed + (c.forTraining ? 0 : s.judged || 0);
-    const isDone = s => count(s) >= Math.min(target, s.graded);
+    // Done also when nothing on the sheet is LEFT to confirm (Ethan, 2026-10-17:
+    // camcorders and New In Box sat at "1 left" with their buttons greyed out).
+    // The last one was a listing the queue won't offer: one he dismissed (Death
+    // Stranding 2, a game on the wrong sheet) or one whose photos changed since its
+    // grade (an approved deletion), which can't be confirmed against it.
+    const isDone = s => count(s) >= Math.min(target, s.graded) || (!c.busy && !s.left);
     const doneSheets = (d.sheets || []).filter(isDone), active = (d.sheets || []).filter(s => !isDone(s));
     const top = active.slice(0, 8), more = active.slice(8);
     const sheets = `<div class="pqc-sheets">${top.map(sheetBtn).join('')}</div>`
         + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '')
         + (doneSheets.length ? `<div class="pqc-done"><span class="pqc-done-h">✓ Done (${doneSheets.length})</span>${doneSheets.map(s =>
-            `<span class="pqc-done-s" title="${s.confirmed} confirmed by you of ${s.graded} graded">✓ ${_ecEsc(s.name)} ${Math.min(count(s), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span>`).join('')}</div>` : '');
+            `<span class="pqc-done-s" title="${s.confirmed} confirmed by you of ${s.graded} graded${count(s) < Math.min(target, s.graded) ? ' — the rest were dismissed, or their photos changed since the grade, so they can’t be confirmed' : ''}">✓ ${_ecEsc(s.name)} ${Math.min(count(s), Math.min(target, s.graded))}/${Math.min(target, s.graded)}${count(s) < Math.min(target, s.graded) ? ' (rest can’t be confirmed)' : ''}</span>`).join('')}</div>` : '');
     const l = _pqcListing();
     if (!l) {
         return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
