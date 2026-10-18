@@ -21,9 +21,16 @@ SYSTEM = ("You label one photo from a used-electronics resale listing against th
 
 def question(ex):
     shots = "; ".join(ex["shots_on_sheet"])
+    # Round 3 (2026-10-18): the photo's position, when the example has it. One
+    # photo alone can't tell "Side" from "Opposite Side" or one laptop corner from
+    # another (round 2's worst sheet, Windows laptops, was 26%). Stores shoot
+    # roughly in the sheet's order, so position is a strong, free hint.
+    where = (f"This is photo {ex['pos']} of {ex['of']} in the listing. Stores usually shoot in the sheet's order, "
+             "and rarely shoot the same view twice.\n") if ex.get("pos") and ex.get("of") else ""
     return (f"Listing: {ex['title']}\n"
             f"Sheet: {ex['sheet']}\n"
-            f"Shots on this sheet: {shots}\n"
+            f"Shots on this sheet, in the sheet's order: {shots}\n"
+            + where +
             "Also allowed: \"Extra\" (anything that is not one of the sheet's shots) and \"Box\" (the packaging only).\n"
             "Which shot is this photo? One photo can be two shots (a front view with the lens open is both).\n"
             "closeup: true for a tight detail shot that does not show the whole item.\n"

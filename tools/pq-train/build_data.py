@@ -92,6 +92,11 @@ def example(listing, photo, path, tier):
         "id": f"{listing['product_id'].split('/')[-1]}#{photo['n']}",
         "product_id": listing["product_id"], "n": photo["n"], "store": listing["store"],
         "sheet": listing["sheet"], "title": listing.get("title") or "", "shots_on_sheet": shot_list(listing),
+        # Where the photo sits in the listing (round 3, 2026-10-18). One photo alone
+        # can't tell "Side" from "Opposite Side", or one laptop corner from another,
+        # and those were round 2's worst misses (Windows laptops 26%). Stores shoot
+        # in the guide's order, so position is a strong, free hint.
+        "pos": photo["n"], "of": len(listing["photos"]),
         "image": path, "target": target, "tier": tier,
     }
 
