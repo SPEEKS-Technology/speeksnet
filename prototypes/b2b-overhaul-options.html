@@ -326,6 +326,79 @@ h2 { font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacin
   .pane-head .btn.sm:not(.primary) { display: none; }
 }
 
+/* ---------- the full-screen hub ---------- */
+.hub { background: var(--bg); border-radius: 14px; overflow: hidden; height: 720px; display: flex; flex-direction: column;
+       box-shadow: 0 18px 50px rgba(15,23,42,.18); font-size: 13px; }
+.appbar { display: flex; align-items: center; gap: 18px; padding: 0 16px; height: 46px; background: #15181b; color: #e6e9ec; flex: none; }
+.appbar-logo { font-weight: 900; letter-spacing: .02em; font-size: 13px; }
+.appbar-nav { display: flex; gap: 4px; flex: 1; min-width: 0; overflow: hidden; }
+.appbar-i { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px; border-radius: 8px; color: #8b95a1; }
+.appbar-i svg { width: 16px; height: 16px; }
+.appbar-i.on { background: #23402f; color: #7fe0a7; }
+.appbar-i b { font-size: 12px; font-weight: 800; }
+.appbar-me { font-size: 12px; font-weight: 700; color: #b8c0c8; white-space: nowrap; }
+.hubbar { display: flex; align-items: center; gap: 16px; padding: 12px 20px 0; background: var(--paper); flex-wrap: wrap; flex: none; }
+.hubbar-l { display: flex; align-items: flex-end; gap: 22px; min-width: 0; flex-wrap: wrap; }
+.hubbar-t { font-size: 17px; font-weight: 900; padding-bottom: 10px; }
+.hubtabs { display: flex; gap: 2px; }
+.hubtab { padding: 0 10px 10px; font-weight: 800; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
+.hubtab.on { color: var(--ink); border-bottom-color: var(--ink); }
+.hubbar-r { margin-left: auto; display: flex; gap: 8px; align-items: center; padding-bottom: 10px; }
+.hubsearch { height: 32px; min-width: 220px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; display: inline-flex; align-items: center; color: var(--faint); background: var(--surface); }
+.hubstrip { display: flex; align-items: center; gap: 8px; padding: 10px 20px; background: var(--paper); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); flex-wrap: wrap; flex: none; }
+.hubstrip .sp { flex: 1; }
+.hubstat { font-size: 12px; color: var(--muted); background: var(--surface); padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.hubstat b { color: var(--ink); font-weight: 900; }
+.hubstat.good b { color: var(--accent-deep); } .hubstat.crit b { color: var(--crit); }
+.hubstrip .filters .segs span { padding: 4px 9px; font-size: 11.5px; }
+.hubbody { flex: 1; min-height: 0; overflow: auto; padding: 14px 20px 20px; }
+.hub-A .hubbody { overflow: hidden; display: flex; }
+.hubboard { flex: 1; min-width: 0; display: flex; }
+.hubboard .board { flex: 1; height: 100%; align-items: stretch; }
+.hubboard .col { background: #e8edf1; border-radius: 12px; padding: 10px; overflow: auto; align-content: start; }
+.lanes { display: grid; gap: 10px; }
+.lane { display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 12px; align-items: start; background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+.lane-h { display: grid; grid-template-columns: 4px 1fr auto; gap: 4px 8px; align-items: center; background: none !important; }
+.lane-h .lane-bar { grid-row: span 2; align-self: stretch; border-radius: 4px; background: currentColor; }
+.lane-h b { font-size: 13px; font-weight: 900; color: var(--ink); }
+.lane-h .col-s { grid-column: 2 / -1; }
+.lane-b { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+.lane-b .dcard { width: 200px; flex: none; }
+.lane-empty { color: var(--faint); font-size: 12px; padding: 10px 0; }
+.dlist { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.dl-r { display: grid; grid-template-columns: 80px minmax(0,2fr) 90px 60px 90px minmax(0,1fr) 50px 90px; gap: 12px; align-items: center;
+        padding: 9px 14px; border: 0; border-top: 1px solid var(--line2); background: none; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.dl-r:hover { background: var(--surface); }
+.dl-r.mine { box-shadow: inset 3px 0 0 var(--accent); }
+.dl-h { background: var(--surface); font: 800 10px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); cursor: default; border-top: 0; }
+.dl-r .r { text-align: right; font-variant-numeric: tabular-nums; }
+.dl-co { font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-m { display: none; }
+.dl-g { display: flex; align-items: center; gap: 8px; padding: 12px 14px 6px; font: 800 10.5px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--ink); border-top: 1px solid var(--line); background: none !important; }
+.dl-g i { width: 4px; height: 12px; border-radius: 3px; background: currentColor !important; }
+.dl-g { color: var(--ink); }
+.crumb { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--paper); border-bottom: 1px solid var(--line); flex: none; }
+.dealpage { flex: 1; min-height: 0; display: flex; }
+.dealpage .m { box-shadow: none; border-radius: 0; height: auto; flex: 1; }
+.dealpage .m-acts .icon-btn[aria-label="Close"] { display: none; }
+.hub .board-m { display: none; }
+@container frame (max-width: 600px) {
+  .appbar-nav .appbar-i:not(.on) { display: none; }
+  .hubbar-t { display: none; }
+  .hubsearch { display: none; }
+  .hubbar-r { padding-bottom: 6px; }
+  .hubtabs { overflow-x: auto; }
+  .hubstrip .filters .segs { max-width: 100%; overflow-x: auto; }
+  .hubboard, .lanes { display: none !important; }
+  .hub-A .hubbody { display: block; overflow: auto; }
+  .hub:not(.hub-C) .board-m { display: grid; }
+  .dl-h { display: none; }
+  .dl-r { grid-template-columns: minmax(0,1fr) auto; }
+  .dl-r > :not(.dl-m):not(:last-child) { display: none; }
+  .dl-m { display: grid; gap: 2px; min-width: 0; }
+  .dl-m b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
 /* ---------- plan bits ---------- */
 .phases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: ph; }
 @media (max-width: 860px) { .phases { grid-template-columns: 1fr; } }
@@ -384,8 +457,9 @@ h2 { font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacin
   <div class="stagebox"><div class="frame" id="frame"></div></div>
 
   <section class="panel pickers" id="pipeline">
-    <h2>Pipeline</h2>
-    <p class="muted" style="margin:0;max-width:68ch">Every open deal at a glance, built from the workspace's parts: the rail becomes the column headers, and the chips, store tags, numbers and ages are the same. Click a card to open that deal above.</p>
+    <h2>The hub: pick a look</h2>
+    <p class="muted" style="margin:0;max-width:72ch">B2B as its own tab at the top, full screen. Pipeline is the first tab and there is no Needs You tab. Click any deal to open it as a full page; ← Pipeline goes back.</p>
+    <div class="optrow" id="hubopts"></div>
     <div class="bar"><div class="seg"><button data-s="desk" class="on">Desktop</button><button data-s="phone">Phone</button></div></div>
   </section>
   <div class="stagebox"><div class="frame" id="bframe"></div></div>
@@ -408,6 +482,7 @@ h2 { font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacin
     <ol class="qs">
       <li><b>Layout:</b> the deal workspace (B).</li>
       <li><b>Pipeline is the main view.</b> The Needs You tab goes; the board’s “Needs you only” switch replaces it.</li>
+      <li><b>B2B gets its own top tab</b>, full screen, and a deal opens as a full page rather than a popup.</li>
       <li><b>Closing:</b> the × in the header (and Esc). No Close or Cancel buttons in the actions.</li>
       <li><b>⋯ menu</b> holds Request Deletion and Decline Deal.</li>
       <li><b>Evaluations</b> open in the same workspace with no stage rail. Corp only.</li>
@@ -687,16 +762,75 @@ h2 { font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacin
         <div class="col-h t-${st.tone}" style="background:none"><div class="col-bar"></div><div class="col-t">${st.short}<span class="sec-n">${inCol.length}</span></div><div class="col-s">${sum ? money(sum) : '&nbsp;'}</div></div>
         ${inCol.length ? inCol.map(dealCard).join('') : '<div class="col-empty">Nothing here</div>'}</div>`).join('')}</div>`;
     const phone = `<div class="board-m">${cols.filter(c => c.inCol.length).map(({ st, inCol, sum }) => `<details class="sec" open><summary><span class="col-bar t-${st.tone}" style="background:currentColor"></span>${st.short}<span class="sec-n">${inCol.length}</span>${sum ? `<span class="col-s" style="text-transform:none;letter-spacing:0">${money(sum)}</span>` : ''}</summary><div class="sec-b">${inCol.map(dealCard).join('')}</div></details>`).join('') || '<div class="col-empty">Nothing matches</div>'}</div>`;
-    const vt = [['Pipeline', DEALS.filter(d => d.mine).length], ['Completed'], ['Evaluations', 2], ['Clients']];
-    return `<div class="pane">
-      <div class="pane-head"><span class="m-ico">${svg('list')}</span><div class="m-titles"><div class="m-eyebrow">OPERATIONS</div><div class="m-title">Business-to-Business</div></div><span class="sp"></span>
-        <button class="btn sm">Delete Requests</button><button class="btn sm">SPEEKS Capture</button><button class="btn sm primary">＋ New Deal</button></div>
-      <div class="vtabs">${vt.map(t => `<span class="vtab ${t[0] === 'Pipeline' ? 'on' : ''}">${t[0]}${t[1] ? ` <span class="sec-n">${t[1]}</span>` : ''}</span>`).join('')}</div>
-      <div class="pane-body">${nums}${filters}${desk}${phone}<div class="board-foot">3 finished this month are in <u>Completed</u>.</div></div></div>`;
+    return { nums, filters, desk, phone, cols, shown };
+  }
+
+  /* ---------------- the hub, full screen ---------------- */
+  const HUBS = {
+    A: { name: 'Board', blurb: 'Today’s columns, full height, edge to edge. Each column scrolls on its own.',
+         pros: ['Familiar', 'See every stage at once'], cons: ['Wide; scrolls sideways under ~1300px'] },
+    B: { name: 'Lanes', blurb: 'One row per stage. Cards run left to right, so a busy stage never gets cut off.',
+         pros: ['Fits any width', 'Busy stages stand out'], cons: ['Less of the flow in one look'] },
+    C: { name: 'List', blurb: 'A dense table grouped by stage, with a Board switch. Sorts by age or value.',
+         pros: ['Most deals on screen', 'Best on a phone'], cons: ['Less visual'] },
+  };
+  const NAVI = {
+    home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+    bolt: '<path d="M13 2L3 14h7l-1 8 10-12h-7z"/>',
+    tool: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
+    chart: '<polyline points="3 17 9 11 13 15 21 7"/>',
+    book: '<path d="M4 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4z"/><path d="M20 4h-7"/>',
+    b2b: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>',
+  };
+  const navSvg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${NAVI[k]}</svg>`;
+  const appBar = () => `<div class="appbar"><span class="appbar-logo">SPEEKSNET</span>
+      <nav class="appbar-nav">${['home', 'bolt', 'tool', 'chart', 'book'].map(k => `<span class="appbar-i">${navSvg(k)}</span>`).join('')}
+        <span class="appbar-i on">${navSvg('b2b')}<b>B2B</b></span></nav>
+      <span class="appbar-me">Nick H.</span></div>`;
+  const hubBar = () => {
+    const tabs = [['Pipeline', DEALS.filter(d => d.mine).length], ['Completed'], ['Evaluations', 2], ['Clients']];
+    return `<div class="hubbar">
+        <div class="hubbar-l"><span class="hubbar-t">Business-to-Business</span>
+          <nav class="hubtabs">${tabs.map(t => `<span class="hubtab ${t[0] === 'Pipeline' ? 'on' : ''}">${t[0]}${t[1] ? ` <span class="sec-n">${t[1]}</span>` : ''}</span>`).join('')}</nav></div>
+        <div class="hubbar-r"><span class="hubsearch">Search deals or clients</span>
+          <button class="btn sm primary">＋ New Deal</button><button class="icon-btn" aria-label="More">${svg('more')}</button></div></div>`;
+  };
+  const hubStrip = (b) => {
+    const withClient = DEALS.filter(d => d.s === 4).reduce((a, d) => a + d.offer, 0);
+    return `<div class="hubstrip">
+        <span class="hubstat"><b>${DEALS.length}</b> in flight</span>
+        <span class="hubstat good"><b>${DEALS.filter(d => d.mine).length}</b> need you</span>
+        <span class="hubstat"><b>${money(withClient)}</b> with clients</span>
+        <span class="hubstat crit"><b>12d</b> oldest</span>
+        <span class="sp"></span>${b.filters}${state.hub === 'C' ? '<span class="segs"><span>Board</span><span class="on">List</span></span>' : ''}</div>`;
+  };
+  const lanesHtml = (b) => `<div class="lanes">${b.cols.map(({ st, inCol, sum }) => `<div class="lane">
+      <div class="lane-h t-${st.tone}"><i class="lane-bar"></i><b>${st.short}</b><span class="sec-n">${inCol.length}</span><span class="col-s">${sum ? money(sum) : ''}</span></div>
+      <div class="lane-b">${inCol.length ? inCol.map(dealCard).join('') : '<div class="lane-empty">Nothing here</div>'}</div></div>`).join('')}</div>`;
+  const listHtml = (b) => `<div class="dlist">
+      <div class="dl-r dl-h"><span>Deal</span><span>Client</span><span>Store</span><span class="r">Units</span><span class="r">Offer</span><span>Waiting on</span><span class="r">Age</span><span></span></div>
+      ${b.cols.filter(c => c.inCol.length).map(({ st, inCol }) => `<div class="dl-g"><i class="t-${st.tone}"></i>${st.short}<span class="sec-n">${inCol.length}</span></div>
+        ${inCol.map(d => `<button class="dl-r ${d.mine ? 'mine' : ''}" data-open="${d.s}">
+          <span class="dcard-ref">${d.ref}</span><span class="dl-co">${d.co}</span>
+          <span>${d.split ? `<span class="store">${d.split}</span>` : d.store ? `<span class="store">${d.store}</span>` : '<span class="muted">—</span>'}</span>
+          <span class="r">${d.units || '—'}</span><span class="r">${d.offer ? money(d.offer) : '—'}</span>
+          <span class="muted">${d.waiting ? 'Not started' : (({ OVL: d.store || 'Corp', approval: 'Approval', 'the client': 'Client' })[st.wait] || st.wait)}</span>
+          <span class="r ${ageCls(d.age)}">${d.age}d</span><span>${d.mine ? '<span class="needs">Needs you</span>' : ''}</span>
+          <span class="dl-m"><b>${d.co}</b><span class="muted">${d.ref} · ${d.units ? d.units + ' units' : d.desc}${d.offer ? ' · ' + money(d.offer) : ''} · ${d.age}d</span></span></button>`).join('')}`).join('')}</div>`;
+  function hubHtml() {
+    if (state.hubDeal != null) {
+      const st = STAGES[state.hubDeal];
+      return `<div class="hub page">${appBar()}
+        <div class="crumb"><button class="btn sm ghost" data-hubback>← Pipeline</button><span class="muted">/</span><span class="dcard-ref">DL-0412</span></div>
+        <div class="dealpage">${LAYOUTS.B.render(st)}</div></div>`;
+    }
+    const b = boardHtml();
+    const body = state.hub === 'B' ? lanesHtml(b) : state.hub === 'C' ? listHtml(b) : `<div class="hubboard">${b.desk}</div>`;
+    return `<div class="hub hub-${state.hub}">${appBar()}${hubBar()}${hubStrip(b)}<div class="hubbody">${body}${b.phone}</div></div>`;
   }
 
   /* ---------------- wiring ---------------- */
-  const state = { opt: 'B', stage: 2, phone: false, tab: null, bstore: 'All', bmine: false };
+  const state = { opt: 'B', stage: 2, phone: false, tab: null, bstore: 'All', bmine: false, hub: 'A', hubDeal: null };
   try { const s = JSON.parse(localStorage.getItem('b2b-overhaul') || '{}'); Object.assign(state, s, { tab: null }); } catch (e) {}
   const bframe = document.getElementById('bframe');
   const save = () => { try { localStorage.setItem('b2b-overhaul', JSON.stringify({ opt: state.opt, stage: state.stage, phone: state.phone })); } catch (e) {} };
@@ -711,13 +845,18 @@ h2 { font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacin
     frame.classList.toggle('phone', state.phone);
     bframe.classList.toggle('phone', state.phone);
     frame.innerHTML = LAYOUTS[state.opt].render(STAGES[state.stage], state.tab);
-    bframe.innerHTML = boardHtml();
+    document.getElementById('hubopts').innerHTML = Object.entries(HUBS).map(([k, H]) => `<button class="opt ${k === state.hub ? 'on' : ''}" data-hub="${k}" aria-pressed="${k === state.hub}">
+        <span class="opt-h"><span class="opt-l">${k}</span>${H.name}</span>
+        <p>${H.blurb}</p><span class="pc">${H.pros.map(p => `<span class="p">${p}</span>`).join('')}${H.cons.map(c => `<span class="c">${c}</span>`).join('')}</span></button>`).join('');
+    bframe.innerHTML = hubHtml();
     save();
   }
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-opt],[data-st],[data-s],[data-tab],[data-menu],[data-open],[data-bstore],[data-bmine]');
+    const t = e.target.closest('[data-opt],[data-st],[data-s],[data-tab],[data-menu],[data-open],[data-bstore],[data-bmine],[data-hub],[data-hubback]');
     if (!t) { document.querySelectorAll('.menu').forEach(m => m.hidden = true); return; }
-    if (t.dataset.open) { state.opt = 'B'; state.stage = +t.dataset.open; state.tab = null; draw(); frame.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    if (t.dataset.hub) { state.hub = t.dataset.hub; state.hubDeal = null; draw(); return; }
+    if (t.hasAttribute('data-hubback')) { state.hubDeal = null; draw(); return; }
+    if (t.dataset.open) { state.hubDeal = +t.dataset.open; draw(); return; }
     if (t.dataset.bstore) { state.bstore = t.dataset.bstore; draw(); return; }
     if (t.hasAttribute('data-bmine')) { state.bmine = !state.bmine; draw(); return; }
     if (t.dataset.opt) { state.opt = t.dataset.opt; state.tab = null; }

@@ -25192,3 +25192,73 @@ select.dd-native {
     .b2b-lt-offer .b2b-lt-r > :nth-child(8),
     .b2b-lt-offer .b2b-lt-r > :nth-child(9) { display: none; }
 }
+
+/* =========================================================================
+   B2B PAGE (2026-10) -- b2b.html, full screen
+   =========================================================================
+   B2B left Operations for its own nav tab and the whole window: no page
+   gutters, no card frame, the panel running from under the top nav to the
+   bottom edge (_wsFitPanels sizes it with no gap on this page). A deal opens as
+   a PAGE in the same place rather than a popup over it: #b2bDealModal sits
+   inside .b2b-wrap, keeps .modal-menu so every closeAllModals() still closes
+   it, and is pulled out of the fixed/centred/animated modal treatment here.
+   The rules key off .b2b-wrap via :has() rather than a body class, because the
+   SPA router swaps .main-content and never touches <body>. */
+.main-content:has(> .b2b-wrap) { padding: 64px 0 0 !important; }   /* the top nav is 64px */
+.b2b-wrap { display: flex; flex-direction: column; min-width: 0; }
+.b2b-wrap > .ws-pane > .b2b-panel.card {
+    border-radius: 0; box-shadow: none; border: 0; margin: 0 !important;
+}
+.b2b-wrap > .ws-pane > .b2b-panel > .cb-head { padding-left: 24px; padding-right: 24px; }
+.b2b-wrap > .ws-pane > .b2b-panel > .cb-scroll { padding-left: 24px; padding-right: 24px; }
+
+/* --- the deal page ------------------------------------------------------- */
+.b2b-wrap > .modal-menu.b2b-dealpage {
+    display: none; position: static; inset: auto; z-index: auto;
+    transform: none !important; opacity: 1; visibility: visible; transition: none;
+    width: auto !important; max-width: none !important; margin: 0;
+    height: calc(100dvh - var(--b2b-top, 64px)) !important; max-height: none !important;
+    border-radius: 0; box-shadow: none; border: 0; background: #fff;
+}
+.b2b-wrap > .modal-menu.b2b-dealpage.show { display: flex; }
+.b2b-wrap:has(> .b2b-dealpage.show) > #ops-pane-b2b { display: none !important; }
+.b2b-dealpage > .manage-content { flex: 1 1 auto; min-height: 0; }
+.b2b-dealpage > .modal-header.tool-head { padding-left: 16px; }
+/* The back button replaces the x on a page. */
+.b2b-dealpage .b2b-dealpage-x { display: none; }
+.b2b-dealpage-back {
+    display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    height: 32px; padding: 0 12px 0 8px; margin-right: 4px; cursor: pointer;
+    border: 1px solid var(--b2b-line); border-radius: 9px; background: #fff;
+    font: inherit; font-size: 12.5px; font-weight: 750; color: var(--b2b-muted);
+}
+.b2b-dealpage-back svg { width: 16px; height: 16px; }
+.b2b-dealpage-back:hover { color: var(--sage-deep); border-color: var(--sage-professional); }
+.modal-menu:not(.b2b-dealpage) .b2b-dealpage-back { display: none; }
+
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .main-content:has(> .b2b-wrap) {
+        padding: 68px 0 calc(78px + env(safe-area-inset-bottom, 0px)) 0 !important;
+    }
+    .b2b-wrap > .ws-pane > .b2b-panel > .cb-head,
+    .b2b-wrap > .ws-pane > .b2b-panel > .cb-scroll { padding-left: 14px; padding-right: 14px; }
+    /* The phone slide-in every tool modal gets would push the page off-screen. */
+    .b2b-wrap > .modal-menu.b2b-dealpage.tool-modal,
+    .b2b-wrap > .modal-menu.b2b-dealpage.tool-modal.show { transform: none !important; }
+    .b2b-wrap > .modal-menu.b2b-dealpage {
+        height: calc(100dvh - var(--b2b-top, 68px) - 78px - env(safe-area-inset-bottom, 0px)) !important;
+    }
+    .b2b-dealpage-back span { display: none; }
+    .b2b-dealpage-back { padding: 0 8px; }
+}
+
+/* The board's "Needs you only" switch (2026-10) -- what the Needs You tab was. */
+.b2b-mine-switch { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; cursor: pointer;
+                   font-size: 12.5px; font-weight: 750; color: var(--b2b-muted); user-select: none; }
+.b2b-mine-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.b2b-mine-sw { position: relative; width: 30px; height: 18px; border-radius: 999px; background: #d4dbe3; transition: background .15s; flex: 0 0 auto; }
+.b2b-mine-sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left .15s; }
+.b2b-mine-switch.on { color: var(--b2b-ink); }
+.b2b-mine-switch.on .b2b-mine-sw { background: var(--sage-deep); }
+.b2b-mine-switch.on .b2b-mine-sw::after { left: 15px; }
+.b2b-mine-switch input:focus-visible + .b2b-mine-sw { box-shadow: 0 0 0 3px rgba(31, 157, 87, .2); }

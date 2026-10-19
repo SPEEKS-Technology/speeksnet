@@ -1,0 +1,1686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPEEKSNET | B2B</title>
+  <style>
+    /* Critical anti-FOUC: keep slide-in side panels out of flow until styles.css loads.
+       styles.css (loaded next) restores their display:flex + off-canvas positioning. */
+    .goals-side-panel, .checklist-side-panel { display: none; }
+  </style>
+  <link rel="stylesheet" href="styles.css?v=20261019c">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+  <script src="speeks.js?v=20261019c" defer></script>
+</head>
+<body class="preload">
+
+<header class="top-nav">
+  <div class="nav-left">
+    <div class="brand-area">
+      <img src="images/SPEEKS%20Logo%20Short%20White.png" alt="SPEEKS" class="brand-mark">
+      <span class="brand-wordmark">SPEEKSNET</span>
+    </div>
+  </div>
+
+  <nav class="nav-bar">
+    <a href="index.html" data-m="Quick Portal" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
+    <a data-mobile="hide" data-tablet="show" href="operations.html" data-m="Ops" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
+    <a href="b2b.html" data-m="B2B" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></i><span>B2B</span></a>
+    <a data-mobile="hide" href="workspace.html" data-m="Work" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></i><span>Workspace</span></a>
+    <a href="docs.html" data-m="Processes" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
+    <a href="stats.html" data-m="Stats" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></i><span>Stats & Awards</span></a>
+  </nav>
+
+  <div class="nav-right">
+    <div class="user-profile-nav">
+
+      <div class="msm-store-switch" title="Switch the store you're managing">
+        <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
+      </div>
+
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" data-tip="SPEEKS Tools">
+        <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
+        <span class="tools-nav-label">Tools</span>
+      </button>
+
+      <div id="dailyMessageBubble">
+            <span id="dailyMessageBubbleIcon">📣</span>
+            <span id="dailyMessageBubbleText"></span>
+            <button onclick="closeDailyCommentBubble()" class="daily-bubble-close" title="Dismiss">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+    <div id="claimAlertBubble">
+    <span id="claimAlertBubbleIcon">⚠️</span>
+    <span id="claimAlertBubbleText"></span>
+    <button onclick="closeClaimAlertBubble()" class="daily-bubble-close" title="Dismiss">
+        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    </button>
+</div>
+        <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" data-tip="Have an Idea?"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg></a>
+        <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" data-tip="Quick Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+        <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" data-mobile="hide" data-tip="Hotkeys &amp; Commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></svg></div>
+        <div class="action-btn" onclick="toggleCalendar()" data-mobile="hide" data-tablet="show" data-tip="Store Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+        <!-- The Announcements bell stood here. Removed 2026-09-07: the Feed Hub it opened is now reached from the QuickPortal deck, which every role sees, so a second door in the nav was one too many. #notifDropdown itself is still on this page — openHubTo() and the realtime ping both use it. -->
+        <div class="action-btn" id="notifySettingsBtn" data-feature="nav-settings" data-mobile="hide" data-tablet="show" onclick="openSettings()" data-tip="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+      </div>
+      <div class="greeting-stack">
+        <h2 id="userGreeting">Welcome!</h2>
+        <div class="version-signout-row">
+            <!-- Stamped by _stampVersion() from APP_VERSION in speeks.js, which is the
+                 one place the version number lives. Do not hardcode it here. -->
+            <span class="version-tag"></span>
+            <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
+        </div>
+      </div>
+    </div>
+</header>
+
+<div id="globalOverlay" class="overlay"></div>
+
+<div class="modal-menu manage-docs-menu" id="hotkeysDropdown">
+    <div class="modal-header">
+        <h3>Hotkeys & Commands</h3>
+        <button class="modal-close-btn" onclick="closeAllModals(); document.getElementById('hotkeysDropdown').classList.remove('show');"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="modal-body">
+        <div id="kbSearchArea" class="kb-search-bar mb-15">
+            <input type="text" id="kbSearch" class="kb-search-input" onkeyup="filterKB()" placeholder="Search by Brand, Device, or Task...">
+        </div>
+        <div class="kb-table-container">
+            <table class="kb-table">
+              <thead>
+                <tr>
+                    <th>Brand</th>
+                    <th>Device</th>
+                    <th>Hotkey/Command</th>
+                    <th>Objective</th>
+                </tr>
+              </thead>
+              <tbody id="kbBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="modal-menu" id="quickMsgDropdown">
+    <div class="modal-header">
+        <h3>Quick Messages</h3>
+        <div class="align-center gap-15">
+            <div class="notif-tabs">
+                <button id="qm-tab-common" class="tab-btn active" onclick="switchQMTab('common')">Common</button>
+                <button id="qm-tab-nodeals" class="tab-btn" data-mobile="hide" onclick="switchQMTab('nodeals')">No Deals</button>
+                <button id="qm-tab-reviews" class="tab-btn" onclick="switchQMTab('reviews')">Reviews</button>
+                <button id="qm-tab-networking" class="tab-btn dynamic-module-block role-district-manager role-manager role-owner-manager" onclick="switchQMTab('networking')">Networking</button>
+            </div>
+            <button class="modal-close-btn" onclick="closeAllModals(); document.getElementById('quickMsgDropdown').classList.remove('show');"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+    </div>
+    <div class="modal-body">
+        <div id="qmContent">Syncing Data...</div>
+    </div>
+</div>
+
+<!-- SPEEKS Feed Hub — one filterable reader (announcements + comments + deadlines
+     + patch notes). Rendered by renderHubFeed(); announcements keep reactions /
+     mark-as-read / read receipts / doc attachments. -->
+<div class="modal-menu notif-menu hub-modal" id="notifDropdown">
+    <div class="hub-head">
+        <div class="hub-head-row">
+            <div class="hub-title-wrap">
+                <span class="hub-hi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"></path></svg></span>
+                <div><h3>SPEEKS Feed</h3><div class="hub-sub">Everything from your team, in one place</div></div>
+            </div>
+            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="hub-filter">
+            <!-- The "Show" label is gone: the control says "All updates" / "Unread"
+                 / "Comments", which is self-evidently what it is showing. -->
+            <div class="hub-select-wrap">
+                <select id="hubFilter" onchange="setHubFilter(this.value)">
+                    <option value="all">All updates</option>
+                    <option value="unread">Unread</option>
+                    <option value="ann">Announcements</option>
+                    <option value="note">Comments</option>
+                    <option value="patch">Patch notes</option>
+                    <option value="arch">Archived</option>
+                </select>
+                <span class="hub-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
+            </div>
+            <span class="hub-count" id="hubCount"></span>
+        </div>
+    </div>
+    <div id="hubFeed" class="hub-feed"><div class="status-message">Syncing your feed...</div></div>
+</div>
+
+<div class="modal-menu calendar-menu" id="calendarDropdown">
+    <div class="modal-header">
+        <div class="scal-headline"><h3>Store Calendar</h3><span id="scalHeadExtra" class="scal-head-extra"></span></div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="calendar-content scal-root" id="scalRoot"></div>
+</div>
+
+<div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
+<div class="modal-menu manage-menu" id="claimsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="9.17" y1="14.83" x2="4.93" y2="19.07"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Claims &amp; Disputes</span>
+          <span class="tool-head-sub">Claims, refund mismatches and eBay cases — anywhere our money is held or not lining up.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 20px;">
+        <div class="notif-tabs claims-tabs">
+            <button id="claims-tab-view" class="tab-btn active" onclick="switchClaimsTab('view')">Claims</button>
+            <button id="claims-tab-mismatch" class="tab-btn" onclick="switchClaimsTab('mismatch')">Mismatches<span id="hold-mgr-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="claims-tab-returns" class="tab-btn" onclick="switchClaimsTab('returns')">Returns<span id="hold-mgr-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="claims-tab-cases" class="tab-btn" onclick="switchClaimsTab('cases')">Cases &amp; Disputes<span id="hold-mgr-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="claims-tab-payments" class="tab-btn" onclick="switchClaimsTab('payments')">Payments<span id="hold-mgr-badge-payments" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+        </div>
+    </div>
+
+    <div class="manage-content">
+        <div id="claims-panel-new" style="display:none;">
+            <div id="claims-store-row" style="margin-bottom: 14px;">
+                <label class="form-label-caps">Store</label>
+                <select id="claim-store" class="form-input-lg"></select>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">
+                <div>
+                    <label class="form-label-caps">Case Number</label>
+                    <input id="claim-case-number" class="form-input-lg" placeholder="e.g. SHPVS-040326141943">
+                </div>
+                <div>
+                    <label class="form-label-caps">Item SKU</label>
+                    <input id="claim-sku" class="form-input-lg" placeholder="e.g. KS01-5759A-E15">
+                </div>
+                <div>
+                    <label class="form-label-caps">Value</label>
+                    <input id="claim-price" type="number" step="0.01" min="0" class="form-input-lg" placeholder="0.00">
+                </div>
+                <div>
+                    <label class="form-label-caps">Cost</label>
+                    <input id="claim-cost" type="number" step="0.01" min="0" class="form-input-lg" placeholder="0.00">
+                </div>
+                <div>
+                    <label class="form-label-caps">Case Reason</label>
+                    <select id="claim-reason" class="form-input-lg" onchange="_onClaimReasonChange()">
+                        <option value="Shopify Claim">Shopify Claim</option>
+                        <option value="USPS Claim">USPS Claim</option>
+                        <option value="UPS Claim">UPS Claim</option>
+                    </select>
+                </div>
+                <div id="claim-type-wrap">
+                    <label class="form-label-caps">Claim Type</label>
+                    <select id="claim-type" class="form-input-lg">
+                        <option value="Damage">Damage</option>
+                        <option value="Loss">Loss</option>
+                    </select>
+                </div>
+            </div>
+            <div style="margin-bottom:14px;">
+                <label class="form-label-caps">Detail (optional)</label>
+                <input id="claim-detail" class="form-input-lg" placeholder="Any extra detail about the case…">
+            </div>
+        </div>
+
+        <div id="claims-panel-view">
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="flex:1; min-width:150px;">
+                    <label class="form-label-caps">Status</label>
+                    <select id="claims-status-filter" class="form-input-lg" onchange="renderClaimsTable()">
+                        <option value="">All statuses</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="recovered">Recovered</option>
+                        <option value="denied">Denied</option>
+                    </select>
+                </div>
+                <div id="claims-view-filter-row" style="display:none; flex:1; min-width:150px;">
+                    <label class="form-label-caps">Store</label>
+                    <select id="claims-view-filter" class="form-input-lg" onchange="renderClaimsTable()"></select>
+                </div>
+                <div style="margin-left:auto; display:flex; align-items:flex-end;">
+                    <button class="btn-primary" onclick="startNewClaim()" style="padding:11px 16px; font-size:13px; white-space:nowrap;">+ New Claim</button>
+                </div>
+            </div>
+            <div id="claims-table-wrap"></div>
+        </div>
+
+        <div id="claims-panel-mismatch" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Orders refunded or cancelled on one site but not the other. Fix it on the site, or mark it resolved and say why it's fine.</div>
+            <div id="hold-mgr-mismatch"></div>
+        </div>
+        <div id="claims-panel-returns" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">eBay returns: the buyer wants to send something back. Do it on eBay — a label, or the refund once it lands — then check in here.</div>
+            <div id="hold-mgr-returns"></div>
+        </div>
+        <div id="claims-panel-cases" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Item-not-received requests, escalated cases and (soon) payment disputes. Respond on eBay; check in here. A refunded item-not-received needs a claim.</div>
+            <div id="hold-mgr-cases"></div>
+        </div>
+        <div id="claims-panel-payments" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Shopify orders we haven't been paid for: a card about to run out before the order ships, or one that already has. Charge or cancel it on Shopify; if the card can't be charged any more, collect another way and say what happened here.</div>
+            <div id="hold-mgr-payments"></div>
+        </div>
+    </div>
+
+    <div class="manage-footer flex-end">
+        <button onclick="switchClaimsTab('view')" class="btn-secondary" id="cancelClaimBtn" style="margin-right:10px;">Cancel</button>
+        <button onclick="submitClaim()" class="btn-primary" id="submitClaimBtn">Save Claim</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="claimsOversightModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Claims &amp; Disputes</span>
+          <span class="tool-head-sub">Claims, refund mismatches and eBay cases across every store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="padding: 14px 18px 20px;">
+        <div class="notif-tabs claims-tabs">
+            <button id="ov-tab-claims" class="tab-btn active" onclick="switchOversightTab('claims')">Claims</button>
+            <button id="ov-tab-mismatch" class="tab-btn" onclick="switchOversightTab('mismatch')">Mismatches<span id="hold-ov-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="ov-tab-returns" class="tab-btn" onclick="switchOversightTab('returns')">Returns<span id="hold-ov-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="ov-tab-cases" class="tab-btn" onclick="switchOversightTab('cases')">Cases &amp; Disputes<span id="hold-ov-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="ov-tab-payments" class="tab-btn" onclick="switchOversightTab('payments')">Payments<span id="hold-ov-badge-payments" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+        </div>
+    </div>
+    <div class="manage-content">
+        <div id="ov-panel-claims"><div id="claims-oversight-body"><div class="status-message">Loading…</div></div></div>
+        <div id="ov-panel-mismatch" style="display:none;"><div id="hold-ov-mismatch"></div></div>
+        <div id="ov-panel-returns" style="display:none;"><div id="hold-ov-returns"></div></div>
+        <div id="ov-panel-cases" style="display:none;"><div id="hold-ov-cases"></div></div>
+        <div id="ov-panel-payments" style="display:none;"><div id="hold-ov-payments"></div></div>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="scorecardSubmitModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Submit Scores</span>
+          <span class="tool-head-sub">Score stores and run the SPEEKS Audit.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
+            <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
+            <button id="sc-tab-manage" class="tab-btn" onclick="switchScoreTab('manage')">Manage Items</button>
+        </div>
+    </div>
+
+    <div class="manage-content">
+        <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;" onchange="onScoreStoreChange()">
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+            <input type="date" id="dm-score-date" class="form-input-lg" style="flex: 1; margin-top: 0;" onchange="onScoreDateChange()">
+        </div>
+
+        <div id="sc-panel-scorecard">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;" id="dm-category-inputs"></div>
+        </div>
+
+        <div id="sc-panel-audit" style="display: none;">
+            <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                <input id="dm-audit-auditor" class="form-input-lg" placeholder="Auditor name (optional)" style="margin-top: 0; flex: 1;">
+                <input type="time" id="dm-audit-time" class="form-input-lg" title="Time of the audit walkthrough" style="margin-top: 0; width: 140px; flex: none;">
+            </div>
+            <div id="dm-audit-runningbar"></div>
+            <div id="audit-entry-container" style="margin-top: 12px;"></div>
+        </div>
+
+        <div id="sc-panel-manage" style="display: none;"></div>
+    </div>
+
+    <div class="manage-footer flex-end">
+        <button onclick="submitNewScorecard()" class="btn-primary" id="submitScorecardBtn">Save Scorecard</button>
+        <button onclick="submitNewAudit()" class="btn-primary" id="submitAuditBtn" style="display: none;">Save Audit</button>
+    </div>
+</div>
+
+<!-- ===== AUDIT BREAKDOWN POPOUT (shared, read-only full breakdown) ===== -->
+<div id="auditBreakdownOverlay" onclick="closeAuditBreakdown()"></div>
+<div class="modal-menu manage-menu" id="auditBreakdownModal">
+    <div class="modal-header">
+        <h3 id="audit-breakdown-title">Audit Breakdown</h3>
+        <button class="modal-close-btn" onclick="closeAuditBreakdown()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="audit-breakdown-body"></div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageUsersDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">User Permissions</span>
+          <span class="tool-head-sub">Manage portal users, roles and PINs.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="manageUsersList">
+        <div class="mu-toolbar">
+            <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:0;">
+                <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+                <input type="text" id="manageUsersSearch" class="kb-search-input doc-search-input" placeholder="Search by name, store, or role…" autocomplete="off" oninput="filterManageUsers()" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterManageUsers();}">
+            </div>
+        </div>
+        <div id="manageUsersRows"></div>
+    </div>
+    <div class="manage-footer">
+        <button class="btn-secondary" onclick="addManageUserRow()">+ Add New User</button>
+        <button id="saveUsersBtn" class="btn-primary" onclick="saveManageUsers()">Save Changes</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="sendCommentModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Send Store Comment</span>
+          <span class="tool-head-sub">Post a note to a store's dashboard.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">This message will pop up for all users in the selected store when they sign in today. It will expire at midnight.</p>
+
+        <label class="form-label-caps">Target Store</label>
+        <select id="commentStoreSelect" class="form-input-lg" style="margin-bottom: 15px;">
+            <option value="ALL">All Stores</option>
+            <option value="OVL">OVL</option>
+            <option value="LEE">LEE</option>
+            <option value="WSP">WSP</option>
+            <option value="MPL">MPL</option>
+            <option value="BAL">BAL</option>
+        </select>
+
+        <label class="form-label-caps">Motivational Message</label>
+        <textarea id="commentMessageInput" class="form-input-lg" rows="4" placeholder="e.g., Great job hitting the eBay goals yesterday! Let's crush it again today!"></textarea>
+    </div>
+    <div class="manage-footer flex-end">
+        <button id="sendCommentBtn" class="btn-primary" onclick="submitStoreComment()">Send Message</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageAnnouncementsDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Announcements</span>
+          <span class="tool-head-sub">Publish an announcement to the team.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+        <div>
+            <label class="form-label-caps">Announcement Title</label>
+            <input type="text" id="annTitleInput" class="form-input-lg" placeholder="e.g., New Store Hours for Holiday Season">
+        </div>
+        <div class="checkbox-wrapper">
+            <input type="checkbox" id="annPriorityInput" class="custom-checkbox">
+            <label for="annPriorityInput" class="checkbox-label">Mark as High Priority (Highlights in Red for all Stores)</label>
+        </div>
+        <div class="editor-container">
+            <label class="form-label-caps">Message Body</label>
+            <div class="editor-toolbar">
+                <button type="button" id="btn-fmt-bold" class="rt-btn" onmousedown="event.preventDefault();" onclick="formatText('bold')" title="Bold">B</button>
+                <button type="button" id="btn-fmt-italic" class="rt-btn italic-text" onmousedown="event.preventDefault();" onclick="formatText('italic')" title="Italic">I</button>
+                <button type="button" id="btn-fmt-underline" class="rt-btn underline-text" onmousedown="event.preventDefault();" onclick="formatText('underline')" title="Underline">U</button>
+                <div class="toolbar-divider"></div>
+                <button type="button" id="btn-fmt-list" class="rt-btn" onmousedown="event.preventDefault();" onclick="formatText('insertUnorderedList')" title="Bullet List">• Bullet List</button>
+            </div>
+            <div id="annBodyInput" class="editor-body" contenteditable="true" placeholder="Start typing your announcement here..."></div>
+        </div>
+    </div>
+    <div class="manage-footer flex-end">
+        <button id="publishAnnBtn" class="btn-primary" onclick="publishAnnouncement()">
+            <span class="align-center gap-8">Publish to All Stores</span>
+        </button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageRecordsDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Company Records</span>
+          <span class="tool-head-sub">Edit company records and reference data.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="manageRecordsList"></div>
+    <div class="manage-footer flex-end">
+        <button id="saveRecordsBtn" class="btn-primary" onclick="saveManageRecords()">Save Changes</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageAlertsDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Performance Metrics</span>
+          <span class="tool-head-sub">Set the store performance metric targets.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="manageAlertsList"></div>
+    <div class="manage-footer flex-end">
+        <button id="saveAlertsBtn" class="btn-primary" onclick="saveAlertsData()">Save Changes</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="managerChecklistDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Manager Checklist</span>
+          <span class="tool-head-sub">Assign and review store checklist tasks.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+        <div class="mcl-field" style="margin-bottom:16px;">
+            <label class="form-label-caps">Viewing</label>
+            <select id="mcl-filter-store" class="form-input-lg" onchange="applyChecklistFilter(this.value)">
+                <option value="">All stores</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <div class="mcl-add-form">
+            <div class="mcl-add-row">
+                <div class="mcl-field mcl-field-period">
+                    <label class="form-label-caps">Time Period</label>
+                    <select id="mcl-period" class="form-input-lg">
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                    </select>
+                </div>
+                <div class="mcl-field mcl-field-text">
+                    <label class="form-label-caps">Required Task</label>
+                    <input type="text" id="mcl-text" class="form-input-lg" placeholder="e.g. Confirm register float counted" onkeydown="if(event.key==='Enter')addRequiredTask()">
+                </div>
+            </div>
+            <div class="mcl-field">
+                <label class="form-label-caps">Applies To <button type="button" class="mcl-allbtn" onclick="mclToggleAllStores()">Toggle all</button></label>
+                <div class="mcl-store-checks" id="mcl-stores">
+                    <label><input type="checkbox" value="OVL"><span>OVL</span></label>
+                    <label><input type="checkbox" value="LEE"><span>LEE</span></label>
+                    <label><input type="checkbox" value="WSP"><span>WSP</span></label>
+                    <label><input type="checkbox" value="MPL"><span>MPL</span></label>
+                    <label><input type="checkbox" value="BAL"><span>BAL</span></label>
+                    <label><input type="checkbox" value="CORP"><span>Corp</span></label>
+                </div>
+            </div>
+            <button class="btn-primary mcl-add-btn" id="mcl-add-btn" onclick="addRequiredTask()">+ Add Required Task</button>
+        </div>
+        <div class="mcl-existing-label" id="mcl-list-label">Current required tasks</div>
+        <div id="mcl-list"><div class="status-message">Loading…</div></div>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageHotkeysDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">System Hotkeys</span>
+          <span class="tool-head-sub">Edit the global hotkeys and commands.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="manageHotkeysList"></div>
+    <div class="manage-footer">
+        <button class="btn-secondary" onclick="addManageHotkeyRow()">+ Add Hotkey</button>
+        <button id="saveHotkeysBtn" class="btn-primary" onclick="saveManageHotkeys()">Save Changes</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageDocsDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Manage Policies</span>
+          <span class="tool-head-sub">Create and edit store policies &amp; docs.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="mp-search-bar">
+        <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:0;">
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+            <input type="text" id="manageDocsSearch" class="kb-search-input doc-search-input" placeholder="Search policies…" autocomplete="off" oninput="filterManageDocs()" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterManageDocs();}">
+        </div>
+    </div>
+    <div class="manage-content" id="manageDocsList"></div>
+    <div class="manage-footer">
+        <button class="btn-secondary" onclick="addNewPolicy()">+ Add Policy</button>
+        <button class="btn-primary" id="saveDocsBtn" onclick="saveDocs()">Save Changes</button>
+    </div>
+</div>
+
+<main class="main-content">
+
+  <!-- ===== B2B — its own page (2026-10) =====
+       Business-to-Business was a sub-tab of Operations. It is the biggest
+       feature on the site, so Nick moved it to its own tab in the top nav and
+       gave it the whole screen (styles.css, "B2B PAGE"). The pane keeps its old
+       id and .ws-pane.active: _b2bRealtimeRefresh and the 60s poll gate on
+       #ops-pane-b2b.active, and keeping it means neither had to learn about a
+       second page. operations.html#b2b links still work -- initOperations
+       forwards them here. -->
+  <div class="b2b-wrap">
+    <section class="ws-pane active" id="ops-pane-b2b">
+      <div class="card cb-panel ws-panel b2b-panel">
+          <div class="cb-head">
+              <div class="cb-head-main">
+                  <span class="cb-head-ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
+                  <div class="cb-head-titles">
+                      <span class="cb-head-title">Business-to-Business</span>
+                      <span id="b2bSubtitle" class="cb-head-sub">Track bulk business deals from pickup through listing.</span>
+                  </div>
+              </div>
+              <div class="cb-head-controls">
+                  <div class="mb-view-toggle b2b-view-toggle" role="tablist" aria-label="B2B views">
+                      <button id="b2bViewPipelineBtn" class="mb-view-btn active" role="tab" aria-selected="false" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
+                      <button id="b2bViewFinishedBtn" class="mb-view-btn" role="tab" aria-selected="false" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
+                      <!-- Evaluations: pricing a client's list before we collect it.
+                           Same audience as raising a deal, since the enquiry lands on
+                           whoever picks up the phone -- _b2bCanPreval() is the real gate. -->
+                      <button id="b2bViewPrevalsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('prevals')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Evaluations<span class="b2b-pip" id="b2bPrevalPip" style="display:none;">0</span></button>
+                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-multistore-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
+                  </div>
+                  <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
+                  <!-- Deals a store has asked to delete. CORP-only; the red-dot
+                       badge lights when any are pending (wired in b2bRender). -->
+                  <button id="b2bDelReqBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd" onclick="b2bDeleteRequests()" title="Deals a store has asked to delete — approve or deny">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                      Delete Requests<span class="crm-badge b2b-delreq-badge" id="b2bDelReqBadge" style="display:none;">0</span>
+                  </button>
+                  <button id="crmGearBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-ceo" onclick="crmOpen()" title="CRM notification settings">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                      CRM Settings<span class="crm-badge" id="crmGearBadge" style="display:none;">0</span>
+                  </button>
+                  <!-- Store managers raise their own deals; theirs holds at their
+                       own store from the moment it is created, and only corp can
+                       move it elsewhere. _b2bCanCreate() is the real gate — this
+                       class list only decides what is drawn. -->
+                  <!-- The bench capture tool, as a download. Pairs with the live
+                       intake tray on the pricing sheet: this is what you put on
+                       the USB stick.
+
+                       `role-none` is deliberate and is the whole access model
+                       here. _passesRoleClasses() treats an element with NO role
+                       classes as visible to everyone, so a bare data-feature
+                       would have shipped this to the entire company. No user
+                       holds a role of "none", so nobody passes the role gate and
+                       an explicit per-user override in Feature Access is the only
+                       way in. Currently: Nick Hettinger and Haydn Davis, while
+                       the feature is being tested. -->
+                  <!-- Opens the tool panel rather than downloading directly:
+                       the same people who may download it may also upload a new
+                       version and roll one back, so it needs somewhere to put
+                       the history. Still one feature key, and still `role-none`
+                       so the role gate denies everyone and a per-user override
+                       is the only way in. -->
+                  <button id="b2bCaptureDlBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-none"
+                     data-feature="b2b-capture-download"
+                     onclick="b2bCaptureTool()"
+                     title="The bench capture tool — download the current version, upload a new one, or roll back to an earlier one">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      SPEEKS Capture
+                  </button>
+                  <!-- FEEDBACK, and deliberately visible to everyone: no role
+                       classes at all, which _passesRoleClasses() treats as
+                       "show to all". The people who hit the rough edges in B2B
+                       are the ones using it all day, and every round of changes
+                       so far has come through Ethan forwarding an email. -->
+                  <button id="b2bFeedbackBtn" class="b2b-btn b2b-btn-head b2b-btn-feedback"
+                     onclick="b2bFeedbackOpen()"
+                     title="Tell Nick what is wrong, missing or annoying about B2B — goes straight to him">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      Feedback
+                  </button>
+                  <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bOpenCreate()">＋ New Deal</button>
+              </div>
+          </div>
+          <div class="cb-scroll ws-scroll" id="b2bBody">
+              <div class="status-message">Loading B2B Deals…</div>
+          </div>
+      </div>
+    </section>
+    <!-- ===== THE DEAL PAGE (title / body / footer all driven by b2bOpenDeal) =====
+         Was a popup over the hub. Since 2026-10 it is a page: it sits inside
+         .b2b-wrap and takes the hub's place while a deal is open (styles.css,
+         "B2B PAGE"). It keeps .modal-menu on purpose -- every B2B action that
+         finishes with closeAllModals() expects that to close the deal, and that
+         is still exactly what happens; it just reveals the hub instead of
+         uncovering it. -->
+    <div class="modal-menu manage-menu b2b-deal-modal b2b-dealpage" id="b2bDealModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <!-- Back to wherever the deal was opened from; _b2bShowDeal names it. -->
+            <button class="b2b-dealpage-back" id="b2bDealBack" onclick="b2bCloseDeal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                <span id="b2bDealBackLbl">Pipeline</span>
+            </button>
+            <span class="tool-head-ico" id="b2bDealIco"></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow" id="b2bDealEyebrow">B2B</span>
+                <span class="tool-head-title" id="b2bDealTitle">Deal</span>
+                <span class="tool-head-sub" id="b2bDealSub"></span>
+            </div>
+            <!-- Workspace screens only: the stage chip beside the client name. -->
+            <span class="b2b-ws-chip" id="b2bDealChip"></span>
+        </div>
+        <div class="tool-head-actions">
+            <!-- Workspace screens only: Request Deletion / Decline live here, off
+                 the main bar. _b2bShowDeal fills #b2bDealMenu from cfg. -->
+            <button class="b2b-ws-more" id="b2bDealMoreBtn" style="display:none;" onclick="b2bWsMenuToggle(event)" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <div class="b2b-ws-menu" id="b2bDealMenu" role="menu" hidden></div>
+            <!-- Request (or, once pending, view) deletion of this deal. Shown on
+                 every stage -- _b2bShowDeal wires it from cfg.delDeal. -->
+            <button class="b2b-btn b2b-btn-secondary b2b-mini b2b-deal-del" id="b2bDealDeleteBtn" style="display:none;" onclick="b2bDealDeleteClick()" title="Request this deal be deleted">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                <span id="b2bDealDeleteLbl">Request deletion</span>
+            </button>
+            <button class="b2b-btn b2b-btn-secondary b2b-mini b2b-deal-print" id="b2bDealPrintBtn" style="display:none;" onclick="b2bPrintPickup()" title="Print the SKU label for this pickup">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                SKU Label
+            </button>
+            <button class="modal-close-btn b2b-dealpage-x" onclick="b2bCloseDeal()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+    </div>
+    <!-- Workspace screens only: where the deal is among the eight stages. -->
+    <div class="b2b-ws-rail" id="b2bDealRail" hidden></div>
+    <div class="manage-content" id="b2bDealBody"></div>
+    <div class="manage-footer flex-end" id="b2bDealFooter"></div>
+</div>
+  </div>
+
+<!-- ===== CRM SETTINGS MODAL (CEO only) — inside .main-content for the SPA router ===== -->
+<div class="modal-menu manage-menu crm-modal" id="crmModal">
+    <div class="modal-header">
+        <h3>⚙️ CRM Settings</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="crm-tabs" id="crmTabs">
+        <button class="crm-tab active" data-tab="clients" onclick="crmTab('clients')">Client List</button>
+        <button class="crm-tab" data-tab="new" onclick="crmTab('new')">New Clients <span class="crm-badge" id="crmTabBadge" style="display:none;">0</span></button>
+        <button class="crm-tab" data-tab="settings" onclick="crmTab('settings')">Notifications</button>
+    </div>
+    <div class="manage-content" id="crmBody"><div class="status-message">Loading…</div></div>
+</div>
+
+<!-- ===== SPEEKS CAPTURE TOOL MODAL =====
+     Download the live version, upload a new one, roll back to an older one.
+     Its own modal rather than a section of the deal screen: the tool is not
+     attached to any deal, and borrowing the deal shell would leave realtime
+     believing a deal was open. Body is rendered by b2bCaptureRender(). -->
+<div class="modal-menu manage-menu" id="b2bCaptureModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">SPEEKS Capture</span>
+                <span class="tool-head-sub">The bench tool. Nothing is ever overwritten — every upload is kept and any version can be made live again.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bCaptureBody"><div class="status-message">Loading…</div></div>
+    <div class="manage-footer flex-end" id="b2bCaptureFooter"></div>
+</div>
+
+<!-- ===== B2B NEW DEAL MODAL (inside .main-content so the SPA router carries it) ===== -->
+<div class="modal-menu manage-menu" id="b2bCreateModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">New Deal</span>
+                <span class="tool-head-sub">Pick the business, then sign off the pickup.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bCreateBody"></div>
+    <div class="manage-footer flex-end" id="b2bCreateFooter"></div>
+</div>
+
+<!-- ===== B2B MOVE LINES BETWEEN LISTING STORES ===== -->
+<!-- Corp only. Separate from the whole-deal move (b2bTransferModal): this one
+     names individual lines, for when one was assigned to the wrong store.
+     Lost once already, in the 2026-09-26 merge of pre-release into
+     feat/b2b-split-listing-locations: the Move Lines button kept rendering and
+     toggleModal() found nothing to open, so it failed silently. -->
+<div class="modal-menu manage-menu" id="b2bMoveLinesModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">Move Lines</span>
+                <span class="tool-head-sub">Send individual lines to a different listing store.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bMoveLinesBody"></div>
+    <div class="manage-footer flex-end" id="b2bMoveLinesFooter"></div>
+</div>
+
+<!-- ===== B2B APPROVAL EVIDENCE MODAL =====
+     Its own modal rather than a section of the deal screen: attaching the
+     client's email is a deliberate, one-at-a-time act, and the deal screen is
+     already the densest thing in the app. Body and footer are painted by
+     _b2bPaintProofModal(). -->
+<!-- ===== B2B FEEDBACK ===== -->
+<!-- Subject + free text, nothing else. Sends through b2b-outreach, which owns
+     the mail path, straight to Nick. No category on purpose: picking one is a
+     decision that stops some people writing anything at all. -->
+<div class="modal-menu manage-menu" id="b2bFeedbackModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">Send Feedback</span>
+                <span class="tool-head-sub">Goes straight to Nick. Say whatever is wrong, missing or annoying.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+        <label class="form-label-caps" for="b2bFbSubject">Subject</label>
+        <input id="b2bFbSubject" class="form-input-lg" maxlength="200"
+            placeholder="e.g. The serials box is fiddly on a phone">
+        <label class="form-label-caps" for="b2bFbBody" style="margin-top:12px;">What's on your mind</label>
+        <textarea id="b2bFbBody" class="form-input-lg" rows="9" maxlength="20000"
+            placeholder="What happened, what you expected instead, and which deal if it matters. Rough notes are fine — it is more useful sent than polished."></textarea>
+        <p class="b2b-hint" id="b2bFbWho"></p>
+    </div>
+    <div class="manage-footer flex-end">
+        <span class="b2b-msg" id="b2bFbMsg"></span>
+        <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
+        <button class="b2b-btn b2b-btn-primary" onclick="b2bFeedbackSend(this)">Send it</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="b2bProofModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">Attach The Client's Approval</span>
+                <span class="tool-head-sub">What answers them later if they say they never agreed.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bProofBody"></div>
+    <div class="manage-footer flex-end" id="b2bProofFooter"></div>
+</div>
+
+
+<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
+    <div class="gi-panel-header">
+        <div class="gi-panel-header-row">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 18px;">🎯</span>
+                <h3 style="margin: 0; font-size: 15px; font-weight: 800; color: var(--slate-charcoal);">Goals &amp; Initiatives</h3>
+            </div>
+            <button class="modal-close-btn" onclick="toggleGoalsPanel()" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+    </div>
+    <div class="gi-panel-body">
+        <div class="gi-section">
+            <div class="gi-section-header">
+                <span class="gi-section-title">Initiatives &amp; Upcoming Projects</span>
+                <div class="gi-section-actions">
+                    <button class="mini-action-btn dynamic-module-block role-district-manager" onclick="openEditCompanyProjectsModal()">Edit Company ✏️</button>
+                    <button class="mini-action-btn dynamic-module-block role-district-manager" onclick="openEditStoreInitiativesModal()">Edit Store ✏️</button>
+                </div>
+            </div>
+            <div id="giInitiativesList" class="gi-items-list">
+                <div class="status-message">Loading...</div>
+            </div>
+        </div>
+        <div class="gi-section">
+            <div class="gi-section-header">
+                <div style="display:flex;align-items:center;gap:7px;min-width:0;">
+                    <span class="gi-section-title" id="giGoalsLabel">Monthly Goals</span>
+                    <div class="gi-prev-wrapper">
+                        <button class="gi-prev-toggle" id="giPrevToggleBtn" onclick="togglePrevMonths(event)"><svg class="gi-cal-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><svg class="gi-prev-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="10" height="10"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                        <div id="giPrevMonthsList" class="gi-months-dropdown"></div>
+                    </div>
+                </div>
+                <button id="giEditGoalsBtn" class="mini-action-btn dynamic-module-block role-manager role-owner-manager" onclick="openEditGoalsModal()">Edit Goals ✏️</button>
+            </div>
+            <div id="giGoalsList" class="gi-items-list">
+                <div class="status-message">Loading...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="checklistSidePanel" data-feature="widget-checklist-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager">
+
+    <div class="cl-panel-header">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0;">Manager Checklist</h3>
+            <button onclick="toggleChecklistPanel(event)" class="modal-close-btn cl-close" style="background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+
+        <div class="notif-tabs">
+            <button id="cl-tab-daily" class="tab-btn active" onclick="switchChecklistTab('daily')">Daily</button>
+            <button id="cl-tab-weekly" class="tab-btn" onclick="switchChecklistTab('weekly')">Weekly</button>
+            <button id="cl-tab-monthly" class="tab-btn" onclick="switchChecklistTab('monthly')">Monthly</button>
+            <button id="cl-tab-quarterly" class="tab-btn" style="display: none;" onclick="switchChecklistTab('quarterly')">Quarterly</button>
+        </div>
+    </div>
+
+    <div class="cl-panel-body">
+        <div id="checklistContent" class="cl-scroll-area">
+            <div class="status-message">Syncing Data...</div>
+        </div>
+
+        <div class="cl-footer-row">
+            <button class="cl-clear-btn" onclick="clearChecklistTab()" title="Uncheck all items on this tab">Reset</button>
+        </div>
+
+        <div class="cl-input-area">
+            <input type="text" id="newChecklistTask" placeholder="Add a personal task...">
+            <button class="btn-primary cl-add-btn" onclick="addChecklistItem()">Add</button>
+        </div>
+    </div>
+</div>
+
+<div id="auditSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
+    <div class="cl-panel-header">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0;">Cleaning Checklist</h3>
+            <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="notif-tabs">
+            <button id="audit-tab-daily" class="tab-btn active" onclick="switchAuditTab('daily')">Daily</button>
+            <button id="audit-tab-weekly" class="tab-btn" onclick="switchAuditTab('weekly')">Weekly</button>
+        </div>
+        <div id="audit-week-label" style="font-size: 12px; color: #64748b; font-weight: 600; margin-top: 8px;"></div>
+    </div>
+    <div class="cl-panel-body">
+        <div id="auditContent" class="cl-scroll-area">
+            <div class="status-message">Syncing Data...</div>
+        </div>
+    </div>
+</div>
+
+</main>
+
+<!-- ===== DM DISTRICT LISTING GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmListingModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Listing Goals</span>
+          <span class="tool-head-sub" id="dmListingSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmListingBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT CLEANING CHECKLIST =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmCleaningModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21v-4a4 4 0 0 1 4-4h5"/><path d="M14 4l6 6"/><path d="M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Cleaning Checklist</span>
+          <span class="tool-head-sub" id="dmCleaningSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <div class="notif-tabs" style="margin:0;">
+          <button id="dmClTabDaily" class="tab-btn active" onclick="switchDmCleaningTab('daily')">Daily</button>
+          <button id="dmClTabWeekly" class="tab-btn" onclick="switchDmCleaningTab('weekly')">Weekly</button>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmCleaningBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Read-only &mdash; stores tick their own items. Refreshes every minute.</span>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT MONTHLY TEAM GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmGoalsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Monthly Team Goals</span>
+          <span class="tool-head-sub" id="dmGoalsSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmGoalsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+
+</div>
+
+<div class="modal-menu manage-menu" id="preferredModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title" id="preferredHeadTitle">Preferred Purchases</span>
+          <span class="tool-head-sub" id="preferredHeadSub">Suggest a product for the company list.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" id="preferredTabs" style="display: inline-flex;">
+            <button id="pl-tab-new" class="tab-btn active" data-pltab="new" onclick="plSwitchTab('new')">New Request</button>
+            <button id="pl-tab-mine" class="tab-btn" data-pltab="mine" onclick="plSwitchTab('mine')">My Requests</button>
+            <button id="pl-tab-pending" class="tab-btn" data-pltab="pending" onclick="plSwitchTab('pending')" style="display:none;">Pending</button>
+            <button id="pl-tab-decided" class="tab-btn" data-pltab="decided" onclick="plSwitchTab('decided')" style="display:none;">Decided</button>
+        </div>
+    </div>
+
+    <div class="manage-content" id="preferredBody"></div>
+
+    <div class="manage-footer" id="preferredFooter" style="display:flex; gap:10px; justify-content:flex-end; padding:14px 18px;">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" id="plSubmitBtn" onclick="plSubmitRequest()">Send Request &#8594;</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="boxOrderModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Box Order</span>
+          <span class="tool-head-sub">Request boxes &amp; supplies for your store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <!-- TABS — DM/CEO only (managers just see the order flow) -->
+    <div id="boxOrderTabs" style="display:none; gap:8px; padding:2px 0 14px;">
+        <button id="boxOrderTabOrder" class="box-order-tab active" onclick="boxOrderSwitchTab('order')">Order</button>
+        <button id="boxOrderTabManage" class="box-order-tab" onclick="boxOrderSwitchTab('manage')">Manage Items</button>
+    </div>
+
+    <!-- PAGE 1: Item Selection -->
+    <div class="manage-content" id="boxOrderPage1">
+        <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+            <input type="text" id="boxOrderSearch" class="kb-search-input doc-search-input" placeholder="Search boxes & supplies..." oninput="filterBoxOrderItems()">
+        </div>
+        <div id="boxOrderItemsContainer"></div>
+        <div class="box-order-disclaimer">
+            If a box or item you need is not on this page, please reach out to your District Manager for approval.
+        </div>
+        <!-- Live "receipt" of what's selected — sticky to the bottom of the list -->
+        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
+    </div>
+
+    <!-- PAGE 2: Email Preview + Notes -->
+    <div class="manage-content" id="boxOrderPage2" style="display:none;">
+        <!-- CORP store selector — shown for CEO / DM only -->
+        <div id="boxOrderStoreSelector" style="display:none; margin-bottom:14px;">
+            <label class="form-label-caps">Order For <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <select id="boxOrderStoreSelect" class="form-input-lg" onchange="boxOrderUpdatePreview()">
+                <option value="">Select a store…</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <div class="box-order-preview-label">Email Preview</div>
+        <div class="box-order-email-preview" id="boxOrderEmailPreview"></div>
+        <label class="form-label-caps" style="margin-top:16px;">
+            Notes <span style="font-weight:400;color:#a0aab2;">(optional)</span>
+        </label>
+        <textarea id="boxOrderNotes" class="form-input-lg" rows="2"
+            placeholder="e.g. Please deliver by Friday"
+            oninput="boxOrderUpdatePreview()"></textarea>
+    </div>
+
+    <!-- MANAGE ITEMS (DM/CEO) — add/remove catalog items -->
+    <div class="manage-content" id="boxOrderManagePage" style="display:none;">
+        <div class="box-order-preview-label">Add an item</div>
+        <label class="form-label-caps">Title — what managers see <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminName" class="form-input-lg" placeholder="e.g. Packing Paper">
+
+        <label class="form-label-caps" style="margin-top:12px;">Section <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminCategory" class="form-input-lg">
+            <option value="Shipping Supplies">Shipping Supplies</option>
+            <option value="Common Box">Common Boxes</option>
+            <option value="Rare Box">Rare Boxes</option>
+            <option value="Very Rare Box">Very Rare Boxes</option>
+            <option value="White Storage Box">White Storage Boxes</option>
+            <option value="Bubble Mailer">Bubble Mailers</option>
+        </select>
+
+        <label class="form-label-caps" style="margin-top:12px;">Market <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminMarket" class="form-input-lg">
+            <option value="">All stores</option>
+            <option value="KC">KC — Overland Park, Lee's Summit, Westport</option>
+            <option value="STL">STL — Maplewood, Ballwin</option>
+        </select>
+
+        <div style="display:flex; gap:12px; margin-top:12px;">
+            <div style="flex:1;">
+                <label class="form-label-caps">Units per bundle <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <input type="number" id="boxAdminBundle" class="form-input-lg" min="1" step="1" value="1">
+            </div>
+            <div style="flex:1;">
+                <label class="form-label-caps">Unit word <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <select id="boxAdminUnit" class="form-input-lg">
+                    <option>Bundle</option>
+                    <option>Roll</option>
+                    <option>Box</option>
+                    <option>Bag</option>
+                    <option>Case</option>
+                    <option>Pack</option>
+                </select>
+            </div>
+        </div>
+
+        <label class="form-label-caps" style="margin-top:12px;">Email name — the full spec the vendor needs <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminOrderName" class="form-input-lg" placeholder="e.g. 24&quot; 40# 900' Kraft Paper">
+
+        <button class="btn-primary" style="margin-top:14px; width:100%;" onclick="boxAdminAddItem(this)">+ Add item</button>
+
+        <div class="box-order-preview-label" style="margin-top:24px;">Current items</div>
+        <div id="boxAdminItemsList"></div>
+    </div>
+
+    <!-- FOOTER PAGE 1 -->
+    <div class="manage-footer box-order-footer" id="boxOrderFooter1">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" onclick="boxOrderNextPage()">Next<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+    </div>
+
+    <!-- FOOTER PAGE 2 -->
+    <div class="manage-footer box-order-footer" id="boxOrderFooter2" style="display:none;">
+        <span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the order pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click Copy and paste the order into any email."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+        <button class="btn-secondary" onclick="boxOrderBackPage()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>Back</button>
+        <button class="btn-secondary" onclick="copyBoxOrder(this)">Copy</button>
+        <button class="btn-primary" onclick="sendBoxOrder()">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+    </div>
+
+    <!-- FOOTER: MANAGE ITEMS -->
+    <div class="manage-footer box-order-footer" id="boxOrderManageFooter" style="display:none;">
+        <button class="btn-secondary" onclick="closeAllModals()">Done</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="recycleInvModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Recycle Inventory</span>
+          <span class="tool-head-sub">Log recycled units for pickup and review.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="recycle-tab-new" class="tab-btn active" onclick="switchRecycleTab('new')">New Request</button>
+            <button id="recycle-tab-view" class="tab-btn" onclick="switchRecycleTab('view')">My Requests</button>
+        </div>
+    </div>
+
+    <div class="manage-content">
+        <div id="recycle-panel-new">
+            <div id="recycle-store-row" style="margin-bottom:14px;">
+                <label class="form-label-caps">Store</label>
+                <select id="recycleInvStoreSelect" class="form-input-lg"></select>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">
+                <div>
+                    <label class="form-label-caps">SKU <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvSku" class="form-input-lg" placeholder="e.g. ABC-12345">
+                </div>
+                <div>
+                    <label class="form-label-caps">Quantity <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvQty" class="form-input-lg" inputmode="numeric" value="1" oninput="recycleInvSanitizeInt(this)">
+                </div>
+                <div>
+                    <label class="form-label-caps">Cost (per unit) <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvCost" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="recycleInvSanitizeMoney(this)">
+                </div>
+                <div>
+                    <label class="form-label-caps">Value</label>
+                    <input type="text" id="recycleInvValue" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="recycleInvSanitizeMoney(this)">
+                </div>
+            </div>
+            <label class="form-label-caps">Item Description <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
+                placeholder="What is the item, and why is it being recycled out of inventory?"></textarea>
+            <div class="box-order-disclaimer">
+                This request is logged under your store and reconciled by SPEEKS at the end of the month.
+                Make sure the SKU, cost, and quantity match what is actually recycled out of inventory.
+            </div>
+        </div>
+
+        <div id="recycle-panel-view" style="display:none;">
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="flex:1; min-width:150px;">
+                    <label class="form-label-caps">Month</label>
+                    <select id="recycle-month-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
+                </div>
+                <div id="recycle-view-filter-row" style="display:none; flex:1; min-width:150px;">
+                    <label class="form-label-caps">Store</label>
+                    <select id="recycle-view-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
+                </div>
+            </div>
+            <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
+                <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+                <input type="text" id="recycleSearch" class="kb-search-input doc-search-input" placeholder="Search SKU, item, or who filed it…" autocomplete="off" oninput="filterRecycleRequests(this.value)" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterRecycleRequests(&quot;&quot;);}">
+            </div>
+            <div id="recycle-table-wrap"></div>
+        </div>
+    </div>
+
+    <div class="manage-footer flex-end">
+        <button onclick="submitRecycleRequest()" class="btn-primary" id="submitRecycleBtn">Submit Request</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="varianceInputModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Submit Variance Report</span>
+          <span class="tool-head-sub">Upload the weekly variance for a store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+        <label class="form-label-caps">Store</label>
+        <select id="vi-store" class="form-input-lg" style="margin-bottom: 15px;" onchange="loadVarianceStoreEmployees()">
+            <option value="OVL">OVL</option>
+            <option value="LEE">LEE</option>
+            <option value="WSP">WSP</option>
+            <option value="MPL">MPL</option>
+            <option value="BAL">BAL</option>
+        </select>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+            <div>
+                <label class="form-label-caps">Date From</label>
+                <input type="date" id="vi-date-from" class="form-input-lg" style="margin: 0;">
+            </div>
+            <div>
+                <label class="form-label-caps">Date To</label>
+                <input type="date" id="vi-date-to" class="form-input-lg" style="margin: 0;">
+            </div>
+        </div>
+
+        <label class="form-label-caps">Store Overall Variance %</label>
+        <input type="number" id="vi-store-pct" class="form-input-lg" step="0.01" placeholder="e.g. -2.45" style="margin-bottom: 15px;">
+
+        <label class="form-label-caps">Employees</label>
+        <div id="vi-employees" style="display: flex; flex-direction: column; gap: 8px;"></div>
+    </div>
+    <div class="manage-footer flex-end">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button id="vi-submit-btn" class="btn-primary" onclick="submitVarianceReport()">Submit Report</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="patchNotesManageModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Patch Notes</span>
+          <span class="tool-head-sub">Publish product patch notes and updates.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" style="display:inline-flex;">
+            <button id="pnmTab-add" class="tab-btn active" onclick="switchPNManageTab('add')">Add New</button>
+            <button id="pnmTab-edit" class="tab-btn" onclick="switchPNManageTab('edit')">Edit Previous</button>
+        </div>
+    </div>
+
+    <!-- ADD NEW TAB -->
+    <div class="manage-content" id="pnManageAdd">
+        <div class="pn-release-info">
+            <div class="pn-form-row" style="margin-bottom:0;">
+                <div class="pn-form-group" style="margin-bottom:0;">
+                    <label class="pn-label">Version Title</label>
+                    <input type="text" id="pnEntryTitle" class="form-input-lg" placeholder="e.g. 1.3.0">
+                </div>
+                <div class="pn-form-group" style="margin-bottom:0;">
+                    <label class="pn-label">Release Date</label>
+                    <input type="date" id="pnEntryDate" class="form-input-lg">
+                </div>
+            </div>
+        </div>
+        <div id="pnItemsList"></div>
+    </div>
+
+    <!-- EDIT PREVIOUS TAB -->
+    <div class="manage-content" id="pnManageEdit" style="display:none;">
+        <div id="pnEditList"><div class="pn-loading">Loading patch notes...</div></div>
+    </div>
+
+    <div class="manage-footer pn-actions-bar" id="pnActionsBar">
+        <button class="pn-add-item-btn" onclick="addPatchItem()">+ Add Item</button>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <button class="btn-primary" onclick="savePatchEntry()" id="pnSaveEntryBtn">SAVE ALL</button>
+            <span class="pn-save-status" id="pnEntrySaveStatus"></span>
+        </div>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageAwardsDropdown">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Monthly Awards</span>
+          <span class="tool-head-sub">Publish the monthly team award winners.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div class="manage-content" id="awardsTabEdit">
+        <div class="awards-form-month-row">
+            <div style="flex:1;">
+                <label class="form-label-caps">Month</label>
+                <input type="text" id="awardsMonthInput" class="form-input-lg" placeholder="e.g. May 2026">
+            </div>
+            <div style="flex:2;">
+                <label class="form-label-caps">Award Video URL (Google Drive share link)</label>
+                <input type="text" id="awardsVideoInput" class="form-input-lg" placeholder="https://drive.google.com/file/d/.../view?usp=sharing">
+            </div>
+        </div>
+
+        <div class="awards-form-grid">
+            <div class="awards-form-award-block">
+                <div class="awards-form-award-title">The Beyond The Benchmark Award</div>
+                <label class="form-label-caps">Winning Store</label>
+                <select id="award1Store" class="form-input-lg">
+                    <option value="">— Select Store —</option>
+                    <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option><option value="MPL">MPL</option><option value="BAL">BAL</option>
+                </select>
+            </div>
+            <div class="awards-form-award-block">
+                <div class="awards-form-award-title">The Scroll Stopper Award</div>
+                <label class="form-label-caps">Winning Store</label>
+                <select id="award2Store" class="form-input-lg">
+                    <option value="">— Select Store —</option>
+                    <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option><option value="MPL">MPL</option><option value="BAL">BAL</option>
+                </select>
+            </div>
+            <div class="awards-form-award-block">
+                <div class="awards-form-award-title">The Brand Beacon Award</div>
+                <label class="form-label-caps">Winning Store</label>
+                <select id="award3Store" class="form-input-lg">
+                    <option value="">— Select Store —</option>
+                    <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option><option value="MPL">MPL</option><option value="BAL">BAL</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="manage-content" id="awardsTabHistory" style="display:none;">
+        <div id="awardsHistoryList" class="awards-history-list">
+            <div class="status-message">Loading history...</div>
+        </div>
+    </div>
+
+    <div class="manage-footer" id="awardsEditFooter">
+        <span id="awardsSaveStatus" class="pn-save-status"></span>
+        <div style="display:flex;gap:10px;align-items:center;">
+            <button class="btn-ghost" onclick="clearAwardsForm()">↺ New Month</button>
+            <button class="btn-primary" id="saveAwardsBtn" onclick="saveAwards()">Save Awards</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
+<!-- ===== EMAIL RECIPIENTS MODAL (DM/CEO) ===== -->
+<div class="modal-menu manage-menu" id="expensesModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; Corporate</span>
+          <span class="tool-head-title">Expense Report</span>
+          <span class="tool-head-sub" id="expSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+      <div id="expBody"><div class="status-message">Loading expenses&hellip;</div></div>
+    </div>
+</div>
+
+<!-- The month's profit goal per store (NET profit from October 2026). Entered here, not in the spreadsheet: the
+     goal is a decision, and the rollover writes it into the new tabs so the
+     workbook's own formulas keep working. District Manager only,
+     unless Feature Access hands 'tool-store-goals' to someone else. -->
+<!-- ===== DAILY STORE MESSAGES (draft review) ===== -->
+<div class="modal-menu manage-menu dbr-menu" id="dailyBriefModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Daily Store Messages</span>
+          <span class="tool-head-sub">Built from last night&#39;s Day End Reports. Nothing is drafted until you pick, and nothing reaches a store until you approve it.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="dailyBriefBody"><div class="status-message">Loading&hellip;</div></div>
+</div>
+
+<div class="modal-menu manage-menu" id="gpGoalsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Month Setup</span>
+          <span class="tool-head-sub">Each store's net profit goal, and the days they are open to buy.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="gpGoalsBody"></div>
+</div>
+
+<div class="modal-menu manage-menu" id="emailRecipientsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Email Recipients</span>
+          <span class="tool-head-sub">Manage who receives each automated report.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="emailRecipientsBody"></div>
+</div>
+
+<div class="modal-menu manage-menu" id="featureAccessModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Feature Access</span>
+          <span class="tool-head-sub">Show or hide features by role and user.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="fa-tabs-wrap">
+        <div class="notif-tabs fa-tabs">
+            <button id="fa-tab-tools" class="tab-btn active" onclick="switchFaTab('tools')">SPEEKS Tools</button>
+            <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
+            <button id="fa-tab-widgets" class="tab-btn" onclick="switchFaTab('widgets')">Widgets</button>
+            <button id="fa-tab-user" class="tab-btn" onclick="switchFaTab('user')">Per-User</button>
+            <button id="fa-tab-coverage" class="tab-btn" onclick="switchFaTab('coverage')">Delegation</button>
+        </div>
+    </div>
+    <div class="manage-content">
+        <div id="fa-body"><div class="status-message">Loading…</div></div>
+    </div>
+</div>
+
+<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
+  <div class="tools-panel-header">
+    <div class="tools-panel-title">
+      <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
+      SPEEKS Tools
+    </div>
+    <button class="tools-panel-close" onclick="_closeToolsPanel()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  </div>
+  <div class="tools-search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="text" id="toolsSearchInput" placeholder="Search tools…" autocomplete="off" oninput="_toolsSearch(this.value)" onkeydown="if(event.key==='Escape'){this.value='';_toolsSearch('');}">
+  </div>
+  <div class="tools-panel-body">
+
+    <div class="tools-group dynamic-module-block role-manager role-owner-manager role-district-manager role-ceo">
+      <div class="tools-group-label">Claims &amp; Refunds</div>
+      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" data-mobile="hide" data-feature="tool-claims-store" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="9.17" y1="14.83" x2="4.93" y2="19.07"/></span>Claims &amp; Disputes</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></span>Claims &amp; Disputes (DM)</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-mocd role-owner-manager">
+      <div class="tools-group-label">Content</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-tablet="show" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></span>Patch Notes</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo">
+      <div class="tools-group-label">Store Ops</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-tablet="show" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></span>Submit Scores</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Manager Checklist</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></span>Submit Variance Report</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-tablet="show" data-feature="tool-store-comment-drafts" onclick="_closeToolsPanel(); openDailyBriefReview();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>Daily Store Messages</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
+      <div class="tools-group-label">Orders</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></span>Box Order</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-assistant-manager" data-mobile="hide" data-tablet="show" data-feature="tool-preferred-request" onclick="_closeToolsPanel(); togglePreferredPurchases();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
+      <a class="tools-item dynamic-module-flex role-owner-manager" data-mobile="hide" data-tablet="show" data-feature="tool-preferred-approve" onclick="_closeToolsPanel(); openPreferredOwner();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/><polyline points="9 15 11 17 15 13"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager role-multistore-manager">
+      <div class="tools-group-label">Admin</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-mobile="hide" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></span>User Permissions</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></span>Feature Access</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="tool-listing-health" onclick="_closeToolsPanel(); openListingHealthTool();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Listing Health</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></span>Email Recipients</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-store-goals" onclick="_closeToolsPanel(); openGpGoals();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg></span>Month Setup</a>
+      <!-- Two rows for ONE tool, sharing the tool-expenses stem the way the claims
+           and preferred-purchase pairs do. Both open the same modal; the edge fn
+           decides the powers from the caller's PIN, so nothing here grants anything.
+           The split exists for FEATURE ACCESS: one key carrying both role-district-manager
+           and role-multistore-manager made the MGR column a lie — it read as "on for
+           managers" while the role class silently admitted only the MSM, and switching
+           it on for an ordinary manager did nothing you could predict. -->
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-expenses" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
+      <a class="tools-item dynamic-module-flex role-multistore-manager" data-feature="tool-expenses-mgr" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></span>Performance Metrics</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></span>Company Records</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></span>Manage Policies</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-monthly-awards" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></span>Monthly Awards</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager">
+      <div class="tools-group-label">System</div>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-system-hotkeys" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></span>System Hotkeys</a>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ===== SETTINGS =====
+     A settings SHELL, not a single screen: pane 1 lists the sections, pane 2 is
+     whichever section was opened. Notifications is the only one today and the
+     index is deliberately kept anyway, because that is the thing that lets the
+     next setting be added without redesigning anything.
+
+     ONE modal with two panes rather than two stacked modals, on purpose. A
+     second modal would have to cooperate with closeAllModals(), the
+     lockAndBlurScreen() overlay and the Escape-peeling order — all of which this
+     codebase has already been bitten by. Two panes inside one modal give the same
+     drill-down feel with none of that: the header morphs, a back chevron appears,
+     and the X still means "leave settings" from either depth.
+
+     Everything below the header is rendered by JS (renderNotifySettings) from
+     what the notify function returns, so the section list and the category list
+     are not duplicated into five HTML files. -->
+<div class="modal-menu settings-menu" id="settingsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <button class="ann-docs-back-btn set-back" id="settingsBackBtn" onclick="settingsBack()" title="Back to Settings" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>Back</button>
+        <span class="tool-head-ico" id="settingsIco"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow" id="settingsEyebrow">Your Account</span>
+          <span class="tool-head-title" id="settingsTitle">Settings</span>
+          <span class="tool-head-sub" id="settingsSub">Your personal preferences for SPEEKSNET.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeSettings()" title="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <!-- pane 1: the index -->
+    <div class="manage-content set-pane" id="settingsIndexPane">
+      <div class="set-list">
+        <button class="set-row" onclick="settingsGo('notifications')">
+          <span class="set-row-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
+          <span class="set-row-copy">
+            <b>Notifications</b>
+            <i>Email alerts for announcements, deadlines, and anything waiting on you.</i>
+          </span>
+          <span class="set-row-state" id="setStateNotifications"></span>
+          <svg class="set-row-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="set-foot-note">More settings to come over time.</div>
+    </div>
+
+    <!-- pane 2: notifications -->
+    <div class="manage-content set-pane" id="settingsNotifyPane" hidden>
+      <div id="notifySettingsBody"><div class="ns-loading">Loading your settings…</div></div>
+    </div>
+
+    <!-- Shown only on a section that has something to save. The index has not. -->
+    <div class="manage-footer flex-end" id="settingsFooter" hidden>
+        <span class="ns-save-note" id="notifySaveNote"></span>
+        <button id="notifySaveBtn" class="btn-primary" onclick="saveNotifySettings()">Save Changes</button>
+    </div>
+</div>
+
+</body>
+</html>

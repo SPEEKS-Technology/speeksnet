@@ -4226,6 +4226,7 @@ async function checkPIN() {
             // guaranteed to take this path.
             if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
             if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+            if (typeof initB2bPage === 'function') initB2bPage();
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
@@ -7651,7 +7652,15 @@ function _wsFitPanels() {
         if (!panel.offsetParent) return;                    // hidden pane
         const top = panel.getBoundingClientRect().top + window.scrollY;
         const docTop = top - window.scrollY;                // viewport-relative
-        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + GAP}px`);
+        // The B2B page runs edge to edge (2026-10), so its panel goes to the
+        // bottom of the window with no gap under it.
+        const gap = panel.closest('.b2b-wrap') ? 0 : GAP;
+        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + gap}px`);
+    });
+    // The deal page takes the hub's place, so it needs the same top to size to
+    // -- measured off the wrapper, which is there whether or not a deal is open.
+    document.querySelectorAll('.b2b-wrap').forEach(w => {
+        w.style.setProperty('--b2b-top', `${Math.max(0, Math.round(w.getBoundingClientRect().top + window.scrollY))}px`);
     });
 }
 
@@ -7685,9 +7694,6 @@ function switchOperationsTab(name) {
     if (name === 'callbacks') {
         cbLoad();
         _startCbSync();
-    } else if (name === 'b2b') {
-        b2bLoad();
-        _startB2bSync();
     } else if (name === 'marginguide') {
         mgLoad();
     } else if (name === 'pictureguide') {
@@ -10400,6 +10406,18 @@ async function pgRemoveShotPhoto(shotId) {
     await _pgReload();
 }
 
+// The B2B page (b2b.html, 2026-10). Detected by DOM like every other page init,
+// and called from the same three places: first load, the PIN sign-in, and the
+// SPA router's hop. What Operations' B2B tab hook used to do, plus the usage
+// record that hook kept.
+function initB2bPage() {
+    if (!document.querySelector('.b2b-wrap')) return;
+    trackUsage('open', 'ops:b2b', _usageLabel('ops:b2b'));
+    _wsFitPanels();
+    b2bLoad();
+    _startB2bSync();
+}
+
 // Detects the operations page and opens the requested sub-tab (defaults to
 // call backs, or honors a #callbacks / #b2b deep-link). Safe no-op elsewhere.
 // A tab can be hidden by its role gate or a Feature Access override, so never
@@ -10407,11 +10425,16 @@ async function pgRemoveShotPhoto(shotId) {
 function initOperations() {
     if (!document.querySelector('.ops-wrap')) return;
     const hash = (window.location.hash || '').replace('#', '');
-    // #b2b-sign-<dealId> was the old phone-signing QR. That route was removed on
-    // 2026-10-16 (Nick: "The phone thing really just wasnt working") -- the B2B
-    // module runs on the phone itself now. A link or QR still printed somewhere
-    // lands on the B2B tab rather than on SPEEKS Connect.
-    const sign = /^b2b-sign-/.test(hash);
+    // B2B IS ITS OWN PAGE NOW (2026-10). Every operations.html#b2b link -- the
+    // notify emails, the action bubbles, a bookmark -- still lands on it:
+    // forwarded here, once, before the Operations tabs are drawn. So is
+    // #b2b-sign-<dealId>, the old phone-signing QR, whose route was removed on
+    // 2026-10-16 (Nick: "The phone thing really just wasnt working"); a link or
+    // QR still printed somewhere lands on B2B rather than on SPEEKS Connect.
+    if (hash === 'b2b' || /^b2b-sign-/.test(hash)) {
+        window.location.replace('b2b.html');
+        return;
+    }
     // #categories is the feed card's destination: the Categories view inside
     // SPEEKS Connect, which is a view of a tab rather than a tab of its own.
     // #photos is the no-pictures card's: the same view, on the Picture Quality
@@ -10421,9 +10444,8 @@ function initOperations() {
         _ecView = 'cats';
         _lhTab = hash === 'photos' ? 'photos' : 'cats';
     }
-    let initial = sign ? 'b2b'
-        : (hash === 'categories' || hash === 'photos') ? 'ebay'
-        : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
+    let initial = (hash === 'categories' || hash === 'photos') ? 'ebay'
+        : ['marginguide', 'pictureguide', 'callbacks', 'ebay'].includes(hash) ? hash : 'ebay';
     // COMPUTED display, not the inline one. The fallback below was written for
     // Feature Access, which writes `display: none !important` onto the element —
     // but the mobile curation cuts a plain [data-feature] tab from a STYLESHEET
@@ -20196,7 +20218,7 @@ const B2B_NO_SERIAL = 'NO SERIAL';
 
 let _b2bDeals        = [];
 let _b2bClients      = [];
-let _b2bView         = 'queue';     // queue | pipeline | finished | clients | overview
+let _b2bView         = 'pipeline';  // pipeline | finished | prevals | clients  (Needs You went 2026-10)
 let _b2bStoreFilter  = 'ALL';
 let _b2bLoading      = false;
 let _b2bModalDeal    = null;        // the deal open in the deal modal
@@ -21673,8 +21695,8 @@ async function _b2bSyncOpenDeal(ping) {
 // --- render controller ----------------------------------------------------
 
 function b2bSetView(view) {
-    if (view === 'clients'  && !_b2bCanClientDirectory())  view = 'queue';
-    if (view === 'prevals'  && !_b2bCanPreval())   view = 'queue';
+    if (view === 'clients'  && !_b2bCanClientDirectory())  view = 'pipeline';
+    if (view === 'prevals'  && !_b2bCanPreval())   view = 'pipeline';
     const changed = _b2bView !== view;
     _b2bView = view;
     b2bRender();
@@ -21691,12 +21713,15 @@ function b2bSetView(view) {
 }
 
 function b2bSetStoreFilter(code) { _b2bStoreFilter = code; b2bRender(); }
+// The board's "Needs you only" switch -- kept for the session, like the store filter.
+let _b2bMineOnly = false;
+function b2bSetMineOnly(on) { _b2bMineOnly = !!on; b2bRender(); }
 
 function b2bRender() {
     const body = document.getElementById('b2bBody');
     if (!body) return;
-    if (_b2bView === 'clients'  && !_b2bCanClientDirectory())  _b2bView = 'queue';
-    if (_b2bView === 'prevals'  && !_b2bCanPreval())   _b2bView = 'queue';
+    if (_b2bView === 'clients'  && !_b2bCanClientDirectory())  _b2bView = 'pipeline';
+    if (_b2bView === 'prevals'  && !_b2bCanPreval())   _b2bView = 'pipeline';
 
     const scoped = _b2bDeals.filter(_b2bInScope);
     const queue  = scoped.filter(d => _b2bActionFor(d));
@@ -21709,7 +21734,7 @@ function b2bRender() {
         // markup; the state has to be maintained here where it changes.
         b.setAttribute('aria-selected', 'false');
     });
-    const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
+    const btn = { pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
                   clients: 'b2bViewClientsBtn',
                   prevals: 'b2bViewPrevalsBtn' }[_b2bView];
     const activeBtn = document.getElementById(btn);
@@ -21729,6 +21754,9 @@ function b2bRender() {
         pvPip.style.display = live ? 'inline-flex' : 'none';
     }
 
+    // What is waiting on this user, counted on the Pipeline tab now that the
+    // Needs You tab is gone (2026-10) -- the board's "Needs you only" switch is
+    // the list behind the number.
     const pip = document.getElementById('b2bQueuePip');
     if (pip) {
         pip.textContent = queue.length;
@@ -21773,11 +21801,13 @@ function b2bRender() {
                 : "Your store's B2B deals — price them, then list them.";
     }
 
-    if (_b2bView === 'pipeline')      body.innerHTML = _b2bRenderPipeline(scoped);
-    else if (_b2bView === 'prevals')  body.innerHTML = _b2bRenderPrevals();
+    // Pipeline is the default and the fallback. The Needs You tab went on
+    // 2026-10 (Nick: the hub's tabs "should not have needs you just the
+    // pipeline"); the board's "Needs you only" switch shows the same set.
+    if (_b2bView === 'prevals')       body.innerHTML = _b2bRenderPrevals();
     else if (_b2bView === 'finished') body.innerHTML = _b2bRenderFinished(scoped);
     else if (_b2bView === 'clients')  body.innerHTML = _b2bRenderClients();
-    else                              body.innerHTML = _b2bRenderQueue(scoped, queue);
+    else                              body.innerHTML = _b2bRenderPipeline(scoped);
 }
 
 // --- view: Needs You ------------------------------------------------------
@@ -21867,16 +21897,25 @@ function _b2bRenderPipeline(scoped) {
     // collapses to zero the moment you filter to a store, so the count vanished
     // exactly when you were somewhere else and might want to jump back to it.
     const unassigned = live.filter(d => !d.pricing_store && !d.listing_store).length;
-    const filter = _b2bIsCorp() ? `
+    // "Needs you only" is what the Needs You tab used to be (2026-10): the same
+    // set, _b2bActionFor, shown on the board instead of as a second list.
+    const mineCount = deals.filter(d => _b2bActionFor(d)).length;
+    if (_b2bMineOnly) deals = deals.filter(d => _b2bActionFor(d));
+    const filter = `
         <div class="b2b-filter">
+            ${_b2bIsCorp() ? `
             <label class="b2b-filter-l" for="b2bStoreSelect">Store</label>
             <select id="b2bStoreSelect" class="kpi-select b2b-filter-sel" onchange="b2bSetStoreFilter(this.value)">
                 <option value="ALL" ${_b2bStoreFilter === 'ALL' ? 'selected' : ''}>All stores</option>
                 <option value="NONE" ${_b2bStoreFilter === 'NONE' ? 'selected' : ''}>Unassigned${unassigned ? ` (${unassigned})` : ''}</option>
                 ${B2B_LOCATIONS.map(c => `
                     <option value="${c}" ${_b2bStoreFilter === c ? 'selected' : ''}>${c === 'CORP' ? 'CORP' : c}</option>`).join('')}
-            </select>
-        </div>` : '';
+            </select>` : ''}
+            <label class="b2b-mine-switch ${_b2bMineOnly ? 'on' : ''}">
+                <input type="checkbox" id="b2bMineOnly" ${_b2bMineOnly ? 'checked' : ''} onchange="b2bSetMineOnly(this.checked)">
+                <span class="b2b-mine-sw" aria-hidden="true"></span>Needs you only${mineCount ? ` <span class="b2b-pip" style="display:inline-flex">${mineCount}</span>` : ''}
+            </label>
+        </div>`;
 
     const cols = B2B_BOARD.map(key => {
         const s = B2B_STAGE[key];
@@ -24873,9 +24912,19 @@ function _b2bShowDeal(cfg) {
     modal.classList.toggle('b2b-modal-full', !!cfg.full);
     closeAllModals();
     modal.classList.add('show');
-    lockAndBlurScreen();
+    // On the B2B page (2026-10) the deal is a PAGE that takes the hub's place,
+    // so there is nothing to dim or pin behind it -- and pinning the body would
+    // fight the page's own scroll. The back button says where it goes.
+    if (modal.classList.contains('b2b-dealpage')) {
+        const back = document.getElementById('b2bDealBackLbl');
+        if (back) back.textContent = B2B_VIEW_LABELS[_b2bView] || 'Pipeline';
+        window.scrollTo(0, 0);
+    } else {
+        lockAndBlurScreen();
+    }
     if (cfg.after) cfg.after();
 }
+const B2B_VIEW_LABELS = { pipeline: 'Pipeline', finished: 'Completed', prevals: 'Evaluations', clients: 'Clients' };
 
 async function b2bOpenDeal(kind, id) {
     const deal = _b2bDealById(id);
@@ -33293,6 +33342,7 @@ document.addEventListener("DOMContentLoaded", () => {
         initTicker();
         initWorkspace();
         initOperations();
+        initB2bPage();
         // A #jump=<feature> deep-link from the search box: land, then spotlight
         // the panel that was asked for.
         try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
@@ -33717,6 +33767,7 @@ document.addEventListener('click', async (e) => {
                     if (typeof applyKpiReminder === 'function') applyKpiReminder();
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
                     if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+                    if (typeof initB2bPage === 'function') initB2bPage();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
                     if (document.getElementById('listing-champions-body') && typeof fetchChampions === 'function') fetchChampions();
@@ -44094,12 +44145,12 @@ function _faCatalog() {
     return merged;
 }
 
-// The tool can be opened from any of the 5 shells, but the DOM only holds the
+// The tool can be opened from any of the 6 shells, but the DOM only holds the
 // current page's features. So when it loads, fetch the sibling shells (static,
 // same-origin) and read their data-feature tags directly — that's how a feature
 // living only on Operations shows up while you're on QuickPortal. Runs once per
 // open; results feed _faCatalog() via _faRemoteFeatures.
-const _FA_SHELLS = ['index.html', 'workspace.html', 'operations.html', 'docs.html', 'stats.html'];
+const _FA_SHELLS = ['index.html', 'workspace.html', 'operations.html', 'b2b.html', 'docs.html', 'stats.html'];
 let _faRemoteFeatures = [];
 let _faScanned = false;
 
@@ -44243,8 +44294,13 @@ const _SECTION_TABS = {
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
-                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
+                        'ec-upload', 'ec-view-categories', 'ec-view-photos',
                         'ec-view-titles', 'ec-view-picture-quality'],
+    // B2B left Operations for its own page and nav tab (2026-10). Same feature
+    // key, so whoever could see the sub-tab sees the tab -- and someone with B2B
+    // and nothing else in Operations no longer gets an Operations link that
+    // opens onto a page they have one tab of.
+    'b2b.html': ['widget-ops-b2b'],
 };
 
 // Sub-tabs that a TABLET still gets, keyed the same way as _SECTION_TABS above.
@@ -44268,10 +44324,9 @@ const _TABLET_SECTION_TABS = new Set(['widget-ops-pictureguide']);
 
 // THE PHONE'S ONE EXCEPTION (2026-10-16). Nick: "have on mobile the b2b module
 // enabled now" -- the pickup and its custody form are done at the client's door,
-// on a phone. The B2B tab itself carries no data-mobile cut any more; this is
-// the other half, the Operations link that reaches it, which IS cut on a phone
-// and stays cut for anyone who cannot see B2B (they would land on an empty
-// page). A link opts in with data-phone="show", and only these keys count.
+// on a phone. A link opts in with data-phone="show", and only these keys count.
+// Since B2B became its own page (2026-10) its nav link carries no data-mobile
+// cut at all, so this matters only if a cut link ever opts back in again.
 const _PHONE_SECTION_TABS = new Set(['widget-ops-b2b']);
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -45125,7 +45180,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
-    { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
+    { id: 'page-b2b',    label: 'B2B Deals',             sub: 'Main navigation', kind: 'page', page: 'b2b.html',        keys: 'b2b business deals pickup quote listing' },
     { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles', 'ec-view-picture-quality'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
@@ -50252,7 +50307,7 @@ function _samReminderCfg() {
         { key: 'gpgoals', id: 'gpGoalAlertBubble', text: 'gpGoalAlertBubbleText',
           title: 'Store Goals to Set', urgency: 2, due: 'Set', cls: 'sam-due-amber',
           noSnooze: true, action: "openGpGoals()" },
-        { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
+        { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='b2b.html'" },
         // The rework's two cards (see the banner over checkB2BReminders). Pricing
         // turns red once anything is overdue; a store cannot snooze it, corp can
         // (and can switch it off in Settings). Unlisted value is a weekly report,
@@ -50262,10 +50317,10 @@ function _samReminderCfg() {
           urgency: _b2bPricingLate ? 2 : 1, due: _b2bPricingLate ? 'Overdue' : 'Due',
           cls: _b2bPricingLate ? 'sam-due-red' : 'sam-due-amber',
           noSnooze: !(typeof _b2bIsCorp === 'function' && _b2bIsCorp()),
-          action: "window.location.href='operations.html#b2b'" },
+          action: "window.location.href='b2b.html'" },
         { key: 'b2bUnlisted', id: 'b2bUnlistedAlertBubble', text: 'b2bUnlistedAlertBubbleText',
           title: 'Unlisted B2B Value', urgency: 0, due: '', cls: 'sam-due-grey', noDue: true,
-          readAction: "b2bUnlistedRead(event)", action: "window.location.href='operations.html#b2b'" },
+          readAction: "b2bUnlistedRead(event)", action: "window.location.href='b2b.html'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.

@@ -1,9 +1,9 @@
 // B2B HEADER — checks that need the REAL markup.
 //
-//   powershell -File scripts/browser-check.ps1 b2b-header-check.js -Html operations.html
+//   powershell -File scripts/browser-check.ps1 b2b-header-check.js -Html b2b.html
 //
 // Separate from b2b-check.js on purpose. These assert about the DOM as
-// operations.html actually declares it -- ids, role classes, data-feature,
+// b2b.html actually declares it -- ids, role classes, data-feature,
 // which element sits inside which -- and that needs the page inlined, which is
 // what -Html does. Keeping them here means the main suite stays runnable with
 // no page at all and cannot start failing for want of a flag.
@@ -59,7 +59,7 @@ t('trial: the header buttons kept their gates through the churn', function () {
 // #b2bMoveLinesModal: the button still rendered, toggleModal() found nothing,
 // and Move Lines did nothing for anybody -- no error, so b2b-check.js (which
 // has no page) passed throughout. Found only by clicking it, on 2026-10-05.
-t('every modal the B2B code opens is in operations.html', function () {
+t('every modal the B2B code opens is in b2b.html', function () {
     var ids = {};
     Object.keys(window).forEach(function (k) {
         if (!/^_?b2b/i.test(k) || typeof window[k] !== 'function') return;

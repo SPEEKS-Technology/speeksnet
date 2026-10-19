@@ -1,6 +1,13 @@
 # B2B Deals — module map
 
-Lives in `operations.html` under `#ops-pane-b2b`. Front end: `speeks.js`
+Lives in **`b2b.html`** (its own nav tab and the full screen since 2026-10; it was
+an Operations sub-tab until then). The pane keeps id `#ops-pane-b2b` because the
+realtime refresh and the poll gate on it. `initB2bPage()` boots it from the
+page load, the PIN sign-in and the SPA router. `operations.html#b2b` forwards
+to it, so emails and bookmarks still land. A deal opens as a page inside
+`.b2b-wrap` in place of the hub (still `.modal-menu`, so `closeAllModals()`
+closes it). The Needs You tab is gone: Pipeline is the default, and the board's
+"Needs you only" switch shows the same set. Front end: `speeks.js`
 **15,524 – 23,230**. Backend: `supabase/functions/b2b-deals/index.ts` (one large
 action-dispatch function), plus `b2b-outreach`, `b2b-intake`, `b2b-capture-tool`,
 and 30 `*_b2b_*.sql` migrations.

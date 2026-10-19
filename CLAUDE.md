@@ -32,8 +32,8 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 3. **Ship a JS/CSS change → bump the cache-buster in every HTML page.** Assets
    are served raw with a hand-maintained query string, e.g.
-   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The five pages
-   that carry it: `index.html`, `operations.html`, `workspace.html`, `stats.html`,
+   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The six pages
+   that carry it: `index.html`, `operations.html`, `b2b.html`, `workspace.html`, `stats.html`,
    `docs.html`. Forget this and users keep the old file.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
@@ -59,7 +59,8 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 | Path | What it is |
 |---|---|
 | `index.html` | Dashboard / home. Every other page bounces here without a session. |
-| `operations.html` | Sub-tab shell for operational tools — **B2B lives here** (`#ops-pane-b2b`). |
+| `operations.html` | Sub-tab shell for operational tools (SPEEKS Connect, Margin Guide, Picture Guide, Call Backs). |
+| `b2b.html` | **B2B lives here** since 2026-10: its own nav tab, full screen. The pane keeps id `#ops-pane-b2b`; `operations.html#b2b` forwards here. |
 | `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance. |
 | `stats.html` | Stats/reporting page. |
 | `docs.html` | *Not* developer docs — the in-app Processes & Policies library (CMS-driven). |
@@ -107,7 +108,7 @@ attribution (scorecards, variance-by-employee) needs real identity first.
 ```
 powershell -File scripts/browser-check.ps1 b2b-check.js         # behaviour
 powershell -File scripts/browser-check.ps1 b2b-layout-check.js  # rendering
-powershell -File scripts/browser-check.ps1 b2b-header-check.js -Html operations.html
+powershell -File scripts/browser-check.ps1 b2b-header-check.js -Html b2b.html
 ```
 
 Three suites, because they catch different things. `b2b-check.js` asserts about

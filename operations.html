@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261019b">
+  <link rel="stylesheet" href="styles.css?v=20261019c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261019b" defer></script>
+  <script src="speeks.js?v=20261019c" defer></script>
 </head>
 <body class="preload">
 
@@ -28,7 +28,8 @@
 
   <nav class="nav-bar">
     <a href="index.html" data-m="Quick Portal" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
-    <a data-mobile="hide" data-tablet="show" data-phone="show" href="operations.html" data-m="Ops" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
+    <a data-mobile="hide" data-tablet="show" href="operations.html" data-m="Ops" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
+    <a href="b2b.html" data-m="B2B" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></i><span>B2B</span></a>
     <a data-mobile="hide" href="workspace.html" data-m="Work" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></i><span>Workspace</span></a>
     <a href="docs.html" data-m="Processes" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
     <a href="stats.html" data-m="Stats" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></i><span>Stats & Awards</span></a>
@@ -630,7 +631,6 @@
         <button class="ws-tab" data-mobile="hide" data-feature="widget-ops-marginguide" id="ops-tab-marginguide" onclick="switchOperationsTab('marginguide')"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg> Margin Guide</button>
         <button class="ws-tab" data-mobile="hide" data-tablet="show" data-feature="widget-ops-pictureguide" id="ops-tab-pictureguide" onclick="switchOperationsTab('pictureguide')"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/><path d="M8 5l1.5-2h5L16 5"/></svg> Picture Guide</button>
         <button class="ws-tab" data-mobile="hide" data-feature="widget-ops-callbacks" id="ops-tab-callbacks" onclick="switchOperationsTab('callbacks')"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.7 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.74-1.74a2 2 0 0 1 2.11-.45c.74.34 1.53.57 2.34.7A2 2 0 0 1 22 16.92z"/></svg> Customer Call Backs</button>
-        <button class="ws-tab dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager role-employee role-training" data-feature="widget-ops-b2b" id="ops-tab-b2b" onclick="switchOperationsTab('b2b')"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Business-to-Business</button>
         <!-- Store leads and corp only. The eBay Channel writes to a live
              marketplace, so the role list here must stay narrower than the
              other Operations tabs — and must match the role gate in the
@@ -784,88 +784,6 @@
       </div>
     </section>
 
-    <!-- ===== B2B DEALS PANE ===== -->
-    <section class="ws-pane" id="ops-pane-b2b">
-      <div class="card cb-panel ws-panel b2b-panel">
-          <div class="cb-head">
-              <div class="cb-head-main">
-                  <span class="cb-head-ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
-                  <div class="cb-head-titles">
-                      <span class="cb-eyebrow">Operations</span>
-                      <span class="cb-head-title">Business-to-Business</span>
-                      <span id="b2bSubtitle" class="cb-head-sub">Track bulk business deals from pickup through listing.</span>
-                  </div>
-              </div>
-              <div class="cb-head-controls">
-                  <div class="mb-view-toggle b2b-view-toggle" role="tablist" aria-label="B2B views">
-                      <button id="b2bViewQueueBtn" class="mb-view-btn active" role="tab" aria-selected="false" onclick="b2bSetView('queue')"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Needs You<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
-                      <button id="b2bViewPipelineBtn" class="mb-view-btn" role="tab" aria-selected="false" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline</button>
-                      <button id="b2bViewFinishedBtn" class="mb-view-btn" role="tab" aria-selected="false" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
-                      <!-- Evaluations: pricing a client's list before we collect it.
-                           Same audience as raising a deal, since the enquiry lands on
-                           whoever picks up the phone -- _b2bCanPreval() is the real gate. -->
-                      <button id="b2bViewPrevalsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('prevals')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Evaluations<span class="b2b-pip" id="b2bPrevalPip" style="display:none;">0</span></button>
-                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-multistore-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
-                  </div>
-                  <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
-                  <!-- Deals a store has asked to delete. CORP-only; the red-dot
-                       badge lights when any are pending (wired in b2bRender). -->
-                  <button id="b2bDelReqBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd" onclick="b2bDeleteRequests()" title="Deals a store has asked to delete — approve or deny">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                      Delete Requests<span class="crm-badge b2b-delreq-badge" id="b2bDelReqBadge" style="display:none;">0</span>
-                  </button>
-                  <button id="crmGearBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-ceo" onclick="crmOpen()" title="CRM notification settings">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                      CRM Settings<span class="crm-badge" id="crmGearBadge" style="display:none;">0</span>
-                  </button>
-                  <!-- Store managers raise their own deals; theirs holds at their
-                       own store from the moment it is created, and only corp can
-                       move it elsewhere. _b2bCanCreate() is the real gate — this
-                       class list only decides what is drawn. -->
-                  <!-- The bench capture tool, as a download. Pairs with the live
-                       intake tray on the pricing sheet: this is what you put on
-                       the USB stick.
-
-                       `role-none` is deliberate and is the whole access model
-                       here. _passesRoleClasses() treats an element with NO role
-                       classes as visible to everyone, so a bare data-feature
-                       would have shipped this to the entire company. No user
-                       holds a role of "none", so nobody passes the role gate and
-                       an explicit per-user override in Feature Access is the only
-                       way in. Currently: Nick Hettinger and Haydn Davis, while
-                       the feature is being tested. -->
-                  <!-- Opens the tool panel rather than downloading directly:
-                       the same people who may download it may also upload a new
-                       version and roll one back, so it needs somewhere to put
-                       the history. Still one feature key, and still `role-none`
-                       so the role gate denies everyone and a per-user override
-                       is the only way in. -->
-                  <button id="b2bCaptureDlBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-none"
-                     data-feature="b2b-capture-download"
-                     onclick="b2bCaptureTool()"
-                     title="The bench capture tool — download the current version, upload a new one, or roll back to an earlier one">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                      SPEEKS Capture
-                  </button>
-                  <!-- FEEDBACK, and deliberately visible to everyone: no role
-                       classes at all, which _passesRoleClasses() treats as
-                       "show to all". The people who hit the rough edges in B2B
-                       are the ones using it all day, and every round of changes
-                       so far has come through Ethan forwarding an email. -->
-                  <button id="b2bFeedbackBtn" class="b2b-btn b2b-btn-head b2b-btn-feedback"
-                     onclick="b2bFeedbackOpen()"
-                     title="Tell Nick what is wrong, missing or annoying about B2B — goes straight to him">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                      Feedback
-                  </button>
-                  <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bOpenCreate()">＋ New Deal</button>
-              </div>
-          </div>
-          <div class="cb-scroll ws-scroll" id="b2bBody">
-              <div class="status-message">Loading B2B Deals…</div>
-          </div>
-      </div>
-    </section>
 
     <!-- ===== SPEEKS CONNECT PANE ===== -->
     <!-- Shell only. Everything inside #ecBody is rendered by ecRender() from
@@ -933,171 +851,6 @@
     </div><!-- /.ws-layout -->
   </div>
 
-<!-- ===== CRM SETTINGS MODAL (CEO only) — inside .main-content for the SPA router ===== -->
-<div class="modal-menu manage-menu crm-modal" id="crmModal">
-    <div class="modal-header">
-        <h3>⚙️ CRM Settings</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="crm-tabs" id="crmTabs">
-        <button class="crm-tab active" data-tab="clients" onclick="crmTab('clients')">Client List</button>
-        <button class="crm-tab" data-tab="new" onclick="crmTab('new')">New Clients <span class="crm-badge" id="crmTabBadge" style="display:none;">0</span></button>
-        <button class="crm-tab" data-tab="settings" onclick="crmTab('settings')">Notifications</button>
-    </div>
-    <div class="manage-content" id="crmBody"><div class="status-message">Loading…</div></div>
-</div>
-
-<!-- ===== SPEEKS CAPTURE TOOL MODAL =====
-     Download the live version, upload a new one, roll back to an older one.
-     Its own modal rather than a section of the deal screen: the tool is not
-     attached to any deal, and borrowing the deal shell would leave realtime
-     believing a deal was open. Body is rendered by b2bCaptureRender(). -->
-<div class="modal-menu manage-menu" id="b2bCaptureModal">
-    <div class="modal-header tool-head">
-        <div class="tool-head-main">
-            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
-            <div class="tool-head-titles">
-                <span class="tool-head-eyebrow">B2B</span>
-                <span class="tool-head-title">SPEEKS Capture</span>
-                <span class="tool-head-sub">The bench tool. Nothing is ever overwritten — every upload is kept and any version can be made live again.</span>
-            </div>
-        </div>
-        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="manage-content" id="b2bCaptureBody"><div class="status-message">Loading…</div></div>
-    <div class="manage-footer flex-end" id="b2bCaptureFooter"></div>
-</div>
-
-<!-- ===== B2B NEW DEAL MODAL (inside .main-content so the SPA router carries it) ===== -->
-<div class="modal-menu manage-menu" id="b2bCreateModal">
-    <div class="modal-header tool-head">
-        <div class="tool-head-main">
-            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
-            <div class="tool-head-titles">
-                <span class="tool-head-eyebrow">B2B</span>
-                <span class="tool-head-title">New Deal</span>
-                <span class="tool-head-sub">Pick the business, then sign off the pickup.</span>
-            </div>
-        </div>
-        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="manage-content" id="b2bCreateBody"></div>
-    <div class="manage-footer flex-end" id="b2bCreateFooter"></div>
-</div>
-
-<!-- ===== B2B MOVE LINES BETWEEN LISTING STORES ===== -->
-<!-- Corp only. Separate from the whole-deal move (b2bTransferModal): this one
-     names individual lines, for when one was assigned to the wrong store.
-     Lost once already, in the 2026-09-26 merge of pre-release into
-     feat/b2b-split-listing-locations: the Move Lines button kept rendering and
-     toggleModal() found nothing to open, so it failed silently. -->
-<div class="modal-menu manage-menu" id="b2bMoveLinesModal">
-    <div class="modal-header tool-head">
-        <div class="tool-head-main">
-            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></span>
-            <div class="tool-head-titles">
-                <span class="tool-head-eyebrow">B2B</span>
-                <span class="tool-head-title">Move Lines</span>
-                <span class="tool-head-sub">Send individual lines to a different listing store.</span>
-            </div>
-        </div>
-        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="manage-content" id="b2bMoveLinesBody"></div>
-    <div class="manage-footer flex-end" id="b2bMoveLinesFooter"></div>
-</div>
-
-<!-- ===== B2B APPROVAL EVIDENCE MODAL =====
-     Its own modal rather than a section of the deal screen: attaching the
-     client's email is a deliberate, one-at-a-time act, and the deal screen is
-     already the densest thing in the app. Body and footer are painted by
-     _b2bPaintProofModal(). -->
-<!-- ===== B2B FEEDBACK ===== -->
-<!-- Subject + free text, nothing else. Sends through b2b-outreach, which owns
-     the mail path, straight to Nick. No category on purpose: picking one is a
-     decision that stops some people writing anything at all. -->
-<div class="modal-menu manage-menu" id="b2bFeedbackModal">
-    <div class="modal-header tool-head">
-        <div class="tool-head-main">
-            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-            <div class="tool-head-titles">
-                <span class="tool-head-eyebrow">B2B</span>
-                <span class="tool-head-title">Send Feedback</span>
-                <span class="tool-head-sub">Goes straight to Nick. Say whatever is wrong, missing or annoying.</span>
-            </div>
-        </div>
-        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="manage-content">
-        <label class="form-label-caps" for="b2bFbSubject">Subject</label>
-        <input id="b2bFbSubject" class="form-input-lg" maxlength="200"
-            placeholder="e.g. The serials box is fiddly on a phone">
-        <label class="form-label-caps" for="b2bFbBody" style="margin-top:12px;">What's on your mind</label>
-        <textarea id="b2bFbBody" class="form-input-lg" rows="9" maxlength="20000"
-            placeholder="What happened, what you expected instead, and which deal if it matters. Rough notes are fine — it is more useful sent than polished."></textarea>
-        <p class="b2b-hint" id="b2bFbWho"></p>
-    </div>
-    <div class="manage-footer flex-end">
-        <span class="b2b-msg" id="b2bFbMsg"></span>
-        <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
-        <button class="b2b-btn b2b-btn-primary" onclick="b2bFeedbackSend(this)">Send it</button>
-    </div>
-</div>
-
-<div class="modal-menu manage-menu" id="b2bProofModal">
-    <div class="modal-header tool-head">
-        <div class="tool-head-main">
-            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>
-            <div class="tool-head-titles">
-                <span class="tool-head-eyebrow">B2B</span>
-                <span class="tool-head-title">Attach The Client's Approval</span>
-                <span class="tool-head-sub">What answers them later if they say they never agreed.</span>
-            </div>
-        </div>
-        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div class="manage-content" id="b2bProofBody"></div>
-    <div class="manage-footer flex-end" id="b2bProofFooter"></div>
-</div>
-
-<!-- ===== B2B DEAL MODAL (title / body / footer all driven by b2bOpenDeal) ===== -->
-<div class="modal-menu manage-menu b2b-deal-modal" id="b2bDealModal">
-    <div class="modal-header tool-head">
-        <div class="tool-head-main">
-            <span class="tool-head-ico" id="b2bDealIco"></span>
-            <div class="tool-head-titles">
-                <span class="tool-head-eyebrow" id="b2bDealEyebrow">B2B</span>
-                <span class="tool-head-title" id="b2bDealTitle">Deal</span>
-                <span class="tool-head-sub" id="b2bDealSub"></span>
-            </div>
-            <!-- Workspace screens only: the stage chip beside the client name. -->
-            <span class="b2b-ws-chip" id="b2bDealChip"></span>
-        </div>
-        <div class="tool-head-actions">
-            <!-- Workspace screens only: Request Deletion / Decline live here, off
-                 the main bar. _b2bShowDeal fills #b2bDealMenu from cfg. -->
-            <button class="b2b-ws-more" id="b2bDealMoreBtn" style="display:none;" onclick="b2bWsMenuToggle(event)" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">
-                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
-            </button>
-            <div class="b2b-ws-menu" id="b2bDealMenu" role="menu" hidden></div>
-            <!-- Request (or, once pending, view) deletion of this deal. Shown on
-                 every stage -- _b2bShowDeal wires it from cfg.delDeal. -->
-            <button class="b2b-btn b2b-btn-secondary b2b-mini b2b-deal-del" id="b2bDealDeleteBtn" style="display:none;" onclick="b2bDealDeleteClick()" title="Request this deal be deleted">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                <span id="b2bDealDeleteLbl">Request deletion</span>
-            </button>
-            <button class="b2b-btn b2b-btn-secondary b2b-mini b2b-deal-print" id="b2bDealPrintBtn" style="display:none;" onclick="b2bPrintPickup()" title="Print the SKU label for this pickup">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                SKU Label
-            </button>
-            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-        </div>
-    </div>
-    <!-- Workspace screens only: where the deal is among the eight stages. -->
-    <div class="b2b-ws-rail" id="b2bDealRail" hidden></div>
-    <div class="manage-content" id="b2bDealBody"></div>
-    <div class="manage-footer flex-end" id="b2bDealFooter"></div>
-</div>
 
 <div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
     <div class="gi-panel-header">
