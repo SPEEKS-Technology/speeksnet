@@ -24934,3 +24934,179 @@ select.dd-native {
 /* Bigger than body copy: this is the sentence being signed. */
 .b2b-cdoc-terms { margin: 14px 0 0; font-size: 14px; line-height: 1.55; color: #1a1c1e; }
 .b2b-sum-link { font-weight: 700; color: var(--sage-professional, #1f9d57); }
+
+/* =========================================================================
+   B2B DEAL WORKSPACE (2026-10 consistency overhaul)
+   =========================================================================
+   Every deal screen is moving onto one shape: header (ref, client, stage chip,
+   ... menu, x), the stage rail, then the stage's own work on the left and the
+   deal on the right -- status and the one next step on top, then facts,
+   numbers and folded sections. Only screens rendered with cfg.ws get
+   .b2b-ws-on; an unported stage is untouched by everything below.
+
+   One type scale for the whole workspace, so nothing here invents a size:
+   10.5 labels, 12 secondary, 13 body, 18 figures. */
+:root { --b2b-ink: #1a1c1e; }
+
+.b2b-ws-chip { display: none; }
+.b2b-ws-on .b2b-ws-chip { display: inline-flex; align-self: center; }
+.b2b-ws-on .tool-head-sub { display: none; }
+.b2b-deal-modal.b2b-ws-on > .modal-header.tool-head { border-bottom: 0; padding-bottom: 10px; align-items: center; }
+
+/* --- ... menu ------------------------------------------------------------- */
+.b2b-deal-modal .tool-head-actions { position: relative; }
+.b2b-ws-more {
+    width: 32px; height: 32px; border-radius: 9px; border: 0; cursor: pointer;
+    background: #f1f5f9; color: var(--b2b-muted); display: inline-flex; align-items: center; justify-content: center;
+}
+.b2b-ws-more svg { width: 16px; height: 16px; }
+.b2b-ws-more:hover, .b2b-ws-more[aria-expanded="true"] { background: #e6ebf1; color: var(--b2b-ink); }
+.b2b-ws-menu {
+    position: absolute; top: 38px; right: 40px; z-index: 30; min-width: 190px; padding: 4px;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, .16);
+}
+.b2b-ws-menu[hidden] { display: none; }
+.b2b-ws-menu button {
+    display: block; width: 100%; text-align: left; border: 0; background: none; cursor: pointer;
+    padding: 9px 11px; border-radius: 7px; font: inherit; font-size: 13px; font-weight: 600; color: var(--b2b-ink);
+}
+.b2b-ws-menu button:hover { background: var(--b2b-surface); }
+.b2b-ws-menu button.danger { color: #d1443b; }
+.b2b-ws-menu button.danger:hover { background: #fcecec; }
+
+/* --- stage rail ----------------------------------------------------------- */
+.b2b-ws-rail { padding: 0 22px 12px; background: #fff; border-bottom: 1px solid #eef1f5; }
+.b2b-ws-rail[hidden] { display: none; }
+.b2b-ws-steps { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; }
+.b2b-ws-step { display: grid; gap: 5px; min-width: 0; }
+.b2b-ws-step i { height: 4px; border-radius: 4px; background: var(--b2b-line); }
+.b2b-ws-step span { font-size: 10.5px; font-weight: 700; color: var(--b2b-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b2b-ws-step.done i { background: var(--sage-deep); }
+.b2b-ws-step.done span { color: var(--b2b-muted); }
+.b2b-ws-step.now i { background: var(--b2b-ink); }
+.b2b-ws-step.now span { color: var(--b2b-ink); font-weight: 800; }
+.b2b-ws-railm, .b2b-ws-railm-l { display: none; }
+.b2b-ws-railm { height: 4px; border-radius: 4px; background: var(--b2b-line); overflow: hidden; }
+.b2b-ws-railm i { display: block; height: 100%; background: var(--sage-deep); border-radius: 4px; }
+.b2b-ws-railm-l { font-size: 11px; font-weight: 700; color: var(--b2b-muted); margin-top: 6px; }
+
+/* --- the split ------------------------------------------------------------ */
+.b2b-deal-modal.b2b-ws-on > .manage-content { padding: 0; overflow: hidden; display: flex; background: #fff; }
+.b2b-ws { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: 0; }
+.b2b-ws-main { overflow: auto; padding: 16px 20px 28px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.b2b-ws-side {
+    overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    background: var(--b2b-surface); border-left: 1px solid var(--b2b-line);
+}
+.b2b-ws-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.b2b-ws-tools .b2b-btn { height: var(--b2b-h-sm); padding: 0 11px; font-size: 12px !important; gap: 6px; }
+.b2b-ws-tools .b2b-btn svg { width: 14px; height: 14px; }
+
+/* --- side panel ----------------------------------------------------------- */
+.b2b-ws-next {
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: var(--b2b-r-lg);
+    padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.b2b-ws-status { font-size: 13px; color: var(--b2b-ink); }
+.b2b-ws-status b { font-weight: 800; }
+.b2b-ws-line { font-size: 12px; color: var(--b2b-muted); }
+.b2b-ws-next .b2b-ws-go { width: 100%; }
+.b2b-ws-why { font-size: 12px; font-weight: 600; color: var(--b2b-muted); }
+.b2b-ws-alt { display: flex; gap: 6px; flex-wrap: wrap; }
+.b2b-ws-alt .b2b-btn { flex: 1 1 auto; height: var(--b2b-h-md); padding: 0 12px; font-size: 12px !important; }
+.b2b-ws-next .b2b-msg { margin: 0; }
+.b2b-ws-next .b2b-msg:empty { display: none; }
+/* A finished deal has nothing to say up here but its date; an empty card would
+   read as something failed to load. */
+.b2b-ws-next:not(:has(> :not(.b2b-msg))) { display: none; }
+
+.b2b-ws-k { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--b2b-faint); }
+.b2b-ws-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; padding: 0 2px; }
+.b2b-ws-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.b2b-ws-fact.wide { grid-column: 1 / -1; }
+.b2b-ws-v { font-size: 13px; font-weight: 700; color: var(--b2b-ink); overflow-wrap: anywhere; }
+
+.b2b-ws-nums {
+    display: grid; grid-template-columns: 1fr 1fr; background: #fff;
+    border: 1px solid var(--b2b-line); border-radius: var(--b2b-r-lg); overflow: hidden;
+}
+.b2b-ws-num { padding: 9px 12px; display: flex; flex-direction: column; gap: 1px; min-width: 0;
+              border-top: 1px solid var(--b2b-line-2); }
+.b2b-ws-num:nth-child(-n+2) { border-top: 0; }
+.b2b-ws-num:nth-child(2n) { border-left: 1px solid var(--b2b-line-2); }
+.b2b-ws-num:last-child { grid-column: 1 / -1; border-left: 0; }
+.b2b-ws-nv { font-size: 18px; font-weight: 850; color: var(--b2b-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.b2b-ws-nv small { font-size: 11px; font-weight: 700; color: var(--b2b-muted); margin-left: 4px; }
+.b2b-ws-num.net .b2b-ws-nv { color: var(--sage-deep); }
+
+/* --- the one section style ------------------------------------------------ */
+.b2b-ws-sec { background: #fff; border: 1px solid var(--b2b-line); border-radius: var(--b2b-r-lg); }
+.b2b-ws-sec > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--b2b-ink);
+}
+.b2b-ws-sec > summary::-webkit-details-marker { display: none; }
+.b2b-ws-sec > summary::after {
+    content: ""; margin-left: auto; width: 6px; height: 6px; transform: rotate(45deg);
+    border-right: 2px solid var(--b2b-faint); border-bottom: 2px solid var(--b2b-faint); transition: transform .15s;
+}
+.b2b-ws-sec[open] > summary::after { transform: rotate(-135deg); }
+.b2b-ws-n { font-size: 10.5px; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--b2b-muted);
+            background: var(--b2b-chip); padding: 1px 6px; border-radius: 5px; }
+.b2b-ws-sec-b { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.b2b-ws-sec .b2b-proof { margin: 0; }
+
+.b2b-ws-desc { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--b2b-ink);
+               padding: 10px 12px; background: var(--b2b-surface); border-radius: var(--b2b-r-md); }
+
+/* --- the one line table --------------------------------------------------- */
+.b2b-lt { border: 1px solid var(--b2b-line); border-radius: var(--b2b-r-lg); overflow-x: auto; background: #fff; flex-shrink: 0; }
+.b2b-lt > * { min-width: 640px; }
+.b2b-lt-r {
+    display: grid; align-items: start; gap: 10px; padding: 9px 12px;
+    border-top: 1px solid var(--b2b-line-2); font-size: 13px; color: var(--b2b-ink);
+}
+.b2b-lt-read .b2b-lt-r { grid-template-columns: 44px minmax(0, 1fr) 72px 44px 52px 84px 92px 64px 32px; }
+.b2b-lt-r:first-child { border-top: 0; }
+.b2b-lt-h { background: var(--b2b-surface); padding-block: 8px; align-items: center;
+            font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--b2b-muted); }
+.b2b-lt-r > * { min-width: 0; }
+.b2b-lt .r { text-align: right; font-variant-numeric: tabular-nums; }
+.b2b-lt .b { font-weight: 800; }
+.b2b-lt-ln { font-size: 11px; color: var(--b2b-faint); padding-top: 1px; }
+.b2b-lt-item b { font-weight: 800; margin-right: 6px; }
+.b2b-lt-sub { font-size: 12px; color: var(--b2b-muted); margin-top: 2px; }
+.b2b-lt-sub .int { color: #8a5a00; }
+.b2b-lt-code { font-size: 11px; color: var(--b2b-faint); margin-top: 2px; overflow-wrap: anywhere; }
+.b2b-lt-flag { display: inline-block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em;
+               padding: 2px 6px; border-radius: 5px; margin-right: 4px; background: #fcecec; color: #d1443b; vertical-align: 1px; }
+.b2b-lt-flag.nrv  { background: #fdf3e1; color: #b7791f; }
+.b2b-lt-flag.wipe { background: #e8f0fb; color: #2563a8; }
+.b2b-lt-cond { font-size: 12px; font-weight: 700; color: var(--b2b-muted); }
+.b2b-lt-foot { display: flex; justify-content: flex-end; gap: 18px; padding: 9px 12px; background: var(--b2b-surface);
+               border-top: 1px solid var(--b2b-line); font-size: 13px; color: var(--b2b-muted); font-variant-numeric: tabular-nums; }
+.b2b-lt-foot b { color: var(--b2b-ink); font-weight: 850; }
+
+/* --- narrow screens: the deal panel goes on top, the work underneath ------ */
+@media (max-width: 760px) {
+    .b2b-ws-rail { padding: 0 16px 12px; }
+    .b2b-ws-steps { display: none; }
+    .b2b-ws-railm, .b2b-ws-railm-l { display: block; }
+    .b2b-deal-modal.b2b-ws-on > .manage-content { overflow: auto; display: block; }
+    .b2b-ws { display: flex; flex-direction: column; }
+    .b2b-ws-main, .b2b-ws-side { overflow: visible; }
+    .b2b-ws-side { order: -1; border-left: 0; border-bottom: 1px solid var(--b2b-line); }
+    .b2b-ws-main { padding: 14px 16px 24px; }
+    .b2b-ws-menu { right: 0; }
+    /* Rows stack to line + item + total. No sideways scroll on a phone; the
+       per-unit figures are one tap away in the deal itself. */
+    .b2b-lt > * { min-width: 0; }
+    .b2b-lt-h { display: none; }
+    .b2b-lt-read .b2b-lt-r { grid-template-columns: 40px minmax(0, 1fr) auto auto; }
+    .b2b-lt-read .b2b-lt-r > :nth-child(3),
+    .b2b-lt-read .b2b-lt-r > :nth-child(4),
+    .b2b-lt-read .b2b-lt-r > :nth-child(5),
+    .b2b-lt-read .b2b-lt-r > :nth-child(6),
+    .b2b-lt-read .b2b-lt-r > :nth-child(8) { display: none; }
+}

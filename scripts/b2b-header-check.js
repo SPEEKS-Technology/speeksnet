@@ -80,3 +80,62 @@ t('every modal the B2B code opens is in operations.html', function () {
 t('the removed Overview tab is not in the page', function () {
     return !document.getElementById('b2bViewOverviewBtn') || 'the Overview button is back, with no view behind it';
 });
+
+// ---------------------------------------------------------------------------
+// THE DEAL WORKSPACE (2026-10 consistency overhaul) -- against the real modal
+// ---------------------------------------------------------------------------
+// _b2bShowDeal switches the ONE deal modal between the workspace and the old
+// layout per screen, and a stage not yet ported must get its old header and
+// footer back exactly. That is a claim about real elements, so it lives here.
+_b2bSend = function () { return Promise.resolve({}); };
+var _wsHdrDeal = {
+    id: 'wh1', ref: 'DL-0412', stage: 'completed', pricing_store: 'OVL', listing_store: 'OVL', listing_stores: ['OVL'],
+    client: { company: 'Harbor Point Dental' }, pickup_date: '2026-10-09', stage_changed_at: '2026-10-24T15:00:00Z',
+    intake_kind: 'pickup',
+};
+function _wsOpen(deal) {
+    _b2bModalDeal = deal; _b2bModalItems = []; _b2bProofs = [];
+    _b2bStageView(deal);
+    return document.getElementById('b2bDealModal');
+}
+
+t('ws the workspace slots are in the deal modal', function () {
+    var m = document.getElementById('b2bDealModal');
+    var miss = ['b2bDealChip', 'b2bDealRail', 'b2bDealMoreBtn', 'b2bDealMenu']
+        .filter(function (id) { var el = document.getElementById(id); return !el || !m.contains(el); });
+    return !miss.length || 'missing from #b2bDealModal: ' + miss.join(', ');
+});
+t('ws a finished deal opens on the workspace: rail, chip, no footer', function () {
+    var m = _wsOpen(_wsHdrDeal);
+    if (!m.classList.contains('b2b-ws-on')) return 'not in workspace mode';
+    if (document.getElementById('b2bDealRail').hidden) return 'no rail';
+    if (document.getElementById('b2bDealChip').innerHTML.indexOf('Completed') === -1) return 'no stage chip';
+    if (document.getElementById('b2bDealFooter').style.display !== 'none') return 'the old footer is still showing';
+    return document.getElementById('b2bDealDeleteBtn').style.display === 'none' || 'the old trashcan is still in the header';
+});
+t('ws deletion and decline live in the ... menu, decline only where it is allowed', function () {
+    var role = sessionStorage.getItem('speeksUserRole');
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try {
+        _wsOpen(_wsHdrDeal);
+        var done = document.getElementById('b2bDealMenu').textContent;
+        _wsOpen(Object.assign({}, _wsHdrDeal, { stage: 'quote' }));
+        var live = document.getElementById('b2bDealMenu').textContent;
+        if (done.indexOf('Request Deletion') === -1) return 'no deletion request on a finished deal';
+        if (done.indexOf('Decline') > -1) return 'a completed deal can be declined';
+        return live.indexOf('Decline Deal') > -1 || 'corp cannot decline a deal out with the client';
+    } finally { sessionStorage.setItem('speeksUserRole', role); }
+});
+t('ws an unported stage gets its old header and footer back', function () {
+    _wsOpen(_wsHdrDeal);
+    _b2bShowDeal({ stage: 'pricing', delDeal: _wsHdrDeal, title: 'Price The Pickup', sub: 'old sub', body: '<p>x</p>',
+                   footer: '<button id="wsOldFoot">Close</button>' });
+    var m = document.getElementById('b2bDealModal');
+    if (m.classList.contains('b2b-ws-on')) return 'still in workspace mode';
+    if (!document.getElementById('b2bDealRail').hidden) return 'the rail stayed';
+    if (document.getElementById('b2bDealFooter').style.display === 'none') return 'the footer stayed hidden';
+    if (!document.getElementById('wsOldFoot')) return 'the footer lost its buttons';
+    if (document.getElementById('b2bDealSub').textContent !== 'old sub') return 'the subtitle was dropped';
+    if (document.getElementById('b2bDealMoreBtn').style.display !== 'none') return 'the ... menu stayed';
+    return document.getElementById('b2bDealDeleteBtn').style.display !== 'none' || 'the trashcan did not come back';
+});

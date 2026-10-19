@@ -1,0 +1,737 @@
+<title>B2B Stage Overhaul</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: a short plan on top, then one live mock frame driven by two pickers
+   (layout option x stage), then build phases and open questions.
+   Single light theme on purpose: it mocks SPEEKSNET, which is light-only. */
+:root {
+  --bg: #eef2f5; --paper: #ffffff; --ink: #1a1c1e; --muted: #647082; --faint: #94a3b8;
+  --line: #e6ebf1; --line2: #eef2f6; --surface: #f6f8fa;
+  --accent: #1f9d57; --accent-deep: #178048; --accent-tint: #e8f7ee;
+  --warn-bg: #fdf3e1; --warn: #b7791f; --crit-bg: #fcecec; --crit: #d1443b;
+  --info-bg: #e8f0fb; --info: #2563a8; --violet-bg: #f0eafc; --violet: #6d28d9;
+  --teal-bg: #e3f6f3; --teal: #0d8a7d; --neu-bg: #f1f5f9;
+  --sans: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  --r-sm: 7px; --r-md: 9px; --r-lg: 12px;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 28px; }
+h1 { font-size: 26px; font-weight: 900; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+h2 { font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 12px; color: var(--ink); }
+.lede { color: var(--muted); margin: 6px 0 0; max-width: 68ch; }
+.panel { background: var(--paper); border-radius: 16px; padding: 22px 24px; box-shadow: 0 2px 10px rgba(15,23,42,.05); min-width: 0; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 860px) { .two { grid-template-columns: 1fr; } }
+.facts-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.facts-list li { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: baseline; }
+.facts-list b { font-weight: 800; }
+.num { font: 700 11px var(--mono); color: var(--muted); background: var(--neu-bg); border-radius: 6px; padding: 2px 0; text-align: center; }
+.muted { color: var(--muted); }
+
+/* ---------- pickers ---------- */
+.pickers { display: grid; gap: 14px; }
+.optrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 860px) { .optrow { grid-template-columns: 1fr; } }
+.opt { text-align: left; border: 2px solid var(--line); background: var(--paper); border-radius: 14px; padding: 14px 16px; cursor: pointer; font: inherit; color: inherit; display: grid; gap: 6px; }
+.opt:hover { border-color: #cfd8e3; }
+.opt.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.opt:focus-visible, .seg button:focus-visible, .stg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.opt-h { display: flex; align-items: center; gap: 8px; font-weight: 900; font-size: 15px; }
+.opt-l { font: 800 11px var(--mono); background: var(--ink); color: #fff; border-radius: 6px; padding: 2px 7px; }
+.opt.on .opt-l { background: var(--accent); }
+.opt p { margin: 0; color: var(--muted); font-size: 13px; }
+.opt .pc { font-size: 12px; display: grid; gap: 2px; }
+.opt .pc span::before { font-weight: 900; margin-right: 6px; }
+.opt .pc .p::before { content: '+'; color: var(--accent); }
+.opt .pc .c::before { content: '–'; color: var(--crit); }
+.rec { font: 800 10px var(--sans); text-transform: uppercase; letter-spacing: .05em; background: var(--accent-tint); color: var(--accent-deep); padding: 2px 7px; border-radius: 999px; margin-left: auto; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.stages { display: flex; flex-wrap: wrap; gap: 6px; }
+.stg { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 6px 12px; font: 700 12px var(--sans); color: var(--muted); cursor: pointer; }
+.stg.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.seg { display: inline-flex; background: var(--neu-bg); border-radius: 9px; padding: 3px; margin-left: auto; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; font: 800 12px var(--sans); color: var(--muted); border-radius: 7px; cursor: pointer; }
+.seg button.on { background: var(--paper); color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.hint-keys { font-size: 12px; color: var(--faint); }
+
+/* ---------- the stage frame (stands in for the Operations page) ---------- */
+.stagebox { background: #dfe5ea; border-radius: 18px; padding: 22px; display: flex; justify-content: center; overflow: hidden; }
+.frame { width: 100%; max-width: 1180px; container-type: inline-size; container-name: frame; transition: max-width .2s; }
+.frame.phone { max-width: 390px; }
+@media (prefers-reduced-motion: reduce) { .frame { transition: none; } }
+
+/* =====================================================================
+   SHARED PIECES — every option is assembled from exactly these.
+   ===================================================================== */
+.m { background: var(--paper); border-radius: 14px; box-shadow: 0 18px 50px rgba(15,23,42,.18); display: flex; flex-direction: column; height: 680px; overflow: hidden; font-size: 13px; position: relative; }
+.m-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px 12px; }
+.m-ico { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-tint); color: var(--accent-deep); display: grid; place-items: center; flex: none; }
+.m-ico svg { width: 18px; height: 18px; }
+.m-titles { min-width: 0; flex: 1; }
+.m-eyebrow { font: 700 10.5px var(--mono); color: var(--muted); letter-spacing: .02em; }
+.m-title { font-size: 17px; font-weight: 900; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.m-acts { display: flex; gap: 6px; align-items: center; position: relative; }
+.icon-btn { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.icon-btn svg { width: 16px; height: 16px; }
+.menu { position: absolute; right: 38px; top: 36px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(15,23,42,.15); padding: 4px; z-index: 5; min-width: 170px; }
+.menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 7px; font: 600 13px var(--sans); color: var(--ink); cursor: pointer; }
+.menu button:hover { background: var(--surface); }
+.menu .danger { color: var(--crit); }
+
+.chip { display: inline-flex; align-items: center; gap: 5px; font: 800 10.5px var(--sans); text-transform: uppercase; letter-spacing: .04em; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+.chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.t-warn { background: var(--warn-bg); color: var(--warn); } .t-info { background: var(--info-bg); color: var(--info); }
+.t-violet { background: var(--violet-bg); color: var(--violet); } .t-teal { background: var(--teal-bg); color: var(--teal); }
+.t-ok { background: var(--accent-tint); color: var(--accent-deep); } .t-neu { background: var(--neu-bg); color: var(--muted); }
+.store { font: 800 10.5px var(--mono); background: var(--neu-bg); color: var(--ink); padding: 2px 7px; border-radius: 6px; }
+
+/* stage rail */
+.rail { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 0 18px 12px; }
+.rail-s { display: grid; gap: 5px; min-width: 0; }
+.rail-b { height: 4px; border-radius: 4px; background: var(--line); }
+.rail-s.done .rail-b { background: var(--accent); }
+.rail-s.now .rail-b { background: var(--ink); }
+.rail-l { font-size: 10.5px; font-weight: 700; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-s.done .rail-l { color: var(--muted); }
+.rail-s.now .rail-l { color: var(--ink); font-weight: 900; }
+.rail-m { display: none; padding: 0 18px 12px; }
+.rail-m .rail-b { background: var(--line); position: relative; overflow: hidden; }
+.rail-m .rail-b i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 4px; }
+.rail-m-l { font-size: 11px; font-weight: 700; color: var(--muted); margin-top: 6px; }
+
+/* status line */
+.status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-radius: var(--r-md); background: var(--surface); }
+.status b { font-weight: 800; }
+.status .age { color: var(--muted); }
+
+/* facts */
+.facts { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 10px 16px; padding: 2px 2px; }
+.fact-k { font: 800 10px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.fact-v { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fact-v.none { color: var(--faint); font-weight: 500; }
+
+/* numbers */
+.nums { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.n { padding: 10px 14px; border-left: 1px solid var(--line); min-width: 0; }
+.n:first-child { border-left: 0; }
+.n-k { font: 800 10px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.n-v { font-size: 17px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.n-v small { font-size: 11px; font-weight: 700; color: var(--muted); margin-left: 3px; }
+.n-v.good { color: var(--accent-deep); }
+
+/* section */
+.sec { border: 1px solid var(--line); border-radius: var(--r-lg); }
+.sec > summary, .sec-h { list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; font: 800 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--ink); cursor: pointer; }
+.sec > summary::-webkit-details-marker { display: none; }
+.sec > summary::after { content: ''; margin-left: auto; width: 7px; height: 7px; border-right: 2px solid var(--faint); border-bottom: 2px solid var(--faint); transform: rotate(45deg); transition: transform .15s; }
+.sec[open] > summary::after { transform: rotate(-135deg); }
+.sec-n { font: 700 10.5px var(--mono); color: var(--muted); background: var(--neu-bg); padding: 1px 6px; border-radius: 5px; text-transform: none; letter-spacing: 0; }
+.sec-b { padding: 0 14px 14px; display: grid; gap: 10px; }
+.sec-plain { border: 0; }
+.sec-plain .sec-h { padding: 0 0 8px; cursor: default; }
+.sec-plain .sec-b { padding: 0; }
+
+/* form bits */
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.fgrid .full { grid-column: 1 / -1; }
+.lbl { font: 800 10px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 5px; }
+.inp { border: 1px solid #d9e1ea; border-radius: var(--r-sm); padding: 8px 10px; min-height: 36px; background: var(--paper); font-weight: 500; }
+.inp.ta { min-height: 60px; }
+.inp.ph { color: var(--faint); }
+.row-toggle { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); }
+.row-toggle .grow { flex: 1; min-width: 0; }
+.sw { width: 34px; height: 20px; border-radius: 999px; background: #d4dbe3; position: relative; flex: none; }
+.sw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.sw.on { background: var(--accent); } .sw.on::after { left: 17px; }
+.tiles { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 8px; }
+.tile { border: 1.5px solid var(--line); border-radius: var(--r-md); padding: 10px; display: grid; gap: 2px; justify-items: start; }
+.tile b { font: 800 13px var(--mono); }
+.tile b { display: inline-flex; align-items: center; gap: 6px; }
+.sdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.tile.on { border-color: var(--accent); background: var(--accent-tint); }
+.segs { display: inline-flex; background: var(--neu-bg); border-radius: 9px; padding: 3px; }
+.segs span { padding: 6px 12px; font-weight: 800; font-size: 12px; color: var(--muted); border-radius: 7px; }
+.segs span.on { background: var(--paper); color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.scan { display: flex; align-items: center; gap: 10px; border: 1.5px dashed #b9e2c9; background: var(--accent-tint); border-radius: var(--r-md); padding: 8px 10px; }
+.scan .inp { flex: 1; border-color: #cfe9d9; }
+.prog { display: grid; gap: 6px; }
+.prog-t { display: flex; justify-content: space-between; font-weight: 700; }
+.prog-b { height: 8px; border-radius: 6px; background: var(--line); overflow: hidden; display: flex; }
+.prog-b i { background: var(--accent); } .prog-b i.r { background: var(--warn); }
+.drop { border: 1.5px dashed #cfd8e3; border-radius: var(--r-md); padding: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--muted); }
+.drop .grow { flex: 1; min-width: 160px; }
+.file { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface); border-radius: var(--r-sm); }
+.file b { font-weight: 700; }
+.note { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; min-height: 48px; color: var(--faint); }
+.hist { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.hist li { display: grid; grid-template-columns: 56px 1fr; gap: 10px; }
+.hist time { font: 700 11px var(--mono); color: var(--muted); }
+.qdoc { border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px; background: #fcfdfe; display: grid; gap: 8px; }
+.qdoc-h { display: flex; justify-content: space-between; font-weight: 800; }
+.qdoc-r { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.qdoc-t { border-top: 1px solid var(--line); padding-top: 8px; font-weight: 900; display: flex; justify-content: space-between; }
+
+/* buttons */
+.btn { height: 36px; padding: 0 14px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--paper); font: 800 12.5px var(--sans); color: var(--ink); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-deep); }
+.btn.primary[disabled] { background: #a9d9bd; border-color: #a9d9bd; cursor: not-allowed; }
+.btn.ghost { border-color: transparent; color: var(--muted); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 11.5px; }
+.btn .pill { font: 800 10px var(--mono); background: var(--neu-bg); padding: 1px 5px; border-radius: 5px; }
+.foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.foot .sp { flex: 1; }
+.why { font-size: 12px; color: var(--muted); font-weight: 600; }
+.saved { font-size: 11.5px; color: var(--faint); font-weight: 600; }
+
+/* ONE line table — column sets switch by mode */
+.lt { border: 1px solid var(--line); border-radius: var(--r-lg); overflow-x: auto; }
+.lt > * { min-width: var(--minw, 0); }
+.cell-in.l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lt-r { display: grid; grid-template-columns: var(--cols); gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line2); min-width: 0; }
+.lt-r:first-child { border-top: 0; }
+.lt-h { background: var(--surface); font: 800 10px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding-block: 8px; }
+.lt-r > * { min-width: 0; }
+.lt .r { text-align: right; font-variant-numeric: tabular-nums; }
+.lt .ln { font: 700 11px var(--mono); color: var(--faint); }
+.it-n { font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.it-s { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cond { font: 800 10px var(--sans); text-transform: uppercase; padding: 2px 6px; border-radius: 5px; }
+.c-Good { background: var(--accent-tint); color: var(--accent-deep); } .c-Fair { background: var(--warn-bg); color: var(--warn); } .c-Broken { background: var(--crit-bg); color: var(--crit); }
+.cell-in { border: 1px solid #d9e1ea; border-radius: 6px; padding: 4px 7px; background: var(--paper); text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cell-in.l { text-align: left; font-weight: 600; }
+.ck { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #c5cfda; display: inline-block; vertical-align: middle; }
+.ck.on { background: var(--accent); border-color: var(--accent); }
+.step { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.step i { font-style: normal; width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line); display: grid; place-items: center; font-weight: 900; color: var(--muted); }
+.step i.add { background: var(--accent); border-color: var(--accent); color: #fff; }
+.lt-m { display: none; }
+.lt-add { padding: 8px 12px; border-top: 1px dashed var(--line); color: var(--accent-deep); font-weight: 800; font-size: 12px; }
+.lt-foot { display: flex; justify-content: flex-end; gap: 18px; padding: 8px 12px; background: var(--surface); font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* ---------- Option A: tidied modal ---------- */
+.A .m-body { flex: 1; overflow: auto; padding: 4px 18px 18px; display: grid; gap: 14px; align-content: start; }
+.A .m-head { border-bottom: 0; }
+
+/* ---------- Option B: workspace ---------- */
+.B .m-split { flex: 1; display: grid; grid-template-columns: minmax(0,1fr) 300px; min-height: 0; border-top: 1px solid var(--line); }
+.B .main { overflow: auto; padding: 14px 18px 18px; display: grid; gap: 14px; align-content: start; }
+.B .tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.B .aside { border-left: 1px solid var(--line); background: #fbfcfd; overflow: auto; padding: 14px; display: grid; gap: 12px; align-content: start; }
+.next { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px; display: grid; gap: 8px; }
+.next .btn { width: 100%; justify-content: center; height: 40px; }
+.next .sec-btns { display: flex; gap: 6px; } .next .sec-btns .btn { height: 32px; font-size: 12px; }
+.B .facts { grid-template-columns: 1fr 1fr; }
+.B .nums { grid-template-columns: 1fr 1fr; }
+.B .nums .n { border-left: 0; border-top: 1px solid var(--line); }
+.B .nums .n:nth-child(-n+2) { border-top: 0; }
+.B .nums .n:nth-child(2n) { border-left: 1px solid var(--line); }
+.B .nums .n:last-child { grid-column: 1 / -1; border-left: 0; }
+.B .aside .sec { background: var(--paper); }
+
+/* ---------- Option C: tabs ---------- */
+.C .tabs { display: flex; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.C .tab { border: 0; background: none; padding: 10px 12px; font: 800 12.5px var(--sans); color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.C .tab.on { color: var(--ink); border-bottom-color: var(--ink); }
+.C .tab .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.C .m-body { flex: 1; overflow: auto; padding: 14px 18px 18px; display: grid; gap: 14px; align-content: start; }
+
+/* ---------- narrow frame = phone ---------- */
+@container frame (max-width: 600px) {
+  .m { height: 720px; border-radius: 22px; }
+  .rail { display: none; } .rail-m { display: block; }
+  .facts { grid-template-columns: 1fr 1fr; }
+  .nums { grid-template-columns: 1fr 1fr; }
+  .nums .n { border-left: 0; border-top: 1px solid var(--line); }
+  .nums .n:nth-child(-n+2) { border-top: 0; }
+  .nums .n:nth-child(2n) { border-left: 1px solid var(--line); }
+  .nums .n:last-child { grid-column: 1 / -1; border-left: 0; }
+  .tiles { grid-template-columns: repeat(3, 1fr); }
+  .fgrid { grid-template-columns: 1fr; }
+  .lt > * { min-width: 0; }
+  .lt-h { display: none; }
+  .lt-r { display: none; }
+  .lt-m { display: grid; gap: 3px; padding: 10px 12px; border-top: 1px solid var(--line2); }
+  .lt-m:first-of-type { border-top: 0; }
+  .lt-m .top { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  .lt-m .meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .foot .why { flex-basis: 100%; order: -1; }
+  .foot .ghost { display: none; }
+  .foot .btn.primary { flex: 1; justify-content: center; }
+  .B .m-split { grid-template-columns: 1fr; overflow: auto; }
+  .B .main, .B .aside { overflow: visible; }
+  .B .aside { border-left: 0; order: -1; border-bottom: 1px solid var(--line); }
+  .B .aside .sec, .B .aside .nums, .B .aside .facts-wrap { display: none; }
+  .B .main .ph-only { display: grid; }
+  .m-head .icon-btn.utility { display: none; }
+}
+.ph-only { display: none; }
+
+/* ---------- Pipeline board (bird's-eye) ---------- */
+.pane { background: var(--paper); border-radius: 14px; box-shadow: 0 18px 50px rgba(15,23,42,.18); overflow: hidden; font-size: 13px; }
+.pane-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px 0; flex-wrap: wrap; }
+.pane-head .sp { flex: 1; }
+.vtabs { display: flex; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--line); overflow-x: auto; margin-top: 10px; }
+.vtab { padding: 10px 12px; font-weight: 800; font-size: 12.5px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
+.vtab.on { color: var(--ink); border-bottom-color: var(--ink); }
+.pane-body { padding: 14px 18px 18px; display: grid; gap: 14px; }
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.filters .segs span { cursor: pointer; }
+.toggle-chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px 5px 6px; font-weight: 700; font-size: 12px; cursor: pointer; }
+.toggle-chip .sw { width: 28px; height: 16px; } .toggle-chip .sw::after { width: 10px; height: 10px; }
+.toggle-chip .sw.on::after { left: 15px; }
+.board { display: grid; grid-template-columns: repeat(7, minmax(148px, 1fr)); gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.col { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.col-h { display: grid; gap: 6px; padding-bottom: 2px; }
+.col-bar { height: 4px; border-radius: 4px; background: currentColor; }
+.col-t { display: flex; align-items: center; gap: 6px; font-weight: 900; color: var(--ink); font-size: 12.5px; }
+.col-t .sec-n { margin-left: auto; }
+.col-s { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 600; }
+.col-empty { border: 1.5px dashed var(--line); border-radius: 10px; padding: 14px; text-align: center; color: var(--faint); font-size: 12px; }
+.dcard { border: 1px solid var(--line); background: var(--paper); border-radius: 10px; padding: 10px; display: grid; gap: 6px; cursor: pointer; text-align: left; font: inherit; color: inherit; width: 100%; }
+.dcard:hover { border-color: #cfd8e3; box-shadow: 0 4px 14px rgba(15,23,42,.07); }
+.dcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dcard.mine { border-color: #9fd5b5; box-shadow: inset 3px 0 0 var(--accent); }
+.dcard-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.dcard-ref { font: 700 10.5px var(--mono); color: var(--muted); }
+.dcard-co { font-weight: 800; line-height: 1.25; }
+.dcard-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dcard-meta b { color: var(--ink); font-weight: 800; }
+.dcard-foot { display: flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; font-size: 11.5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.dcard-foot .sp { flex: 1; }
+.age-warn { color: var(--warn); } .age-crit { color: var(--crit); }
+.needs { font: 800 10px var(--sans); text-transform: uppercase; letter-spacing: .04em; background: var(--accent-tint); color: var(--accent-deep); padding: 2px 7px; border-radius: 999px; }
+.mini-prog { height: 5px; border-radius: 4px; background: var(--line); overflow: hidden; display: flex; }
+.mini-prog i { background: var(--accent); }
+.board-foot { font-size: 12px; color: var(--muted); }
+.board-foot u { color: var(--accent-deep); font-weight: 700; text-decoration: none; }
+.board-m { display: none; }
+.board-nums { grid-template-columns: repeat(4, minmax(0,1fr)); }
+@container frame (max-width: 600px) {
+  .board { display: none; }
+  .board-m { display: grid; gap: 10px; }
+  .board-m .sec-b { gap: 8px; }
+  .board-m summary .col-bar { width: 4px; height: 14px; }
+  .board-nums { grid-template-columns: 1fr 1fr; }
+  .board-nums .n:last-child { grid-column: auto; }
+  .pane-body > * { min-width: 0; }
+  .filters .segs { max-width: 100%; overflow-x: auto; }
+  .pane-head .m-title { font-size: 15px; }
+  .pane-head .btn.sm:not(.primary) { display: none; }
+}
+
+/* ---------- plan bits ---------- */
+.phases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: ph; }
+@media (max-width: 860px) { .phases { grid-template-columns: 1fr; } }
+.phases li { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; counter-increment: ph; }
+.phases li::before { content: counter(ph); font: 800 11px var(--mono); background: var(--ink); color: #fff; border-radius: 6px; padding: 2px 7px; margin-right: 8px; }
+.phases b { font-weight: 900; }
+.phases p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.qs { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.qs b { font-weight: 800; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>B2B Stage Overhaul</h1>
+    <p class="lede">Every deal screen rebuilt from the same parts, in the same order, with the same buttons in the same place. Pick a layout below and step through all eight stages with the same sample deal.</p>
+  </header>
+
+  <section class="two">
+    <div class="panel">
+      <h2>What's inconsistent today</h2>
+      <ul class="facts-list">
+        <li><span class="num">5</span><span><b>line tables.</b> Pricing, approval, quote, listing and the read-only view each draw the lines differently, with different columns.</span></li>
+        <li><span class="num">2</span><span><b>totals widgets.</b> A profit strip on some stages, nine stat tiles on others. The full quote sheet shows both.</span></li>
+        <li><span class="num">≠</span><span><b>Buttons move.</b> Close vs Cancel, Decline before or after Close. Pickup and pricing have two primary buttons and approval has none.</span></li>
+        <li><span class="num">?</span><span><b>No sense of where you are.</b> A deal screen never shows the stage among the eight.</span></li>
+        <li><span class="num">6</span><span><b>heading styles,</b> 27 font sizes, ~20 corner radii, 527 B2B CSS classes.</span></li>
+        <li><span class="num">¶</span><span><b>Help paragraphs</b> on nearly every stage.</span></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h2>The rules every option follows</h2>
+      <ul class="facts-list">
+        <li><span class="num">1</span><span><b>One header.</b> Ref, client, stage chip. Delete and Decline sit in a ⋯ menu; × closes.</span></li>
+        <li><span class="num">2</span><span><b>Stage rail.</b> All eight steps, current one marked.</span></li>
+        <li><span class="num">3</span><span><b>Status line.</b> Who it's waiting on and for how long.</span></li>
+        <li><span class="num">4</span><span><b>Same facts, same order</b> on every stage.</span></li>
+        <li><span class="num">5</span><span><b>One numbers strip:</b> Units, Offer, Resale, Gross, Net.</span></li>
+        <li><span class="num">6</span><span><b>One line table.</b> Each stage picks its columns.</span></li>
+        <li><span class="num">7</span><span><b>One section style</b> for Files, Notes, Client Quote and History.</span></li>
+        <li><span class="num">8</span><span><b>One primary button,</b> always in the same spot. If it's disabled, the reason sits beside it.</span></li>
+        <li><span class="num">9</span><span><b>Labels, not paragraphs.</b> Anything longer becomes a tooltip or goes.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="panel pickers" aria-label="Layout options">
+    <h2>Pick a layout</h2>
+    <div class="optrow" id="opts"></div>
+    <div class="bar">
+      <div class="stages" id="stages" role="tablist" aria-label="Stage"></div>
+      <div class="seg"><button data-s="desk" class="on">Desktop</button><button data-s="phone">Phone</button></div>
+    </div>
+    <div class="hint-keys">← → steps through stages</div>
+  </section>
+
+  <div class="stagebox"><div class="frame" id="frame"></div></div>
+
+  <section class="panel pickers" id="pipeline">
+    <h2>Pipeline</h2>
+    <p class="muted" style="margin:0;max-width:68ch">Every open deal at a glance, built from the workspace's parts: the rail becomes the column headers, and the chips, store tags, numbers and ages are the same. Click a card to open that deal above.</p>
+    <div class="bar"><div class="seg"><button data-s="desk" class="on">Desktop</button><button data-s="phone">Phone</button></div></div>
+  </section>
+  <div class="stagebox"><div class="frame" id="bframe"></div></div>
+
+  <section class="panel">
+    <h2>How it gets built</h2>
+    <ol class="phases">
+      <li><b>Foundation</b><p>Tokens, one type scale, and the shared pieces: header, rail, status, facts, numbers, line table, section, footer. Nothing changes on screen yet.</p></li>
+      <li><b>Port the stages</b><p>One at a time, deleting each old renderer as its replacement lands. Simplest first: Completed, Listing Store, Pricing Store, Pickup, Approval + Quote, Listing. Pricing last.</p></li>
+      <li><b>Copy pass</b><p>Every help paragraph cut to a label or a tooltip. Error messages stay plain and specific.</p></li>
+      <li><b>List views</b><p>Needs You, Pipeline, Completed, Evaluations, Clients: same chips, cards, tiles and empty states as the deal screen.</p></li>
+      <li><b>Phones</b><p>One narrow-screen pass across every stage, built into the shared pieces, not per stage.</p></li>
+      <li><b>CSS cleanup</b><p>Delete the dead Overview styles and every class the old renderers leave behind.</p></li>
+    </ol>
+    <p class="muted" style="margin:12px 0 0">No database or edge-function changes. Each phase is checked with the B2B browser suites at phone, tablet and desktop widths.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Decided</h2>
+    <ol class="qs">
+      <li><b>Layout:</b> the deal workspace (B).</li>
+      <li><b>Pipeline is the main view.</b> The Needs You tab goes; the board’s “Needs you only” switch replaces it.</li>
+      <li><b>Closing:</b> the × in the header (and Esc). No Close or Cancel buttons in the actions.</li>
+      <li><b>⋯ menu</b> holds Request Deletion and Decline Deal.</li>
+      <li><b>Evaluations</b> open in the same workspace with no stage rail. Corp only.</li>
+    </ol>
+  </section>
+</div>
+
+<script>
+(function () {
+  const money = (n, d = 0) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const ICO = {
+    pickup: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+    pin: '<path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+    tag: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/>',
+    check: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
+    doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+    list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
+    done: '<path d="M20 6L9 17l-5-5"/>',
+    more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    print: '<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+    scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/>',
+  };
+  const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICO[k]}</svg>`;
+
+  const LINES = [
+    { n: '0001', type: 'Laptop', item: 'Dell Latitude 5420', cond: 'Good', qty: 12, value: 210, offer: 120, wipe: true, handle: 'Purchase', listed: 7, rec: 0, store: 'OVL' },
+    { n: '0002', type: 'Laptop', item: 'Lenovo ThinkPad T14 Gen 2', cond: 'Fair', qty: 6, value: 240, offer: 130, wipe: true, handle: 'Purchase', listed: 2, rec: 1, store: 'OVL', note: 'Light scuffs' },
+    { n: '0003', type: 'Monitor', item: 'Dell P2419H', cond: 'Good', qty: 20, value: 45, offer: 18, wipe: false, handle: 'Purchase', listed: 20, rec: 0, store: 'OVL' },
+    { n: '0004', type: 'Phone', item: 'Apple iPhone 12 64GB', cond: 'Broken', qty: 4, value: 90, offer: 35, wipe: true, handle: 'Parts', listed: 0, rec: 0, store: 'OVL', note: 'Cracked screens' },
+  ];
+  const T = LINES.reduce((a, l) => ({ units: a.units + l.qty, offer: a.offer + l.qty * l.offer, value: a.value + l.qty * l.value, listed: a.listed + l.listed, rec: a.rec + l.rec }), { units: 0, offer: 0, value: 0, listed: 0, rec: 0 });
+  T.gross = T.value - T.offer; T.fees = T.value * 0.08; T.net = T.gross - T.fees;
+
+  // Every stage is data. The layouts never branch on the stage -- they ask it.
+  const STAGES = [
+    { k: 'pickup', short: 'Pickup', label: 'Pickup Sign-Off', tone: 'warn', ico: 'pickup', wait: 'OVL', age: '1 day',
+      line: 'Collected Oct 9. Needs the client’s signature.', primary: 'Sign & Mark Picked Up', off: 'Needs a signature',
+      utils: ['Holding Label'], secondary: [], sections: [], tab: 'details', facts: { pricing: 'OVL' } },
+    { k: 'pricing_location', short: 'Pricing Store', label: 'Pricing Location', tone: 'info', ico: 'pin', wait: 'Corp', age: '4 hrs',
+      line: 'Signed off. Pick where it gets priced.', primary: 'Send To OVL', utils: ['Holding Label'], secondary: [], sections: [], tab: 'details', facts: { signed: 'Dana Ruiz' } },
+    { k: 'pricing', short: 'Pricing', label: 'Pricing', tone: 'info', ico: 'tag', wait: 'OVL', age: '3 days',
+      line: '4 lines, 42 units priced.', primary: 'Submit For Quoting', utils: ['SKUs', 'Move Store'], secondary: [], sections: ['notes', 'cq'], tab: 'lines', saved: true, facts: { pricing: 'OVL', signed: 'Dana Ruiz' } },
+    { k: 'review', short: 'Approval', label: 'Awaiting Approval', tone: 'warn', ico: 'check', wait: 'approval', age: '1 day',
+      line: 'Priced. Check it, then send it.', primary: 'Copy Quote & Mark Sent', utils: ['SKUs', 'Move Store'], secondary: ['Send Back'], sections: ['proof', 'notes'], tab: 'quote', saved: true, facts: { pricing: 'OVL', signed: 'Dana Ruiz' } },
+    { k: 'quote', short: 'With Client', label: 'Out For Quote', tone: 'violet', ico: 'doc', wait: 'the client', age: '3 days',
+      line: 'Sent Oct 15.', primary: 'Mark Accepted', off: 'Add the client’s email first', utils: ['SKUs', 'Move Store'], secondary: ['Copy Quote', 'Send Back'], sections: ['proof', 'notes', 'cq'], tab: 'files', saved: true, facts: { pricing: 'OVL', signed: 'Dana Ruiz', sent: 'Oct 15' } },
+    { k: 'listing_location', short: 'Listing Store', label: 'Listing Location', tone: 'warn', ico: 'pin', wait: 'Corp', age: '2 hrs',
+      line: `Accepted Oct 16 for ${money(T.offer)}.`, primary: 'Send To Listing', utils: [], secondary: [], sections: ['proof', 'notes'], tab: 'details', facts: { pricing: 'CORP', signed: 'Dana Ruiz', sent: 'Oct 15', acc: 'Oct 16' } },
+    { k: 'listing', short: 'Listing', label: 'Listing', tone: 'teal', ico: 'list', wait: 'OVL', age: '2 days',
+      line: `${T.listed + T.rec} of ${T.units} units done.`, primary: 'Complete Deal', off: `${T.units - T.listed - T.rec} units left`, utils: ['SKUs', 'Move Lines', 'Move Store'], secondary: [], sections: ['proof', 'hist'], tab: 'lines', facts: { pricing: 'CORP', listing: 'OVL', signed: 'Dana Ruiz', sent: 'Oct 15', acc: 'Oct 16' } },
+    { k: 'completed', short: 'Done', label: 'Completed', tone: 'ok', ico: 'done', wait: null, age: null,
+      line: 'Completed Oct 24.', primary: null, utils: ['SKUs'], secondary: [], sections: ['proof', 'notes', 'hist'], tab: 'lines', facts: { pricing: 'CORP', listing: 'OVL', signed: 'Dana Ruiz', sent: 'Oct 15', acc: 'Oct 16' } },
+    // Corp-only, outside the deal flow: same workspace, no rail.
+    { k: 'preval', short: 'Evaluation', label: 'Draft', tone: 'neu', ico: 'doc', wait: null, age: null, norail: true, ref: 'EV-0057',
+      line: 'Good until Nov 2.', primary: 'Send To Client', utils: [], secondary: [], sections: ['cq'], tab: 'lines', saved: true, facts: {} },
+  ];
+  const FLOW = 8;   // the deal stages; anything after is not on the rail
+  const ix = (st) => STAGES.indexOf(st);
+
+  /* ---------------- shared pieces ---------------- */
+  const header = (st) => `
+    <div class="m-head">
+      <span class="m-ico">${svg(st.ico)}</span>
+      <div class="m-titles">
+        <div class="m-eyebrow">${st.ref || 'DL-0412'}${st.norail ? ' · Corp only' : ''}</div>
+        <div class="m-title">Harbor Point Dental <span class="chip t-${st.tone}">${st.label}</span></div>
+      </div>
+      <div class="m-acts">
+        <button class="icon-btn" data-menu aria-label="More actions">${svg('more')}</button>
+        <button class="icon-btn" aria-label="Close">${svg('x')}</button>
+      </div>
+    </div>`;
+  const rail = (st) => {
+    if (st.norail) return '<div style="height:12px"></div>';
+    const i = ix(st);
+    return `<div class="rail">${STAGES.slice(0, FLOW).map((s, j) => `<div class="rail-s ${j < i ? 'done' : j === i ? 'now' : ''}"><div class="rail-b"></div><div class="rail-l">${s.short}</div></div>`).join('')}</div>
+      <div class="rail-m"><div class="rail-b"><i style="width:${((i + 1) / FLOW) * 100}%"></i></div><div class="rail-m-l">Step ${i + 1} of ${FLOW} · ${st.short}</div></div>`;
+  };
+  const status = (st) => `<div class="status"><span class="chip t-${st.tone}">${st.short}</span>
+      ${st.wait ? `<span>Waiting on <b>${st.wait}</b></span><span class="age">· ${st.age}</span>` : ''}<span class="muted">${st.line}</span></div>`;
+  const facts = (st) => {
+    const f = st.facts, v = (x) => x ? `<div class="fact-v">${x}</div>` : '<div class="fact-v none">—</div>';
+    const store = (x) => x ? `<span class="store">${x}</span>` : null;
+    if (st.norail) return `<div class="facts facts-wrap">
+      <div><div class="fact-k">Contact</div>${v('Dana Ruiz')}</div>
+      <div><div class="fact-k">Evaluated</div>${v('Oct 19')}</div>
+      <div><div class="fact-k">Good until</div>${v('Nov 2')}</div>
+      <div><div class="fact-k">Reference</div>${v('Q4 refresh')}</div></div>`;
+    return `<div class="facts facts-wrap">
+      <div><div class="fact-k">Contact</div>${v('Dana Ruiz')}</div>
+      <div><div class="fact-k">Picked up</div>${v('Oct 9')}</div>
+      <div><div class="fact-k">Pricing</div>${v(store(f.pricing))}</div>
+      <div><div class="fact-k">Listing</div>${v(store(f.listing))}</div>
+      <div><div class="fact-k">Quote sent</div>${v(f.sent)}</div>
+      <div><div class="fact-k">Accepted</div>${v(f.acc)}</div></div>`;
+  };
+  const numbers = (st) => ix(st) < 2 ? '' : `<div class="nums">
+      <div class="n"><div class="n-k">Units</div><div class="n-v">${T.units}<small>· 4 lines</small></div></div>
+      <div class="n"><div class="n-k">Our offer</div><div class="n-v">${money(T.offer)}</div></div>
+      <div class="n"><div class="n-k">Resale</div><div class="n-v">${money(T.value)}</div></div>
+      <div class="n"><div class="n-k">Gross</div><div class="n-v">${money(T.gross)}<small>${Math.round(T.gross / T.value * 100)}%</small></div></div>
+      <div class="n"><div class="n-k">Net</div><div class="n-v good">${money(Math.round(T.net))}<small>${Math.round(T.net / T.value * 100)}%</small></div></div></div>`;
+  const section = (title, body, o = {}) => o.plain
+    ? `<div class="sec sec-plain"><div class="sec-h">${title}${o.n != null ? ` <span class="sec-n">${o.n}</span>` : ''}</div><div class="sec-b">${body}</div></div>`
+    : `<details class="sec"${o.open ? ' open' : ''}><summary>${title}${o.n != null ? ` <span class="sec-n">${o.n}</span>` : ''}</summary><div class="sec-b">${body}</div></details>`;
+
+  // The one line table. Modes pick columns; nothing else differs.
+  const COLS = {
+    edit:  { minw: '820px', cols: '44px minmax(0,2.2fr) 70px 46px 70px 70px 54px 92px 40px 80px', head: ['Line', 'Item', 'Cond', 'Qty', 'Value', 'Offer', 'Margin', 'Handling', 'Wipe', 'Total'] },
+    offer: { cols: '44px minmax(0,2.4fr) 70px 46px 76px 80px 60px 86px', head: ['Line', 'Item', 'Cond', 'Qty', 'Value', 'Offer', 'Margin', 'Total'] },
+    read:  { cols: '44px minmax(0,2.4fr) 70px 46px 76px 76px 86px 56px', head: ['Line', 'Item', 'Cond', 'Qty', 'Value', 'Offer', 'Total', 'Store'] },
+    list:  { cols: '44px minmax(0,2.4fr) 70px 76px minmax(0,1.2fr) 130px', head: ['Line', 'Item', 'Cond', 'Value', 'Progress', 'Listed'] },
+  };
+  const R = new Set(['Qty', 'Value', 'Offer', 'Margin', 'Total', 'Listed']);
+  const lines = (mode, o = {}) => {
+    const c = COLS[mode];
+    const head = `<div class="lt-r lt-h">${c.head.map(h => `<div class="${R.has(h) ? 'r' : ''}">${h}</div>`).join('')}</div>`;
+    const rows = LINES.map(l => {
+      const margin = Math.round((l.value - l.offer) / l.value * 100) + '%';
+      const tot = money(l.qty * l.offer);
+      const item = `<div><div class="it-n">${l.item}</div><div class="it-s">${l.type}${l.note ? ' · ' + l.note : ''}${l.wipe && mode !== 'edit' ? ' · Wipe' : ''}</div></div>`;
+      const cond = `<div><span class="cond c-${l.cond}">${l.cond}</span></div>`;
+      let cells;
+      if (mode === 'edit') cells = [`<div class="ln">${l.n}</div>`, `<div class="cell-in l">${l.item}</div>`, cond, `<div class="cell-in">${l.qty}</div>`, `<div class="cell-in">${l.value}</div>`, `<div class="cell-in">${l.offer}</div>`, `<div class="r muted">${margin}</div>`, `<div class="cell-in l">${l.handle}</div>`, `<div><span class="ck ${l.wipe ? 'on' : ''}"></span></div>`, `<div class="r"><b>${tot}</b></div>`];
+      else if (mode === 'offer') cells = [`<div class="ln">${l.n}</div>`, item, cond, `<div class="r">×${l.qty}</div>`, `<div class="r muted">${money(l.value)}</div>`, `<div class="cell-in">${l.offer}</div>`, `<div class="r muted">${margin}</div>`, `<div class="r"><b>${tot}</b></div>`];
+      else if (mode === 'read') cells = [`<div class="ln">${l.n}</div>`, item, cond, `<div class="r">×${l.qty}</div>`, `<div class="r muted">${money(l.value)}</div>`, `<div class="r">${money(l.offer)}</div>`, `<div class="r"><b>${tot}</b></div>`, `<div>${o.stores ? `<span class="store">${l.store}</span>` : '<span class="muted">—</span>'}</div>`];
+      else {
+        const done = l.listed + l.rec, pct = (n) => (n / l.qty * 100) + '%';
+        cells = [`<div class="ln">${l.n}</div>`, item, cond, `<div class="r">${money(l.value)}</div>`, `<div class="prog-b"><i style="width:${pct(l.listed)}"></i><i class="r" style="width:${pct(l.rec)}"></i></div>`, `<div class="step"><b>${done}/${l.qty}</b><i>−</i><i class="add">+</i></div>`];
+      }
+      const meta = mode === 'list' ? `${l.listed + l.rec} of ${l.qty} done${l.rec ? ` · ${l.rec} recycled` : ''}` : `×${l.qty} · ${money(l.offer)} ea · <b>${tot}</b>`;
+      return `<div class="lt-r">${cells.join('')}</div>
+        <div class="lt-m"><div class="top"><span class="it-n">${l.item}</span><span class="cond c-${l.cond}">${l.cond}</span></div><div class="meta">${l.n} · ${meta}</div></div>`;
+    }).join('');
+    const add = mode === 'edit' ? '<div class="lt-add">＋ Add Line</div>' : '';
+    const foot = mode === 'list' ? '' : `<div class="lt-foot"><span class="muted">${T.units} units</span><span>${money(T.offer)}</span></div>`;
+    return `<div class="lt" style="--cols:${c.cols};--minw:${c.minw || '600px'}">${head}${rows}${add}${foot}</div>`;
+  };
+
+  const quoteDoc = () => `<div class="qdoc"><div class="qdoc-h"><span>Quote · Harbor Point Dental</span><span class="m-eyebrow">DL-0412</span></div>
+      ${LINES.map(l => `<div class="qdoc-r"><span>${l.qty} × ${l.item} <span class="muted">(${l.cond})</span></span><span>${money(l.qty * l.offer)}</span></div>`).join('')}
+      <div class="qdoc-t"><span>Total offer</span><span>${money(T.offer)}</span></div><div class="muted" style="font-size:12px">Good for 14 days from Oct 15.</div></div>`;
+  const proof = (st) => ix(st) >= 5
+    ? `<div class="file">${svg('doc').replace('<svg', '<svg width="16" height="16"')}<div><b>RE: Quote DL-0412.msg</b><div class="muted" style="font-size:12px">Added Oct 16</div></div></div>`
+    : `<div class="drop"><div class="grow"><b style="color:var(--ink)">Client’s acceptance email</b><div>Drop the .msg here</div></div><button class="btn sm">Choose File</button></div>`;
+  const HIST = [['Oct 9', 'Picked up and signed'], ['Oct 10', 'Sent to OVL for pricing'], ['Oct 14', 'Submitted for quoting'], ['Oct 15', 'Quote sent'], ['Oct 16', 'Accepted'], ['Oct 16', 'Listing at OVL'], ['Oct 24', 'Completed']];
+  const hist = (st) => `<ul class="hist">${HIST.slice(0, Math.max(1, ix(st))).map(h => `<li><time>${h[0]}</time><span>${h[1]}</span></li>`).join('')}</ul>`;
+  const SECTIONS = {
+    proof: (st) => section('Files', proof(st), { n: ix(st) >= 5 ? 1 : 0, open: st.k === 'quote' || st.k === 'review' }),
+    notes: () => section('Notes', `<div class="fgrid"><div><div class="lbl">On the quote</div><div class="note">Prints under the standard notes</div></div><div><div class="lbl">Internal</div><div class="note">Never printed</div></div></div>`),
+    cq: () => section('Client quote', quoteDoc()),
+    hist: (st) => section('History', hist(st), { n: Math.max(1, ix(st)), open: st.k === 'completed' }),
+  };
+  const extras = (st, skip = []) => st.sections.filter(s => !skip.includes(s)).map(s => SECTIONS[s](st)).join('');
+
+  // The stage's own work. Returns pieces; each layout decides where they go.
+  const work = (st) => {
+    const tiles = (on) => `<div class="tiles">${[['OVL', '#7c6fd6'], ['LEE', '#4e90cf'], ['WSP', '#2ea36a'], ['MPL', '#d99f43'], ['BAL', '#d9776a'], ['CORP', '#1a1c1e']].map(t => `<div class="tile ${t[0] === on ? 'on' : ''}"><b><i class="sdot" style="background:${t[1]}"></i>${t[0]}</b></div>`).join('')}</div>`;
+    switch (st.k) {
+      case 'pickup': return { top: `<div class="fgrid">
+          <div class="full"><div class="lbl">What was picked up</div><div class="inp ta">~40 laptops, 20 monitors, a box of phones</div></div>
+          <div><div class="lbl">Client name</div><div class="inp">Dana Ruiz</div></div>
+          <div><div class="lbl">Pickup date</div><div class="inp">Oct 9, 2026</div></div>
+          <div class="full"><div class="lbl">Received by</div><div class="inp ph">Who took these in at OVL</div></div></div>
+          <div class="row-toggle"><span class="sw"></span><div class="grow"><b>Itemized pickup</b> <span class="muted">· scan each unit</span></div></div>
+          <div class="row-toggle"><div class="grow"><b>Custody form</b> <span class="muted">· not signed</span></div><button class="btn sm">Review &amp; Sign</button></div>` };
+      case 'pricing_location': return { top: `${section('Price it at', tiles('OVL'), { plain: true })}
+          <div class="fgrid"><div><div class="lbl">Handed over by</div><div class="inp">Marcus</div></div><div><div class="lbl">Received by</div><div class="inp ph">Name</div></div></div>` };
+      case 'pricing': return { lines: lines('edit') };
+      case 'preval': return { top: `<div><div class="lbl">What they say they have</div><div class="inp ta">~40 laptops, 20 monitors, a box of phones</div></div>`, lines: lines('edit') };
+      case 'review': return { lines: lines('offer'), quote: true };
+      case 'quote': return { lines: lines('offer') };
+      case 'listing_location': return { top: `<div><span class="segs"><span class="on">Whole deal</span><span>Split by line</span></span></div>${section('List it at', tiles('OVL'), { plain: true })}`, lines: lines('read', { stores: true }) };
+      case 'listing': return { top: `<div class="scan">${svg('scan').replace('<svg', '<svg width="18" height="18" style="color:var(--accent-deep)"')}<div class="inp ph">Scan our label, then the Shopify barcode</div></div>
+          <div class="prog"><div class="prog-t"><span>${T.listed + T.rec} of ${T.units} units</span><span class="muted">${T.listed} listed · ${T.rec} recycled</span></div><div class="prog-b"><i style="width:${T.listed / T.units * 100}%"></i><i class="r" style="width:${T.rec / T.units * 100}%"></i></div></div>`, lines: lines('list') };
+      default: return { lines: lines('read', { stores: true }) };
+    }
+  };
+  const utilBtns = (st) => st.utils.map(u => u === 'SKUs' ? `<button class="btn ghost">${svg('print').replace('<svg', '<svg width="14" height="14"')}SKUs <span class="pill">42</span></button>` : `<button class="btn ghost">${u}</button>`).join('');
+  const secBtns = (st) => st.secondary.map(s => `<button class="btn">${s}</button>`).join('');
+  const primary = (st, cls = '') => st.primary ? `<button class="btn primary ${cls}" ${st.off ? 'disabled' : ''}>${st.primary}</button>` : '';
+  const footer = (st) => `<div class="foot">${utilBtns(st)}<span class="sp"></span>${st.saved ? '<span class="saved">All changes saved</span>' : ''}${st.off ? `<span class="why">${st.off}</span>` : ''}${secBtns(st)}${primary(st)}</div>`;
+  const menu = `<div class="menu" hidden><button>Request Deletion</button><button class="danger">Decline Deal</button></div>`;
+
+  /* ---------------- the three layouts ---------------- */
+  const LAYOUTS = {
+    A: {
+      name: 'Tidied popup', blurb: 'Today’s popup on one skeleton. Everything stacks in the same order on every stage.',
+      pros: ['Smallest change, nothing to relearn', 'Quickest to build'], cons: ['Long deals scroll a lot'],
+      render(st) {
+        const w = work(st);
+        return `<div class="m A">${header(st)}${rail(st)}<div class="m-body">${status(st)}${facts(st)}${numbers(st)}${w.top || ''}${w.lines || ''}${w.quote ? section('Client quote', quoteDoc(), { open: true }) : ''}${extras(st)}</div>${footer(st)}${menu}</div>`;
+      },
+    },
+    B: {
+      name: 'Deal workspace', blurb: 'Full screen. The work on the left; the deal on the right with the next step at the top.',
+      pros: ['Next step never moves', 'Room for the pricing sheet'], cons: ['Biggest change'], rec: true,
+      render(st) {
+        const w = work(st);
+        const next = `<div class="next">${status(st).replace('class="status"', 'class="status" style="background:none;padding:0"')}${primary(st)}${st.off ? `<span class="why">${st.off}</span>` : ''}${st.secondary.length ? `<div class="sec-btns">${secBtns(st)}</div>` : ''}${st.primary ? '' : '<span class="why">Nothing left to do.</span>'}</div>`;
+        return `<div class="m B">${header(st)}${rail(st)}<div class="m-split">
+            <div class="main">${st.utils.length ? `<div class="tools">${utilBtns(st).replaceAll('btn ghost', 'btn sm')}${st.saved ? '<span class="saved" style="margin-left:auto;align-self:center">All changes saved</span>' : ''}</div>` : ''}
+              ${w.top || ''}${w.lines || ''}${w.quote ? section('Client quote', quoteDoc(), { open: true }) : ''}
+              <div class="ph-only" style="gap:12px">${numbers(st)}${extras(st)}</div></div>
+            <aside class="aside">${next}<div class="facts-wrap">${facts(st)}</div>${numbers(st)}${extras(st)}</aside>
+          </div>${menu}</div>`;
+      },
+    },
+    C: {
+      name: 'Tabs', blurb: 'Same popup, split into tabs. Each stage opens on the tab it needs.',
+      pros: ['Shortest screens', 'Least scrolling'], cons: ['Things hide behind tabs', 'Approving means flipping tabs'],
+      render(st, tab) {
+        const w = work(st);
+        const TABS = [['details', 'Details'], ['lines', 'Lines', 4], ['quote', 'Quote'], ['files', 'Files & Notes'], ['history', 'History']];
+        const on = tab || st.tab;
+        let body;
+        if (on === 'details') body = `${status(st)}${facts(st)}${numbers(st)}${w.top && st.k !== 'listing' ? w.top : ''}`;
+        else if (on === 'lines') body = `${st.k === 'listing' ? w.top : ''}${w.lines || lines('read')}`;
+        else if (on === 'quote') body = `${quoteDoc()}`;
+        else if (on === 'files') body = `${section('Files', proof(st), { plain: true })}${section('Notes', SECTIONS.notes().replace(/^<details class="sec">.*?<div class="sec-b">/, '').replace(/<\/div><\/details>$/, ''), { plain: true })}`;
+        else body = section('History', hist(st), { plain: true });
+        return `<div class="m C">${header(st)}${rail(st)}<div class="tabs" role="tablist">${TABS.map(t => `<button class="tab ${t[0] === on ? 'on' : ''}" data-tab="${t[0]}">${t[0] === st.tab ? '<span class="dot"></span>' : ''}${t[1]}${t[2] ? ` <span class="sec-n">${t[2]}</span>` : ''}</button>`).join('')}</div><div class="m-body">${body}</div>${footer(st)}${menu}</div>`;
+      },
+    },
+  };
+
+  /* ---------------- Pipeline board ---------------- */
+  // Viewing as corp, so "needs you" = the stages corp acts on. Our sample deal
+  // (DL-0412) sits in Pricing and opens the workspace above like any other card.
+  const DEALS = [
+    { ref: 'DL-0431', co: 'Northgate Family Practice', s: 0, store: 'OVL', desc: '~25 laptops', age: 1 },
+    { ref: 'DL-0433', co: 'Ridgeview Schools', s: 0, store: 'WSP', desc: '2 pallets of Chromebooks', age: 0 },
+    { ref: 'DL-0428', co: 'Crestline Logistics', s: 1, store: null, desc: '60 desktops', age: 1, mine: true },
+    { ref: 'DL-0412', co: 'Harbor Point Dental', s: 2, store: 'OVL', units: 42, offer: 2720, age: 3, sample: true },
+    { ref: 'DL-0419', co: 'Midtown Legal Group', s: 2, store: 'LEE', units: 18, offer: 1240, age: 6 },
+    { ref: 'DL-0421', co: 'Blue Valley Credit Union', s: 2, store: 'BAL', units: 31, age: 2, waiting: true },
+    { ref: 'DL-0415', co: 'Summit Orthopedics', s: 3, store: 'MPL', units: 24, offer: 3180, age: 1, mine: true },
+    { ref: 'DL-0409', co: 'Prairie Fire Coffee', s: 4, store: 'OVL', units: 9, offer: 640, age: 8 },
+    { ref: 'DL-0407', co: 'Lakeside Church', s: 4, store: 'WSP', units: 14, offer: 1020, age: 12 },
+    { ref: 'DL-0405', co: 'Gateway Engineering', s: 5, store: 'CORP', units: 56, offer: 5400, age: 1, mine: true },
+    { ref: 'DL-0398', co: 'Kessler Insurance', s: 6, store: 'OVL', units: 38, offer: 2950, age: 4, done: 30 },
+    { ref: 'DL-0401', co: 'Metro Animal Hospital', s: 6, store: 'LEE', split: 'LEE · MPL', units: 22, offer: 1480, age: 9, done: 8 },
+    { ref: 'DL-0394', co: 'Union Station Events', s: 6, store: 'BAL', units: 12, offer: 760, age: 3, done: 11 },
+  ];
+  const STORES = ['All', 'OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP', 'Unassigned'];
+  const ageCls = (d) => d >= 10 ? 'age-crit' : d >= 5 ? 'age-warn' : '';
+  const dealCard = (d) => {
+    const st = STAGES[d.s];
+    const store = d.split ? `<span class="store">${d.split}</span>` : d.store ? `<span class="store">${d.store}</span>` : '<span class="store" style="color:var(--faint)">NONE</span>';
+    const meta = d.units ? `<b>${d.units}</b> units${d.offer ? ` · <b>${money(d.offer)}</b>` : ''}` : d.desc;
+    const prog = d.done != null ? `<div class="mini-prog"><i style="width:${d.done / d.units * 100}%"></i></div><div class="dcard-meta">${d.done} of ${d.units} listed</div>` : '';
+    const wait = d.waiting ? 'Not started' : ({ OVL: d.store || 'Corp', approval: 'Approval', 'the client': 'Client' })[st.wait] || st.wait || '';
+    return `<button class="dcard ${d.mine ? 'mine' : ''}" data-open="${d.s}">
+        <div class="dcard-top"><span class="dcard-ref">${d.ref}</span>${store}</div>
+        <div class="dcard-co">${d.co}</div>
+        <div class="dcard-meta">${meta}</div>${prog}
+        <div class="dcard-foot"><span>${wait}</span><span class="${ageCls(d.age)}">· ${d.age}d</span><span class="sp"></span>${d.mine ? '<span class="needs">Needs you</span>' : ''}</div>
+      </button>`;
+  };
+  function boardHtml() {
+    const shown = DEALS.filter(d => (state.bstore === 'All' || (state.bstore === 'Unassigned' ? !d.store : (d.store === state.bstore || (d.split || '').includes(state.bstore)))) && (!state.bmine || d.mine));
+    const cols = STAGES.slice(0, 7).map((st, i) => {
+      const inCol = shown.filter(d => d.s === i);
+      const sum = inCol.reduce((a, d) => a + (d.offer || 0), 0);
+      return { st, inCol, sum };
+    });
+    const withClient = DEALS.filter(d => d.s === 4).reduce((a, d) => a + d.offer, 0);
+    const nums = `<div class="nums board-nums">
+        <div class="n"><div class="n-k">In flight</div><div class="n-v">${DEALS.length}<small>deals</small></div></div>
+        <div class="n"><div class="n-k">Needs you</div><div class="n-v good">${DEALS.filter(d => d.mine).length}</div></div>
+        <div class="n"><div class="n-k">With clients</div><div class="n-v">${money(withClient)}</div></div>
+        <div class="n"><div class="n-k">Oldest</div><div class="n-v age-crit">${Math.max(...DEALS.map(d => d.age))}<small>days · DL-0407</small></div></div></div>`;
+    const filters = `<div class="filters"><span class="segs">${STORES.map(s => `<span class="${s === state.bstore ? 'on' : ''}" data-bstore="${s}">${s}</span>`).join('')}</span>
+        <span class="toggle-chip" data-bmine><span class="sw ${state.bmine ? 'on' : ''}"></span>Needs you only</span></div>`;
+    const desk = `<div class="board">${cols.map(({ st, inCol, sum }) => `<div class="col">
+        <div class="col-h t-${st.tone}" style="background:none"><div class="col-bar"></div><div class="col-t">${st.short}<span class="sec-n">${inCol.length}</span></div><div class="col-s">${sum ? money(sum) : '&nbsp;'}</div></div>
+        ${inCol.length ? inCol.map(dealCard).join('') : '<div class="col-empty">Nothing here</div>'}</div>`).join('')}</div>`;
+    const phone = `<div class="board-m">${cols.filter(c => c.inCol.length).map(({ st, inCol, sum }) => `<details class="sec" open><summary><span class="col-bar t-${st.tone}" style="background:currentColor"></span>${st.short}<span class="sec-n">${inCol.length}</span>${sum ? `<span class="col-s" style="text-transform:none;letter-spacing:0">${money(sum)}</span>` : ''}</summary><div class="sec-b">${inCol.map(dealCard).join('')}</div></details>`).join('') || '<div class="col-empty">Nothing matches</div>'}</div>`;
+    const vt = [['Pipeline', DEALS.filter(d => d.mine).length], ['Completed'], ['Evaluations', 2], ['Clients']];
+    return `<div class="pane">
+      <div class="pane-head"><span class="m-ico">${svg('list')}</span><div class="m-titles"><div class="m-eyebrow">OPERATIONS</div><div class="m-title">Business-to-Business</div></div><span class="sp"></span>
+        <button class="btn sm">Delete Requests</button><button class="btn sm">SPEEKS Capture</button><button class="btn sm primary">＋ New Deal</button></div>
+      <div class="vtabs">${vt.map(t => `<span class="vtab ${t[0] === 'Pipeline' ? 'on' : ''}">${t[0]}${t[1] ? ` <span class="sec-n">${t[1]}</span>` : ''}</span>`).join('')}</div>
+      <div class="pane-body">${nums}${filters}${desk}${phone}<div class="board-foot">3 finished this month are in <u>Completed</u>.</div></div></div>`;
+  }
+
+  /* ---------------- wiring ---------------- */
+  const state = { opt: 'B', stage: 2, phone: false, tab: null, bstore: 'All', bmine: false };
+  try { const s = JSON.parse(localStorage.getItem('b2b-overhaul') || '{}'); Object.assign(state, s, { tab: null }); } catch (e) {}
+  const bframe = document.getElementById('bframe');
+  const save = () => { try { localStorage.setItem('b2b-overhaul', JSON.stringify({ opt: state.opt, stage: state.stage, phone: state.phone })); } catch (e) {} };
+  const optsEl = document.getElementById('opts'), stEl = document.getElementById('stages'), frame = document.getElementById('frame');
+
+  function draw() {
+    optsEl.innerHTML = Object.entries(LAYOUTS).map(([k, L]) => `<button class="opt ${k === state.opt ? 'on' : ''}" data-opt="${k}" aria-pressed="${k === state.opt}">
+        <span class="opt-h"><span class="opt-l">${k}</span>${L.name}${L.rec ? '<span class="rec">Chosen</span>' : ''}</span>
+        <p>${L.blurb}</p><span class="pc">${L.pros.map(p => `<span class="p">${p}</span>`).join('')}${L.cons.map(c => `<span class="c">${c}</span>`).join('')}</span></button>`).join('');
+    stEl.innerHTML = STAGES.map((s, i) => `<button class="stg ${i === state.stage ? 'on' : ''}" data-st="${i}" role="tab" aria-selected="${i === state.stage}">${i < FLOW ? `${i + 1}. ` : ''}${s.short}</button>`).join('');
+    document.querySelectorAll('[data-s]').forEach(b => b.classList.toggle('on', (b.dataset.s === 'phone') === state.phone));
+    frame.classList.toggle('phone', state.phone);
+    bframe.classList.toggle('phone', state.phone);
+    frame.innerHTML = LAYOUTS[state.opt].render(STAGES[state.stage], state.tab);
+    bframe.innerHTML = boardHtml();
+    save();
+  }
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-opt],[data-st],[data-s],[data-tab],[data-menu],[data-open],[data-bstore],[data-bmine]');
+    if (!t) { document.querySelectorAll('.menu').forEach(m => m.hidden = true); return; }
+    if (t.dataset.open) { state.opt = 'B'; state.stage = +t.dataset.open; state.tab = null; draw(); frame.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    if (t.dataset.bstore) { state.bstore = t.dataset.bstore; draw(); return; }
+    if (t.hasAttribute('data-bmine')) { state.bmine = !state.bmine; draw(); return; }
+    if (t.dataset.opt) { state.opt = t.dataset.opt; state.tab = null; }
+    else if (t.dataset.st) { state.stage = +t.dataset.st; state.tab = null; }
+    else if (t.dataset.s) state.phone = t.dataset.s === 'phone';
+    else if (t.dataset.tab) state.tab = t.dataset.tab;
+    else if (t.hasAttribute('data-menu')) { const m = t.closest('.m').querySelector('.menu'); m.hidden = !m.hidden; return; }
+    draw();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest('input,textarea')) return;
+    if (e.key === 'ArrowRight' && state.stage < STAGES.length - 1) { state.stage++; state.tab = null; draw(); }
+    if (e.key === 'ArrowLeft' && state.stage > 0) { state.stage--; state.tab = null; draw(); }
+  });
+  draw();
+})();
+</script>

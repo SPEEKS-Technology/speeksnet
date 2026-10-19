@@ -23659,6 +23659,42 @@ async function _b2bLoadProofs(ownerId) {
     }
 }
 
+// One approval-email row. Shared by the proof panel and the workspace's
+// read-only Files section, so an email looks the same wherever it is listed.
+function _b2bProofRowHtml(p) {
+    const k = _b2bProofKind(p.kind);
+    const who = [p.from_addr, p.sent_on ? _b2bDate(p.sent_on) : ''].filter(Boolean).join(' · ');
+    return `
+    <div class="b2b-proof ${p.removed_at ? 'gone' : ''}">
+        <div class="b2b-proof-main">
+            <div class="b2b-proof-t">
+                <span class="b2b-chip b2b-chip-${p.removed_at ? 'neu' : 'ok'}">${escapeHtml(k.label)}</span>
+                ${p.label ? `<b>${escapeHtml(p.label)}</b>` : ''}
+                ${who ? `<span class="b2b-proof-from">${escapeHtml(who)}</span>` : ''}
+            </div>
+            ${p.body_text ? `<pre class="b2b-proof-body">${escapeHtml(p.body_text)}</pre>` : ''}
+            <div class="b2b-proof-meta">
+                Added by ${escapeHtml(p.added_by)} · ${escapeHtml(_b2bDate(p.added_at))}
+                ${p.removed_at ? ` · withdrawn by ${escapeHtml(p.removed_by || '')}: ${escapeHtml(p.removed_reason || '')}` : ''}
+            </div>
+        </div>
+        <div class="b2b-proof-acts">
+            <!-- Says which format, because that answers "what do I open it
+                 with" on the row rather than after the download. A .msg
+                 double-clicks into Outlook; an .eml opens in Outlook or any
+                 mail client. The server sends it with a real filename and
+                 extension, so it lands ready to open -- see the
+                 Content-Disposition in b2b-deals. -->
+            ${p.file_path ? `<a class="b2b-mini" target="_blank" rel="noopener"
+                title="Downloads the message itself. Double-click it to open it in Outlook."
+                href="${B2B_URL}?proof_file=${encodeURIComponent(p.id)}">Download${
+                    _b2bProofExt(p) ? ` .${_b2bProofExt(p)}` : ''}</a>` : ''}
+            ${!p.removed_at && _b2bCanAccept()
+                ? `<button class="b2b-mini" onclick="b2bRemoveProof('${p.id}')">Withdraw</button>` : ''}
+        </div>
+    </div>`;
+}
+
 // The panel that sits on the quote and review screens, and stays on the deal
 // forever afterwards -- the argument it exists for happens months later.
 function _b2bProofPanel(owner) {
@@ -23667,40 +23703,7 @@ function _b2bProofPanel(owner) {
     const gone = _b2bProofs.filter(p => p.removed_at);
     const waived = owner.approval_waived_by;
     const ok = live.length > 0 || waived;
-
-    const row = (p) => {
-        const k = _b2bProofKind(p.kind);
-        const who = [p.from_addr, p.sent_on ? _b2bDate(p.sent_on) : ''].filter(Boolean).join(' · ');
-        return `
-        <div class="b2b-proof ${p.removed_at ? 'gone' : ''}">
-            <div class="b2b-proof-main">
-                <div class="b2b-proof-t">
-                    <span class="b2b-chip b2b-chip-${p.removed_at ? 'neu' : 'ok'}">${escapeHtml(k.label)}</span>
-                    ${p.label ? `<b>${escapeHtml(p.label)}</b>` : ''}
-                    ${who ? `<span class="b2b-proof-from">${escapeHtml(who)}</span>` : ''}
-                </div>
-                ${p.body_text ? `<pre class="b2b-proof-body">${escapeHtml(p.body_text)}</pre>` : ''}
-                <div class="b2b-proof-meta">
-                    Added by ${escapeHtml(p.added_by)} · ${escapeHtml(_b2bDate(p.added_at))}
-                    ${p.removed_at ? ` · withdrawn by ${escapeHtml(p.removed_by || '')}: ${escapeHtml(p.removed_reason || '')}` : ''}
-                </div>
-            </div>
-            <div class="b2b-proof-acts">
-                <!-- Says which format, because that answers "what do I open it
-                     with" on the row rather than after the download. A .msg
-                     double-clicks into Outlook; an .eml opens in Outlook or any
-                     mail client. The server sends it with a real filename and
-                     extension, so it lands ready to open -- see the
-                     Content-Disposition in b2b-deals. -->
-                ${p.file_path ? `<a class="b2b-mini" target="_blank" rel="noopener"
-                    title="Downloads the message itself. Double-click it to open it in Outlook."
-                    href="${B2B_URL}?proof_file=${encodeURIComponent(p.id)}">Download${
-                        _b2bProofExt(p) ? ` .${_b2bProofExt(p)}` : ''}</a>` : ''}
-                ${!p.removed_at && _b2bCanAccept()
-                    ? `<button class="b2b-mini" onclick="b2bRemoveProof('${p.id}')">Withdraw</button>` : ''}
-            </div>
-        </div>`;
-    };
+    const row = _b2bProofRowHtml;
 
     const ownerAttr = owner.eval_no !== undefined
         ? `'${owner.id}','preval'` : `'${owner.id}','deal'`;
@@ -24496,12 +24499,260 @@ function _b2bApprovalGate(owner, ownerId, ownerKind) {
 // DEAL MODAL -- one shell, one renderer per stage
 // ---------------------------------------------------------------------------
 
+// ============================================================================
+// DEAL WORKSPACE -- the one shape every deal screen is moving to (2026-10)
+// ============================================================================
+// Each stage screen was built at a different time and read like a different
+// app: five line tables, two totals widgets, six heading styles, buttons that
+// moved. Nick, 2026-10-19, chose the "deal workspace" from three mocked layouts
+// (prototypes/b2b-overhaul-options.html): the stage's own work on the left, the
+// deal on the right -- status and the ONE next step at the top of that panel,
+// then the facts, the numbers, and the folded sections. Every stage fills the
+// same slots; nothing about the frame depends on which stage it is.
+//
+// Decisions that came with it, so they are not relitigated stage by stage:
+//   - Closing is the header x (and Esc). No Close/Cancel in the actions: the
+//     panel holds only things that DO something.
+//   - Request Deletion and Decline Deal live in the header's ... menu, away from
+//     the buttons people press every day.
+//   - Evaluations use the same workspace with no rail (cfg.rail === false).
+//
+// Stages move onto this one at a time (cfg.ws). Until a stage is ported it
+// renders exactly as before -- _b2bShowDeal puts the old header, body and
+// footer back whenever cfg.ws is absent.
+
+// The rail's own short labels. B2B_STAGES carries the long ones the chips use;
+// eight of those side by side do not fit a laptop.
+const B2B_RAIL = [
+    ['pickup', 'Pickup'], ['pricing_location', 'Pricing Store'], ['pricing', 'Pricing'],
+    ['review', 'Approval'], ['quote', 'With Client'], ['listing_location', 'Listing Store'],
+    ['listing', 'Listing'], ['completed', 'Done'],
+];
+
+function _b2bRailHtml(stage) {
+    const at = B2B_RAIL.findIndex(r => r[0] === stage);
+    // A declined deal is off the line entirely: every step reads as not-done
+    // rather than pretending it stopped at some particular one.
+    const cells = B2B_RAIL.map(([k, label], i) => {
+        const cls = at < 0 ? '' : i < at ? 'done' : i === at ? 'now' : '';
+        return `<div class="b2b-ws-step ${cls}"><i></i><span>${label}</span></div>`;
+    }).join('');
+    const mobile = at < 0 ? '' : `<div class="b2b-ws-railm"><i style="width:${((at + 1) / B2B_RAIL.length) * 100}%"></i></div>
+        <div class="b2b-ws-railm-l">Step ${at + 1} of ${B2B_RAIL.length} · ${B2B_RAIL[at][1]}</div>`;
+    return `<div class="b2b-ws-steps">${cells}</div>${mobile}`;
+}
+
+// Who the deal is sitting with. Mirrors the ownership rules in _b2bActionFor,
+// but answers for everyone rather than "is it me".
+function _b2bWaitingOn(deal) {
+    const ls = (deal.listing_stores || []);
+    switch (deal.stage) {
+        case 'pickup':           return deal.pricing_store && deal.pricing_store !== 'CORP' ? deal.pricing_store : 'Corp';
+        case 'pricing_location': return 'Corp';
+        case 'pricing':          return deal.pricing_store && deal.pricing_store !== 'CORP' ? deal.pricing_store : 'Corp';
+        case 'review':           return 'approval';
+        case 'quote':            return 'the client';
+        case 'listing_location': return 'Corp';
+        case 'listing':          return ls.length > 1 ? ls.join(' & ') : (deal.listing_store || ls[0] || 'Corp');
+        default:                 return null;
+    }
+}
+
+// The top of the side panel: where it stands, then the one thing to do next.
+// `next` = { line, primary: {label, onclick, disabled, id}, why, secondary: [{label, onclick}] }
+// -- onclick values are inline-handler strings, like every other button here.
+function _b2bNextHtml(deal, next) {
+    const n = next || {};
+    const wait = _b2bWaitingOn(deal);
+    const days = _b2bDaysIn(deal);
+    const mine = !!_b2bActionFor(deal);
+    const status = wait
+        ? `<div class="b2b-ws-status">Waiting on <b>${mine ? 'you' : escapeHtml(wait)}</b>
+              <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">· ${days}d</span></div>`
+        : '';
+    const btn = (b, cls) => `<button class="b2b-btn ${cls}" ${b.id ? `id="${b.id}"` : ''}
+        ${b.disabled ? 'disabled' : ''} ${b.title ? `title="${escapeHtml(b.title)}"` : ''}
+        onclick="${b.onclick}">${escapeHtml(b.label)}</button>`;
+    return `
+        <div class="b2b-ws-next">
+            ${status}
+            ${n.line ? `<div class="b2b-ws-line">${n.line}</div>` : ''}
+            ${n.primary ? btn(n.primary, 'b2b-btn-primary b2b-ws-go') : ''}
+            ${n.why ? `<div class="b2b-ws-why" id="b2bWsWhy">${escapeHtml(n.why)}</div>` : ''}
+            ${(n.secondary || []).length ? `<div class="b2b-ws-alt">${n.secondary.map(b => btn(b, 'b2b-btn-secondary')).join('')}</div>` : ''}
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+        </div>`;
+}
+
+// Long values get the full panel width instead of being clipped in a half cell.
+const B2B_WIDE_FACTS = new Set(['Client', 'Email', 'Custody', 'Custody form']);
+function _b2bFactsHtml(deal) {
+    // The client's name is already the screen's title.
+    const rows = _b2bFactRows(deal).filter(([k]) => k !== 'Client' && k !== 'Reference');
+    return `<div class="b2b-ws-facts">${rows.map(([k, v]) =>
+        `<div class="b2b-ws-fact ${B2B_WIDE_FACTS.has(k) ? 'wide' : ''}"><span class="b2b-ws-k">${k}</span><span class="b2b-ws-v">${v}</span></div>`).join('')}</div>`;
+}
+
+// One numbers block for every stage: the five figures that answer "is this a
+// good deal". Replaces both the pricing totals strip and the nine Deal Stats
+// tiles. The cost lines that make up Net (shipping, fees, wipes) are on its
+// tooltip -- they are how Net is reached, not separate questions.
+function _b2bNumsInner() {
+    const t = _b2bItemTotals();
+    const gross = t.value - t.offer;
+    const net = t.value - t.outlay;
+    const pct = (x) => t.value > 0 ? Math.round((x / t.value) * 100) : 0;
+    const parts = [t.ship ? `shipping ${_b2bMoney(t.ship, 2)}` : '', t.fee ? `selling fees ${_b2bMoney(t.fee, 2)}` : '',
+                   t.wipe ? `data wipes −${_b2bMoney(t.wipe, 2)}` : ''].filter(Boolean);
+    const cell = (k, v, sub, cls, tip) => `<div class="b2b-ws-num ${cls || ''}" ${tip ? `title="${escapeHtml(tip)}"` : ''}>
+        <span class="b2b-ws-k">${k}</span><span class="b2b-ws-nv">${v}${sub ? `<small>${sub}</small>` : ''}</span></div>`;
+    return cell('Units', t.units, `${t.lines} line${t.lines === 1 ? '' : 's'}`)
+         + cell('Our offer', _b2bMoney(t.offer))
+         + cell('Resale', _b2bMoney(t.value))
+         + cell('Gross', _b2bMoney(gross), `${pct(gross)}%`)
+         + cell('Net', _b2bMoney(net), `${pct(net)}%`, 'net', parts.length ? `Resale − offer − ${parts.join(', ')}` : '');
+}
+function _b2bNumsHtml() {
+    return _b2bModalItems.length ? `<div class="b2b-ws-nums" id="b2bWsNums">${_b2bNumsInner()}</div>` : '';
+}
+
+// The one section style: a folded block with a title and an optional count.
+// o = { open, n, id, ontoggle }
+function _b2bSection(title, body, o = {}) {
+    return `<details class="b2b-ws-sec" ${o.id ? `id="${o.id}"` : ''} ${o.open ? 'open' : ''}
+        ${o.ontoggle ? `ontoggle="${o.ontoggle}"` : ''}>
+        <summary>${escapeHtml(title)}${o.n != null ? ` <span class="b2b-ws-n">${o.n}</span>` : ''}</summary>
+        <div class="b2b-ws-sec-b">${body}</div></details>`;
+}
+
+// The one line table. Each stage picks a mode; the row anatomy (line number,
+// item with its detail underneath, condition, figures) never changes. Modes
+// arrive as stages are ported -- 'read' first, for the read-only view.
+function _b2bLineTable(items, mode, o = {}) {
+    if (!items.length) return '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>';
+    const t = _b2bItemTotals();
+    const showStore = (items || []).some(it => it.listing_store);
+    const head = `<div class="b2b-lt-r b2b-lt-h"><span>Line</span><span>Item</span><span>Cond</span>
+        <span class="r">Qty</span><span class="r">Done</span><span class="r">Unit</span><span class="r">Total</span>
+        <span>${showStore ? 'Store' : ''}</span><span></span></div>`;
+    const rows = items.map(it => {
+        const qty = Number(it.quantity) || 1;
+        const buy = _b2bIsBuy(it);
+        const unit = Number(it.cost != null ? it.cost : it.offer) || 0;
+        const spec = _b2bQuoteDesc(it);
+        const ser = _b2bSerials(it);
+        const flags = [
+            !buy ? `<span class="b2b-lt-flag ${_b2bIsScrap(it) ? '' : 'nrv'}">${escapeHtml(B2B_DISP[_b2bDispOf(it)].label)}</span>` : '',
+            it.wipe_required ? `<span class="b2b-lt-flag wipe">Wipe ${Number(it.wiped_qty) || 0}/${qty}</span>` : '',
+        ].join('');
+        const detail = [
+            spec ? escapeHtml(spec) : '',
+            it.listing_info ? _b2bNoteHtml(it.listing_info) : '',
+            it.client_notes ? escapeHtml(it.client_notes) : '',
+            it.staff_notes ? `<span class="int">Internal: ${escapeHtml(it.staff_notes)}</span>` : '',
+        ].filter(Boolean).map(s => `<div class="b2b-lt-sub">${s}</div>`).join('');
+        const codes = [ser.length ? ser.join(', ') : '', it.sku || ''].filter(Boolean)
+            .map(s => `<div class="b2b-lt-code b2b-mono">${escapeHtml(s)}</div>`).join('');
+        return `<div class="b2b-lt-r">
+            <span class="b2b-lt-ln b2b-mono">${escapeHtml(String(it.line_no || '').padStart(4, '0'))}</span>
+            <span class="b2b-lt-item"><b>${escapeHtml(_b2bItemName(it))}</b>${flags}${detail}${codes}</span>
+            <span><span class="b2b-lt-cond">${escapeHtml(it.condition || '—')}</span></span>
+            <span class="r">×${qty}</span>
+            <span class="r">${_b2bDone(it)}/${qty}</span>
+            <span class="r">${buy ? _b2bMoney(unit, 2) : '—'}</span>
+            <span class="r b">${buy ? _b2bMoney(unit * qty, 2) : '—'}</span>
+            <span>${showStore && it.listing_store ? _b2bStoreTag(it.listing_store) : ''}</span>
+            <span class="r">${_b2bLabelBtn(it)}</span>
+        </div>`;
+    }).join('');
+    return `<div class="b2b-lt b2b-lt-${mode}">${head}${rows}
+        <div class="b2b-lt-foot"><span>${t.units} unit${t.units === 1 ? '' : 's'}</span><b>${_b2bMoney(t.offer, 2)}</b></div></div>`;
+}
+
+// --- the ... menu ------------------------------------------------------------
+function b2bWsMenuToggle(ev) {
+    ev.stopPropagation();
+    const m = document.getElementById('b2bDealMenu');
+    const b = document.getElementById('b2bDealMoreBtn');
+    if (!m) return;
+    m.hidden = !m.hidden;
+    b?.setAttribute('aria-expanded', String(!m.hidden));
+}
+function _b2bWsMenuClose() {
+    const m = document.getElementById('b2bDealMenu');
+    if (m && !m.hidden) {
+        m.hidden = true;
+        document.getElementById('b2bDealMoreBtn')?.setAttribute('aria-expanded', 'false');
+    }
+}
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('#b2bDealMenu')) _b2bWsMenuClose();
+});
+
+// Puts the shared header back the way an unported stage expects it, or into
+// workspace shape. Everything a stage used to set (title, sub, footer) still
+// works when cfg.ws is absent.
+function _b2bWsHeader(cfg, deal) {
+    const ws = !!cfg.ws;
+    const modal = document.getElementById('b2bDealModal');
+    modal.classList.toggle('b2b-ws-on', ws);
+    const chip = document.getElementById('b2bDealChip');
+    if (chip) chip.innerHTML = ws && deal ? _b2bStageChip(cfg.stage, deal) : (ws && cfg.chip ? cfg.chip : '');
+    const rail = document.getElementById('b2bDealRail');
+    if (rail) {
+        rail.hidden = !ws || cfg.rail === false;
+        rail.innerHTML = rail.hidden ? '' : _b2bRailHtml(cfg.stage);
+    }
+    const more = document.getElementById('b2bDealMoreBtn');
+    const menu = document.getElementById('b2bDealMenu');
+    const items = [];
+    if (ws && cfg.delDeal && cfg.delDeal.id) {
+        items.push(cfg.delDeal.delete_requested_at
+            ? { label: 'Delete requested — review', onclick: 'b2bDeleteRequests()' }
+            : { label: 'Request Deletion', onclick: `b2bRequestDelete('${cfg.delDeal.id}')` });
+    }
+    if (ws) items.push(...(cfg.menu || []));
+    if (menu) {
+        menu.hidden = true;
+        menu.innerHTML = items.map(i => `<button role="menuitem" class="${i.danger ? 'danger' : ''}"
+            onclick="_b2bWsMenuClose();${i.onclick}">${escapeHtml(i.label)}</button>`).join('');
+    }
+    if (more) more.style.display = ws && items.length ? '' : 'none';
+}
+
+// The tools row above the stage's work: the label printer and whatever the
+// stage adds (Move, Print All SKUs, Move Lines).
+function _b2bWsTools(cfg) {
+    const print = !cfg.noPrint && ['pricing', 'review', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage)
+        ? `<button class="b2b-btn b2b-btn-secondary b2b-ws-tool" onclick="b2bPrintPickup()" title="Print the SKU label for this pickup">
+               ${_b2bIco('<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>')}SKU Label</button>`
+        : '';
+    const tools = print + (cfg.tools || '');
+    return tools ? `<div class="b2b-ws-tools">${tools}</div>` : '';
+}
+
 function _b2bShowDeal(cfg) {
     const stage = B2B_STAGE[cfg.stage] || B2B_STAGE.pickup;
+    const deal = cfg.deal || null;
     document.getElementById('b2bDealIco').innerHTML     = _b2bIco(cfg.svg || stage.svg);
     document.getElementById('b2bDealEyebrow').textContent = cfg.eyebrow || 'B2B';
     document.getElementById('b2bDealTitle').textContent   = cfg.title || 'Deal';
-    document.getElementById('b2bDealSub').textContent     = cfg.sub || '';
+    document.getElementById('b2bDealSub').textContent     = cfg.ws ? '' : (cfg.sub || '');
+    _b2bWsHeader(cfg, deal);
+    if (cfg.ws) {
+        cfg.full = true;
+        cfg.body = `
+            <div class="b2b-ws">
+                <div class="b2b-ws-main">${_b2bWsTools(cfg)}${cfg.main || ''}</div>
+                <aside class="b2b-ws-side">
+                    ${deal ? _b2bNextHtml(deal, cfg.next) : ''}
+                    ${cfg.facts != null ? cfg.facts : deal ? _b2bFactsHtml(deal) : ''}
+                    ${cfg.nums === false ? '' : _b2bNumsHtml()}
+                    ${cfg.side || ''}
+                </aside>
+            </div>`;
+        cfg.footer = '';
+    }
     document.getElementById('b2bDealBody').innerHTML      = cfg.body || '';
     document.getElementById('b2bDealFooter').innerHTML    = cfg.footer || '';
     // SKU label print becomes available once the pickup is dropped at its
@@ -24511,7 +24762,7 @@ function _b2bShowDeal(cfg) {
     // deal somebody happened to open.
     const pb = document.getElementById('b2bDealPrintBtn');
     if (pb) {
-        pb.style.display = (!cfg.noPrint
+        pb.style.display = (!cfg.ws && !cfg.noPrint
             && ['pricing', 'review', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage))
             ? '' : 'none';
     }
@@ -24521,7 +24772,8 @@ function _b2bShowDeal(cfg) {
     // opens the queue so CORP can approve or deny.
     const db = document.getElementById('b2bDealDeleteBtn');
     if (db) {
-        const dd = cfg.delDeal;
+        // On the workspace, deletion is in the ... menu instead (_b2bWsHeader).
+        const dd = cfg.ws ? null : cfg.delDeal;
         if (dd && dd.id) {
             const pending = !!dd.delete_requested_at;
             db.style.display = '';
@@ -24537,6 +24789,8 @@ function _b2bShowDeal(cfg) {
         }
     }
     const modal = document.getElementById('b2bDealModal');
+    // The footer is gone on the workspace -- its actions live in the side panel.
+    document.getElementById('b2bDealFooter').style.display = cfg.ws ? 'none' : '';
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
     // Pricing runs near-full-screen so a long pickup reads as one dense sheet.
     modal.classList.toggle('b2b-modal-full', !!cfg.full);
@@ -24604,7 +24858,16 @@ async function b2bOpenDeal(kind, id) {
 // The identity block every stage screen opens with. A store prices and lists
 // the goods; talking to the client is corp's job, so the contact details are
 // corp-only -- a store never needs them and shouldn't be the one reaching out.
+//
+// The rows are built once, here, and rendered two ways: the old summary strip
+// (_b2bSummary) for stages not yet on the workspace, and the workspace side
+// panel (_b2bFactsHtml). One builder, so the two can never disagree about who
+// sees the contact details or when the pencil appears.
 function _b2bSummary(deal) {
+    return `<div class="b2b-summary">${_b2bFactRows(deal).map(([k, v]) =>
+        `<div class="b2b-sum-cell"><span class="b2b-sum-k">${k}</span><span class="b2b-sum-v">${v}</span></div>`).join('')}</div>`;
+}
+function _b2bFactRows(deal) {
     const rows = [
         ['Client',    escapeHtml(deal.client?.company || '—')],
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
@@ -24661,8 +24924,7 @@ function _b2bSummary(deal) {
         rows.push(['Custody', escapeHtml([deal.delivered_by ? `${handoff} ${deal.delivered_by}` : '',
                                           deal.received_by ? `received by ${deal.received_by}` : ''].filter(Boolean).join(', '))]);
     }
-    return `<div class="b2b-summary">${rows.map(([k, v]) =>
-        `<div class="b2b-sum-cell"><span class="b2b-sum-k">${k}</span><span class="b2b-sum-v">${v}</span></div>`).join('')}</div>`;
+    return rows;
 }
 
 // --- stage 1: pickup sign-off ---------------------------------------------
@@ -26299,6 +26561,13 @@ async function b2bSplitGo(itemId, btn) {
 // Folded away and fetched on first open: most deals never move, and a closed
 // <details> costs nothing. A store is sent only the moves into or out of its
 // own stores (the same ?store= scope as the item fetch).
+// The workspace version: the same lazy load, in the one section style.
+// b2bLoadMoveHistory only needs a .b2b-xlog-body inside the element it is given.
+function _b2bMoveHistorySec(deal) {
+    if (!deal || ['pickup', 'declined'].includes(deal.stage)) return '';
+    return _b2bSection('Move history', '<div class="b2b-xlog-body"><div class="b2b-hint">Loading…</div></div>',
+        { ontoggle: `if(this.open)b2bLoadMoveHistory(this,'${deal.id}')` });
+}
 function _b2bMoveHistoryHtml(deal) {
     if (!deal || ['pickup', 'declined'].includes(deal.stage)) return '';
     return `
@@ -26694,6 +26963,9 @@ function _b2bItemTotals() {
 function _b2bPaintTotals() {
     const t = _b2bItemTotals();
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    // The workspace numbers block (2026-10 overhaul) -- same figures, its own markup.
+    const ws = document.getElementById('b2bWsNums');
+    if (ws) ws.innerHTML = _b2bNumsInner();
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
     // "Our offer" is the gross offer we make the client; the data-wipe discount
     // is shown as its own line and added back into the net below, rather than
@@ -30051,17 +30323,27 @@ function _b2bStageView(deal) {
     // (every stage, via delDeal) raises the request and CORP approves it. The
     // decline dialog's note says so too -- it used to promise a reopen the server
     // has refused since the reopen action was retired.
+    //
+    // First screen on the workspace (2026-10 overhaul). The approval email is
+    // listed here now too -- it was loaded for this screen and never shown, and
+    // "did they agree to that price" is asked long after the quote stage.
+    const live = _b2bLiveProofs();
+    const when = deal.stage === 'completed' ? `Completed ${_b2bDate(deal.stage_changed_at)}`
+        : deal.accepted_at ? `Accepted ${_b2bDate(deal.accepted_at)}` : '';
     _b2bShowDeal({
+        ws: true,
+        deal,
         stage: deal.stage,
         delDeal: deal,
         eyebrow: deal.ref,
         title: deal.client?.company || 'Deal',
-        sub: `${B2B_STAGE[deal.stage]?.label || deal.stage}${deal.accepted_at ? ` · accepted ${_b2bDate(deal.accepted_at)}` : ''}`,
-        full: true,
-        body: `
-            ${_b2bSummary(deal)}
-            ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+        menu: canDecline ? [{ label: 'Decline Deal', danger: true, onclick: `b2bDeclineDeal('${deal.id}')` }] : [],
+        next: { line: when },
+        side: `
+            ${live.length ? _b2bSection('Approval email', live.map(_b2bProofRowHtml).join(''), { n: live.length }) : ''}
+            ${_b2bMoveHistorySec(deal)}`,
+        main: `
+            ${deal.pickup_desc ? `<div class="b2b-ws-desc"><span class="b2b-ws-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${deal.declined_reason ? `<div class="b2b-note bad">
                 <span class="b2b-note-k">Declined</span>
                 <span>${escapeHtml(deal.declined_reason)}
@@ -30071,11 +30353,7 @@ function _b2bStageView(deal) {
                         deal.declined_at ? _b2bDate(deal.declined_at) : '',
                     ].filter(Boolean).join(' · '))}</div></span>
             </div>` : ''}
-            ${_b2bItemTableHtml(_b2bModalItems)}
-            ${_b2bMoveHistoryHtml(deal)}`,
-        footer: `
-            ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
+            ${_b2bLineTable(_b2bModalItems, 'read')}`,
     });
 }
 

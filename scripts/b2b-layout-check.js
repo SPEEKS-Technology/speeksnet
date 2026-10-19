@@ -392,3 +392,39 @@ t('layout: the quote status line wraps rather than spilling on a phone', functio
 });
 
 document.getElementById('layout-host') && document.getElementById('layout-host').remove();
+
+// ---------------------------------------------------------------------------
+// THE DEAL WORKSPACE (2026-10 consistency overhaul)
+// ---------------------------------------------------------------------------
+// The side panel is a fixed 320px column, and everything in it -- facts with a
+// long email or custody line, the numbers block, a folded section -- has to
+// fit it without widening it. The line table may be wider than its column, but
+// only inside its own scroller.
+t('ws the side panel fits its 320px column', function () {
+    var html = '<div class="b2b-ws-side" style="width:320px">'
+        + _b2bNextHtml(FIX_DEAL, { line: 'Accepted Oct 16', primary: { label: 'Complete Deal', onclick: '' },
+                                   secondary: [{ label: 'Send Back', onclick: '' }, { label: 'Copy Quote', onclick: '' }] })
+        + _b2bFactsHtml(Object.assign({}, FIX_DEAL, { delivered_by: 'Marcus Whitaker-Johnson', received_by: 'Ethan Kushnir' }))
+        + _b2bNumsHtml()
+        + _b2bSection('Move history', '<div class="b2b-hint">Nothing moved.</div>', { open: true, n: 0 })
+        + '</div>';
+    var bad = overflowing(stage(320, html));
+    return !bad.length || 'overflows: ' + bad.slice(0, 4).join(', ');
+});
+[1200, 820].forEach(function (w) {
+    t('ws the read table never widens the page at ' + w + 'px', function () {
+        var bad = overflowing(stage(w - 320, _b2bLineTable(FIX_ITEMS, 'read')));
+        return !bad.length || 'overflows: ' + bad.slice(0, 4).join(', ');
+    });
+});
+t('ws every read-table row lines up with the header', function () {
+    var two = FIX_ITEMS.concat([Object.assign({}, FIX_ITEMS[0], { id: 'i2', line_no: 2, sku: 'B2B-0001-02', staff_notes: '' })]);
+    var host = stage(900, _b2bLineTable(two, 'read'));
+    // Visible rows only: the runner's default window is ~758px, under the
+    // workspace's 760px phone breakpoint, where the header row is hidden and
+    // reports "none" for its columns.
+    var rows = Array.prototype.filter.call(host.querySelectorAll('.b2b-lt-r'), function (r) { return r.offsetParent; });
+    if (rows.length < 2) return 'nothing to compare';
+    var cols = rows.map(function (r) { return getComputedStyle(r).gridTemplateColumns; });
+    return cols.every(function (c) { return c === cols[0]; }) || 'rows use different columns: ' + cols.join(' | ');
+});

@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261018a">
+  <link rel="stylesheet" href="styles.css?v=20261019a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261018a" defer></script>
+  <script src="speeks.js?v=20261019a" defer></script>
 </head>
 <body class="preload">
 
@@ -1070,8 +1070,16 @@
                 <span class="tool-head-title" id="b2bDealTitle">Deal</span>
                 <span class="tool-head-sub" id="b2bDealSub"></span>
             </div>
+            <!-- Workspace screens only: the stage chip beside the client name. -->
+            <span class="b2b-ws-chip" id="b2bDealChip"></span>
         </div>
         <div class="tool-head-actions">
+            <!-- Workspace screens only: Request Deletion / Decline live here, off
+                 the main bar. _b2bShowDeal fills #b2bDealMenu from cfg. -->
+            <button class="b2b-ws-more" id="b2bDealMoreBtn" style="display:none;" onclick="b2bWsMenuToggle(event)" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <div class="b2b-ws-menu" id="b2bDealMenu" role="menu" hidden></div>
             <!-- Request (or, once pending, view) deletion of this deal. Shown on
                  every stage -- _b2bShowDeal wires it from cfg.delDeal. -->
             <button class="b2b-btn b2b-btn-secondary b2b-mini b2b-deal-del" id="b2bDealDeleteBtn" style="display:none;" onclick="b2bDealDeleteClick()" title="Request this deal be deleted">
@@ -1085,6 +1093,8 @@
             <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
     </div>
+    <!-- Workspace screens only: where the deal is among the eight stages. -->
+    <div class="b2b-ws-rail" id="b2bDealRail" hidden></div>
     <div class="manage-content" id="b2bDealBody"></div>
     <div class="manage-footer flex-end" id="b2bDealFooter"></div>
 </div>

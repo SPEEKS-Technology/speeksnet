@@ -176,6 +176,30 @@ a security boundary, it is the client telling the server which rule to apply.
 Field-level scoping of contact details is separate and unchanged
 (`CONTACT_COLS` / `SCOPED_DEAL_COLS`, applied on the board query).
 
+## Deal workspace (2026-10 overhaul, in progress)
+
+Every deal screen is moving onto one layout, chosen by Nick from the mocks in
+`prototypes/b2b-overhaul-options.html`. The layout: header (ref, client, stage
+chip, ⋯ menu, ×), then the stage rail, then the stage's own work on the left and
+the deal on the right (status + the one next step, facts, numbers, folded
+sections). A screen opts in by passing `ws: true` to `_b2bShowDeal`. A screen
+without it renders exactly as before, because the shell restores the old
+header, subtitle, trashcan and footer.
+
+Parts (grep the names, line numbers drift): `B2B_RAIL` / `_b2bRailHtml`,
+`_b2bWaitingOn`, `_b2bNextHtml`, `_b2bFactRows` (the one builder behind both
+`_b2bSummary` and `_b2bFactsHtml`), `_b2bNumsInner` (repainted by
+`_b2bPaintTotals`), `_b2bSection`, `_b2bLineTable(items, mode)`,
+`_b2bWsHeader`, `_b2bWsTools`. CSS: the `B2B DEAL WORKSPACE` banner at the end
+of `styles.css`.
+
+Decided with it: close is the header × or Esc only, with no Close/Cancel among the actions;
+Request Deletion and Decline Deal live in the ⋯ menu; evaluations use the
+workspace with `rail: false`; the Needs You tab goes, and Pipeline becomes the
+default view with a "Needs you only" switch.
+
+Ported so far: the read-only view (`_b2bStageView`).
+
 ## Screens
 
 Router `b2bOpenDeal(kind, id)` `speeks.js:19028`.
