@@ -25262,3 +25262,45 @@ select.dd-native {
 .b2b-mine-switch.on .b2b-mine-sw { background: var(--sage-deep); }
 .b2b-mine-switch.on .b2b-mine-sw::after { left: 15px; }
 .b2b-mine-switch input:focus-visible + .b2b-mine-sw { box-shadow: 0 0 0 3px rgba(31, 157, 87, .2); }
+
+/* =========================================================================
+   PIPELINE BOARD THAT FITS (2026-10) -- no sideways scroll
+   =========================================================================
+   Replaces the flex row of 208px columns that scrolled inside .b2b-boardwrap.
+   The board is a grid; _b2bRenderPipeline writes its tracks inline (1fr for a
+   stage with deals, 40px for a stage folded because it has none), so seven busy
+   stages share the width and an idle one costs almost nothing. Everything that
+   sits in a column has to be able to get narrow without spilling: the card's
+   top row wraps, the client name breaks, the store tags wrap. Below ~900px of
+   board the stages stack instead -- a column narrower than that reads worse
+   than a list. */
+.b2b-boardwrap { overflow: visible; padding-bottom: 0; container-type: inline-size; container-name: b2bboard; }
+.b2b-board { display: grid; gap: 10px; width: auto; min-width: 0; align-items: start; }
+.b2b-col { flex: none; min-width: 0; max-width: none; }
+.b2b-col-h { flex-wrap: wrap; row-gap: 4px; }
+.b2b-col-t { min-width: 0; line-height: 1.25; }
+.b2b-col-b { padding: 3px 8px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); align-items: start; }
+/* A wide column (few stages busy) lays its cards out two or three across rather
+   than stretching one card across half the screen. */
+.b2b-card { min-width: 0; padding: 10px; }
+.b2b-card-top { flex-wrap: wrap; row-gap: 4px; }
+.b2b-card-co { overflow-wrap: anywhere; }
+.b2b-card .b2b-store-split { max-width: 100%; }
+
+/* A stage with nothing in it: a slim strip carrying its name, read upwards. */
+.b2b-col.folded {
+    align-self: stretch; min-height: 150px; align-items: center; justify-content: flex-start;
+    padding: 12px 0; cursor: default; background: transparent; border: 1px dashed var(--b2b-line);
+    border-top-width: 3px; border-top-style: solid;
+}
+.b2b-col-fold {
+    writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap;
+    font-size: 11px; font-weight: 800; letter-spacing: .04em; color: var(--b2b-faint);
+}
+.b2b-col-fold b { color: var(--b2b-faint); font-weight: 800; margin-top: 6px; display: inline-block; }
+
+@container b2bboard (max-width: 900px) {
+    .b2b-board { grid-template-columns: 1fr !important; }
+    .b2b-col.folded { display: none; }
+    .b2b-col-b { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+}

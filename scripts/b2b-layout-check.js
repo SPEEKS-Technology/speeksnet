@@ -431,3 +431,54 @@ t('ws every read-table row lines up with the header', function () {
     var cols = rows.map(function (r) { return getComputedStyle(r).gridTemplateColumns; });
     return cols.every(function (c) { return c === cols[0]; }) || 'rows use different columns: ' + cols.join(' | ');
 });
+
+// ---------------------------------------------------------------------------
+// THE PIPELINE BOARD FITS (2026-10) -- Nick: no horizontal scroll, and it has
+// to look right with every stage busy too.
+// ---------------------------------------------------------------------------
+function _boardDeals(stages) {
+    var out = [];
+    stages.forEach(function (s, i) {
+        for (var k = 0; k < 2; k++) out.push({ id: 'bd' + i + k, ref: 'BD-' + i + k, stage: s, pricing_store: 'OVL',
+            listing_store: s === 'listing' ? 'OVL' : null, listing_stores: s === 'listing' ? ['OVL'] : [],
+            client: { company: 'Northgate Family Practice ' + i }, total_offer: 1200, stage_changed_at: '2026-10-10T15:00:00Z',
+            pricing_started_at: '2026-10-01' });
+    });
+    return out;
+}
+function _boardAt(width, deals) {
+    var keepR = sessionStorage.getItem('speeksUserRole');
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try { return stage(width, _b2bRenderPipeline(deals)); }
+    finally { sessionStorage.setItem('speeksUserRole', keepR); }
+}
+[1300, 1000, 700].forEach(function (w) {
+    t('board: every stage busy, no sideways scroll at ' + w + 'px', function () {
+        var host = _boardAt(w, _boardDeals(B2B_BOARD));
+        var wrap = host.querySelector('.b2b-boardwrap');
+        if (!wrap) return 'no board';
+        if (wrap.scrollWidth > wrap.clientWidth + 1) return 'board scrolls: ' + wrap.scrollWidth + ' > ' + wrap.clientWidth;
+        var bad = overflowing(host);
+        return !bad.length || 'overflows: ' + bad.slice(0, 3).join(', ');
+    });
+});
+t('board: an idle stage folds to a strip, a busy one gets the width', function () {
+    var host = _boardAt(1300, _boardDeals(['pricing', 'listing']));
+    var folded = host.querySelectorAll('.b2b-col.folded');
+    if (folded.length !== B2B_BOARD.length - 2) return 'expected ' + (B2B_BOARD.length - 2) + ' folded, got ' + folded.length;
+    var strip = folded[0].getBoundingClientRect().width;
+    var busy = host.querySelector('.b2b-col:not(.folded)').getBoundingClientRect().width;
+    return (strip <= 44 && busy > 400) || 'strip ' + Math.round(strip) + 'px, busy ' + Math.round(busy) + 'px';
+});
+t('board: with nothing in flight every stage keeps its column', function () {
+    var host = _boardAt(1300, []);
+    return host.querySelectorAll('.b2b-col.folded').length === 0 || 'an empty board folded its stages';
+});
+t('board: narrow boards stack the stages instead of squeezing them', function () {
+    var host = _boardAt(700, _boardDeals(B2B_BOARD));
+    var cols = host.querySelectorAll('.b2b-col');
+    var a = cols[0].getBoundingClientRect(), b = cols[1].getBoundingClientRect();
+    return b.top >= a.bottom - 1 || 'stages are still side by side at 700px';
+});
+
+document.getElementById('layout-host') && document.getElementById('layout-host').remove();

@@ -21917,9 +21917,28 @@ function _b2bRenderPipeline(scoped) {
             </label>
         </div>`;
 
+    // NO SIDEWAYS SCROLL (Nick, 2026-10: "I do not like having a horizontal
+    // scroll on the pipeline ... adjust it so they all keep it looking nice
+    // though even when they are all active"). The board is a grid that always
+    // fits its width: a stage with deals takes an equal share, a stage with none
+    // folds to a slim labelled strip -- still there, so the flow reads left to
+    // right, but costing 40px instead of 208. When nothing is in flight at all
+    // every stage keeps its full column, since a board of strips says nothing.
+    // Too narrow even for that, and the CSS stacks the stages (container query
+    // on .b2b-boardwrap).
+    const anyLive = B2B_BOARD.some(key => deals.some(d => d.stage === key));
+    const tracks = [];
     const cols = B2B_BOARD.map(key => {
         const s = B2B_STAGE[key];
         const inCol = deals.filter(d => d.stage === key);
+        const fold = anyLive && !inCol.length;
+        tracks.push(fold ? '40px' : 'minmax(0, 1fr)');
+        if (fold) {
+            return `
+            <div class="b2b-col b2b-col-${s.tone} folded" title="${escapeHtml(s.label)}: nothing here">
+                <span class="b2b-col-fold">${escapeHtml(s.label)} <b>0</b></span>
+            </div>`;
+        }
         const cards = inCol.length ? inCol.map(d => {
             const days = _b2bDaysIn(d);
             const act  = _b2bActionFor(d);
@@ -21957,9 +21976,9 @@ function _b2bRenderPipeline(scoped) {
         ? `<div class="b2b-archive-note">${finished} finished deal${finished === 1 ? '' : 's'} `
           + `${finished === 1 ? 'is' : 'are'} kept in <button class="b2b-linkbtn" onclick="b2bSetView('finished')">Completed</button>.</div>`
         : '';
-    // Six columns are wider than most laptops, so the board scrolls inside
-    // its own wrapper rather than pushing the whole page sideways.
-    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${note}`;
+    // The tracks travel inline because they depend on which stages are busy;
+    // everything else about the board lives in styles.css.
+    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board" style="grid-template-columns:${tracks.join(' ')}">${cols}</div></div>${note}`;
 }
 
 // --- view: Completed ------------------------------------------------------
