@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.2';
+const APP_VERSION = '3.9.3';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
