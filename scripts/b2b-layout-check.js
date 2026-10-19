@@ -238,7 +238,7 @@ t('layout: the notes panel stacks rather than squeezing on a phone', function ()
     // b2b-grid2 side by side is right on a desktop and wrong at 390px, where two
     // columns would leave each textarea about 20 characters wide.
     var host = stage(390, _b2bNotesPanel(FIX_DEAL));
-    var boxes = host.querySelectorAll('.b2b-notespanel textarea');
+    var boxes = host.querySelectorAll('.b2b-ws-notes textarea');
     if (boxes.length !== 2) return 'expected two note fields, got ' + boxes.length;
     var a = boxes[0].getBoundingClientRect(), b = boxes[1].getBoundingClientRect();
     // Stacked means the second starts below the first, not beside it.
@@ -248,7 +248,7 @@ t('layout: the notes panel stacks rather than squeezing on a phone', function ()
 
 t('layout: both note fields are the same width on a desktop', function () {
     var host = stage(1200, _b2bNotesPanel(FIX_DEAL));
-    var boxes = host.querySelectorAll('.b2b-notespanel textarea');
+    var boxes = host.querySelectorAll('.b2b-ws-notes textarea');
     var a = boxes[0].getBoundingClientRect().width;
     var b = boxes[1].getBoundingClientRect().width;
     return Math.abs(a - b) <= 2 || 'lopsided: ' + Math.round(a) + ' vs ' + Math.round(b);
@@ -365,29 +365,32 @@ document.getElementById('layout-host') && document.getElementById('layout-host')
 // Nick: the Out For Quote screen crushed its lines into half the width. They
 // now span the screen; on a phone they must scroll inside their own box, never
 // widen the page.
+// Since the 2026-10 workspace port: the status facts are the side panel's line
+// and the lines are the shared table's offer mode.
 function _sentQuoteHtml() {
     var d = Object.assign({}, FIX_DEAL, { stage: 'quote', quote_sent_at: '2026-10-10T15:00:00Z', quote_send_count: 1 });
-    return _b2bQuoteStatus(d)
-        + '<div id="b2bReviewLines" class="b2b-rvw-full">' + _b2bReviewLines(true) + '</div>';
+    return _b2bQuoteFactsHtml(d)
+        + '<div id="b2bReviewLines">' + _b2bReviewLines() + '</div>';
 }
 t('layout: sent-quote lines get the width on a desktop', function () {
-    var host = stage(1300, _sentQuoteHtml());
-    var name = host.querySelector('.b2b-rvw-full .b2b-rvw-name');
+    var host = stage(1300 - 320, _sentQuoteHtml());
+    var name = host.querySelector('.b2b-lt-item b');
     if (!name) return 'no line rendered';
     // One line of text, not three: the old split wrapped names to ~3 lines.
     var h = name.getBoundingClientRect().height;
     return h < 34 || 'item name is ' + Math.round(h) + 'px tall — still wrapping';
 });
-t('layout: sent-quote lines scroll inside their box on a phone', function () {
+t('layout: sent-quote lines never widen the page on a phone, and the offer stays usable', function () {
     var host = stage(390, _sentQuoteHtml());
     var bad = overflowing(host);
     if (bad.length) return 'page widened by: ' + bad.join(', ');
-    var box = host.querySelector('.b2b-rvw-full .b2b-rvw');
-    return (box.scrollWidth > box.clientWidth) || 'the table was crushed instead of scrolling';
+    var input = host.querySelector('.b2b-lt-in');
+    if (!input) return 'no offer field';
+    return input.getBoundingClientRect().width >= 60 || 'the offer field is ' + Math.round(input.getBoundingClientRect().width) + 'px';
 });
 t('layout: the quote status line wraps rather than spilling on a phone', function () {
     var host = stage(390, _sentQuoteHtml());
-    var st = host.querySelector('.b2b-qstatus');
+    var st = host.querySelector('.b2b-ws-qfacts');
     return st.getBoundingClientRect().width <= 391 || 'status line is ' + Math.round(st.getBoundingClientRect().width) + 'px';
 });
 

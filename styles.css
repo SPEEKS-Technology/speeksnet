@@ -25057,6 +25057,48 @@ select.dd-native {
 .b2b-ws-sec-b { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
 .b2b-ws-sec .b2b-proof { margin: 0; }
 
+.b2b-ws-why:empty { display: none; }
+.b2b-ws-qfacts { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.b2b-ws-qfacts b { color: var(--b2b-ink); }
+.b2b-ws-qfacts.urgent b { color: #b7791f; }
+.b2b-ws-line .b2b-store { vertical-align: 1px; }
+.b2b-ws-h .b2b-ws-hbtn { margin-left: auto; text-transform: none; letter-spacing: 0; }
+.b2b-ws-tools .b2b-savestate { margin-left: auto; }
+.b2b-ws-side .b2b-ws-fields { grid-template-columns: 1fr; }
+.b2b-ws-side textarea.form-input-lg { margin: 0; width: 100%; min-height: 64px; }
+/* The proof panel was a callout of its own; inside a section the section is the frame. */
+.b2b-ws-sec .b2b-proofwrap { margin: 0; padding: 0; border: 0; background: none; }
+.b2b-ws-sec .b2b-proofwrap > .b2b-note-k { display: none; }
+/* A 320px column has no room for icon | text | button in a row; stack them, the
+   same way the large drop zone does. */
+.b2b-ws-side .b2b-proof-drop { flex-direction: column; text-align: center; gap: 8px; padding: 16px 12px; }
+.b2b-ws-side .b2b-proof-droptxt { margin-right: 0; align-items: center; }
+.b2b-ws-side .b2b-proof-pickbtn { width: 100%; }
+.b2b-ws-side .b2b-proof { flex-wrap: wrap; }
+.b2b-ws-main .b2b-qdoc { max-width: 860px; }
+.b2b-ws-ack { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.4; color: var(--b2b-ink); cursor: pointer; margin: 0; }
+.b2b-ws-ack input { margin-top: 2px; flex: 0 0 auto; width: 16px; height: 16px; accent-color: var(--sage-deep); }
+.b2b-ws-main .b2b-mf, .b2b-ws-main .b2b-signq, .b2b-ws-main .b2b-note { margin: 0; flex-shrink: 0; }
+.b2b-ws-main textarea.form-input-lg { margin: 0; width: 100%; min-height: 76px; flex-shrink: 0; }
+
+/* --- the work area: titled blocks, the switch ---------------------------- */
+.b2b-ws-block { display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; }
+.b2b-ws-h { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-weight: 800;
+            text-transform: uppercase; letter-spacing: .06em; color: var(--b2b-ink); }
+.b2b-ws-h .b2b-ws-n { margin-left: 2px; }
+.b2b-ws-seg { display: inline-flex; align-self: flex-start; background: var(--b2b-chip); border-radius: var(--b2b-r-md); padding: 3px; gap: 2px; }
+.b2b-ws-seg button { border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 750;
+                     color: var(--b2b-muted); padding: 6px 14px; border-radius: 7px; }
+.b2b-ws-seg button.on { background: #fff; color: var(--b2b-ink); box-shadow: 0 1px 4px rgba(15, 23, 42, .08); }
+.b2b-ws-block .b2b-loc-pick { margin: 0; }
+.b2b-ws-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.b2b-ws-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; margin: 0; }
+.b2b-ws-field.wide { grid-column: 1 / -1; }
+.b2b-ws-field .b2b-ws-k { color: var(--b2b-muted); }
+.b2b-ws-field .form-input-lg { margin: 0; width: 100%; }
+.b2b-ws-req { color: #d1443b; }
+.b2b-ws-hint { font-size: 12px; color: var(--b2b-faint); }
+
 .b2b-ws-desc { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--b2b-ink);
                padding: 10px 12px; background: var(--b2b-surface); border-radius: var(--b2b-r-md); }
 
@@ -25084,9 +25126,41 @@ select.dd-native {
 .b2b-lt-flag.nrv  { background: #fdf3e1; color: #b7791f; }
 .b2b-lt-flag.wipe { background: #e8f0fb; color: #2563a8; }
 .b2b-lt-cond { font-size: 12px; font-weight: 700; color: var(--b2b-muted); }
+.b2b-lt-offer .b2b-lt-r { grid-template-columns: 44px minmax(0, 1fr) 74px 44px 84px 96px 58px 70px 52px 96px; align-items: center; }
+.b2b-lt-offer > * { min-width: 820px; }
+.b2b-lt .muted { color: var(--b2b-muted); }
+.b2b-lt-r.scrap { opacity: .6; }
+.b2b-lt .b2b-chip { font-size: 10px; }
+.b2b-lt-in {
+    width: 100%; height: var(--b2b-h-sm); padding: 0 8px; text-align: right; font: inherit; font-size: 13px; font-weight: 750;
+    font-variant-numeric: tabular-nums; border: 1px solid #d9e1ea; border-radius: var(--b2b-r-sm); background: #fff; color: var(--b2b-ink);
+}
+.b2b-lt-in:focus { outline: none; border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31, 157, 87, .14); }
 .b2b-lt-foot { display: flex; justify-content: flex-end; gap: 18px; padding: 9px 12px; background: var(--b2b-surface);
                border-top: 1px solid var(--b2b-line); font-size: 13px; color: var(--b2b-muted); font-variant-numeric: tabular-nums; }
 .b2b-lt-foot b { color: var(--b2b-ink); font-weight: 850; }
+
+/* --- sheet stages: the panel folds into a band above the sheet ----------- */
+/* Same elements, reflowed: the next-step card and the numbers sit in one row
+   over the sheet, the facts and sections wait for "Details". See
+   _b2bWsFolded for why. */
+.b2b-ws.folded { display: flex; flex-direction: column; }
+.b2b-ws.folded .b2b-ws-side {
+    order: -1; flex-direction: row; align-items: stretch; flex-wrap: wrap; gap: 10px;
+    overflow: visible; border-left: 0; border-bottom: 1px solid var(--b2b-line); padding: 10px 20px;
+}
+.b2b-ws.folded .b2b-ws-side > :not(.b2b-ws-next):not(.b2b-ws-nums) { display: none; }
+.b2b-ws.folded .b2b-ws-next { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px 14px; flex: 1 1 360px; }
+.b2b-ws.folded .b2b-ws-next .b2b-ws-go { width: auto; margin-left: auto; padding: 0 22px; }
+.b2b-ws.folded .b2b-ws-nums { display: flex; flex: 0 1 auto; }
+.b2b-ws.folded .b2b-ws-num { border-top: 0 !important; border-left: 1px solid var(--b2b-line-2) !important; padding: 8px 14px; }
+.b2b-ws.folded .b2b-ws-num:first-child { border-left: 0 !important; }
+.b2b-ws.folded .b2b-ws-nv { font-size: 15px; }
+.b2b-ws.folded .b2b-ws-main { overflow: auto; flex: 1; min-height: 0; }
+/* The same narrow gutters the pricing modal always had (.b2b-modal-full): a
+   sixteen-column sheet buys more from 20px of width than from padding. */
+.b2b-ws.sheet .b2b-ws-main { padding-left: 10px; padding-right: 10px; }
+.b2b-ws-fold[aria-pressed="true"] { border-color: var(--sage-professional); color: var(--sage-deep); }
 
 /* --- narrow screens: the deal panel goes on top, the work underneath ------ */
 @media (max-width: 760px) {
@@ -25109,4 +25183,12 @@ select.dd-native {
     .b2b-lt-read .b2b-lt-r > :nth-child(5),
     .b2b-lt-read .b2b-lt-r > :nth-child(6),
     .b2b-lt-read .b2b-lt-r > :nth-child(8) { display: none; }
+    /* Offer mode keeps what is being approved: the item, the offer, the total. */
+    .b2b-lt-offer .b2b-lt-r { grid-template-columns: 40px minmax(0, 1fr) 84px auto; }
+    .b2b-lt-offer .b2b-lt-r > :nth-child(3),
+    .b2b-lt-offer .b2b-lt-r > :nth-child(4),
+    .b2b-lt-offer .b2b-lt-r > :nth-child(5),
+    .b2b-lt-offer .b2b-lt-r > :nth-child(7),
+    .b2b-lt-offer .b2b-lt-r > :nth-child(8),
+    .b2b-lt-offer .b2b-lt-r > :nth-child(9) { display: none; }
 }

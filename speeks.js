@@ -23330,28 +23330,7 @@ function _b2bStagePreval(v) {
     const open    = _b2bPrevalOpen(v);
     const expired = _b2bPrevalExpired(v);
     const canMove = _b2bCanAccept();
-
-    const dates = `
-        <div class="b2b-grid2" style="margin-top:4px;">
-            <div>
-                <label class="form-label-caps">Evaluated On</label>
-                <input id="b2bPvDate" type="date" class="form-input-lg" value="${escapeHtml(v.eval_date || '')}"
-                    ${open ? '' : 'disabled'} onchange="b2bPrevalSaveMeta('${v.id}')">
-            </div>
-            <div>
-                <label class="form-label-caps">Good Until</label>
-                <input id="b2bPvUntil" type="date" class="form-input-lg" value="${escapeHtml(v.valid_until || '')}"
-                    ${open ? '' : 'disabled'} onchange="b2bPrevalSaveMeta('${v.id}')">
-            </div>
-        </div>
-        <label class="form-label-caps" style="margin-top:12px;">Reference</label>
-        <input id="b2bPvTitle" class="form-input-lg" maxlength="160" value="${escapeHtml(v.title || '')}"
-            placeholder="e.g. Q3 laptop refresh" ${open ? '' : 'disabled'}
-            onchange="b2bPrevalSaveMeta('${v.id}')">
-        <label class="form-label-caps" style="margin-top:12px;">What They Say They Have</label>
-        <textarea id="b2bPvSummary" class="form-input-lg" rows="2" ${open ? '' : 'disabled'}
-            placeholder="Their own description, before anyone has seen it"
-            onchange="b2bPrevalSaveMeta('${v.id}')">${escapeHtml(v.summary || '')}</textarea>`;
+    const dis = open ? '' : 'disabled';
 
     // Why the sheet is read-only, when it is. Said once and plainly, because the
     // alternative is a screen full of disabled inputs with no explanation.
@@ -23360,71 +23339,80 @@ function _b2bStagePreval(v) {
             <span class="b2b-note-k">${escapeHtml(meta.label)}${
                 v.status === 'converted' && v.deal_ref ? ` — became ${escapeHtml(v.deal_ref)}` : ''}</span>
             ${v.status === 'accepted'
-                ? 'The client has agreed to these figures, so the lines are locked. Reopen it as a draft if something has to change before it becomes a deal.'
+                ? 'Locked: the client agreed to these figures. Reopen it to change them.'
                 : v.status === 'converted'
-                ? 'This became a deal. Change the lines on the deal itself — this record is what says where its prices came from.'
+                ? 'Change the lines on the deal. This record shows where its prices came from.'
                 : escapeHtml(v.declined_reason || 'This evaluation is closed.')}
         </div>`;
 
     const expiredNote = expired ? `
         <div class="b2b-note warn">
             <span class="b2b-note-k">Past its date</span>
-            This was only good until ${escapeHtml(_b2bDate(v.valid_until))}. Re-price it or move
-            the date before treating it as live.
+            Good until ${escapeHtml(_b2bDate(v.valid_until))}. Re-price it or move the date.
         </div>` : '';
 
+    // On the workspace (2026-10), with no rail: an evaluation is corp's own
+    // thing, priced before anything is collected, and is not a step of the deal
+    // flow. Same parts otherwise -- the sheet is the pricing sheet.
     _b2bShowDeal({
+        ws: true,
+        rail: false,
         stage: 'pricing',
+        sheet: true,
         noPrint: true,
-        eyebrow: v.ref,
-        title: 'Pre-Evaluation',
-        sub: `${v.company || 'Client'} — priced before we collect anything.`,
-        full: true,
-        body: `
+        eyebrow: `${v.ref} · Evaluation`,
+        title: v.company || 'Client',
+        chip: `<span class="b2b-chip b2b-chip-${meta.tone}">${escapeHtml(meta.label)}</span>`,
+        facts: _b2bFactsGrid([
+            ...(v.contact ? [['Contact', escapeHtml(v.contact)]] : []),
+            ...(v.contact_email ? [['Email', escapeHtml(v.contact_email)]] : []),
+        ]),
+        next: Object.assign({ line: v.valid_until ? `Good until ${escapeHtml(_b2bDate(v.valid_until))}` : '' }, _b2bPrevalNext(v, canMove)),
+        main: `
             ${frozen}${expiredNote}
-            ${dates}
-            ${_b2bTotalsBar(true)}
+            <div class="b2b-ws-fields">
+                ${_b2bWsField('Evaluated on', `<input id="b2bPvDate" type="date" class="form-input-lg" value="${escapeHtml(v.eval_date || '')}" ${dis} onchange="b2bPrevalSaveMeta('${v.id}')">`)}
+                ${_b2bWsField('Good until', `<input id="b2bPvUntil" type="date" class="form-input-lg" value="${escapeHtml(v.valid_until || '')}" ${dis} onchange="b2bPrevalSaveMeta('${v.id}')">`)}
+                ${_b2bWsField('Reference', `<input id="b2bPvTitle" class="form-input-lg" maxlength="160" value="${escapeHtml(v.title || '')}" placeholder="e.g. Q3 laptop refresh" ${dis} onchange="b2bPrevalSaveMeta('${v.id}')">`)}
+                ${_b2bWsField('What they say they have', `<textarea id="b2bPvSummary" class="form-input-lg" rows="2" ${dis}
+                    placeholder="Their own description, before anyone has seen it"
+                    onchange="b2bPrevalSaveMeta('${v.id}')">${escapeHtml(v.summary || '')}</textarea>`, { wide: true })}
+            </div>
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             ${open ? `<button class="b2b-btn b2b-btn-secondary b2b-add"
                 onclick="b2bAddItem('${v.id}',this)">＋ Add Line Item</button>` : ''}
-            ${_b2bQuoteClientBlock(_b2bQuoteSubject_src())}`,
-        footer: `
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            ${_b2bPrevalActions(v, canMove)}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
+            ${_b2bSection('Quote for the client', `<div id="b2bQuoteDoc">${_b2bQuoteDoc(_b2bQuoteSubject_src(), _b2bModalItems)}</div>`,
+                { open: _b2bCustOpen, ontoggle: 'b2bToggleCust(this)' })}`,
         after: _b2bPaintTotals,
     });
 }
 
-// The one action this evaluation is waiting on, plus the way back. Mirrors the
-// deal footers: the forward move is primary, the way back is quiet.
-function _b2bPrevalActions(v, canMove) {
+// The one action this evaluation is waiting on, plus the way back, as the
+// panel's next step. The forward move is primary, the way back is quiet.
+function _b2bPrevalNext(v, canMove) {
     const id = v.id;
+    const go = (label, onclick) => ({ label, onclick });
     if (v.status === 'converted') {
-        return v.converted_deal_id
-            ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bOpenPrevalDeal('${id}')">Open ${escapeHtml(v.deal_ref || 'Deal')}</button>`
-            : '';
+        return v.converted_deal_id ? { primary: go(`Open ${v.deal_ref || 'Deal'}`, `b2bOpenPrevalDeal('${id}')`) } : {};
     }
-    if (!canMove) {
-        return `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">A CEO, MOCD or DM sends and accepts evaluations.</span>`;
-    }
-    if (v.status === 'draft') {
-        return `<button class="b2b-btn b2b-btn-primary" onclick="b2bPrevalStatus('${id}','sent',this)">Send To Client</button>`;
-    }
+    if (!canMove) return { why: 'A CEO, MOCD or DM sends and accepts evaluations.' };
+    if (v.status === 'draft') return { primary: go('Send To Client', `b2bPrevalStatus('${id}','sent',this)`) };
     if (v.status === 'sent') {
-        return `
-            <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrevalStatus('${id}','draft',this)">Back To Draft</button>
-            <button class="b2b-btn b2b-btn-danger" onclick="b2bPrevalStatus('${id}','declined',this)">They Passed</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bPrevalStatus('${id}','accepted',this)">They Accepted</button>`;
+        return {
+            primary: go('They Accepted', `b2bPrevalStatus('${id}','accepted',this)`),
+            secondary: [go('They Passed', `b2bPrevalStatus('${id}','declined',this)`),
+                        go('Back To Draft', `b2bPrevalStatus('${id}','draft',this)`)],
+        };
     }
     if (v.status === 'accepted') {
-        return `
-            <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrevalStatus('${id}','draft',this)">Reopen For Changes</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenPrevalConvert('${id}')">Turn Into A Deal</button>`;
+        return {
+            primary: go('Turn Into A Deal', `b2bOpenPrevalConvert('${id}')`),
+            secondary: [go('Reopen For Changes', `b2bPrevalStatus('${id}','draft',this)`)],
+        };
     }
     // declined
-    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bPrevalStatus('${id}','draft',this)">Reopen</button>`;
+    return { secondary: [go('Reopen', `b2bPrevalStatus('${id}','draft',this)`)] };
 }
 
 function b2bOpenPrevalDeal(id) {
@@ -23713,8 +23701,7 @@ function _b2bProofPanel(owner) {
             <span class="b2b-note-k">${ok ? "The client's approval is on record" : "No approval on record yet"}</span>
             ${waived ? `<div class="b2b-proof-waived">Accepted without written approval by
                 ${escapeHtml(waived)} — ${escapeHtml(owner.approval_waived_reason || '')}</div>` : ''}
-            ${!ok ? `<div>Upload the client's email before this is accepted. It is what answers
-                them later if they say they never agreed to the price.</div>` : ''}
+            ${!ok ? `<div title="It is what answers them later if they say they never agreed to the price.">Needed before this is accepted.</div>` : ''}
             ${live.map(row).join('')}
             ${gone.length ? `<details class="b2b-proof-gone"><summary>${gone.length} withdrawn</summary>${gone.map(row).join('')}</details>` : ''}
             <!-- UPLOAD IS THE ROUTE. Nick, 2026-09-10: "Go back to just the file
@@ -23736,8 +23723,7 @@ function _b2bProofPanel(owner) {
                 ondrop="b2bProofDrop(event,${ownerAttr})">
                 <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
                 <span class="b2b-proof-droptxt"><b>Upload the client's email</b>
-                    <span>In Outlook, open it and use Download or Save As — then upload that
-                        file here. Or drag it straight on, if your Outlook lets you.</span></span>
+                    <span>In Outlook, use Download or Save As, then drop it here.</span></span>
                 <!-- The label IS the button. A styled label wired to a hidden
                      input avoids the unstyleable native "Choose file" control
                      while staying a real file input, so it keeps the OS picker,
@@ -24561,11 +24547,12 @@ function _b2bWaitingOn(deal) {
 // The top of the side panel: where it stands, then the one thing to do next.
 // `next` = { line, primary: {label, onclick, disabled, id}, why, secondary: [{label, onclick}] }
 // -- onclick values are inline-handler strings, like every other button here.
+// `deal` may be null -- an evaluation has no deal behind it, so no owner or age.
 function _b2bNextHtml(deal, next) {
     const n = next || {};
-    const wait = _b2bWaitingOn(deal);
-    const days = _b2bDaysIn(deal);
-    const mine = !!_b2bActionFor(deal);
+    const wait = deal ? _b2bWaitingOn(deal) : null;
+    const days = wait ? _b2bDaysIn(deal) : 0;
+    const mine = wait ? !!_b2bActionFor(deal) : false;
     const status = wait
         ? `<div class="b2b-ws-status">Waiting on <b>${mine ? 'you' : escapeHtml(wait)}</b>
               <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">· ${days}d</span></div>`
@@ -24577,18 +24564,50 @@ function _b2bNextHtml(deal, next) {
         <div class="b2b-ws-next">
             ${status}
             ${n.line ? `<div class="b2b-ws-line">${n.line}</div>` : ''}
+            ${n.before || ''}
             ${n.primary ? btn(n.primary, 'b2b-btn-primary b2b-ws-go') : ''}
-            ${n.why ? `<div class="b2b-ws-why" id="b2bWsWhy">${escapeHtml(n.why)}</div>` : ''}
+            <div class="b2b-ws-why" id="b2bWsWhy">${escapeHtml(n.why || '')}</div>
             ${(n.secondary || []).length ? `<div class="b2b-ws-alt">${n.secondary.map(b => btn(b, 'b2b-btn-secondary')).join('')}</div>` : ''}
             <span class="b2b-msg" id="b2bDealMsg"></span>
         </div>`;
+}
+
+// Why the next step can't be taken yet, in a few words beside the button.
+// Screens that enable their button live (a store picked, a box ticked) call
+// this from the same place they flip `disabled`, so the two never disagree.
+function _b2bWsWhy(text) {
+    const el = document.getElementById('b2bWsWhy');
+    if (el) el.textContent = text || '';
+}
+
+// A titled block in the work area -- the unfolded partner of _b2bSection.
+function _b2bWsBlock(title, body, extra) {
+    return `<div class="b2b-ws-block">${title ? `<div class="b2b-ws-h">${escapeHtml(title)}${extra || ''}</div>` : ''}${body}</div>`;
+}
+
+// A two-or-three way switch. opts = [[value, label]], onclick gets the value.
+function _b2bWsSeg(opts, current, onclick) {
+    return `<div class="b2b-ws-seg" role="group">${opts.map(([v, label]) =>
+        `<button class="${v === current ? 'on' : ''}" aria-pressed="${v === current}"
+            onclick="${onclick.replace('$', JSON.stringify(v).replace(/"/g, '&quot;'))}">${escapeHtml(label)}</button>`).join('')}</div>`;
+}
+
+// Decline Deal, for the ... menu. One rule for every screen: corp, and only
+// while the deal can still fall through -- once goods are being listed they
+// are ours, so declining stops making sense.
+function _b2bDeclineMenu(deal) {
+    return _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage)
+        ? [{ label: 'Decline Deal', danger: true, onclick: `b2bDeclineDeal('${deal.id}')` }] : [];
 }
 
 // Long values get the full panel width instead of being clipped in a half cell.
 const B2B_WIDE_FACTS = new Set(['Client', 'Email', 'Custody', 'Custody form']);
 function _b2bFactsHtml(deal) {
     // The client's name is already the screen's title.
-    const rows = _b2bFactRows(deal).filter(([k]) => k !== 'Client' && k !== 'Reference');
+    return _b2bFactsGrid(_b2bFactRows(deal).filter(([k]) => k !== 'Client' && k !== 'Reference'));
+}
+// rows = [[label, html]]
+function _b2bFactsGrid(rows) {
     return `<div class="b2b-ws-facts">${rows.map(([k, v]) =>
         `<div class="b2b-ws-fact ${B2B_WIDE_FACTS.has(k) ? 'wide' : ''}"><span class="b2b-ws-k">${k}</span><span class="b2b-ws-v">${v}</span></div>`).join('')}</div>`;
 }
@@ -24625,46 +24644,76 @@ function _b2bSection(title, body, o = {}) {
         <div class="b2b-ws-sec-b">${body}</div></details>`;
 }
 
-// The one line table. Each stage picks a mode; the row anatomy (line number,
-// item with its detail underneath, condition, figures) never changes. Modes
-// arrive as stages are ported -- 'read' first, for the read-only view.
-function _b2bLineTable(items, mode, o = {}) {
+// The one line table. Each stage picks a mode -- which columns -- and the row
+// anatomy never changes: line number, the item with its detail underneath,
+// condition, then the figures. Each mode's columns are listed once, below, as
+// [header, cell, class]; the CSS grid for a mode lives beside the others under
+// the workspace banner in styles.css.
+//   read  -- the deal as it stands (read-only view, Listing Store)
+//   offer -- only the offer is editable (Approval, Out For Quote)
+const B2B_LT_DASH = '<span class="b2b-f-off">—</span>';
+function _b2bLtItem(it, o) {
+    const qty = Number(it.quantity) || 1;
+    const buy = _b2bIsBuy(it);
+    const spec = _b2bQuoteDesc(it);
+    const ser = _b2bSerials(it);
+    const flags = [
+        !buy ? `<span class="b2b-lt-flag ${_b2bIsScrap(it) ? '' : 'nrv'}">${escapeHtml(B2B_DISP[_b2bDispOf(it)].label)}</span>` : '',
+        it.wipe_required ? `<span class="b2b-lt-flag wipe">${o.wipeCount ? `Wipe ${Number(it.wiped_qty) || 0}/${qty}` : 'Certified wipe'}</span>` : '',
+    ].join('');
+    const detail = [
+        spec ? escapeHtml(spec) : '',
+        o.listingInfo && it.listing_info ? _b2bNoteHtml(it.listing_info) : '',
+        it.client_notes ? escapeHtml(it.client_notes) : '',
+        o.internal && it.staff_notes ? `<span class="int">Internal: ${escapeHtml(it.staff_notes)}</span>` : '',
+    ].filter(Boolean).map(s => `<div class="b2b-lt-sub">${s}</div>`).join('');
+    const codes = o.codes ? [ser.length ? ser.join(', ') : '', it.sku || ''].filter(Boolean)
+        .map(s => `<div class="b2b-lt-code b2b-mono">${escapeHtml(s)}</div>`).join('') : '';
+    return `<b>${escapeHtml(_b2bItemName(it))}</b>${flags}${detail}${codes}`;
+}
+function _b2bLtCols(mode, items) {
+    const qtyOf  = (it) => Number(it.quantity) || 1;
+    const unitOf = (it) => Number(it.cost != null ? it.cost : it.offer) || 0;
+    const line   = ['Line', it => `<span class="b2b-lt-ln b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>`];
+    const cond   = ['Cond', it => it.condition
+        ? `<span class="b2b-chip b2b-chip-${_b2bCondChip(it.condition)}">${escapeHtml(it.condition)}</span>` : B2B_LT_DASH];
+    const qty    = ['Qty', it => `×${qtyOf(it)}`, 'r'];
+    if (mode === 'offer') {
+        return [line,
+            ['Item', it => _b2bLtItem(it, {}), 'b2b-lt-item'],
+            cond, qty,
+            ['Value', it => _b2bIsScrap(it) ? B2B_LT_DASH : _b2bMoney(Number(it.value) || 0, 2), 'r muted'],
+            // The one editable cell: the number being approved, and a typo there
+            // is the one correction not worth a round trip through pricing.
+            ['Offer', it => _b2bIsBuy(it)
+                ? `<input class="b2b-lt-in" type="number" min="0" step="0.01" value="${Number(it.offer) || 0}" aria-label="Offer per unit"
+                      oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bReviewOffer('${it.id}')">`
+                : B2B_LT_DASH, 'r'],
+            ['Margin', it => _b2bLineGrossHtml(it), 'r'],
+            ['Ship', it => _b2bIsScrap(it) ? B2B_LT_DASH : _b2bMoney(Number(it.shipping_cost) || 0, 2), 'r muted'],
+            ['Net', it => _b2bLineNetHtml(it), 'r'],
+            ['Total', it => _b2bIsBuy(it) ? _b2bMoney((Number(it.offer) || 0) * qtyOf(it), 2) : '—', 'r b'],
+        ];
+    }
+    const showStore = (items || []).some(it => it.listing_store);
+    return [line,
+        ['Item', it => _b2bLtItem(it, { wipeCount: true, listingInfo: true, internal: true, codes: true }), 'b2b-lt-item'],
+        cond, qty,
+        ['Done', it => `${_b2bDone(it)}/${qtyOf(it)}`, 'r'],
+        ['Unit', it => _b2bIsBuy(it) ? _b2bMoney(unitOf(it), 2) : '—', 'r'],
+        ['Total', it => _b2bIsBuy(it) ? _b2bMoney(unitOf(it) * qtyOf(it), 2) : '—', 'r b'],
+        [showStore ? 'Store' : '', it => showStore && it.listing_store ? _b2bStoreTag(it.listing_store) : ''],
+        ['', it => _b2bLabelBtn(it), 'r'],
+    ];
+}
+function _b2bLineTable(items, mode) {
     if (!items.length) return '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>';
     const t = _b2bItemTotals();
-    const showStore = (items || []).some(it => it.listing_store);
-    const head = `<div class="b2b-lt-r b2b-lt-h"><span>Line</span><span>Item</span><span>Cond</span>
-        <span class="r">Qty</span><span class="r">Done</span><span class="r">Unit</span><span class="r">Total</span>
-        <span>${showStore ? 'Store' : ''}</span><span></span></div>`;
-    const rows = items.map(it => {
-        const qty = Number(it.quantity) || 1;
-        const buy = _b2bIsBuy(it);
-        const unit = Number(it.cost != null ? it.cost : it.offer) || 0;
-        const spec = _b2bQuoteDesc(it);
-        const ser = _b2bSerials(it);
-        const flags = [
-            !buy ? `<span class="b2b-lt-flag ${_b2bIsScrap(it) ? '' : 'nrv'}">${escapeHtml(B2B_DISP[_b2bDispOf(it)].label)}</span>` : '',
-            it.wipe_required ? `<span class="b2b-lt-flag wipe">Wipe ${Number(it.wiped_qty) || 0}/${qty}</span>` : '',
-        ].join('');
-        const detail = [
-            spec ? escapeHtml(spec) : '',
-            it.listing_info ? _b2bNoteHtml(it.listing_info) : '',
-            it.client_notes ? escapeHtml(it.client_notes) : '',
-            it.staff_notes ? `<span class="int">Internal: ${escapeHtml(it.staff_notes)}</span>` : '',
-        ].filter(Boolean).map(s => `<div class="b2b-lt-sub">${s}</div>`).join('');
-        const codes = [ser.length ? ser.join(', ') : '', it.sku || ''].filter(Boolean)
-            .map(s => `<div class="b2b-lt-code b2b-mono">${escapeHtml(s)}</div>`).join('');
-        return `<div class="b2b-lt-r">
-            <span class="b2b-lt-ln b2b-mono">${escapeHtml(String(it.line_no || '').padStart(4, '0'))}</span>
-            <span class="b2b-lt-item"><b>${escapeHtml(_b2bItemName(it))}</b>${flags}${detail}${codes}</span>
-            <span><span class="b2b-lt-cond">${escapeHtml(it.condition || '—')}</span></span>
-            <span class="r">×${qty}</span>
-            <span class="r">${_b2bDone(it)}/${qty}</span>
-            <span class="r">${buy ? _b2bMoney(unit, 2) : '—'}</span>
-            <span class="r b">${buy ? _b2bMoney(unit * qty, 2) : '—'}</span>
-            <span>${showStore && it.listing_store ? _b2bStoreTag(it.listing_store) : ''}</span>
-            <span class="r">${_b2bLabelBtn(it)}</span>
-        </div>`;
-    }).join('');
+    const cols = _b2bLtCols(mode, items);
+    const head = `<div class="b2b-lt-r b2b-lt-h">${cols.map(([h, , cls]) =>
+        `<span class="${(cls || '').split(' ').includes('r') ? 'r' : ''}">${h}</span>`).join('')}</div>`;
+    const rows = items.map(it => `<div class="b2b-lt-r ${_b2bIsScrap(it) ? 'scrap' : ''}" data-rvw="${it.id}">${
+        cols.map(([, cell, cls]) => `<span class="${cls || ''}">${cell(it)}</span>`).join('')}</div>`).join('');
     return `<div class="b2b-lt b2b-lt-${mode}">${head}${rows}
         <div class="b2b-lt-foot"><span>${t.units} unit${t.units === 1 ? '' : 's'}</span><b>${_b2bMoney(t.offer, 2)}</b></div></div>`;
 }
@@ -24720,6 +24769,28 @@ function _b2bWsHeader(cfg, deal) {
     if (more) more.style.display = ws && items.length ? '' : 'none';
 }
 
+// THE SHEET STAGES (pricing, listing) need the width. Their sheets are
+// ~1130px (listing) and ~1400px (pricing) at their narrowest, and a 320px side
+// panel leaves a 1440px laptop about 1065px -- so the controls at the right end
+// of every row (the +/- stepper, the row menu) sat off-screen behind a
+// scrollbar. On those stages the panel can fold into a band above the sheet:
+// the status and the ONE primary stay in view (same element, CSS reflow only,
+// so every id other code toggles still exists), while the facts and sections
+// wait behind "Details". It starts folded below 1600px; whatever the user picks
+// holds for the session.
+let _b2bWsWide = null;
+function _b2bWsFolded(cfg) {
+    if (!cfg.sheet) return false;
+    return _b2bWsWide !== null ? _b2bWsWide : window.innerWidth < 1600;
+}
+function b2bWsToggleSide(btn) {
+    const ws = btn?.closest('.b2b-ws');
+    if (!ws) return;
+    _b2bWsWide = !ws.classList.contains('folded');
+    ws.classList.toggle('folded', _b2bWsWide);
+    btn.setAttribute('aria-pressed', String(!_b2bWsWide));
+}
+
 // The tools row above the stage's work: the label printer and whatever the
 // stage adds (Move, Print All SKUs, Move Lines).
 function _b2bWsTools(cfg) {
@@ -24727,7 +24798,13 @@ function _b2bWsTools(cfg) {
         ? `<button class="b2b-btn b2b-btn-secondary b2b-ws-tool" onclick="b2bPrintPickup()" title="Print the SKU label for this pickup">
                ${_b2bIco('<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>')}SKU Label</button>`
         : '';
-    const tools = print + (cfg.tools || '');
+    // The saved/unsaved readout (_b2bPaintSaveState writes it) rides the far
+    // end of the row on screens that edit as you go.
+    const saved = cfg.saved ? '<span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>' : '';
+    const fold = cfg.sheet ? `<button class="b2b-btn b2b-btn-secondary b2b-ws-fold" aria-pressed="${!_b2bWsFolded(cfg)}"
+        onclick="b2bWsToggleSide(this)" title="Show or hide the deal details beside the sheet">${
+        _b2bIco('<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/>')}Details</button>` : '';
+    const tools = print + (cfg.tools || '') + saved + fold;
     return tools ? `<div class="b2b-ws-tools">${tools}</div>` : '';
 }
 
@@ -24742,10 +24819,10 @@ function _b2bShowDeal(cfg) {
     if (cfg.ws) {
         cfg.full = true;
         cfg.body = `
-            <div class="b2b-ws">
+            <div class="b2b-ws ${cfg.sheet ? 'sheet' : ''} ${_b2bWsFolded(cfg) ? 'folded' : ''}">
                 <div class="b2b-ws-main">${_b2bWsTools(cfg)}${cfg.main || ''}</div>
                 <aside class="b2b-ws-side">
-                    ${deal ? _b2bNextHtml(deal, cfg.next) : ''}
+                    ${deal || cfg.next ? _b2bNextHtml(deal, cfg.next) : ''}
                     ${cfg.facts != null ? cfg.facts : deal ? _b2bFactsHtml(deal) : ''}
                     ${cfg.nums === false ? '' : _b2bNumsHtml()}
                     ${cfg.side || ''}
@@ -24956,66 +25033,54 @@ function _b2bStagePickup(deal) {
     const holding = deal.pricing_store;
     const w = _b2bIntake(deal);
     const walkIn = w.key === 'walkin';
+    // On the workspace (2026-10). The scanned list reports into the panel's
+    // message line (#b2bDealMsg, from _b2bNextHtml) -- without one _b2bSay falls
+    // back to alert() mid-scan. The acknowledgement sits directly above the
+    // button it unlocks, and the custody form keeps its own block in the work
+    // area but no longer a second green button: the panel's is the one primary.
     _b2bShowDeal({
+        ws: true,
+        deal,
         delDeal: deal,
         stage: 'pickup',
         eyebrow: deal.ref,
-        title: w.title,
-        sub: holding ? `${w.sub.replace(/\.$/, '')} — then straight into pricing at ${holding}.` : w.sub,
-        body: `
-            ${_b2bSummary(deal)}
-            ${_b2bPrevalOriginNote(deal)}
-            <label class="form-label-caps">${w.items}</label>
-            <textarea id="b2bPuDesc" class="form-input-lg" rows="3" ${lock}
-                placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(puDesc)}</textarea>
-            <p class="b2b-hint">${w.hint}</p>
-            <div class="${walkIn ? '' : 'b2b-grid2'}" style="margin-top:14px;">
-                <div>
-                    <label class="form-label-caps">Client Name *</label>
-                    <input id="b2bPuSigned" class="form-input-lg" ${lock} value="${escapeHtml(puName)}" placeholder="Full name of whoever released the items">
-                </div>
-                ${walkIn ? '' : `
-                <div>
-                    <label class="form-label-caps">Pickup Date *</label>
-                    <!-- Deliberately NOT pre-filled with today. It used to be, and a
-                         collection that happened last week got silently recorded as
-                         today by anyone who did not think to change it -- a wrong
-                         answer that looks like a considered one. Blank forces the
-                         choice; the required check below catches it. max stops a
-                         collection being dated into the future. -->
-                    <input id="b2bPuDate" type="date" class="form-input-lg" ${lock} max="${today}" value="${escapeHtml(puDate)}">
-                </div>`}
-            </div>
-            ${walkIn ? `
-            <p class="b2b-hint">Dated today, ${escapeHtml(_b2bDate(today))}, and recorded as received
-                by you — they are standing at the counter, so there is nothing to ask.</p>`
-            : holding ? `
-            <div style="margin-top:14px;">
-                <label class="form-label-caps">Received By</label>
-                <input id="b2bPuRecv" class="form-input-lg" ${lock} value="${escapeHtml(recv)}"
-                    placeholder="Who took these in at ${escapeHtml(holding)}">
-                <p class="b2b-hint">A deal picked up by corp records this when it is dropped at
-                    its pricing location. This one never leaves ${escapeHtml(holding)}, so it is
-                    recorded here instead.</p>
-            </div>` : ''}
-            ${_b2bManifestBlock(deal)}
-            ${_b2bSignBlock(deal)}
-            <label class="b2b-ack">
+        title: deal.client?.company || w.title,
+        menu: _b2bDeclineMenu(deal),
+        tools: _b2bHoldingLabelBtn(deal) + _b2bMoveBtn(deal),
+        next: {
+            line: holding ? `Goes straight into pricing at ${escapeHtml(holding)}` : '',
+            before: `<label class="b2b-ws-ack">
                 <input type="checkbox" id="b2bPuAck" onchange="document.getElementById('b2bPuGo').disabled=!this.checked">
-                <span>${w.ack}</span>
-            </label>`,
+                <span>${w.ack}</span></label>`,
+            primary: { id: 'b2bPuGo', label: w.go.replace(/&amp;/g, '&'), disabled: true, onclick: `b2bSignPickup('${deal.id}',this)` },
+        },
+        main: `
+            ${_b2bPrevalOriginNote(deal)}
+            ${_b2bWsBlock(w.items, `
+                <textarea id="b2bPuDesc" class="form-input-lg" rows="3" ${lock}
+                    placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(puDesc)}</textarea>`)}
+            <div class="b2b-ws-fields">
+                ${_b2bWsField('Client name', `<input id="b2bPuSigned" class="form-input-lg" ${lock} value="${escapeHtml(puName)}" placeholder="Who released the items">`,
+                    { req: true, hint: walkIn ? `Dated today and received by you.` : '' })}
+                ${walkIn ? '' : _b2bWsField('Pickup date',
+                    /* Deliberately NOT pre-filled with today. It used to be, and a
+                       collection that happened last week got silently recorded as
+                       today by anyone who did not think to change it -- a wrong
+                       answer that looks like a considered one. Blank forces the
+                       choice; the required check below catches it. max stops a
+                       collection being dated into the future. */
+                    `<input id="b2bPuDate" type="date" class="form-input-lg" ${lock} max="${today}" value="${escapeHtml(puDate)}">`, { req: true })}
+                ${!walkIn && holding ? _b2bWsField('Received by',
+                    /* A corp pickup records this when it is dropped at its pricing
+                       location. A store's own pickup never leaves the store, so
+                       this screen is the only place it gets recorded. */
+                    `<input id="b2bPuRecv" class="form-input-lg" ${lock} value="${escapeHtml(recv)}" placeholder="Who took these in at ${escapeHtml(holding)}">`) : ''}
+            </div>
+            ${_b2bManifestBlock(deal)}
+            ${_b2bSignBlock(deal)}`,
         after: () => {
             _b2bPickupDraft = null;   // consumed into the inputs above
         },
-        footer: `
-            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
-                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
-            <!-- The scanned list reports here ("already on the list", a failed
-                 save); without it _b2bSay falls back to alert() mid-scan. -->
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            ${_b2bMoveBtn(deal)}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">${w.go}</button>`,
     });
 }
 
@@ -25048,34 +25113,56 @@ async function b2bSignPickup(id) {
 
 function _b2bStageAssign(deal) {
     _b2bAssignPick = null;
+    // On the workspace (2026-10). The CORP note ("the listing store gets chosen
+    // separately once the client accepts") moved onto the CORP tile's tooltip --
+    // it only matters to the person hovering that choice.
     _b2bShowDeal({
+        ws: true,
+        deal,
         delDeal: deal,
         stage: 'pricing_location',
         eyebrow: deal.ref,
-        title: 'Assign Pricing Location',
-        sub: 'Pick who itemizes and prices this pickup, and record the hand-off.',
-        body: `
-            ${_b2bSummary(deal)}
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
-            <label class="form-label-caps" style="margin-top:14px;">Price It At</label>
-            <div class="b2b-loc-pick">
-                ${B2B_LOCATIONS.map(c => `
-                    <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
-                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
-                        <span class="b2b-loc-c">${c}</span>
-                    </button>`).join('')}
-            </div>
-            <p class="b2b-hint">Pricing at CORP means the listing store gets chosen separately once the client accepts.</p>
-            <div class="b2b-grid2" style="margin-top:14px;">
-                <div><label class="form-label-caps">Handed Over By</label><input id="b2bAsDeliv" class="form-input-lg" placeholder="Who picked it up or dropped it off"></div>
-                <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in at the location"></div>
-            </div>`,
-        footer: `
-            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
-                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignPricing('${deal.id}',this)">Send To Pricing</button>`,
+        title: deal.client?.company || 'Deal',
+        menu: _b2bDeclineMenu(deal),
+        tools: _b2bHoldingLabelBtn(deal),
+        next: {
+            primary: { id: 'b2bAsGo', label: 'Send To Pricing', disabled: true, onclick: `b2bAssignPricing('${deal.id}',this)` },
+            why: 'Pick a store',
+        },
+        main: `
+            ${_b2bPickupDescHtml(deal)}
+            ${_b2bWsBlock('Price it at', `
+                <div class="b2b-loc-pick">
+                    ${B2B_LOCATIONS.map(c => `
+                        <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')"
+                            ${c === 'CORP' ? 'title="The listing store is picked once the client accepts"' : ''}>
+                            <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                            <span class="b2b-loc-c">${c}</span>
+                        </button>`).join('')}
+                </div>`)}
+            ${_b2bWsBlock('Hand-off', `
+                <div class="b2b-ws-fields">
+                    ${_b2bWsField('Handed over by', '<input id="b2bAsDeliv" class="form-input-lg" placeholder="Name">')}
+                    ${_b2bWsField('Received by', '<input id="b2bAsRecv" class="form-input-lg" placeholder="Name">')}
+                </div>`)}`,
     });
+}
+
+// What came in, as the person who collected it described it. Same block on
+// every screen that shows it.
+function _b2bPickupDescHtml(deal) {
+    return deal.pickup_desc
+        ? `<div class="b2b-ws-desc"><span class="b2b-ws-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : '';
+}
+// One labelled form field. `control` is the input/textarea/select markup.
+function _b2bWsField(label, control, o = {}) {
+    return `<label class="b2b-ws-field ${o.wide ? 'wide' : ''}"><span class="b2b-ws-k">${escapeHtml(label)}${
+        o.req ? ' <span class="b2b-ws-req">*</span>' : ''}</span>${control}${o.hint ? `<span class="b2b-ws-hint">${o.hint}</span>` : ''}</label>`;
+}
+// The holding label prints from the two screens before anything has a SKU.
+function _b2bHoldingLabelBtn(deal) {
+    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintHoldingLabel('${deal.id}')">${
+        _b2bIco('<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>')}Holding Label</button>`;
 }
 
 function b2bPickLocation(code) {
@@ -25083,6 +25170,7 @@ function b2bPickLocation(code) {
     document.querySelectorAll('.b2b-loc').forEach(b => b.classList.toggle('on', b.dataset.loc === code));
     const go = document.getElementById('b2bAsGo');
     if (go) { go.disabled = false; go.textContent = `Send To ${code}`; }
+    _b2bWsWhy('');
 }
 
 async function b2bAssignPricing(id) {
@@ -25503,12 +25591,11 @@ function _b2bSignBlock(deal) {
     return `
         <div class="b2b-signq b2b-custody-ask" id="b2bCustodyAsk">
             <div class="b2b-signq-txt">
-                <b>Custody form</b>
-                <p>The client reads the custody form — what was collected, by whom, and when — and signs it.
-                   The signed copy is saved on this deal as a PDF.</p>
+                <b>Custody form</b> <span class="b2b-ws-hint">· not signed</span>
                 ${legacy}
                 <div class="b2b-signq-acts">
-                    <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenCustody('${deal.id}')">Review &amp; Sign Custody Form</button>
+                    <button class="b2b-btn b2b-btn-secondary" onclick="b2bOpenCustody('${deal.id}')"
+                        title="The client reads what was collected, by whom and when, and signs. The signed copy is saved on this deal as a PDF.">Review &amp; Sign</button>
                     <button class="b2b-mini" onclick="b2bPhoneQR()">Use a phone</button>
                     ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
                                       : '<span class="b2b-signq-note">A CEO, MOCD or DM can sign off without one.</span>'}
@@ -25716,8 +25803,7 @@ function _b2bManifestBlock(deal) {
             <label class="b2b-mf-toggle">
                 <input type="checkbox" ${m.open ? 'checked' : ''} ${locked || m.rows.length ? 'disabled' : ''}
                     onchange="b2bManifestToggle(this.checked)">
-                <span><b>Itemized pickup</b> — optional, for secure clients. Scan each unit; the list becomes
-                    pricing lines and prints on the custody form.</span>
+                <span title="For secure clients. The list becomes pricing lines and prints on the custody form."><b>Itemized pickup</b> · scan each unit</span>
             </label>
             <div class="b2b-mf-body" ${m.open ? '' : 'hidden'}>
                 ${locked ? '<p class="b2b-hint">Part of the signed custody form. Take the signature again to change it.</p>' : `
@@ -28159,53 +28245,62 @@ function _b2bSendbackNote(deal) {
 
 function _b2bStagePricing(deal) {
     _b2bGridMode = 'sheet';
+    // On the workspace (2026-10), as a sheet stage: the panel folds over the
+    // sheet below 1600px so the sixteen columns keep their width (see
+    // _b2bWsFolded). The notes and the client's quote stay in the work area,
+    // under the sheet, rather than in the panel -- this is where they are
+    // written: whoever prices the deal is who knows what the client should be
+    // told and what the approver needs warning about. Haydn asked for them and
+    // Haydn prices, and a folded panel would hide them from him.
     _b2bShowDeal({
+        ws: true,
+        deal,
         delDeal: deal,
         stage: 'pricing',
+        sheet: true,
+        saved: true,
         eyebrow: deal.ref,
-        title: 'Price The Pickup',
-        sub: 'Itemize what came in. Every change saves as you go.',
-        full: true,
-        body: `
-            ${_b2bSummary(deal)}
+        title: deal.client?.company || 'Deal',
+        menu: _b2bDeclineMenu(deal),
+        tools: _b2bPricingTools(deal),
+        next: {
+            primary: _b2bIsEmployee() ? null
+                : { id: 'b2bPrSubmit', label: 'Submit For Quoting', disabled: !_b2bModalItems.length,
+                    onclick: `b2bSubmitPricing('${deal.id}',this)` },
+            why: _b2bIsEmployee() ? 'Saves as you go. A manager or DM submits it.' : '',
+        },
+        main: `
             ${_b2bSendbackNote(deal)}
             ${_b2bPrevalOriginNote(deal)}
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
-            ${_b2bTotalsBar(true, !_b2bIsPreval() && _b2bModalItems.length > 1
-                ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
-                    title="Group by brand then model, highest value first at both levels"
-                    onclick="b2bSortItems(this)">↕ Sort by brand</button>`
-                : '')}
+            ${_b2bPickupDescHtml(deal)}
             ${_b2bBenchTray(deal)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
-            <!-- Above the quote preview, because this is where they are written:
-                 whoever prices the deal is who knows what the client should be
-                 told and what the approver needs warning about. Haydn asked for
-                 them and Haydn prices -- putting them only on the approval
-                 screen would have left the person who wanted them unable to
-                 reach them. -->
             ${_b2bNotesPanel(deal)}
-            ${_b2bQuoteClientBlock(deal)}`,
-        footer: `
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
-            <button class="b2b-btn b2b-btn-secondary" id="b2bSaveNow" disabled style="display:none;"
-                title="Post anything typed but not yet saved" onclick="b2bSaveNow()">Save</button>
-            ${_b2bMoveBtn(deal)}
-            ${_b2bPrintAllBtn(deal)}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
-            ${_b2bIsEmployee()
-                ? '<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">Prices save automatically — a manager or DM submits this for quoting.</span>'
-                : `<button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
-                onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`}`,
+            ${_b2bSection('Quote for the client', `<div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>`,
+                { open: _b2bCustOpen, ontoggle: 'b2bToggleCust(this)' })}`,
+        side: _b2bMoveHistorySec(deal),
         // Totals as always, plus the first read of the intake tray. It runs here
         // rather than from _b2bBenchTray because the markup has to be in the DOM
         // before there is anything to repaint into, and a render function has no
         // business firing a fetch. A no-op when the feature is off.
         after: (...a) => { _b2bPaintTotals(...a); _b2bIntakeLoad(deal.id); },
     });
+}
+
+// The sheet's tools, shared by pricing and the quote's full sheet: labels, the
+// brand sort, the hidden Save (b2bSaveNow shows it when something is stuck), and
+// the store move.
+function _b2bPricingTools(deal) {
+    return `${_b2bPrintAllBtn(deal)}
+        ${!_b2bIsPreval() && _b2bModalItems.length > 1
+            ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+                title="Group by brand then model, highest value first at both levels"
+                onclick="b2bSortItems(this)">↕ Sort by brand</button>` : ''}
+        ${_b2bMoveBtn(deal)}
+        <button class="b2b-btn b2b-btn-secondary" id="b2bSaveNow" disabled style="display:none;"
+            title="Post anything typed but not yet saved" onclick="b2bSaveNow()">Save</button>`;
 }
 
 async function b2bSubmitPricing(id, btn) {
@@ -28288,6 +28383,15 @@ function _b2bAwaitingApproval(deal) {
 // second half yet, and saying so is better than showing "Unassigned".
 function _b2bWhereLine(deal) {
     if (!deal.pricing_store) return '';
+    return `
+        <div class="b2b-note b2b-where">
+            <span class="b2b-note-k">Where it is</span>
+            ${_b2bStoreTag(deal.pricing_store)} <span class="b2b-where-go">— ${_b2bListsAt(deal)}</span>
+        </div>`;
+}
+// Where the goods will be listed, as a phrase. The workspace panel uses it on
+// its own; _b2bWhereLine wraps it for the screens not yet on the workspace.
+function _b2bListsAt(deal) {
     const at = deal.pricing_store;
     // A SPLIT DEAL IS THE FIRST CASE WITH MORE THAN ONE ANSWER. Checking
     // listing_store alone read a split as "not chosen yet" -- the single-store
@@ -28295,16 +28399,11 @@ function _b2bWhereLine(deal) {
     // said the listing store was still to come on a deal already being listed.
     const split = (deal.listing_stores || []).length > 1;
     const to = deal.listing_store || (at === 'CORP' ? null : at);
-    const going = split
+    return split
         ? `split across ${deal.listing_stores.map(_b2bStoreTag).join(' ')}`
         : to
             ? (to === at ? 'lists where it already is' : `lists at ${_b2bStoreTag(to)}`)
             : 'listing store is chosen once the client accepts';
-    return `
-        <div class="b2b-note b2b-where">
-            <span class="b2b-note-k">Where it is</span>
-            ${_b2bStoreTag(at)} <span class="b2b-where-go">— ${going}</span>
-        </div>`;
 }
 
 // Approving a quote is not the same job as pricing one, and it had the same
@@ -28324,7 +28423,10 @@ function b2bReviewFull(on) { _b2bReviewFull = !!on; b2bOpenDeal('quote', _b2bMod
 // many times it went, what we offered, and who priced it. The send control
 // stays here (Copy Quote is the whole send route), so a resend is where the
 // "sent" facts are. Days are the stores' days (Central), like every other age.
-function _b2bQuoteStatus(deal) {
+//
+// On the workspace (2026-10) these facts are the panel's status line, and Copy
+// Quote is one of the panel's buttons; `urgent` tints the line after a week.
+function _b2bQuoteFacts(deal) {
     const t = _b2bItemTotals();
     const sentDay = deal.quote_sent_at ? _b2bCentralDay(deal.quote_sent_at) : '';
     const days = sentDay ? Math.max(0, _b2bDayDiff(sentDay, _b2bCentralDay(new Date()))) : null;
@@ -28335,97 +28437,26 @@ function _b2bQuoteStatus(deal) {
         `Offer <b>${_b2bMoney(t.offer, 2)}</b> on ${t.units} unit${t.units === 1 ? '' : 's'}`,
         deal.priced_by ? `Priced by ${escapeHtml(deal.priced_by)}` : '',
     ].filter(Boolean);
-    return `
-        <div class="b2b-sendbar b2b-qstatus${days !== null && days >= 7 ? ' urgent' : ''}">
-            <span class="b2b-qstatus-facts">${facts.map(f => `<span>${f}</span>`).join('')}</span>
-            <!-- One button, because Copy Quote is the whole route: it copies
-                 the quote AND records the send. The address field, Open In
-                 Email and Sent By Hand all went on 2026-09-10. -->
-            <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
-                data-tip="Copies the quote and records it as sent — paste it into Gmail, Outlook or anywhere else">Copy Quote</button>
-        </div>`;
+    return { facts, urgent: days !== null && days >= 7 };
+}
+function _b2bQuoteFactsHtml(deal) {
+    const q = _b2bQuoteFacts(deal);
+    return `<div class="b2b-ws-qfacts ${q.urgent ? 'urgent' : ''}" id="b2bWsQuoteFacts">${q.facts.map(f => `<span>${f}</span>`).join('')}</div>`;
 }
 
 // The lines, as something to check rather than something to fill in. Offer is
 // the one editable cell -- it is the number being approved, and a typo there is
 // the one correction not worth a whole round trip through pricing.
 //
-// `full` (the sent quote, full width) leads with the line number (2026-10-16),
-// so a row there is the same "0003" as on the label, the pricing sheet and the
-// listing sheet. Approval's half-width split leaves it off: that column is
-// already the tightest on the screen.
-function _b2bReviewLines(full) {
+// Since the 2026-10 workspace port this is the shared line table's 'offer'
+// mode, on Approval and Out For Quote alike: same columns, line number first,
+// so a row is the same "0003" as on the label and the listing sheet. (The
+// approval split that left the line number off is gone -- see _b2bStageReview.)
+function _b2bReviewLines() {
     if (!_b2bModalItems.length) {
         return '<div class="b2b-empty sm"><div class="b2b-empty-t">No lines on this quote</div></div>';
     }
-    const rows = _b2bModalItems.map(it => {
-        const qty   = Number(it.quantity) || 1;
-        const buy   = _b2bIsBuy(it);
-        const scrap = _b2bIsScrap(it);
-        const disp  = _b2bDispOf(it);
-        const spec  = _b2bQuoteDesc(it);
-        return `
-        <div class="b2b-rvw-row ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}" data-rvw="${it.id}">
-            ${full ? `<div class="b2b-rvw-line b2b-mono">${escapeHtml(_b2bLineNo(it))}</div>` : ''}
-            <div class="b2b-rvw-what">
-                <div class="b2b-rvw-name">${escapeHtml(_b2bItemName(it))}
-                    ${it.condition ? `<span class="b2b-chip b2b-chip-${_b2bCondChip(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
-                    ${!buy ? `<span class="b2b-chip b2b-chip-neu">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
-                    ${it.wipe_required ? '<span class="b2b-chip b2b-chip-info">Certified wipe</span>' : ''}
-                </div>
-                ${spec ? `<div class="b2b-rvw-spec">${escapeHtml(spec)}</div>` : ''}
-                ${it.client_notes ? `<div class="b2b-rvw-note">${escapeHtml(it.client_notes)}</div>` : ''}
-            </div>
-            <div class="b2b-rvw-qty">×${qty}</div>
-            <div class="b2b-rvw-val">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(Number(it.value) || 0, 2)}</div>
-            <div class="b2b-rvw-offer">
-                ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
-                        aria-label="Offer per unit"
-                        oninput="b2bItemInput('${it.id}','offer',this.value)"
-                        onchange="b2bReviewOffer('${it.id}')">`
-                      : '<span class="b2b-f-off">—</span>'}
-            </div>
-            <div class="b2b-rvw-mgn">${_b2bLineGrossHtml(it)}</div>
-            <div class="b2b-rvw-ship">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(Number(it.shipping_cost) || 0, 2)}</div>
-            <div class="b2b-rvw-net">${_b2bLineNetHtml(it)}</div>
-            <div class="b2b-rvw-tot">${buy ? _b2bMoney((Number(it.offer) || 0) * qty, 2) : '—'}</div>
-        </div>`;
-    }).join('');
-    return `
-        <div class="b2b-rvw">
-            <div class="b2b-rvw-head">
-                ${full ? '<span>Line</span>' : ''}<span>Item</span><span class="c">Qty</span><span class="r">Value ea.</span>
-                <span class="r">Offer ea.</span><span class="r" title="Gross margin — resale value − our offer">Margin</span>
-                <span class="r" title="Our freight cost per unit — never shown to the client">Ship</span>
-                <span class="r" title="Net margin — value − offer − shipping − selling fees + data wipe">Net</span>
-                <span class="r">Line total</span>
-            </div>
-            ${rows}
-        </div>`;
-}
-
-// The split the approval and out-for-quote screens share: on the left the P&L
-// stats and a line list whose ONLY editable cell is the offer -- value, fees and
-// margins are there to be read, not filled in; on the right the exact document
-// the client sees, which is where the specs and notes live. Editing an offer
-// (b2bReviewOffer) repaints both halves. The full pricing sheet is one click
-// away for the rare correction that is worth more than a send-back.
-function _b2bReviewSplit(deal, capLabel) {
-    return `
-        <div class="b2b-rvw-wrap">
-            <div class="b2b-rvw-main">
-                ${_b2bTotalsBar(true)}
-                <div class="b2b-rvw-cap">
-                    <span>${escapeHtml(capLabel)}</span>
-                    <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
-                </div>
-                <div id="b2bReviewLines">${_b2bReviewLines()}</div>
-            </div>
-            <div class="b2b-rvw-doc">
-                <div class="b2b-rvw-cap"><span>Quote for the client</span></div>
-                <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
-            </div>
-        </div>`;
+    return _b2bLineTable(_b2bModalItems, 'offer');
 }
 
 // Repaint the list in place after a price edit, so the line total and the margin
@@ -28443,13 +28474,11 @@ function b2bReviewOffer(id) {
 function _b2bRepaintReview(focusId) {
     const el = document.getElementById('b2bReviewLines');
     if (!el) return;
-    el.innerHTML = _b2bReviewLines(el.classList.contains('b2b-rvw-full'));
+    el.innerHTML = _b2bReviewLines();
     _b2bPaintTotals();
-    if (_b2bModalDeal && document.getElementById('b2bReviewLines')?.classList.contains('b2b-rvw-full')) {
-        // The sent-quote status line carries the offer total.
-        const st = document.querySelector('.b2b-qstatus');
-        if (st) st.outerHTML = _b2bQuoteStatus(_b2bModalDeal);
-    }
+    // The sent-quote status line carries the offer total.
+    const st = document.getElementById('b2bWsQuoteFacts');
+    if (st && _b2bModalDeal) st.outerHTML = _b2bQuoteFactsHtml(_b2bModalDeal);
     // Found by id, never by position: a recycle or no-residual line renders a
     // dash instead of a field, so the inputs and the items are different-length
     // lists and any index into one is the wrong line in the other.
@@ -28467,32 +28496,39 @@ function _b2bRepaintReview(focusId) {
 //
 // Saves on blur like the pricing sheet, and through the same pending-edit
 // tracker, so the footer's saved/unsaved readout covers these too.
+//
+// On the workspace (2026-10) it is one of the panel's folded sections, open
+// whenever either note has something in it -- a note somebody wrote for the
+// approver is no use folded away. The two tags carry the difference; the hint
+// lines that repeated them went.
 function _b2bNotesPanel(deal) {
     if (!['pricing', 'review', 'quote'].includes(deal.stage)) return '';
-    return `
-        <div class="b2b-sec b2b-notespanel">
-            <div class="b2b-sec-h"><span>Notes On This Quote</span></div>
-            <div class="b2b-grid2" style="padding:12px 14px;">
-                <div>
-                    <label class="form-label-caps">Extra Line On The Quote
-                        <span class="b2b-tag-cli">the client sees this</span></label>
-                    <textarea id="b2bQuoteNote" class="form-input-lg" rows="3" maxlength="2000"
-                        placeholder="e.g. Collection can be arranged for the week of the 15th."
-                        oninput="b2bNoteInput('quote_note',this.value)"
-                        onchange="b2bSaveNotes('${deal.id}')">${escapeHtml(deal.quote_note || '')}</textarea>
-                    <p class="b2b-hint">Prints at the bottom of the quote, under the standard notes.</p>
-                </div>
-                <div>
-                    <label class="form-label-caps">For Whoever Sends It
-                        <span class="b2b-tag-int">never leaves the building</span></label>
-                    <textarea id="b2bInternalNote" class="form-input-lg" rows="3" maxlength="4000"
-                        placeholder="e.g. They asked about the two dead laptops — we took them at no charge."
-                        oninput="b2bNoteInput('internal_note',this.value)"
-                        onchange="b2bSaveNotes('${deal.id}')">${escapeHtml(deal.internal_note || '')}</textarea>
-                    <p class="b2b-hint">Context for the approver. Never printed on the quote.</p>
-                </div>
-            </div>
-        </div>`;
+    const n = [deal.quote_note, deal.internal_note].filter(s => String(s || '').trim()).length;
+    return _b2bSection('Notes', `
+        <div class="b2b-ws-fields b2b-ws-notes">
+            <label class="b2b-ws-field">
+                <span class="b2b-ws-k">On the quote <span class="b2b-tag-cli">the client sees this</span></span>
+                <textarea id="b2bQuoteNote" class="form-input-lg" rows="3" maxlength="2000"
+                    placeholder="e.g. Collection can be arranged for the week of the 15th."
+                    oninput="b2bNoteInput('quote_note',this.value)"
+                    onchange="b2bSaveNotes('${deal.id}')">${escapeHtml(deal.quote_note || '')}</textarea>
+            </label>
+            <label class="b2b-ws-field">
+                <span class="b2b-ws-k">For whoever sends it <span class="b2b-tag-int">never leaves the building</span></span>
+                <textarea id="b2bInternalNote" class="form-input-lg" rows="3" maxlength="4000"
+                    placeholder="e.g. They asked about the two dead laptops — we took them at no charge."
+                    oninput="b2bNoteInput('internal_note',this.value)"
+                    onchange="b2bSaveNotes('${deal.id}')">${escapeHtml(deal.internal_note || '')}</textarea>
+            </label>
+        </div>`, { n: n || null, open: n > 0 });
+}
+
+// The approval evidence as a panel section: open while there is none, because
+// then it is the thing standing between the deal and acceptance.
+function _b2bProofSec(deal) {
+    const live = _b2bLiveProofs().length;
+    return _b2bSection('Approval email', _b2bProofPanel(deal),
+        { n: live, open: !live && !deal.approval_waived_by });
 }
 
 // Local first, so the quote preview updates as it is typed; the save is on blur.
@@ -28555,49 +28591,41 @@ async function b2bEditPickupDate(id) {
 
 function _b2bStageReview(deal) {
     const canAccept = _b2bCanAccept();
-    const sent = deal.quote_send_count
-        ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
-        : 'Not sent yet';
+    // On the workspace (2026-10). Approval is still a proofread -- the lines
+    // with only the offer editable, then the exact document the client gets --
+    // but the two now stack in the work area instead of squeezing side by side,
+    // and the send is finally the screen's primary: Copy Quote was styled as a
+    // secondary here, so the one thing an approver comes to do looked optional.
+    //
+    // Copy Quote is the whole send route. It puts the quote on the clipboard AND
+    // records the send, so Mark Accepted becomes available without a mail draft
+    // or a second button. Open In Email and Sent By Hand both went on 2026-09-10
+    // -- the first opened a BLANK draft you had to paste into anyway, and the
+    // second recorded a send made outside the tool, which Nick says does not
+    // happen. The address field went with them.
     _b2bShowDeal({
+        ws: true,
+        deal,
         delDeal: deal,
         stage: deal.stage,
         eyebrow: deal.ref,
-        title: 'Approve & Send',
-        sub: 'Everything the client will see. Adjust a price if you need to — anything else goes back to pricing.',
-        full: true,
-        body: `
-            ${_b2bSummary(deal)}
-            ${_b2bWhereLine(deal)}
+        title: deal.client?.company || 'Deal',
+        menu: _b2bDeclineMenu(deal),
+        tools: _b2bMoveBtn(deal),
+        saved: true,
+        next: {
+            line: _b2bListsAt(deal),
+            primary: canAccept ? { label: 'Copy Quote & Mark Sent', onclick: 'b2bCopyQuote()',
+                                   title: 'Copies the quote and records it as sent. Paste it into Gmail, Outlook or anywhere else.' } : null,
+            secondary: canAccept ? [{ label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` }] : [],
+            why: canAccept ? '' : 'A CEO, MOCD or DM sends it',
+        },
+        main: `
             ${_b2bPrevalOriginNote(deal)}
-            <div class="b2b-note warn b2b-approve">
-                <span class="b2b-note-k">Waiting on you</span>
-                ${canAccept
-                    ? 'Nothing has gone to the client yet. Send it from your own mailbox, or send it back to pricing with a note.'
-                    : 'A CEO, MOCD or District Manager sends it out.'}
-            </div>
-            ${_b2bProofPanel(deal)}
-            ${_b2bNotesPanel(deal)}
-            ${_b2bReviewSplit(deal, "What you're approving")}`,
-        footer: `
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
-            ${_b2bMoveBtn(deal)}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
-            ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
-            ${canAccept ? `
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
-                <!-- Copy Quote is the whole send route now. It puts the quote on
-                     the clipboard AND records the send, so Mark Accepted becomes
-                     available without a mail draft or a second button.
-                     Open In Email and Sent By Hand both went on 2026-09-10 -- the
-                     first opened a BLANK draft you had to paste into anyway, and
-                     the second recorded a send made outside the tool, which Nick
-                     says does not happen. The address field went with them: it
-                     was only ever read by the mailto, so leaving it would ask for
-                     a client's email and then do nothing with it. -->
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
-                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>`
-                : `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">${escapeHtml(sent)}</span>`}`,
+            ${_b2bWsBlock('What you’re approving', `<div id="b2bReviewLines">${_b2bReviewLines()}</div>`,
+                `<button class="b2b-mini b2b-ws-hbtn" onclick="b2bReviewFull(true)">Full pricing sheet</button>`)}
+            ${_b2bWsBlock('Quote for the client', `<div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>`)}`,
+        side: `${_b2bProofSec(deal)}${_b2bNotesPanel(deal)}${_b2bMoveHistorySec(deal)}`,
         after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
     });
 }
@@ -28609,9 +28637,6 @@ function _b2bStageQuote(deal) {
     if (_b2bAwaitingApproval(deal) && !_b2bReviewFull) return _b2bStageReview(deal);
     const canAccept = _b2bCanAccept();
     const unsent = _b2bAwaitingApproval(deal);
-    const sent = deal.quote_send_count
-        ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
-        : 'Not sent yet';
 
     // Default view for a SENT quote ("Out For Quote").
     //
@@ -28631,43 +28656,34 @@ function _b2bStageQuote(deal) {
     // editable here, exactly as before. Approval keeps its split (_b2bStageReview)
     // -- that screen IS a proofread.
     //
-    // Built from the pieces the other stages already use (_b2bTotalsBar,
-    // _b2bReviewLines, the panels) so the coming stage-consistency pass has one
-    // fewer bespoke layout to fold in.
+    // Built from the shared workspace parts (2026-10): the status facts are the
+    // panel's line, the P&L is the numbers block, the lines are the shared
+    // table's offer mode, and the client's copy stays folded below them.
     if (!_b2bReviewFull) {
         return _b2bShowDeal({
+            ws: true,
+            deal,
             delDeal: deal,
             stage: deal.stage,
             eyebrow: deal.ref,
-            title: 'Out For Quote',
-            sub: 'Waiting on the client. Adjust an offer if you need to — accepting locks the offers in as our cost.',
-            full: true,
-            body: `
-            ${_b2bSummary(deal)}
-            ${_b2bWhereLine(deal)}
-            ${_b2bQuoteStatus(deal)}
-            ${_b2bTotalsBar(true)}
-            <div class="b2b-rvw-cap b2b-rvw-cap-full">
-                <span>Quote lines</span>
-                <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
-            </div>
-            <div id="b2bReviewLines" class="b2b-rvw-full">${_b2bReviewLines(true)}</div>
-            ${_b2bProofPanel(deal)}
-            ${_b2bNotesPanel(deal)}
-            <details class="b2b-sec b2b-qdoc-fold">
-                <summary class="b2b-sec-h"><span>The quote as the client sees it</span></summary>
-                <div class="b2b-qdoc-fold-body"><div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div></div>
-            </details>`,
-            footer: `
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
-            ${_b2bMoveBtn(deal)}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
-            ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
-            ${canAccept ? `<button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
-            ${canAccept
-                ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bAcceptQuote('${deal.id}',this)">Mark Accepted</button>`
-                : '<span class="b2b-foot-note">Only a CEO, MOCD or District Manager can accept a quote.</span>'}`,
+            title: deal.client?.company || 'Deal',
+            menu: _b2bDeclineMenu(deal),
+            tools: _b2bMoveBtn(deal),
+            saved: true,
+            next: {
+                line: `${_b2bQuoteFactsHtml(deal)}<div>${_b2bListsAt(deal)}</div>`,
+                primary: canAccept ? { label: 'Mark Accepted', onclick: `b2bAcceptQuote('${deal.id}',this)` } : null,
+                secondary: canAccept ? [
+                    { label: 'Copy Quote', onclick: 'b2bCopyQuote()', title: 'Copies the quote again and records the resend' },
+                    { label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` },
+                ] : [],
+                why: canAccept ? '' : 'Only a CEO, MOCD or DM can accept',
+            },
+            main: `
+                ${_b2bWsBlock('Quote lines', `<div id="b2bReviewLines">${_b2bReviewLines()}</div>`,
+                    `<button class="b2b-mini b2b-ws-hbtn" onclick="b2bReviewFull(true)">Full pricing sheet</button>`)}
+                ${_b2bSection('Quote as the client sees it', `<div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>`)}`,
+            side: `${_b2bProofSec(deal)}${_b2bNotesPanel(deal)}${_b2bMoveHistorySec(deal)}`,
             after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
         });
     }
@@ -28677,62 +28693,41 @@ function _b2bStageQuote(deal) {
     // preview below it is what they review before emailing.
     _b2bGridMode = 'sheet';
 
-    const banner = unsent ? `
-        <div class="b2b-note warn b2b-approve">
-            <span class="b2b-note-k">Awaiting approval</span>
-            This quote hasn't gone to the client yet.
-            ${canAccept ? 'Send it from your own mailbox, or send it back to pricing if something needs changing.'
-                        : 'A CEO, MOCD or District Manager sends it out.'}
-        </div>` : '';
-
+    // On the workspace (2026-10), laid out exactly like pricing -- it IS the
+    // pricing sheet -- with the quote's own next step in the panel. An unsent
+    // quote's one action is the send; a sent one's is acceptance.
     _b2bShowDeal({
+        ws: true,
+        deal,
         delDeal: deal,
-        // The deal's own stage, so the header icon matches and the print
-        // whitelist sees review as well as quote.
+        // The deal's own stage, so the header icon, chip and rail match and the
+        // print whitelist sees review as well as quote.
         stage: deal.stage,
+        sheet: true,
+        saved: true,
         eyebrow: deal.ref,
-        title: unsent ? 'Quote — Awaiting Approval' : 'Quote',
-        sub: unsent
-            ? 'Check it over, then send it to the client or send it back for changes.'
-            : 'Edit freely while the client decides. Accepting locks the offers in as our cost.',
-        full: true,
-        body: `
-            ${_b2bSummary(deal)}
-            ${_b2bWhereLine(deal)}
-            ${banner}
-            <div class="b2b-sendbar${unsent ? ' urgent' : ''}">
-                <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
-                <!-- One button, because Copy Quote is the whole route: it copies
-                     the quote AND records the send. The address field, Open In
-                     Email and Sent By Hand all went on 2026-09-10. -->
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
-                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <span class="b2b-sendbar-hint">Puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
-            </div>
-            ${_b2bProofPanel(deal)}
-            ${_b2bTotalsBar(true, _b2bModalItems.length > 1
-                ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
-                    title="Group by brand then model, highest value first at both levels"
-                    onclick="b2bSortItems(this)">↕ Sort by brand</button>`
-                : '')}
+        title: deal.client?.company || 'Deal',
+        menu: _b2bDeclineMenu(deal),
+        tools: `<button class="b2b-btn b2b-btn-secondary" onclick="b2bReviewFull(false)">← Back to the quote</button>${_b2bPricingTools(deal)}`,
+        next: {
+            line: unsent ? _b2bListsAt(deal) : `${_b2bQuoteFactsHtml(deal)}<div>${_b2bListsAt(deal)}</div>`,
+            primary: !canAccept ? null : unsent
+                ? { label: 'Copy Quote & Mark Sent', onclick: 'b2bCopyQuote()',
+                    title: 'Copies the quote and records it as sent. Paste it into Gmail, Outlook or anywhere else.' }
+                : { label: 'Mark Accepted', onclick: `b2bAcceptQuote('${deal.id}',this)` },
+            secondary: !canAccept ? [] : unsent
+                ? [{ label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` }]
+                : [{ label: 'Copy Quote', onclick: 'b2bCopyQuote()' }, { label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` }],
+            why: canAccept ? '' : unsent ? 'A CEO, MOCD or DM sends it' : 'Only a CEO, MOCD or DM can accept',
+        },
+        main: `
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
-            ${_b2bDealStatsHtml(_b2bModalItems, deal)}
             ${_b2bNotesPanel(deal)}
-            ${_b2bQuoteClientBlock(deal)}`,
-        footer: `
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
-            <button class="b2b-btn b2b-btn-secondary" id="b2bSaveNow" disabled style="display:none;"
-                title="Post anything typed but not yet saved" onclick="b2bSaveNow()">Save</button>
-            ${_b2bMoveBtn(deal)}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
-            ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
-            ${canAccept ? `<button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
-            ${canAccept
-                ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bAcceptQuote('${deal.id}',this)">Mark Accepted</button>`
-                : '<span class="b2b-foot-note">Only a CEO, MOCD or District Manager can accept a quote.</span>'}`,
+            ${_b2bSection('Quote for the client', `<div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>`,
+                { open: _b2bCustOpen, ontoggle: 'b2bToggleCust(this)' })}`,
+        side: `${_b2bProofSec(deal)}${_b2bMoveHistorySec(deal)}`,
         after: () => {
             _b2bPaintTotals();
             _b2bPaintQuoteDoc();
@@ -29333,20 +29328,23 @@ function _b2bSplitRepaint() {
     if (host) host.innerHTML = _b2bSplitPickerHtml();
     const go = document.getElementById('b2bAsGo');
     if (go) {
+        const left = _b2bSplitUnplaced().length;
         const ready = _b2bSplitMode
-            ? (_b2bSplitUnplaced().length === 0 && _b2bSplitStores().length > 0)
+            ? (left === 0 && _b2bSplitStores().length > 0)
             : !!_b2bAssignPick;
         go.disabled = !ready;
         go.textContent = _b2bSplitMode && _b2bSplitStores().length > 1
             ? `Split To ${_b2bSplitStores().length} Stores`
-            : 'Send To Listing';
+            : _b2bAssignPick && !_b2bSplitMode ? `Send To ${_b2bAssignPick}` : 'Send To Listing';
+        _b2bWsWhy(ready ? '' : _b2bSplitMode
+            ? `${left} line${left === 1 ? '' : 's'} still need a store`
+            : 'Pick a store');
     }
 }
 
 function _b2bSplitPickerHtml() {
     if (!_b2bSplitMode) {
         return `
-            <label class="form-label-caps" style="margin-top:14px;">List At</label>
             <div class="b2b-loc-pick">
                 ${STORE_CODES.map(c => `
                     <button class="b2b-loc ${_b2bAssignPick === c ? 'on' : ''}" data-loc="${c}"
@@ -29394,7 +29392,7 @@ function _b2bSplitPickerHtml() {
 
     return `
         <div class="b2b-splitbar">
-            <span class="form-label-caps">Pick a store, then click the lines that go there</span>
+            <span class="b2b-ws-k">Pick a store, then tap its lines</span>
             <div class="b2b-loc-pick sm">
                 ${STORE_CODES.map(c => `
                     <button class="b2b-loc ${_b2bSplitBrush === c ? 'on' : ''}" onclick="b2bSplitBrush('${c}')">
@@ -29413,46 +29411,35 @@ function _b2bSplitPickerHtml() {
             <span class="b2b-note-k">${left
                 ? `${left} line${left === 1 ? '' : 's'} still to place`
                 : `All ${_b2bModalItems.length} lines placed across ${stores.length} store${stores.length === 1 ? '' : 's'}`}</span>
-            ${left ? '<div>Every line has to go somewhere before this can be sent.</div>' : ''}
         </div>
         <div class="b2b-splitrows">${_b2bModalItems.map(row).join('')}</div>`;
 }
 
 function _b2bStageListingLocation(deal) {
     _b2bAssignPick = null;
+    // On the workspace (2026-10). The choice is still made once and up front:
+    // a split is the rarer case, so it is opt-in and the whole-deal route stays
+    // one tap on a store tile. The accepted figure that used to be a callout is
+    // the status line; the nine stat tiles are the numbers block.
     _b2bShowDeal({
+        ws: true,
+        deal,
         delDeal: deal,
         stage: 'listing_location',
         eyebrow: deal.ref,
-        title: 'Assign Listing Store',
-        sub: _b2bSplitMode
-            ? 'Split the deal: every line needs a store before this can be sent.'
-            : 'CORP priced this one, so pick the store that will list the items.',
-        full: true,
-        body: `
-            ${_b2bSummary(deal)}
-            <div class="b2b-note ok"><span class="b2b-note-k">Accepted</span>
-                ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(_b2bNetOffer(deal), 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
-            ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
-            <!-- The choice, made once and up front. A split is the rarer case, so
-                 it is opt-in and the whole-deal route stays one click on a store
-                 tile. -->
-            <label class="form-label-caps" style="margin-top:14px;">Where Is It Going</label>
-            <div class="b2b-splitmode">
-                <button class="b2b-splitmode-b ${!_b2bSplitMode ? 'on' : ''}" onclick="b2bSplitToggle(false)">
-                    <b>All to one store</b><span>The whole deal is listed in one place</span>
-                </button>
-                <button class="b2b-splitmode-b ${_b2bSplitMode ? 'on' : ''}" onclick="b2bSplitToggle(true)">
-                    <b>Split it up</b><span>Choose which lines go to which store</span>
-                </button>
-            </div>
-            <div id="b2bSplitWrap">${_b2bSplitPickerHtml()}</div>
-            ${_b2bSplitMode ? '' : `
-                <label class="form-label-caps" style="margin-top:16px;">What's In It</label>
-                ${_b2bItemTableHtml(_b2bModalItems)}`}`,
-        footer: `
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignListing('${deal.id}',this)">Send To Listing</button>`,
+        title: deal.client?.company || 'Deal',
+        menu: _b2bDeclineMenu(deal),
+        next: {
+            line: `Accepted ${deal.accepted_at ? _b2bDate(deal.accepted_at) + ' ' : ''}for ${_b2bMoney(_b2bNetOffer(deal), 2)}`,
+            primary: { id: 'b2bAsGo', label: 'Send To Listing', disabled: true, onclick: `b2bAssignListing('${deal.id}',this)` },
+        },
+        side: `${_b2bLiveProofs().length ? _b2bSection('Approval email', _b2bLiveProofs().map(_b2bProofRowHtml).join(''),
+                    { n: _b2bLiveProofs().length }) : ''}${_b2bMoveHistorySec(deal)}`,
+        main: `
+            ${_b2bWsBlock('Where it’s going', `
+                ${_b2bWsSeg([[false, 'One store'], [true, 'Split by line']], _b2bSplitMode, 'b2bSplitToggle($)')}
+                <div id="b2bSplitWrap">${_b2bSplitPickerHtml()}</div>`)}
+            ${_b2bSplitMode ? '' : _b2bLineTable(_b2bModalItems, 'read')}`,
     });
     _b2bSplitRepaint();
 }
@@ -29512,45 +29499,54 @@ const B2B_SCAN_SVG = '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0
 // person about to put a price on Shopify, and it is only true at that moment:
 // what a line was valued at during pricing was a buying decision made to protect
 // the deal, not a resale price anyone committed to.
+// The values on a deal were set to price the BUY, and a buy is priced
+// conservatively on purpose -- they are a floor, not a resale price. One line,
+// with the reasoning on hover.
 function _b2bConservativeNote() {
     return `
-        <div class="b2b-note warn">
+        <div class="b2b-note warn" title="The values here were set to price the buy, and a buy is priced conservatively. Look each line up before it goes live.">
             <span class="b2b-note-k">Check the price before you list</span>
-            The values on this deal were set to price the BUY, and we deliberately
-            price a buy conservatively. They are a floor, not a resale price —
-            look each line up before it goes live.
+            These values are a buy floor, not a resale price.
         </div>`;
+}
+
+// What is still to do on the units this user answers for, for the panel line
+// beside the Complete button. Repainted with the rows.
+function _b2bListLeftText() {
+    const own = _b2bMyLines();
+    const left = own.reduce((n, it) => n + Math.max(0, (Number(it.quantity) || 1) - _b2bDone(it)), 0);
+    return left ? `${left} unit${left === 1 ? '' : 's'} left to list` : '';
 }
 
 function _b2bStageListing(deal) {
     _b2bPendingUnit = null;
+    // On the workspace (2026-10). The scan bar, progress and sheet stay as they
+    // were -- they are the job -- and the footer's tools moved to the tools row.
+    // On a split deal Complete finishes THIS STORE'S part, and the deal follows
+    // once the last part lands -- so the label says whose part, and
+    // _b2bAllSatisfied is already only counting the lines this user was sent.
     _b2bShowDeal({
+        ws: true,
+        deal,
         delDeal: deal,
         stage: 'listing',
+        sheet: true,
         eyebrow: deal.ref,
-        title: 'Listing',
-        sub: 'Scan our label, then the Shopify barcode it went live under.',
-        full: true,
-        body: `
-            ${_b2bSummary(deal)}
+        title: deal.client?.company || 'Deal',
+        menu: _b2bDeclineMenu(deal),
+        tools: _b2bPrintAllBtn(deal) + _b2bMoveLinesBtn(deal) + _b2bMoveBtn(deal),
+        next: {
+            primary: { id: 'b2bListDone', disabled: !_b2bAllSatisfied(), onclick: `b2bCompleteDeal('${deal.id}',this)`,
+                       label: _b2bIsSplit(deal) && !_b2bIsCorp() ? 'My Part Is Done' : 'Complete Deal' },
+            why: _b2bListLeftText(),
+        },
+        side: `${_b2bLiveProofs().length ? _b2bSection('Approval email', _b2bLiveProofs().map(_b2bProofRowHtml).join(''),
+                    { n: _b2bLiveProofs().length }) : ''}${_b2bMoveHistorySec(deal)}`,
+        main: `
             ${_b2bConservativeNote()}
-            ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
-            <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>
-            ${_b2bMoveHistoryHtml(deal)}`,
-        footer: `
-            ${_b2bMoveBtn(deal)}
-            ${_b2bMoveLinesBtn(deal)}
-            ${_b2bPrintAllBtn(deal)}
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
-            <!-- On a split deal this completes THIS STORE'S part, and the deal
-                 follows once the last part lands -- so the label says whose
-                 part, and _b2bAllSatisfied is already only counting the lines
-                 this user was sent. -->
-            <button class="b2b-btn b2b-btn-primary" id="b2bListDone" ${_b2bAllSatisfied() ? '' : 'disabled'}
-                onclick="b2bCompleteDeal('${deal.id}',this)">${
-                    _b2bIsSplit(deal) && !_b2bIsCorp() ? 'My Part Is Done' : 'Complete Deal'}</button>`,
+            <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>`,
         after: () => document.getElementById('b2bScanIn')?.focus(),
     });
 }
@@ -29713,13 +29709,20 @@ function _b2bListProgress() {
     }).join('');
 
     const waiting = split && _b2bIsCorp() ? live.filter(p => !p.completed_at).map(p => p.store) : [];
+    // Listed / to-do value used to be two of the nine Deal Stats tiles. The
+    // workspace's numbers block is the same five figures on every stage, so the
+    // two that only matter while listing ride on this line instead -- and it
+    // repaints with every unit, which the tiles needed a second pass for.
+    const v = _b2bDealStatRaw(mine ? _b2bMyLines() : _b2bModalItems, deal);
+    const worth = [v.listed_value ? `${_b2bMoney(v.listed_value)} listed` : '',
+                   v.todo_value ? `${_b2bMoney(v.todo_value)} to go` : ''].filter(Boolean).join(' · ');
 
     return `
         <div class="b2b-prog">
             <div class="b2b-prog-h">
                 <span>${mine ? `Your part${mine.store ? ` · ${escapeHtml(mine.store)}` : ''}` : 'Listing progress'}${
                     split && _b2bIsCorp() ? ` · split across ${live.length} stores` : ''}</span>
-                <span><b>${done}</b> of ${total} units · ${pct}%</span>
+                <span><b>${done}</b> of ${total} units · ${pct}%${worth ? ` <span class="b2b-prog-worth">· ${worth}</span>` : ''}</span>
             </div>
             <div class="b2b-pace-bar"><i style="width:${pct}%"></i></div>
             ${bars ? `<div class="b2b-prog-parts">${bars}</div>` : ''}
@@ -29972,6 +29975,7 @@ function _b2bRepaintListing() {
     _b2bPaintDealStats();
     const done = document.getElementById('b2bListDone');
     if (done) done.disabled = !_b2bAllSatisfied();
+    _b2bWsWhy(_b2bListLeftText());
 }
 
 function _b2bScanFlash(msg, bad, itemId) {
@@ -30317,7 +30321,6 @@ function _b2bItemTableHtml(items) {
 }
 
 function _b2bStageView(deal) {
-    const canDecline = _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage);
     // Reopen is gone -- a declined deal is final (see the edge fn). Deletion is
     // the only way a deal leaves the record now; the trashcan in the modal header
     // (every stage, via delDeal) raises the request and CORP approves it. The
@@ -30337,13 +30340,13 @@ function _b2bStageView(deal) {
         delDeal: deal,
         eyebrow: deal.ref,
         title: deal.client?.company || 'Deal',
-        menu: canDecline ? [{ label: 'Decline Deal', danger: true, onclick: `b2bDeclineDeal('${deal.id}')` }] : [],
+        menu: _b2bDeclineMenu(deal),
         next: { line: when },
         side: `
             ${live.length ? _b2bSection('Approval email', live.map(_b2bProofRowHtml).join(''), { n: live.length }) : ''}
             ${_b2bMoveHistorySec(deal)}`,
         main: `
-            ${deal.pickup_desc ? `<div class="b2b-ws-desc"><span class="b2b-ws-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            ${_b2bPickupDescHtml(deal)}
             ${deal.declined_reason ? `<div class="b2b-note bad">
                 <span class="b2b-note-k">Declined</span>
                 <span>${escapeHtml(deal.declined_reason)}

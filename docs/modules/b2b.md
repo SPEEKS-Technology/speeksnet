@@ -198,7 +198,19 @@ Request Deletion and Decline Deal live in the ⋯ menu; evaluations use the
 workspace with `rail: false`; the Needs You tab goes, and Pipeline becomes the
 default view with a "Needs you only" switch.
 
-Ported so far: the read-only view (`_b2bStageView`).
+Ported: every stage screen and the evaluation (`rail: false`). The sheet
+stages (pricing, listing, the quote's full sheet, the evaluation) pass
+`sheet: true`. Below 1600px their panel folds into a band above the sheet,
+because the sheets need ~1130px (listing) and ~1400px (pricing). See
+`_b2bWsFolded`. Buttons that other code enables keep their ids (`b2bAsGo`,
+`b2bPuGo`, `b2bPrSubmit`, `b2bListDone`). Screens fill `#b2bWsWhy` through
+`_b2bWsWhy()` to say why a button is still disabled.
+
+Still on the old shell, on purpose for now: the sub-dialogs that borrow the deal
+modal (Send Back, Decline, Convert evaluation, Delete Requests). Dead since the
+port and due for removal: `_b2bSummary`, `_b2bWhereLine`, `_b2bTotalsBar`,
+`_b2bDealStatsHtml`, `_b2bItemTableHtml`, `_b2bQuoteClientBlock`,
+`_b2bCustPanel`, and their CSS.
 
 ## Screens
 
