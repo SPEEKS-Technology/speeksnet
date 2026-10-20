@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.2';
+const APP_VERSION = '3.9.3';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -43258,7 +43258,14 @@ const FEATURE_CATALOG = [
     // Guide. DM and CEO only while it is new (Ethan, 2026-09-23); it widens to
     // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
     // picture-quality function, for the same reason ec-view-titles must match.
-    { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // ⏸ PARKED 2026-10-20 (v3.9.3). Ethan: it went live by accident with an
+    // earlier merge and is still being built — "make it as if it was never added
+    // to the live site", for everyone, him included. With the entry commented
+    // out _featureEffectiveVisible says no, so nothing fetches picture-quality
+    // and Listing Health draws No Photos the way it did before the grader (see
+    // _pqHtml, _lhHtml and the All Stores card). The function, the data and the
+    // nightly (paused anyway) are untouched. Restore by uncommenting this line.
+    // { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // Live bench intake: the capture tool on a machine being tested posts its
     // own specs into the open deal. `def: []` is the whole point -- it ships off
@@ -56160,7 +56167,9 @@ function _ecHealthCats(store) {
          + (hasTitles ? grp('Title Quality', [
                { k: 'Wrong Titles', n: titlesBad, bad: 'ec-bad' },
                { k: 'Titles To Review', n: titles }]) : '')
-         + (pqParts.length ? grp('Picture Quality', pqParts) : '')
+         // No grader (ec-view-picture-quality parked): No Photos goes back on the
+         // face of the card as the plain red row it was before the drawer.
+         + (pq ? grp('Picture Quality', pqParts) : hasPics ? row('No Photos', pics, 'ec-bad') : '')
          + (hasCats ? grp('Categories', [
                { k: 'In &ldquo;Other&rdquo;', n: other },
                { k: 'No Suggestion', n: none },
@@ -56304,7 +56313,7 @@ function _lhTabCounts() {
     return [
         { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
           n: (_ltData?.queue || []).length, bad: !!_ltErr },
-        { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
+        { v: 'photos', label: _lhMay('pictures') ? 'Picture Quality' : 'No Photos', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
           // Passed rows ride in the same queue (for the Passed tab) but are not work.
           n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).filter(r => r.verdict !== 'pass').length, bad: noPhotos > 0 || !!_lhPhotoErr },
         { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
@@ -56577,6 +56586,11 @@ function _pqHtml() {
     const head = (inner, badge) => _lhSec('Photos', 'Picture Quality', inner, badge);
     const store = _ecEsc(_ecStore || '');
     const mayPics = _lhMay('pictures');
+    // Without the grader this tab is No Photos and nothing else — drawn as its
+    // own section, the way it was before Picture Quality existed. That also keeps
+    // Confirm Shots (gated on role, not on the switch) off the screen while
+    // ec-view-picture-quality is parked.
+    if (!mayPics) return _lhMay('photos') ? _lhPhotosHtml() : '';
     // Only the tabs this reader holds. See _lhHtml: two switches, one section.
     const tiers = _PQ_TIERS.filter(t => _lhMay(t.half));
     if (!tiers.length) return '';
