@@ -37,9 +37,15 @@ $unlock = New-CimInstance -CimClass $unlockClass -ClientOnly
 $unlock.StateChange = 8   # TASK_SESSION_UNLOCK
 $unlock.UserId = "$env:USERDOMAIN\$env:USERNAME"
 $unlock.Enabled = $true
+# Logon and unlock wait 3 minutes before starting. Wi-Fi and Drive for desktop are
+# still reconnecting at that moment, and every start Oct 16-20 (most of them
+# unlocks) died within seconds while a manual run minutes later worked.
+$unlock.Delay = 'PT3M'
+$logon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$logon.Delay = 'PT3M'
 $trigger = @(
     (New-ScheduledTaskTrigger -Daily -At $At),
-    (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"),
+    $logon,
     $unlock
 )
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
