@@ -678,6 +678,19 @@ async function relay(to: string, subject: string, html: string) {
   return { ok: false, status, attempts: 3 };
 }
 
+// Same broadcast claims-disputes sends after a write: open pages re-run their
+// claims checks, which is what puts the 4pm card in the feed. Best-effort — the
+// feed's own poll picks it up anyway.
+async function pingFeed(store: string) {
+  try {
+    await fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      body: JSON.stringify({ messages: [{ topic: "speeks-notify", event: "changed", payload: { tool: "claims", store, ts: Date.now() } }] }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 async function logSent(kind: string, store: string, rows: Row[], today: string) {
   if (!rows.length) return;
   await sb("hold_email_log", {
@@ -871,6 +884,9 @@ Deno.serve(async (req: Request) => {
           if (dry) { sent.push({ store: s, to, subject, items: dueNow[s].length }); continue; }
           const r = await relay(to.join(","), subject, html);
           if (r.ok) await logIt("manager_nudge", s, dueNow[s], today);
+          // The feed card is built from exactly these log rows (claims-disputes,
+          // DUE_ALERT_DONE), so tell open pages now rather than at their next poll.
+          if (r.ok && !toOverride) await pingFeed(s);
           sent.push({ store: s, to, subject, items: dueNow[s].length, ...r });
         }
       } else {

@@ -941,11 +941,19 @@ async function loadNp(sb: any, c: Central) {
   return out;
 }
 
-// One store's NP. The unbanked part is everything Shopify has counted this month
-// that the NP tab has not: Shopify's month-to-date GP and sales LESS the banked
-// days' own GP and sales. Taken as a difference, not by guessing which days are
-// missing, so a day the tab skipped (or a 6:05am refresh before the 6:10 pass)
-// is still counted exactly once.
+// One store's NP: the NP tab's banked days, plus an estimate for the days it has
+// not reached — today always, and yesterday until the 6:10 pass banks it.
+//
+// ⚠️ PER DAY, NOT SHOPIFY'S MONTH-TO-DATE LESS THE BANKED DAYS (Ethan 2026-10-13).
+// It used to be the difference, so a skipped day would be counted without
+// guessing which one it was. But the two sources do not agree on a finished day:
+// the tab's Sales ran $1–7k above Shopify's month-to-date at every store by the
+// 12th (MPL: $45,096 vs $38,473). The difference went NEGATIVE with nothing left
+// to estimate, took $2,260 off MPL's NP, and the site printed 81% of goal beside
+// the sheet's 95%. A banked day is now final, and only the days the tab does not
+// have get Shopify's figure. A day older than yesterday that the tab skipped is
+// left out rather than estimated — Shopify sends no per-day figure for it, and
+// the morning NP health check is what catches a skipped day.
 function npFor(
   m: { mtdNet: number; mtdGp: number; netToday: number; gpToday: number; prev: DayMetrics | null },
   code: string, np: Awaited<ReturnType<typeof loadNp>>, c: Central, pd: PrevDay,
@@ -953,17 +961,18 @@ function npFor(
 ): NpMetrics {
   const rate = np.rate[code] ?? NP_FALLBACK_RATE;
   const days = np.month[code] || {};
-  let bNp = 0, bSales = 0, bGp = 0, bEbay = 0, bShip = 0, n = 0;
-  for (const v of Object.values(days)) { bNp += v.np; bSales += v.sales; bGp += v.gp; bEbay += v.ebay; bShip += v.ship; n++; }
+  let bNp = 0, bSales = 0, bEbay = 0, bShip = 0, n = 0;
+  for (const v of Object.values(days)) { bNp += v.np; bSales += v.sales; bEbay += v.ebay; bShip += v.ship; n++; }
   const est = (gp: number, sales: number) => gp - rate * sales;
-  const unbanked = est(m.mtdGp - bGp, m.mtdNet - bSales);
+  const y = pd.inMonth ? days[pd.iso] : undefined;
+  const yEst = (pd.inMonth && !y && m.prev) ? est(m.prev.gpToday, m.prev.netToday) : 0;
+  const unbanked = yEst + est(m.gpToday, m.netToday);
   const mtd = round2(bNp + unbanked);
   const goal = np.goals[code] ?? null;
   const pct = goal && goal > 0 ? round2(mtd / goal * 100) : null;
   let prev: NpMetrics["prev"] = null;
   if (m.prev && pd.inMonth) {
-    const y = days[pd.iso];
-    const pMtd = round2(bNp + est(m.prev.mtdGp - bGp, m.prev.mtdNet - bSales));
+    const pMtd = round2(bNp + yEst);
     const pPct = goal && goal > 0 ? round2(pMtd / goal * 100) : null;
     prev = {
       day: y ? round2(y.np) : round2(est(m.prev.gpToday, m.prev.netToday)),

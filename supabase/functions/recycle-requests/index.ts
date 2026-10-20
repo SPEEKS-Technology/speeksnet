@@ -9,7 +9,8 @@ const corsHeaders = {
 // Recycle-out-of-inventory requests. Replaces the old email flow: stores log
 // each recycled item here as a line item (SKU / qty / per-unit cost) and the
 // DM reconciles per-store cost totals at month end, ticking lines as reviewed.
-// Scoped by store, same model as shopify_claims.
+// Scoped by store, same model as shopify_claims. Each line also carries a
+// reason slug (0145) so the review tab can filter and total by it.
 
 function parseMoney(v: unknown): number | null {
   if (v === null || v === "" || v === undefined) return null;
@@ -107,9 +108,19 @@ Deno.serve(async (req: Request) => {
         if (!Number.isFinite(quantity) || quantity < 1) {
           return jsonResponse({ success: false, error: "Quantity must be at least 1" }, 400);
         }
+        // Why it is being recycled — one of a fixed list (migration 0145). The form
+        // requires it; here an UNKNOWN value is refused but a missing one is let
+        // through, so a page still on the old cached speeks.js (no dropdown) keeps
+        // working until it reloads. Those rows read as "No reason" on review.
+        const REASONS = ["poor_testing", "damaged", "low_value", "other"];
+        const reason = body.reason ? String(body.reason).trim() : null;
+        if (reason && !REASONS.includes(reason)) {
+          return jsonResponse({ success: false, error: "Unknown reason" }, 400);
+        }
         const record = {
           store,
           sku,
+          reason,
           description: body.description ? String(body.description).trim() : null,
           quantity,
           value: parseMoney(body.value), // resale value of the item (optional)

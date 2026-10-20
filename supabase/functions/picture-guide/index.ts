@@ -80,7 +80,7 @@ Deno.serve(async (req: Request) => {
         .select("id, slug, name, group_name, sort_order, updated_at, updated_by")
         .eq("active", true).order("sort_order").order("id"),
       supabase.from("pg_shots")
-        .select("id, category_id, label, cond_label, repeatable, note, image_path, sort_order")
+        .select("id, category_id, label, cond_label, repeatable, note, image_path, crucial, sort_order")
         .order("category_id").order("sort_order").order("id"),
     ]);
     const bad = [cats, shots].find((r) => r.error);
@@ -93,6 +93,8 @@ Deno.serve(async (req: Request) => {
         label: s.label,
         cond: s.cond_label,          // null => always taken
         rep: !!s.repeatable,
+        // Picture Quality: a missing crucial view flags the listing (0142).
+        crucial: !!s.crucial,
         note: s.note,
         path: s.image_path,
         img: publicUrl(s.image_path),
@@ -225,6 +227,10 @@ Deno.serve(async (req: Request) => {
         note: body.note ? String(body.note).trim() : null,
         ...stamp,
       };
+      // Crucial (0142): set only when sent. The photo-upload and photo-remove
+      // saves resend the row without it, and must not quietly un-tick it. An
+      // optional photo is never crucial — "only if" and "must have" contradict.
+      if ("crucial" in body) patch.crucial = cond ? false : !!body.crucial;
       // Absent means "leave the photo alone"; explicit null means "remove it".
       if ("path" in body) patch.image_path = body.path || null;
 
