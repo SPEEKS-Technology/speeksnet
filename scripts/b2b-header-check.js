@@ -53,3 +53,30 @@ t('trial: the header buttons kept their gates through the churn', function () {
     return Array.from(fb.classList).filter(function (c) { return c.indexOf('role-') === 0; }).length === 0
         || 'Feedback picked up a role gate — it is meant to be for everyone';
 });
+
+// Every modal the B2B code opens has to exist in the page. The 2026-09-26 merge
+// of pre-release into feat/b2b-split-listing-locations dropped
+// #b2bMoveLinesModal: the button still rendered, toggleModal() found nothing,
+// and Move Lines did nothing for anybody -- no error, so b2b-check.js (which
+// has no page) passed throughout. Found only by clicking it, on 2026-10-05.
+t('every modal the B2B code opens is in operations.html', function () {
+    var ids = {};
+    Object.keys(window).forEach(function (k) {
+        if (!/^_?b2b/i.test(k) || typeof window[k] !== 'function') return;
+        var re = /toggleModal\(\s*'([A-Za-z0-9_-]+)'/g, m, src = _srcOf(window[k]);
+        while ((m = re.exec(src))) ids[m[1]] = k;
+    });
+    var found = Object.keys(ids);
+    if (found.indexOf('b2bMoveLinesModal') < 0) return 'the scan no longer sees Move Lines open its modal';
+    var missing = found.filter(function (id) { return !document.getElementById(id); });
+    return !missing.length || 'opened but not in the page: '
+        + missing.map(function (id) { return id + ' (by ' + ids[id] + ')'; }).join(', ');
+});
+
+// The Overview tab was removed on 2026-09-10 (its renderer and router are gone),
+// and a merge put the button back in operations.html: it rendered for CEO and DM,
+// and clicking it did nothing. Same failure as the Move Lines modal, other way
+// round -- the page outlived the code. Found by clicking it on 2026-10-14.
+t('the removed Overview tab is not in the page', function () {
+    return !document.getElementById('b2bViewOverviewBtn') || 'the Overview button is back, with no view behind it';
+});
