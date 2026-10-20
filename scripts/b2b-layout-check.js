@@ -462,23 +462,44 @@ function _boardAt(width, deals) {
         return !bad.length || 'overflows: ' + bad.slice(0, 3).join(', ');
     });
 });
-t('board: an idle stage folds to a strip, a busy one gets the width', function () {
+// Nick, after the folded strips: "I really dont like the vertical bars when
+// there arent any deals in that stage". Idle stages live in the stage row only.
+t('board: an idle stage is not a column, only a grey tile in the stage row', function () {
     var host = _boardAt(1300, _boardDeals(['pricing', 'listing']));
-    var folded = host.querySelectorAll('.b2b-col.folded');
-    if (folded.length !== B2B_BOARD.length - 2) return 'expected ' + (B2B_BOARD.length - 2) + ' folded, got ' + folded.length;
-    var strip = folded[0].getBoundingClientRect().width;
-    var busy = host.querySelector('.b2b-col:not(.folded)').getBoundingClientRect().width;
-    return (strip <= 44 && busy > 400) || 'strip ' + Math.round(strip) + 'px, busy ' + Math.round(busy) + 'px';
-});
-t('board: with nothing in flight every stage keeps its column', function () {
-    var host = _boardAt(1300, []);
-    return host.querySelectorAll('.b2b-col.folded').length === 0 || 'an empty board folded its stages';
-});
-t('board: narrow boards stack the stages instead of squeezing them', function () {
-    var host = _boardAt(700, _boardDeals(B2B_BOARD));
     var cols = host.querySelectorAll('.b2b-col');
-    var a = cols[0].getBoundingClientRect(), b = cols[1].getBoundingClientRect();
-    return b.top >= a.bottom - 1 || 'stages are still side by side at 700px';
+    if (cols.length !== 2) return 'expected 2 columns, got ' + cols.length;
+    var tiles = host.querySelectorAll('.b2b-flow-s');
+    if (tiles.length !== B2B_BOARD.length) return 'the stage row shows ' + tiles.length + ' of ' + B2B_BOARD.length + ' stages';
+    var idle = host.querySelectorAll('.b2b-flow-s.idle[disabled]').length;
+    if (idle !== B2B_BOARD.length - 2) return idle + ' idle tiles, expected ' + (B2B_BOARD.length - 2);
+    var w = cols[0].getBoundingClientRect().width;
+    return w > 400 || 'two busy stages only got ' + Math.round(w) + 'px each';
+});
+t('board: with nothing in flight it says so, and the stage row still shows the flow', function () {
+    var host = _boardAt(1300, []);
+    if (host.querySelectorAll('.b2b-col').length) return 'empty columns drawn';
+    if (!host.querySelector('.b2b-empty')) return 'no empty-state message';
+    return host.querySelectorAll('.b2b-flow-s').length === B2B_BOARD.length || 'the stage row went with the deals';
+});
+t('board: every stage busy fits one row at 1300px', function () {
+    var host = _boardAt(1300, _boardDeals(B2B_BOARD));
+    var tops = Array.prototype.map.call(host.querySelectorAll('.b2b-col'), function (c) { return Math.round(c.getBoundingClientRect().top); });
+    return tops.every(function (t) { return t === tops[0]; }) || 'columns wrapped at 1300px: ' + tops.join(',');
+});
+t('board: a narrow board wraps its columns rather than squeezing them under 170px', function () {
+    var host = _boardAt(700, _boardDeals(B2B_BOARD));
+    var thin = Array.prototype.filter.call(host.querySelectorAll('.b2b-col'), function (c) { return c.getBoundingClientRect().width < 169; });
+    return !thin.length || thin.length + ' column(s) under 170px at 700px';
+});
+t('board: picking a stage in the row narrows the board to it', function () {
+    var keep = _b2bStageFocus;
+    try {
+        _b2bStageFocus = 'listing';
+        var host = _boardAt(1300, _boardDeals(['pricing', 'listing']));
+        var cols = host.querySelectorAll('.b2b-col');
+        if (cols.length !== 1) return 'expected 1 column, got ' + cols.length;
+        return !!host.querySelector('.b2b-flow-s.on') || 'the picked tile is not marked';
+    } finally { _b2bStageFocus = keep; }
 });
 
 document.getElementById('layout-host') && document.getElementById('layout-host').remove();

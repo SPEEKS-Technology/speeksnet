@@ -25264,43 +25264,59 @@ select.dd-native {
 .b2b-mine-switch input:focus-visible + .b2b-mine-sw { box-shadow: 0 0 0 3px rgba(31, 157, 87, .2); }
 
 /* =========================================================================
-   PIPELINE BOARD THAT FITS (2026-10) -- no sideways scroll
+   PIPELINE: THE STAGE ROW + A BOARD OF BUSY STAGES (2026-10)
    =========================================================================
-   Replaces the flex row of 208px columns that scrolled inside .b2b-boardwrap.
-   The board is a grid; _b2bRenderPipeline writes its tracks inline (1fr for a
-   stage with deals, 40px for a stage folded because it has none), so seven busy
-   stages share the width and an idle one costs almost nothing. Everything that
-   sits in a column has to be able to get narrow without spilling: the card's
-   top row wraps, the client name breaks, the store tags wrap. Below ~900px of
-   board the stages stack instead -- a column narrower than that reads worse
-   than a list. */
-.b2b-boardwrap { overflow: visible; padding-bottom: 0; container-type: inline-size; container-name: b2bboard; }
-.b2b-board { display: grid; gap: 10px; width: auto; min-width: 0; align-items: start; }
+   No sideways scroll (Nick), and no columns standing empty (Nick, again: "I
+   really dont like the vertical bars when there arent any deals in that
+   stage"). The stage row carries the whole flow -- all seven stages, count and
+   value, idle ones grey -- so the board below only has to show stages that
+   have deals. Those columns auto-fit: equal shares of the width, each at least
+   170px, wrapping onto a second row rather than squeezing. Seven busy stages
+   fit one row on a 1440 screen; a phone gets one stage per row. A wide column
+   lays its cards out two or three across rather than stretching one. */
+.b2b-flow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
+.b2b-flow-s {
+    display: grid; grid-template-columns: 1fr auto; grid-template-areas: "l l" "n v"; align-items: end; gap: 2px 8px;
+    min-width: 0; padding: 9px 11px 8px; text-align: left; font: inherit; cursor: pointer;
+    background: #fff; border: 1px solid var(--b2b-line); border-top: 3px solid var(--b2b-line); border-radius: 10px;
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.b2b-flow-s.busy:hover { box-shadow: 0 4px 14px rgba(16, 24, 40, .07); }
+.b2b-flow-s.idle { cursor: default; background: var(--b2b-surface); border-top-color: var(--b2b-line); }
+.b2b-flow-s.on { box-shadow: 0 0 0 2px var(--sage-deep); }
+.b2b-flow-s:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(31, 157, 87, .25); }
+.b2b-flow-l { grid-area: l; display: block; min-width: 0;
+              font-size: 11px; font-weight: 800; letter-spacing: .03em; color: #334155;
+              line-height: 1.2; }
+.b2b-flow-n { grid-area: n; font-size: 20px; font-weight: 850; line-height: 1.1; color: var(--b2b-ink); font-variant-numeric: tabular-nums; }
+.b2b-flow-v { grid-area: v; font-size: 11.5px; font-weight: 700; color: var(--b2b-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.b2b-flow-s.idle .b2b-flow-l, .b2b-flow-s.idle .b2b-flow-n { color: var(--b2b-faint); }
+.b2b-flow-you { display: inline-block; width: 7px; height: 7px; margin-left: 5px; vertical-align: 1px; border-radius: 50%; background: var(--sage-deep); }
+/* Busy stages wear their stage colour along the top, same tones as the chips. */
+.b2b-flow-s.busy.b2b-flow-ok     { border-top-color: #1f9d57; }
+.b2b-flow-s.busy.b2b-flow-warn   { border-top-color: #d9a441; }
+.b2b-flow-s.busy.b2b-flow-crit   { border-top-color: #d1443b; }
+.b2b-flow-s.busy.b2b-flow-info   { border-top-color: #3b82f6; }
+.b2b-flow-s.busy.b2b-flow-violet { border-top-color: #8b5cf6; }
+.b2b-flow-s.busy.b2b-flow-teal   { border-top-color: #0d8a7d; }
+.b2b-flow-s.busy.b2b-flow-neu    { border-top-color: #94a3b8; }
+.b2b-flow-all { display: inline-block; margin: -6px 0 12px; font-size: 12px; }
+
+.b2b-boardwrap { overflow: visible; padding-bottom: 0; }
+.b2b-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)) !important; gap: 10px;
+             width: auto; min-width: 0; align-items: start; }
 .b2b-col { flex: none; min-width: 0; max-width: none; }
 .b2b-col-h { flex-wrap: wrap; row-gap: 4px; }
 .b2b-col-t { min-width: 0; line-height: 1.25; }
 .b2b-col-b { padding: 3px 8px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); align-items: start; }
-/* A wide column (few stages busy) lays its cards out two or three across rather
-   than stretching one card across half the screen. */
 .b2b-card { min-width: 0; padding: 10px; }
 .b2b-card-top { flex-wrap: wrap; row-gap: 4px; }
 .b2b-card-co { overflow-wrap: anywhere; }
 .b2b-card .b2b-store-split { max-width: 100%; }
 
-/* A stage with nothing in it: a slim strip carrying its name, read upwards. */
-.b2b-col.folded {
-    align-self: stretch; min-height: 150px; align-items: center; justify-content: flex-start;
-    padding: 12px 0; cursor: default; background: transparent; border: 1px dashed var(--b2b-line);
-    border-top-width: 3px; border-top-style: solid;
-}
-.b2b-col-fold {
-    writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap;
-    font-size: 11px; font-weight: 800; letter-spacing: .04em; color: var(--b2b-faint);
-}
-.b2b-col-fold b { color: var(--b2b-faint); font-weight: 800; margin-top: 6px; display: inline-block; }
-
-@container b2bboard (max-width: 900px) {
-    .b2b-board { grid-template-columns: 1fr !important; }
-    .b2b-col.folded { display: none; }
-    .b2b-col-b { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+/* Phones and narrow tablets: the stage row wraps to two lines of compact tiles. */
+@media (max-width: 900px) {
+    .b2b-flow { grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); }
+    .b2b-flow-n { font-size: 17px; }
+    .b2b-flow-l { font-size: 10.5px; }
 }

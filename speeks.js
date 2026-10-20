@@ -21716,6 +21716,10 @@ function b2bSetStoreFilter(code) { _b2bStoreFilter = code; b2bRender(); }
 // The board's "Needs you only" switch -- kept for the session, like the store filter.
 let _b2bMineOnly = false;
 function b2bSetMineOnly(on) { _b2bMineOnly = !!on; b2bRender(); }
+// A stage picked in the pipeline's stage row: the board shows just that one.
+// Clicking it again (or null) shows every stage again.
+let _b2bStageFocus = null;
+function b2bFocusStage(key) { _b2bStageFocus = (key && key !== _b2bStageFocus) ? key : null; b2bRender(); }
 
 function b2bRender() {
     const body = document.getElementById('b2bBody');
@@ -21917,28 +21921,42 @@ function _b2bRenderPipeline(scoped) {
             </label>
         </div>`;
 
-    // NO SIDEWAYS SCROLL (Nick, 2026-10: "I do not like having a horizontal
-    // scroll on the pipeline ... adjust it so they all keep it looking nice
-    // though even when they are all active"). The board is a grid that always
-    // fits its width: a stage with deals takes an equal share, a stage with none
-    // folds to a slim labelled strip -- still there, so the flow reads left to
-    // right, but costing 40px instead of 208. When nothing is in flight at all
-    // every stage keeps its full column, since a board of strips says nothing.
-    // Too narrow even for that, and the CSS stacks the stages (container query
-    // on .b2b-boardwrap).
-    const anyLive = B2B_BOARD.some(key => deals.some(d => d.stage === key));
-    const tracks = [];
-    const cols = B2B_BOARD.map(key => {
+    // THE STAGE ROW AND A BOARD OF BUSY STAGES ONLY (Nick, 2026-10).
+    //
+    // First ask: no horizontal scroll, and it has to look right with every
+    // stage busy. Then: "I really dont like the vertical bars when there arent
+    // any deals in that stage" -- the 40px folded strips that answered the first
+    // ask. So the two jobs a column did are split:
+    //   - the STAGE ROW says where everything is: all seven stages, in order,
+    //     each with its count and value, an idle one quietly grey. The flow is
+    //     always readable here, whatever the board shows.
+    //   - the BOARD shows only stages that have deals, sharing the width, so
+    //     nothing on it is ever empty and nothing scrolls sideways. Too narrow
+    //     for that and the CSS stacks them (container query on .b2b-boardwrap).
+    // Clicking a stage in the row narrows the board to it; clicking it again,
+    // or "Show all", puts the rest back.
+    const byStage = Object.fromEntries(B2B_BOARD.map(key => [key, deals.filter(d => d.stage === key)]));
+    if (_b2bStageFocus && !byStage[_b2bStageFocus]?.length) _b2bStageFocus = null;
+    const worth = (list) => list.reduce((n, d) => n + (d.total_offer ? Number(_b2bNetOffer(d)) || 0 : 0), 0);
+    const flow = `
+        <div class="b2b-flow" role="group" aria-label="Stages">
+            ${B2B_BOARD.map(key => {
+                const s = B2B_STAGE[key], list = byStage[key], n = list.length, v = worth(list);
+                const mine = list.some(d => _b2bActionFor(d));
+                return `
+                <button class="b2b-flow-s b2b-flow-${s.tone} ${n ? 'busy' : 'idle'} ${_b2bStageFocus === key ? 'on' : ''}"
+                    ${n ? `onclick="b2bFocusStage('${key}')"` : 'disabled'} aria-pressed="${_b2bStageFocus === key}"
+                    title="${escapeHtml(s.label)}: ${n} deal${n === 1 ? '' : 's'}${n ? ` · ${_b2bStageFocus === key ? 'show every stage' : 'show only this stage'}` : ''}">
+                    <span class="b2b-flow-l">${escapeHtml(s.label)}${mine ? '<i class="b2b-flow-you" title="Needs you"></i>' : ''}</span>
+                    <span class="b2b-flow-n">${n}</span>
+                    <span class="b2b-flow-v">${v ? _b2bMoney(v) : '&nbsp;'}</span>
+                </button>`;
+            }).join('')}
+        </div>`;
+    const shown = B2B_BOARD.filter(key => byStage[key].length && (!_b2bStageFocus || _b2bStageFocus === key));
+    const cols = shown.map(key => {
         const s = B2B_STAGE[key];
-        const inCol = deals.filter(d => d.stage === key);
-        const fold = anyLive && !inCol.length;
-        tracks.push(fold ? '40px' : 'minmax(0, 1fr)');
-        if (fold) {
-            return `
-            <div class="b2b-col b2b-col-${s.tone} folded" title="${escapeHtml(s.label)}: nothing here">
-                <span class="b2b-col-fold">${escapeHtml(s.label)} <b>0</b></span>
-            </div>`;
-        }
+        const inCol = byStage[key];
         const cards = inCol.length ? inCol.map(d => {
             const days = _b2bDaysIn(d);
             const act  = _b2bActionFor(d);
@@ -21976,9 +21994,16 @@ function _b2bRenderPipeline(scoped) {
         ? `<div class="b2b-archive-note">${finished} finished deal${finished === 1 ? '' : 's'} `
           + `${finished === 1 ? 'is' : 'are'} kept in <button class="b2b-linkbtn" onclick="b2bSetView('finished')">Completed</button>.</div>`
         : '';
-    // The tracks travel inline because they depend on which stages are busy;
-    // everything else about the board lives in styles.css.
-    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board" style="grid-template-columns:${tracks.join(' ')}">${cols}</div></div>${note}`;
+    // Nothing in flight (or nothing left once filtered) gets a sentence, not a
+    // row of empty columns.
+    const filtered = _b2bMineOnly || (_b2bIsCorp() && _b2bStoreFilter !== 'ALL');
+    const board = shown.length
+        ? `<div class="b2b-board" style="grid-template-columns:repeat(${shown.length}, minmax(0, 1fr))">${cols}</div>`
+        : `<div class="b2b-empty"><div class="b2b-empty-t">${filtered ? 'Nothing matches' : 'No deals in flight'}</div>
+              <div class="b2b-empty-s">${filtered ? 'Clear the filters above to see every deal.' : 'New deals show up here as soon as they are raised.'}</div></div>`;
+    const focusNote = _b2bStageFocus
+        ? `<button class="b2b-linkbtn b2b-flow-all" onclick="b2bFocusStage(null)">Show all stages</button>` : '';
+    return `${filter}${flow}${focusNote}<div class="b2b-boardwrap">${board}</div>${note}`;
 }
 
 // --- view: Completed ------------------------------------------------------
