@@ -342,6 +342,69 @@ which `notify/index.ts` lists and `0057`/`0066` added preferences for. Nothing
 has ever inserted a `categories` row, so it has not bitten yet — but the first
 one will fail the constraint.
 
+### The October 2026 rework (0148 / 0149)
+
+Nick, 2026-10-16. **B2B is its own email category (`b2b`)** with three sub-switches:
+`b2b_stage` (the stage events above, moved out of `requests` under the same key, so
+old mutes still hold), `b2b_pricing_due` and `b2b_unlisted`. 0149 copied each
+person's `cat_requests` into `cat_b2b` so nobody started receiving B2B mail they had
+switched off.
+
+- **Pricing due — daily.** Due = the Central day the deal entered pricing
+  (`stage_changed_at`) + 7, so a send-back starts a fresh week. Stores: their own
+  deals; corp: every deal. Email from the notify digest (`collectDue`, slug
+  `b2bPricingDue`, one card per deal per day); feed card `b2bPricing`
+  (`_b2bPricingCard`), which **a store cannot snooze and corp can**.
+- **Unlisted value — Mondays.** View `b2b_unlisted_value` (per deal per listing
+  store, listing stage only, signed-off parts excluded). Digest slug
+  `b2bUnlistedWeekly` (per store + one corp card with a per-store breakdown); feed
+  card `b2bUnlisted` reads `GET ?unlisted=1&store=…` and stays up from Monday until
+  "Mark read" (per person per week, localStorage).
+- **The generic "B2B Deals Waiting" card** now skips pricing and listing deals —
+  they have their own cadence.
+- **Corp's on-site switches** are `user_notify_prefs.feed_muted`
+  (`b2b_pricing_due` / `b2b_unlisted`), drawn in Settings → Notifications as an "On
+  the site" block above the email switch. The notify function accepts them from
+  DM/CEO/MOCD only and clears them for anyone else.
+
+⚠️ **Production `notify` is not pre-release's `notify`.** Ethan's unmerged
+`Main-November-Update-2` deployed an Aging Inventory pause and a Variance "End a
+period" change. The rework was deployed as a 3-way merge of both. Deploying `notify`
+straight from pre-release would switch Aging emails back on until his branch merges.
+
+Why Paul got no "ready for review" mail (2026-09-18): he has no `user_notify_prefs`
+row (email alerts never switched on), and the quote-ready email's fallback address
+is `b2b_crm_settings.notify_email`, a different mailbox from the one he writes from.
+
+## Pickup: custody form and itemized pickup (0150)
+
+**The QR-to-a-phone signing route is gone** (`#b2b-sign-<id>`, `b2bOpenSign`,
+`b2bSignHere`, `b2bSaveSign`). B2B runs on phones instead: the B2B tab has no
+`data-mobile` cut, and the Operations nav link carries `data-phone="show"`, honoured
+by `_applySectionNavVisibility` for `_PHONE_SECTION_TABS` (`widget-ops-b2b`) only —
+so a phone user without B2B still has no Ops link. "Use a phone" on the pickup screen
+is `b2bPhoneQR()`: a popout QR to the site's `index.html`, nothing deal-specific.
+
+**Custody form.** `b2bOpenCustody` → the client reads `_b2bCustodyDocHtml` (facts,
+items, scanned list, `B2B_CUSTODY_TERMS` — wording is Nick's to approve) and signs →
+`b2bSignCustody`: `capture_signature` (PNG of record) → `_b2bCustodyPdf` (jsPDF from
+CDN, signature embedded as JPEG, compressed — about 13 KB) → `save_custody`, which
+stores the PDF in the private `b2b-custody` bucket and **writes the printed facts
+onto the deal**. From then on the pickup fields and the list are read-only and
+`sign_pickup` uses the stored values, so a phone-signed pickup finishes at the store
+with no retyping. `reset_custody` ("Take it again") clears the custody and signature
+pointers (the files stay). `GET ?custody=<deal>[&dl=1]` streams the PDF; later stages
+show it in `_b2bSummary`.
+
+**Itemized pickup** (optional). `b2b_deals.pickup_manifest` = `[{serial, desc, qty}]`,
+saved as it is built (`save_pickup_manifest`, debounced; locked once custody is
+signed). Held newest-first on screen, stored in scan order. `sign_pickup` turns it into
+pricing lines **before** moving the stage: `manifestLines` groups by description
+(case-insensitive), joins serials, sums quantity, splits a group whose serials would
+pass 4000 characters; lines are `item_type 'other'`, `staff_notes = 'From the itemized
+pickup'` (the marker that stops a retry doubling them). Camera scanning uses
+`BarcodeDetector` where the browser has it; the button is not drawn elsewhere.
+
 ## Live collaborative pricing
 
 `speeks.js:16771-16972`. `_b2bSyncOpenDeal` `:16841` merges server state into the

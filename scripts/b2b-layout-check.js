@@ -360,3 +360,35 @@ t('audit §11: the primary button and count pip clear WCAG AA', function () {
 });
 
 document.getElementById('layout-host') && document.getElementById('layout-host').remove();
+
+// --- October 2026: the sent quote at full width ----------------------------
+// Nick: the Out For Quote screen crushed its lines into half the width. They
+// now span the screen; on a phone they must scroll inside their own box, never
+// widen the page.
+function _sentQuoteHtml() {
+    var d = Object.assign({}, FIX_DEAL, { stage: 'quote', quote_sent_at: '2026-10-10T15:00:00Z', quote_send_count: 1 });
+    return _b2bQuoteStatus(d)
+        + '<div id="b2bReviewLines" class="b2b-rvw-full">' + _b2bReviewLines(true) + '</div>';
+}
+t('layout: sent-quote lines get the width on a desktop', function () {
+    var host = stage(1300, _sentQuoteHtml());
+    var name = host.querySelector('.b2b-rvw-full .b2b-rvw-name');
+    if (!name) return 'no line rendered';
+    // One line of text, not three: the old split wrapped names to ~3 lines.
+    var h = name.getBoundingClientRect().height;
+    return h < 34 || 'item name is ' + Math.round(h) + 'px tall — still wrapping';
+});
+t('layout: sent-quote lines scroll inside their box on a phone', function () {
+    var host = stage(390, _sentQuoteHtml());
+    var bad = overflowing(host);
+    if (bad.length) return 'page widened by: ' + bad.join(', ');
+    var box = host.querySelector('.b2b-rvw-full .b2b-rvw');
+    return (box.scrollWidth > box.clientWidth) || 'the table was crushed instead of scrolling';
+});
+t('layout: the quote status line wraps rather than spilling on a phone', function () {
+    var host = stage(390, _sentQuoteHtml());
+    var st = host.querySelector('.b2b-qstatus');
+    return st.getBoundingClientRect().width <= 391 || 'status line is ' + Math.round(st.getBoundingClientRect().width) + 'px';
+});
+
+document.getElementById('layout-host') && document.getElementById('layout-host').remove();

@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.2';
+const APP_VERSION = '3.9.3';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -7551,14 +7551,21 @@ async function loadWorkspaceKpis() {
 }
 
 function switchWorkspaceTab(name) {
+    // Aging Inventory is PAUSED (see FEATURE_CATALOG) — a stale #aging link or
+    // bookmark lands on the brief instead of opening the hidden pane.
+    if (name === 'aging' && typeof _agEnabled === 'function' && !_agEnabled()) name = 'brief';
     document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
     document.getElementById('ws-tab-' + name)?.classList.add('active');
+    // Claims & Disputes has two buttons (store / DM) over one pane; which one is
+    // lit is decided with the view, in _claimsShowInPage.
     document.getElementById('ws-pane-' + name)?.classList.add('active');
     _wsFitPanels();                        // see the .ws-panel rule
     try { history.replaceState(null, '', 'workspace.html#' + name); } catch (e) {}
 
-    if (name === 'brief') {
+    if (name === 'claims') {
+        _claimsShowInPage();
+    } else if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
         // MSM only: a store-specific KPI feed card routes the pane to that store
@@ -7615,17 +7622,23 @@ function initWorkspace() {
     const hash = (window.location.hash || '').replace('#', '');
     // 'mreplies' is deliberately NOT accepted — Margin Replies is parked, so a
     // #mreplies deep link falls through to the brief. Add it back with the tab.
-    let initial = ['brief', 'kpis', 'vreplies', 'aging'].includes(hash) ? hash : 'brief';
+    // No (or an unknown) hash → the FIRST tab this person can see, not a fixed
+    // one (Ethan, 2026-10-06: "default the user to the first tab always"). That is
+    // Claims & Disputes for managers and the DM, Monthly Breakdown for an ASM —
+    // and whatever leads the strip if the order changes again.
+    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims'].includes(hash) ? hash : '';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
     // fall back to the first visible tab.
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
-    if (!tabVisible('ws-tab-' + initial)) {
+    // 'claims' is either of its two buttons (see workspace.html).
+    const shown = name => tabVisible('ws-tab-' + name) || (name === 'claims' && tabVisible('ws-tab-claimsdm'));
+    if (!shown(initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ws-tab-"]'))
             .find(b => b.style.display !== 'none' && !b.hidden);
-        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '');
+        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '').replace(/^claimsdm$/, 'claims');
     }
-    switchWorkspaceTab(initial);
+    switchWorkspaceTab(initial || 'brief'); // nothing visible (a phone): the old default
     applyKpiReminder();
 }
 
@@ -9647,6 +9660,10 @@ function _pgRenderAdmin(body) {
       </div>`);
 }
 
+// No Crucial tick on the row or in the form (Ethan, 2026-10-11). It was briefly
+// in both, but every required photo turned out to be one he would tick; Picture
+// Quality treats the guide's FIRST photo as the crucial one instead
+// (picture-quality/rules.ts). pg_shots.crucial (0142) stays in the table, unread.
 function _pgAdminRowHtml(s, i, n) {
     if (_pgAdmin.editing === s.id) return _pgAdminEditHtml(s);
     return `
@@ -9663,6 +9680,7 @@ function _pgAdminRowHtml(s, i, n) {
             : 'Always taken'}${s.img ? '' : ' &middot; No photo yet'}</small>
         </div>
         <div class="pg-etools">
+
           <label class="pg-ephoto" title="${s.img ? 'Replace the photo' : 'Add a photo'}">
             <input type="file" accept="image/png,image/jpeg,image/webp" onchange="pgUploadShotPhoto(${s.id}, this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/></svg>
@@ -10407,11 +10425,11 @@ async function pgRemoveShotPhoto(shotId) {
 function initOperations() {
     if (!document.querySelector('.ops-wrap')) return;
     const hash = (window.location.hash || '').replace('#', '');
-    // #b2b-sign-<dealId> is the B2B signing QR: open the B2B tab, and park the
-    // id for b2bLoad() to act on once the deals are actually here. The deal
-    // cannot be looked up yet -- this runs before the first fetch.
-    const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
-    if (sign) _b2bPendingSign = sign[1];
+    // #b2b-sign-<dealId> was the old phone-signing QR. That route was removed on
+    // 2026-10-16 (Nick: "The phone thing really just wasnt working") -- the B2B
+    // module runs on the phone itself now. A link or QR still printed somewhere
+    // lands on the B2B tab rather than on SPEEKS Connect.
+    const sign = /^b2b-sign-/.test(hash);
     // #categories is the feed card's destination: the Categories view inside
     // SPEEKS Connect, which is a view of a tab rather than a tab of its own.
     // #photos is the no-pictures card's: the same view, on the Picture Quality
@@ -13241,9 +13259,22 @@ function _lvView(m) {
 // needs to be moved to NP, I meant it"). Every margin a store sees is the NET
 // margin — NP over net sales for the span on screen — and gross profit is not
 // shown as a figure of its own anywhere on the board.
+//
+// ONE EXCEPTION (Ethan 2026-10-06): the district table carries a Gross margin
+// column in front of Net margin. It is a rate, not a GP figure — revenue less
+// cost over revenue — and it is what shows WHERE a net margin went: a store with
+// a healthy gross margin and a weak net one is losing it to fees and shipping,
+// not to what it paid for the stock. Still no GP dollars anywhere.
 function _lvNetMargin(v) {
     const n = Number(v && v.npDay), s = Number(v && v.netToday);
     return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+// Worked from net sales and cost for the span on screen rather than read from
+// marginToday, so the roll-up rows (summed on the page) and the stores agree by
+// construction on every tab.
+function _lvGrossMargin(v) {
+    const s = Number(v && v.netToday), c = Number(v && v.cogsToday);
+    return (s > 0 && isFinite(c)) ? (s - c) / s * 100 : null;
 }
 function _lvNetMarginMtd(v) {
     const n = Number(v && v.npMtd), s = Number(v && v.mtdNet);
@@ -13394,6 +13425,42 @@ function _lvPace(pctOfGoal, elapsedPct) {
     return Math.round(p / e * 100);
 }
 
+// "% TO GOAL" ON THE TODAY TAB IS THROUGH YESTERDAY (Ethan 2026-10-06).
+// Live pace counts today's half-finished day — on an NP month, an ESTIMATE of
+// it — so it swung all day and read as behind every morning. The Today tab now
+// shows the pace at yesterday's close: exactly the figure the Yesterday tab
+// shows, read off the same view, so the two tabs can never disagree about it.
+// The header carries a "Through Yesterday" tag so nobody takes it for live.
+//
+// Worked by running _lvView in 'prev' mode rather than reaching into m.prev /
+// m.np.prev by hand: the overlay already knows which of the two applies.
+// Null on the 1st, when yesterday belongs to last month (the same rule that
+// blanks pace on the Yesterday tab).
+function _lvPaceThru() { return _lvIsToday(); }
+function _lvAsPrev(fn) {
+    const keep = _lvMode;
+    _lvMode = 'prev';
+    try { return fn(); } finally { _lvMode = keep; }
+}
+function _lvPaceThruStore(m, d) {
+    if (!(d && d.prev && d.prev.inMonth) || !m || m.error) return null;
+    const v = _lvAsPrev(() => _lvView(m));
+    return v && v.paceIndex !== undefined ? v.paceIndex : null;
+}
+// A roll-up's pace is derived from its pctOfGoal, the way the table and the card
+// deck derive it on every tab. The district payload carries its own `prev`; the
+// MSM's "Both" is a sum built on the page, so it is re-summed from the same
+// healthy stores at yesterday's close.
+function _lvPaceThruRoll(rollup, stores, d) {
+    if (!(d && d.prev && d.prev.inMonth)) return null;
+    const pv = _lvAsPrev(() => (rollup && rollup.prev)
+        ? _lvView(rollup)
+        : _lvCombine((stores || []).filter(m => m && !m.error).map(_lvView)));
+    if (!pv || pv.pctOfGoal === null || pv.pctOfGoal === undefined) return null;
+    return _lvPace(pv.pctOfGoal, d.prev.elapsedPct);
+}
+const _LV_THRU_TAG = '<span class="lv-thru">Through Yesterday</span>';
+
 // --- "something just happened at MPL" ---------------------------------------
 // The payload is a snapshot, not an event stream, so a sale or a refund is derived
 // by diffing successive fetches. The cron writes only on a change and pings us, so
@@ -13421,6 +13488,22 @@ let _lvSnap = null;    // code -> { net, orders, returns, lastOrderAt }
 let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
 let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
 let _lvEvSeq = 0;
+// Every order this page has already put on the strip, by _lvOrderKey. Kept apart
+// from _lvEvents because a ticker chip leaves that list after 30 seconds, and the
+// second sighting of the same order can arrive later than that.
+const _lvAnnounced = new Set();
+
+// One order, one id — shared by the seed and the diff path.
+//
+// The payload reports a new sale in two halves that land on different fetches:
+// lastOrderAt comes off the Orders API and moves the moment the till rings,
+// ordersToday is ShopifyQL and catches up a poll or two later. Each half on its
+// own reads as "a sale just happened", so the same order (same amount, same time)
+// came up as two chips with two chimes. Keying on the order itself is what makes
+// the second half a no-op.
+function _lvOrderKey(code, at) {
+    return 'o' + code + String(at).replace(/\D/g, '');
+}
 
 // Which store codes belong to the person looking. Two callers, both asking the
 // same question: the chime (is this worth a NOISE) and the activity strip (is
@@ -13530,11 +13613,15 @@ function _lvTrackChanges(d) {
                     // Order's own amount first, net delta second. Falling back to
                     // "now" for the time as well means a chip can never come out as
                     // just a store name with nothing beside it.
-                    const hit = _lvRecentOrder(byCode[code], b.lastOrderAt);
-                    const amt = (hit && Number(hit.amount)) || (b.net - a.net);
-                    _lvPush({ kind: 'sale', code, amount: amt, items: _lvItems(hit),
-                              at: b.lastOrderAt || new Date().toISOString() });
-                    sold = true;
+                    const key = b.lastOrderAt ? _lvOrderKey(code, b.lastOrderAt) : '';
+                    if (!key || !_lvAnnounced.has(key)) {
+                        if (key) _lvAnnounced.add(key);
+                        const hit = _lvRecentOrder(byCode[code], b.lastOrderAt);
+                        const amt = (hit && Number(hit.amount)) || (b.net - a.net);
+                        _lvPush({ kind: 'sale', code, amount: amt, key, items: _lvItems(hit),
+                                  at: b.lastOrderAt || new Date().toISOString() });
+                        sold = true;
+                    }
                 }
             }
         });
@@ -13553,7 +13640,7 @@ function _lvTrackChanges(d) {
 
 // Newest first, so a fresh sale enters at the left and pushes the rest along.
 function _lvPush(e) {
-    e.id = 'e' + (++_lvEvSeq);
+    e.id = e.key || ('e' + (++_lvEvSeq));
     e.ts = Date.now();
     _lvEvents.unshift(e);
     if (_lvEvents.length > LV_ACTIVITY_MAX) _lvEvents.length = LV_ACTIVITY_MAX;
@@ -13710,10 +13797,12 @@ function _lvSeedEvents(d) {
         (m.recentOrders || []).forEach(o => {
             const ts = Date.parse(o.at);
             if (!isFinite(ts)) return;
-            // Keyed by store and order time so the id is stable across renders and
-            // cannot collide with the diff path's own "e1, e2, …" sequence.
+            // Keyed by store and order time so the id is stable across renders, and
+            // is the same id the diff path gives this order — see _lvOrderKey.
+            const id = _lvOrderKey(m.code, o.at);
+            _lvAnnounced.add(id);
             out.push({
-                id: 'o' + m.code + String(o.at).replace(/\D/g, ''),
+                id,
                 kind: 'sale', code: m.code, amount: Number(o.amount) || 0,
                 items: _lvItems(o), at: o.at, ts: ts,
             });
@@ -16453,10 +16542,18 @@ function _lvStoreRow(v, d, foot, rev) {
     if (v.error) {
         // colspan spans every column EXCEPT the store cell — keep it in step with
         // the header row or a broken store knocks the table out of alignment.
-        // (It was 7 against eight columns; adding Refunds makes it nine.)
+        // COUNTED from the same switches _lvTable's header reads, not typed: the
+        // typed 9 outlived the Cost column by months and spanned one column past
+        // the table on every tab (found 2026-10-06 adding Gross margin).
+        const ec = _lvCols();
+        const span = 5   // net, profit, refunds, margin, month
+            + (ec.cost ? 1 : 0) + (ec.orders ? 1 : 0) + (ec.tail ? 1 : 0)
+            + (_lvFeeCols() ? 2 : 0) + (_lvNpKind() ? 1 : 0)   // fees; gross margin
+            + 1                                                // % to goal
+            + (rev === null || rev === undefined ? 0 : 1);
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="' + ((rev === null || rev === undefined ? 9 : 10) + (_lvFeeCols() ? 2 : 0))
+            + '<td colspan="' + span
             + '" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
@@ -16503,6 +16600,9 @@ function _lvStoreRow(v, d, foot, rev) {
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
         + (_lvFeeCols() ? _lvFeeCell(v, 'npBEbay', d, foot) + _lvFeeCell(v, 'npBShip', d, foot) : '')
         + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
+        // Keyed off _lvNpKind(), like the header — not v.npKind, which a store
+        // with no NP block lacks, and a missing cell shifts the row one left.
+        + (_lvNpKind() ? '<td class="lv-boldnum">' + _lvPct(_lvGrossMargin(v)) + '</td>' : '')
         + '<td class="lv-boldnum">' + _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
@@ -16658,7 +16758,7 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         const band = has ? ' ' + _lvPaceCls(pct) : '';
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
             + head + '<span class="lvc-goal' + band + '">'
-            + '<span class="lvc-goal-k">% to Goal</span>'
+            + '<span class="lvc-goal-k">% to Goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</span>'
             // "No Goal" in place of the figure, not on a line of its own underneath:
             // the extra row was 32px that only some cards had, so the card grew and
             // shrank as the picker moved between stores.
@@ -16704,15 +16804,21 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         // has none, so it is derived here the same way _lvTable derives it for its
         // own total row — otherwise the District card would be the one card on the
         // phone with a blank percentage.
+        // On Today both are at yesterday's close, the same figure as the table's
+        // column (see _lvPaceThru).
         const rollView = _lvView(roll);
         deck.push({ key: '_roll', label: rollLabel,
             view: Object.assign({}, rollView, { code: rollLabel, name: '',
-                paceIndex: _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
+                paceIndex: _lvPaceThru() ? _lvPaceThruRoll(roll, list, d)
+                    : _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
             buy: rollBuy, isRoll: true });
     }
     list.forEach((m, i) => {
+        const v = _lvView(m);
         deck.push({ key: String((m && m.code) || ''), label: String((m && m.code) || ''),
-            view: _lvView(m), buy: buys[i], isRoll: false });
+            view: (_lvPaceThru() && m && !m.error)
+                ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v,
+            buy: buys[i], isRoll: false });
     });
 
     // A pick that is no longer in the deck — a role change, a store that dropped
@@ -16868,16 +16974,25 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + '<th>Refunds</th>'
         + (_lvFeeCols() ? '<th title="Finished days, off the Net Profit tab">eBay fees</th>'
             + '<th title="Finished days, off the Net Profit tab">Shipping</th>' : '')
-        + (cols.orders ? '<th>Orders</th>' : '') + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
+        + (cols.orders ? '<th>Orders</th>' : '')
+        // Gross margin sits in front of Net margin on an NP month (Ethan
+        // 2026-10-06) — see _lvGrossMargin. On a GP month the one Margin column
+        // already IS gross, so a second would repeat it.
+        + (_lvNpKind() ? '<th>Gross margin</th>' : '')
+        + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
         + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
-            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th><th>% to goal</th>'
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th>'
+        + '<th>% to goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
     // ranking gains. The pace column is what makes a bad store findable.
+    const thru = _lvPaceThru();
     stores.forEach(m => {
-        html += _lvStoreRow(_lvView(m), d, false, null);
+        const v = _lvView(m);
+        html += _lvStoreRow(thru && !m.error
+            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v, d, false, null);
     });
     html += '</tbody>';
     if (rollup) {
@@ -16887,7 +17002,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // Its own projection, summed from the stores above it by the one
             // function the Tracking tiles also use.
             fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
-            paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
+            paceIndex: thru ? _lvPaceThruRoll(rollup, stores, d) : _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
@@ -17512,6 +17627,17 @@ function _isWorkingRole(role) {
     const r = String(role || '').trim().toUpperCase();
     return !!r && r !== '-' && r !== GOALS_OFF;
 }
+
+// TRAINING (Ethan, 2026-10-06): somebody learning to list, expected to manage
+// HALF of what a Lister 1 would on the same day. It is half of that person's own
+// L1 goal rather than a number of its own — same shift, same Saturday factor,
+// same stretch factor — so it moves whenever the lister rate or the store's
+// factor moves, and it never needs tuning separately (see rateFor).
+//
+// A working role (they are in, and they count as staffed), but uncapped like Off:
+// a store can have more than one trainee on the same day. It is not an L role, so
+// it never satisfies "there is a lister today" (_lgCoverage, daily-brief).
+const GOALS_TRAINING = 'TR';
 // The role currently selected in one `.goals-edit-roles` group ('-' when none).
 function _activeRoleIn(group) {
     return _roleOf(group ? group.querySelector('.role-dot.active') : null);
@@ -17754,6 +17880,11 @@ function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     roles.forEach(r => {
         html += `<button type="button" class="role-dot ${cur === r ? 'active' : ''}" data-role="${r}" ${dis} onclick="selectRole(this, '${safeEmp}', '${r}')">${r}</button>`;
     });
+    // Training rides here rather than in goalsAvailableRoles for the same reason
+    // Off does: it is offered at every roster size, and the role ladder is not.
+    html += `<button type="button" class="role-dot ${cur === GOALS_TRAINING ? 'active' : ''}" data-role="${GOALS_TRAINING}" ${dis}`
+         + ` title="Training — half of what a Lister 1 would be expected to list today"`
+         + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_TRAINING}')">TR</button>`;
     html += `<button type="button" class="role-dot role-off ${cur === GOALS_OFF ? 'active' : ''}" data-role="${GOALS_OFF}" ${dis}`
          + ` title="Off today — no goal, and they stop holding up the daily reminder"`
          + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_OFF}')">Off</button>`;
@@ -18000,7 +18131,11 @@ const ListingGoalsEngine = {
         if (!_isWorkingRole(r)) return 0;
         if (r === 'B1') return this.cfg.rate_buyer_1;
         if (r === 'B2') return this.cfg.rate_buyer_2;
-        return isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        const lister = isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        // Half of what THIS person would score as L1 — so a new hire in training
+        // is half of their ramp rate, never more than they would get listing.
+        if (r === GOALS_TRAINING) return lister / 2;
+        return lister;
     },
 
     // Saturday is shorter and the busiest buy day, so it produces about half a
@@ -18383,7 +18518,7 @@ function buildGoalsEditForm() {
                 <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
                 <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
             </div>
-            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
+            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. TR is Training: half of what a Lister 1 would be expected to list. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
         `;
     }
     
@@ -19714,7 +19849,7 @@ async function fetchAndRenderEmployeeGoals() {
             }
         });
 
-        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'OFF': 'Off Today' };
+        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'TR': 'Training', 'OFF': 'Off Today' };
         const displayRole = roleTranslations[todayRole] || todayRole;
 
         const roleDescriptions = {
@@ -19722,6 +19857,7 @@ async function fetchAndRenderEmployeeGoals() {
             'B2': 'You\'re the second buyer in rotation. Hang back and jump in the moment a second customer arrives.',
             'L1': 'Dedicated listing only — no buying, no shipping, no exceptions. Your entire focus today is getting items listed and nothing else.',
             'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.',
+            'TR': 'You\'re in training today — your goal is half of what a Lister 1 would be expected to list. Focus on learning the process the right way; speed comes with practice.',
             'OFF': 'You\'re marked off today — no listing goal. Enjoy the day.'
         };
         const roleDesc = roleDescriptions[todayRole] || '';
@@ -20030,7 +20166,7 @@ const B2B_INTAKE = {
         go:    'Sign &amp; Mark Picked Up',
         was:   'Picked up',
         items: 'Items Picked Up',
-        hint:  'A general description is enough here — the itemized list comes later, at pricing.',
+        hint:  'A general description is enough — or switch on Itemized pickup below to scan each unit.',
         ack:   'The client confirms the items above were collected by SPEEKS Technology on the date shown.',
     },
     walkin: {
@@ -20043,7 +20179,7 @@ const B2B_INTAKE = {
         go:    'Sign &amp; Take It In',
         was:   'Brought in',
         items: 'What They Brought In',
-        hint:  'A general description is enough here — the itemized list comes later, at pricing.',
+        hint:  'A general description is enough — or switch on Itemized pickup below to scan each unit.',
         ack:   'The client confirms the items above were left with SPEEKS Technology today.',
     },
 };
@@ -20867,14 +21003,6 @@ async function b2bLoad() {
         _b2bClients = clients;
         _b2bPrevals = prevals;
         b2bRender();
-        // A signing QR was scanned. Consume it before opening, so a refresh
-        // doesn't reopen the pad over a deal that has since been signed off.
-        if (_b2bPendingSign) {
-            const id = _b2bPendingSign;
-            _b2bPendingSign = null;
-            try { history.replaceState(null, '', location.pathname + '#b2b'); } catch (_) {}
-            b2bOpenSign(id);
-        }
     } catch (e) {
         body.innerHTML = `<div class="status-message" style="color:var(--red-alert);">Couldn't load B2B deals. ${escapeHtml(e.message)}</div>`;
     } finally {
@@ -21524,11 +21652,18 @@ async function _b2bSyncOpenDeal(ping) {
     const deal = _b2bModalDeal;
     if (!deal) return;
 
-    // The pickup screen has no grid, but it is the one waiting on a phone: the
-    // QR is on screen precisely so someone can sign somewhere else. Reopen it so
-    // the signature appears without anybody refreshing.
-    if (deal.stage === 'pickup' && document.getElementById('b2bSignQR')) {
+    // The pickup screen has no grid, but the same pickup can be open on a phone
+    // at the client's door and on a desktop at the store. When the custody form
+    // is signed (or the signature skipped) on one, reopen the other so it shows
+    // -- and ONLY then: this device's own manifest saves ping too, and reopening
+    // on every one of those would yank the scanner field out from under a run
+    // of scans.
+    if (deal.stage === 'pickup' && document.getElementById('b2bPuDesc')) {
         if (ping && ping.deal && ping.deal !== deal.id) return;
+        const before = [deal.custody_path, deal.signature_path, deal.signature_skipped_by].join('|');
+        await b2bRefresh();
+        const fresh = _b2bDealById(deal.id);
+        if (!fresh || [fresh.custody_path, fresh.signature_path, fresh.signature_skipped_by].join('|') === before) return;
         // Capture BEFORE the reopen. This path re-renders the pickup screen from
         // a poll or a realtime ping, and nothing on that screen is saved yet --
         // without this the description, client name and date the operator has
@@ -21536,9 +21671,7 @@ async function _b2bSyncOpenDeal(ping) {
         // the fields" report (the poll skips while the tab is hidden, so it
         // lands the moment you come back from the print window).
         _b2bCapturePickupDraft(deal.id);
-        await b2bRefresh();
-        const fresh = _b2bDealById(deal.id);
-        if (fresh && (fresh.signature_path || fresh.signature_skipped_by)) b2bOpenDeal('pickup', deal.id);
+        b2bOpenDeal('pickup', deal.id);
         return;
     }
 
@@ -24647,6 +24780,13 @@ function _b2bSummary(deal) {
     if (deal.quote_sent_at) rows.push(['Quote sent', _b2bDate(deal.quote_sent_at)]);
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
+    // The signed custody form (2026-10-16), from every stage after pickup -- it
+    // is the proof of what was handed over, and the question it answers ("did
+    // they release the 40 laptops or 38?") comes up at pricing and listing, not
+    // only at the door. The pickup screen carries its own buttons.
+    if (deal.custody_path && deal.stage !== 'pickup') {
+        rows.push(['Custody form', `<a class="b2b-sum-link" href="${_b2bCustodyUrl(deal, true)}">Download PDF</a>`]);
+    }
     if (deal.delivered_by || deal.received_by) {
         // Reads in the order it happened: who handed it over, then who took it in.
         // A walk-in has no first half -- nobody collected it -- so it only ever
@@ -24665,15 +24805,24 @@ function _b2bSummary(deal) {
 
 function _b2bStagePickup(deal) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    // Restore anything typed before a same-device signing round-trip.
-    const draft = (_b2bPickupDraft && _b2bPickupDraft.id === deal.id) ? _b2bPickupDraft : null;
+    // A signed custody form fixes these four: they are printed on a document the
+    // client signed, so the fields show what was signed and are read-only until
+    // the signature is taken again (b2bRetakeCustody). save_custody stored them
+    // on the deal, which is also how a pickup signed on a phone at the client's
+    // door is finished at the store without retyping.
+    const custody = !!deal.custody_path;
+    const lock = custody ? 'readonly' : '';
+    // Restore anything typed before a same-device round-trip (the custody form,
+    // a skip, a sync) -- never over a signed form's values.
+    const draft = (!custody && _b2bPickupDraft && _b2bPickupDraft.id === deal.id) ? _b2bPickupDraft : null;
     const puDesc = draft ? (draft.desc || '') : (deal.pickup_desc || '');
     const puName = draft ? (draft.name || '') : (deal.signed_by || '');
     const recv   = draft ? (draft.recv || '') : (deal.received_by || '');
-    // Only ever from the draft: the field is deliberately blank on a fresh open
-    // (see the comment on the input below), so there is no deal value to fall
-    // back to here -- restoring it is purely about not losing a typed answer.
-    const puDate = draft ? (draft.date || '') : '';
+    // From the draft, or from a signed form. Otherwise deliberately blank on a
+    // fresh open (see the comment on the input below) -- the date is only on the
+    // deal before sign-off when a custody form put it there.
+    const puDate = draft ? (draft.date || '') : (custody ? (deal.pickup_date || '') : '');
+    _b2bManifestFor(deal);
     // A pickup that already knows where it is holding was raised by that store,
     // and signing it off drops it straight into pricing there -- there is no
     // routing stage in between, so this screen is the only place its custody
@@ -24691,13 +24840,13 @@ function _b2bStagePickup(deal) {
             ${_b2bSummary(deal)}
             ${_b2bPrevalOriginNote(deal)}
             <label class="form-label-caps">${w.items}</label>
-            <textarea id="b2bPuDesc" class="form-input-lg" rows="3"
+            <textarea id="b2bPuDesc" class="form-input-lg" rows="3" ${lock}
                 placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(puDesc)}</textarea>
             <p class="b2b-hint">${w.hint}</p>
             <div class="${walkIn ? '' : 'b2b-grid2'}" style="margin-top:14px;">
                 <div>
                     <label class="form-label-caps">Client Name *</label>
-                    <input id="b2bPuSigned" class="form-input-lg" value="${escapeHtml(puName)}" placeholder="Full name of whoever released the items">
+                    <input id="b2bPuSigned" class="form-input-lg" ${lock} value="${escapeHtml(puName)}" placeholder="Full name of whoever released the items">
                 </div>
                 ${walkIn ? '' : `
                 <div>
@@ -24708,7 +24857,7 @@ function _b2bStagePickup(deal) {
                          answer that looks like a considered one. Blank forces the
                          choice; the required check below catches it. max stops a
                          collection being dated into the future. -->
-                    <input id="b2bPuDate" type="date" class="form-input-lg" max="${today}" value="${escapeHtml(puDate)}">
+                    <input id="b2bPuDate" type="date" class="form-input-lg" ${lock} max="${today}" value="${escapeHtml(puDate)}">
                 </div>`}
             </div>
             ${walkIn ? `
@@ -24717,27 +24866,27 @@ function _b2bStagePickup(deal) {
             : holding ? `
             <div style="margin-top:14px;">
                 <label class="form-label-caps">Received By</label>
-                <input id="b2bPuRecv" class="form-input-lg" value="${escapeHtml(recv)}"
+                <input id="b2bPuRecv" class="form-input-lg" ${lock} value="${escapeHtml(recv)}"
                     placeholder="Who took these in at ${escapeHtml(holding)}">
                 <p class="b2b-hint">A deal picked up by corp records this when it is dropped at
                     its pricing location. This one never leaves ${escapeHtml(holding)}, so it is
                     recorded here instead.</p>
             </div>` : ''}
+            ${_b2bManifestBlock(deal)}
             ${_b2bSignBlock(deal)}
             <label class="b2b-ack">
                 <input type="checkbox" id="b2bPuAck" onchange="document.getElementById('b2bPuGo').disabled=!this.checked">
                 <span>${w.ack}</span>
             </label>`,
         after: () => {
-            // Only worth drawing when there is nothing signed yet.
-            if (!deal.signature_path && !deal.signature_skipped_by) {
-                _b2bPaintQR(document.getElementById('b2bSignQR'), _b2bSignUrl(deal.id));
-            }
             _b2bPickupDraft = null;   // consumed into the inputs above
         },
         footer: `
             <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
                 onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
+            <!-- The scanned list reports here ("already on the list", a failed
+                 save); without it _b2bSay falls back to alert() mid-scan. -->
+            <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">${w.go}</button>`,
@@ -24753,6 +24902,11 @@ async function b2bSignPickup(id) {
     const dateEl = document.getElementById('b2bPuDate');
     if (!signed) return alert("Enter the name of the person releasing the items.");
     if (dateEl && !dateEl.value) return alert('Pick the date the items were collected.');
+    // The scanned list becomes pricing lines server-side, so whatever is still
+    // waiting to save has to land first.
+    if (_b2bManifest.dealId === id && !_b2bModalDeal?.custody_path) {
+        try { await _b2bManifestSaveNow(); } catch (_) { return; }
+    }
     await _b2bPost({
         action: 'sign_pickup', id, signed_by: signed, pickup_date: dateEl?.value,
         pickup_desc: document.getElementById('b2bPuDesc')?.value.trim(),
@@ -24903,7 +25057,7 @@ function b2bRowMenuClose() {
 // because collapsing the controls must not collapse what they were telling you.
 function _b2bRowActsBtn(it, ok) {
     const recycled = Number(it.recycled_qty) || 0;
-    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const short = _b2bLabelOwed(it) ? _b2bLabelsShort(it) : 0;
     const printed = Number(it.label_printed_qty) || 0;
     const labelState = short > 0 ? 'b2b-rowacts-todo' : (printed > 0 ? 'b2b-rowacts-done' : '');
     const bits = [];
@@ -24929,6 +25083,7 @@ function b2bRowActions(ev, itemId) {
     const scrap = _b2bIsScrap(it);
     const ok = _b2bSatisfied(it);
     const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const owed = _b2bLabelOwed(it);
     const printed = Number(it.label_printed_qty) || 0;
 
     // The same disabled rules the buttons carried, in one place rather than
@@ -24950,12 +25105,13 @@ function b2bRowActions(ev, itemId) {
     el.innerHTML = [
         `<div class="b2b-rowmenu-head">${escapeHtml(_b2bItemName(it))}
             <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}</span></div>`,
-        row('Print labels', short > 0
+        row('Print labels', owed
                 ? `${short} of ${qty} still to print`
-                : (printed > 0 ? 'All printed — reprint' : `${qty === 1 ? 'One label' : 'It asks how many'}`),
+                : (short > 0 ? `${printed} of ${qty} printed — print more`
+                    : (printed > 0 ? 'All printed — reprint' : `${qty === 1 ? 'One label' : 'It asks how many'}`)),
             `b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')`,
             { hide: !it.sku, ico: B2B_ICO_BARCODE,
-              cls: short > 0 ? 'todo' : (printed > 0 ? 'done' : '') }),
+              cls: owed ? 'todo' : (printed > 0 ? 'done' : '') }),
         row('Recycle one out', ok ? 'Every unit is accounted for' : `${qty - recycled} left on this line`,
             `b2bRecycleUnit('${it.id}')`,
             { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' }),
@@ -25010,7 +25166,7 @@ function _b2bLabelBtn(it, cls) {
     // The button carries its own state so nothing has to nag or auto-open: amber
     // while any unit still needs a label, green once they are all printed. No
     // print is ever forced -- the colour is the whole reminder.
-    const short = _b2bLabelsShort(it);
+    const short = _b2bLabelOwed(it) ? _b2bLabelsShort(it) : 0;
     const state = short > 0 ? 'b2b-label-todo' : ((Number(it.label_printed_qty) || 0) > 0 ? 'b2b-label-done' : '');
     const tip = short > 0
         ? `${short} of ${n} label${n === 1 ? '' : 's'} not printed yet — click to print`
@@ -25178,19 +25334,31 @@ function _b2bLineNetHtml(it) {
     return `<span class="b2b-f-mgn${pct < 0 ? ' bad' : ''}" id="b2bNm-${it.id}" title="Net margin — value − offer − shipping − selling fees + data wipe (${_b2bMoney(f.net, 2)})">${pct}%</span>`;
 }
 
-// What the pickup screen shows for the signature: the QR to collect one, the
-// signature once collected, or the bypass once someone has recorded why there
-// isn't going to be one.
+// What the pickup screen shows for the client's sign-off: the custody form to
+// sign, the signed form once it exists, or the bypass once someone has recorded
+// why there isn't going to be one.
+//
+// THE CUSTODY FORM (Nick, 2026-10-16) replaced the bare signature pad: "Client
+// should read a document stating they are accepting that we are taking custody
+// of said items and then when they sign the signature is placed into the
+// document and saved as a pdf downloadable file." The old QR-to-a-phone route
+// went with it ("The phone thing really just wasnt working") -- B2B runs on the
+// phone now, so the phone opens this same screen. "Use a phone" is just a QR to
+// the site's sign-in (b2bPhoneQR).
 function _b2bSignBlock(deal) {
-    if (deal.signature_path) {
-        const who = [deal.signature_by, deal.signature_at ? _b2bDate(deal.signature_at) : '']
-            .filter(Boolean).join(' · ');
+    if (deal.custody_path) {
+        const who = [deal.signed_by, deal.custody_at ? _b2bDate(deal.custody_at) : ''].filter(Boolean).join(' · ');
         return `
-            <div class="b2b-note ok b2b-signed">
-                <span class="b2b-note-k">Signed by the client${who ? ` — captured by ${escapeHtml(who)}` : ''}</span>
-                <img class="b2b-sig-img" alt="Client signature"
-                    src="${B2B_URL}?signature=${encodeURIComponent(deal.id)}&v=${encodeURIComponent(deal.signature_at || '')}">
-                <button class="b2b-mini" onclick="b2bRetakeSign('${deal.id}')">Take it again</button>
+            <div class="b2b-note ok b2b-signed" id="b2bCustodyDone">
+                <span class="b2b-note-k">Custody form signed${who ? ` — ${escapeHtml(who)}` : ''}</span>
+                ${deal.signature_path ? `<img class="b2b-sig-img" alt="Client signature"
+                    src="${B2B_URL}?signature=${encodeURIComponent(deal.id)}&v=${encodeURIComponent(deal.signature_at || '')}">` : ''}
+                <div class="b2b-signq-acts">
+                    <a class="b2b-btn b2b-btn-secondary" target="_blank" rel="noopener"
+                        href="${_b2bCustodyUrl(deal)}">View PDF</a>
+                    <a class="b2b-btn b2b-btn-secondary" href="${_b2bCustodyUrl(deal, true)}">Download</a>
+                    <button class="b2b-mini" onclick="b2bRetakeCustody('${deal.id}')">Take it again</button>
+                </div>
             </div>`;
     }
     if (deal.signature_skipped_by) {
@@ -25200,15 +25368,22 @@ function _b2bSignBlock(deal) {
                 ${escapeHtml(deal.signature_skipped_reason || '')}
             </div>`;
     }
+    // A signature from before custody forms existed: valid for the sign-off
+    // (the server accepts it), but there is no document behind it. Offered the
+    // form rather than hidden, since the PDF is the point.
+    const legacy = deal.signature_path ? `
+        <p class="b2b-hint">A signature is on file from before custody forms existed, so there is no PDF.
+            Have the client sign the form below to get one, or complete the sign-off as it is.</p>` : '';
     return `
-        <div class="b2b-signq">
-            <div class="b2b-signq-qr" id="b2bSignQR"><span class="b2b-signq-wait">Drawing code…</span></div>
+        <div class="b2b-signq b2b-custody-ask" id="b2bCustodyAsk">
             <div class="b2b-signq-txt">
-                <b>Have the client sign</b>
-                <p>Sign right here on this device — hand it to the client — or scan the
-                   code to sign on a phone instead.</p>
+                <b>Custody form</b>
+                <p>The client reads the custody form — what was collected, by whom, and when — and signs it.
+                   The signed copy is saved on this deal as a PDF.</p>
+                ${legacy}
                 <div class="b2b-signq-acts">
-                    <button class="b2b-btn b2b-btn-primary" onclick="b2bSignHere('${deal.id}')">Sign on this device</button>
+                    <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenCustody('${deal.id}')">Review &amp; Sign Custody Form</button>
+                    <button class="b2b-mini" onclick="b2bPhoneQR()">Use a phone</button>
                     ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
                                       : '<span class="b2b-signq-note">A CEO, MOCD or DM can sign off without one.</span>'}
                 </div>
@@ -25216,15 +25391,23 @@ function _b2bSignBlock(deal) {
         </div>`;
 }
 
-// Reopening the pad on the desktop is not useful -- it is the phone that has the
-// client in front of it -- so this just clears the way for another scan.
-function b2bRetakeSign(id) {
-    if (!confirm('Take the signature again?\n\nYou can re-sign on this device or with the phone. '
-        + 'The signature already on file stays until a new one replaces it.')) return;
-    const deal = _b2bDealById(id);
-    // Same unsaved-form problem as skipping: this reopens the screen.
-    _b2bCapturePickupDraft(id);
-    if (deal) { deal.signature_path = null; b2bOpenDeal('pickup', id); }
+function _b2bCustodyUrl(deal, download) {
+    return `${B2B_URL}?custody=${encodeURIComponent(deal.id)}${download ? '&dl=1' : ''}&v=${encodeURIComponent(deal.custody_at || '')}`;
+}
+
+// Taking it again clears the signed form (and its signature) on the deal, which
+// unlocks the fields and the scanned list. The earlier PDF and signature stay in
+// their buckets -- evidence is never overwritten -- they just stop being current.
+async function b2bRetakeCustody(id) {
+    if (!confirm('Take the custody signature again?\n\nThe details and the scanned list unlock so they can be '
+        + 'corrected, and the client signs a fresh form. The earlier signed copy is kept on file.')) return;
+    try {
+        await _b2bSend({ action: 'reset_custody', id, user: _b2bUser() });
+        await b2bRefresh();
+        b2bOpenDeal('pickup', id);
+    } catch (e) {
+        alert(`Couldn't reopen the form: ${e.message}`);
+    }
 }
 
 async function b2bSkipSign(id) {
@@ -25239,7 +25422,7 @@ async function b2bSkipSign(id) {
         // server and reopens the pickup screen from the stored row, so the
         // description, the client's name and the received-by all vanished --
         // typed, unsaved, and gone the moment you explained why there was no
-        // signature. b2bSignHere has always done this for the same reason.
+        // signature. The custody form does the same before it opens.
         _b2bCapturePickupDraft(id);
         await _b2bSend({ action: 'skip_signature', id, reason: reason.trim() });
         await b2bRefresh();
@@ -25249,18 +25432,13 @@ async function b2bSkipSign(id) {
     }
 }
 
-// --- signature capture -----------------------------------------------------
-// The pickup screen shows a QR. A staff member scans it with their own phone,
-// which opens THIS app at #b2b-sign-<dealId>, signs in with their PIN if the
-// phone hasn't already, and hands the phone to the client to sign.
-//
-// Nothing here is public. The phone is an ordinary signed-in session, which is
-// why there is no token to mint, no anonymous write path, and no second shell
-// to keep in step with this one.
-
-// A deal id waiting for the pane to finish loading. The deep link arrives before
-// _b2bDeals exists, so the hash is parked here and b2bLoad() picks it up.
-let _b2bPendingSign = null;
+// --- the phone ---------------------------------------------------------------
+// Until 2026-10-16 the pickup screen showed a QR that opened a signature pad on
+// a phone (#b2b-sign-<deal>). Nick: "The phone thing really just wasnt working,
+// Remove the whole current system for that and just have a popout where you CAN
+// scan a qr code that just opens speeksnet." So B2B now runs on the phone, the
+// pickup is opened there like anywhere else, and the QR below is only a way to
+// get a phone onto the site's sign-in without typing the address.
 
 // qrcode-generator from CDN, the same way _rtEnsureClient loads supabase-js and
 // the XLSX loader loads its own. Hand-rolling this is not the same proposition
@@ -25289,10 +25467,38 @@ function _b2bEnsureQR() {
     return _b2bQrLoading;
 }
 
-function _b2bSignUrl(dealId) {
-    const base = location.href.replace(/#.*$/, '').replace(/[^/]*$/, '');
-    return `${base}operations.html#b2b-sign-${dealId}`;
+// The site's front door, wherever this copy is being served from -- the live
+// site, or a local checkout while it is being tested.
+function _b2bSiteUrl() {
+    return location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '') + 'index.html';
 }
+
+// A popout with a QR to the sign-in page. Nothing deal-specific rides in it:
+// the phone signs in with its own PIN and opens the pickup from Business-to-
+// Business like any other device would.
+function b2bPhoneQR() {
+    b2bPhoneQRClose();
+    const url = _b2bSiteUrl();
+    const pop = document.createElement('div');
+    pop.id = 'b2bPhonePop';
+    pop.className = 'b2b-qrpop';
+    pop.innerHTML = `
+        <div class="b2b-qrpop-card" role="dialog" aria-modal="true" aria-labelledby="b2bPhonePopT">
+            <b id="b2bPhonePopT">Open SPEEKSNET on a phone</b>
+            <div class="b2b-qrpop-qr" id="b2bPhoneQr"><span class="b2b-signq-wait">Drawing code…</span></div>
+            <p>Scan with the phone's camera, sign in with your PIN, then open this pickup under
+               Operations → Business-to-Business.</p>
+            <span class="b2b-mono b2b-qrpop-url">${escapeHtml(url)}</span>
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bPhoneQRClose()">Close</button>
+        </div>`;
+    pop.addEventListener('click', (ev) => { if (ev.target === pop) b2bPhoneQRClose(); });
+    document.body.appendChild(pop);
+    _b2bPaintQR(document.getElementById('b2bPhoneQr'), url);
+}
+function b2bPhoneQRClose() { document.getElementById('b2bPhonePop')?.remove(); }
+document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && document.getElementById('b2bPhonePop')) { ev.stopPropagation(); b2bPhoneQRClose(); }
+}, true);
 
 // Draws into whatever element is passed, so the caller owns the layout.
 async function _b2bPaintQR(el, text) {
@@ -25313,13 +25519,9 @@ async function _b2bPaintQR(el, text) {
     }
 }
 
-// --- the phone's side ------------------------------------------------------
+// --- the custody form ----------------------------------------------------------
 
 let _b2bSigCtx = null, _b2bSigDrawn = false;
-// True when the pad was opened straight on the pickup device (not the phone
-// deep-link), so saving returns to the pickup screen instead of the phone's
-// "hand it back" dead-end.
-let _b2bSignOnDevice = false;
 
 // Whatever's typed on the pickup screen, kept across anything that re-renders it
 // so a round-trip doesn't wipe an already-entered name/description/date.
@@ -25345,47 +25547,306 @@ function _b2bCapturePickupDraft(id) {
         date: document.getElementById('b2bPuDate')?.value,
     };
 }
-function b2bSignHere(id) {
-    _b2bCapturePickupDraft(id);
-    b2bOpenSign(id, true);
+// --- the itemized pickup -----------------------------------------------------
+// Nick, 2026-10-14: "for pickup sheet create optional itemized system with
+// serial number scan entry optional as well". 2026-10-16: for the more secure
+// clients; what is scanned "becomes pricing lines and is put on the document
+// for signing custody". Haydn, 2026-09-21: "Being able to scan in serials would
+// be nice too."
+//
+// Optional, so it starts folded. "What it is" STAYS filled between scans: a run
+// of forty identical laptops is forty scans, not forty descriptions. A scanner
+// is a keyboard that presses Enter, so the serial field is the whole loop.
+//
+// Saved to the deal as it is built (save_pickup_manifest), so the phone at the
+// door and the desktop at the store see one list. sign_pickup turns it into
+// pricing lines -- grouped by description, serials joined -- and the custody PDF
+// prints it.
+let _b2bManifest = { dealId: null, rows: [], open: false, desc: '' };
+let _b2bManifestTimer = null;
+
+function _b2bManifestFor(deal) {
+    const fromDeal = (Array.isArray(deal.pickup_manifest) ? deal.pickup_manifest : [])
+        .map(r => ({ serial: String(r.serial || ''), desc: String(r.desc || ''), qty: Math.max(1, Number(r.qty) || 1) }))
+        // Stored in scan order; held newest-first here, the way the screen lists it.
+        .reverse();
+    // A different deal, or nothing of ours still waiting to save: the deal's
+    // copy is the truth (another device may have added to it).
+    if (_b2bManifest.dealId !== deal.id) {
+        _b2bManifest = { dealId: deal.id, rows: fromDeal, open: fromDeal.length > 0, desc: '' };
+    } else if (!_b2bManifestTimer && !_b2bBusyLine('mf:' + deal.id)) {
+        _b2bManifest.rows = fromDeal;
+        if (fromDeal.length) _b2bManifest.open = true;
+    }
 }
 
-function b2bOpenSign(dealId, onDevice) {
-    const deal = _b2bDealById(dealId);
-    if (!deal) return alert("That deal is no longer open for signing.");
-    if (deal.stage !== 'pickup') {
-        return alert(`${deal.ref} has already been signed off.`);
+function _b2bManifestBlock(deal) {
+    const m = _b2bManifest;
+    const locked = !!deal.custody_path;
+    if (locked && !m.rows.length) return '';     // signed without one: nothing to show
+    const camera = typeof window.BarcodeDetector === 'function';
+    return `
+        <div class="b2b-mf ${m.open ? 'open' : ''}" id="b2bMf">
+            <label class="b2b-mf-toggle">
+                <input type="checkbox" ${m.open ? 'checked' : ''} ${locked || m.rows.length ? 'disabled' : ''}
+                    onchange="b2bManifestToggle(this.checked)">
+                <span><b>Itemized pickup</b> — optional, for secure clients. Scan each unit; the list becomes
+                    pricing lines and prints on the custody form.</span>
+            </label>
+            <div class="b2b-mf-body" ${m.open ? '' : 'hidden'}>
+                ${locked ? '<p class="b2b-hint">Part of the signed custody form. Take the signature again to change it.</p>' : `
+                <div class="b2b-mf-entry">
+                    <input id="b2bMfDesc" class="form-input-lg" autocomplete="off" value="${escapeHtml(m.desc)}"
+                        placeholder="What it is — e.g. Dell Latitude 5440" oninput="_b2bManifest.desc=this.value">
+                    <input id="b2bMfSerial" class="form-input-lg b2b-mono" autocomplete="off" autocapitalize="characters"
+                        spellcheck="false" placeholder="Scan or type a serial"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();b2bManifestAdd();}">
+                    <input id="b2bMfQty" type="number" min="1" value="1" class="form-input-lg b2b-mf-qty"
+                        aria-label="Quantity" title="How many — for a row with no serial, such as a box of cables">
+                    <button class="b2b-btn b2b-btn-secondary" onclick="b2bManifestAdd()">Add</button>
+                    ${camera ? `<button class="b2b-btn b2b-btn-secondary" onclick="b2bManifestCamera()">Scan with camera</button>` : ''}
+                </div>
+                <p class="b2b-hint">"What it is" stays filled in between scans, so a run of the same model is one scan each.</p>`}
+                <div id="b2bMfList">${_b2bManifestList(locked)}</div>
+            </div>
+        </div>`;
+}
+
+function _b2bManifestList(locked) {
+    const rows = _b2bManifest.rows;
+    if (!rows.length) return '<div class="b2b-mf-empty">Nothing scanned yet.</div>';
+    const units = rows.reduce((n, r) => n + (Number(r.qty) || 1), 0);
+    const kinds = new Set(rows.map(r => r.desc.trim().toLowerCase())).size;
+    return `
+        <div class="b2b-mf-sum"><b>${units}</b> unit${units === 1 ? '' : 's'} · ${kinds} kind${kinds === 1 ? '' : 's'}</div>
+        <div class="b2b-mf-rows">
+            ${rows.map((r, i) => `
+            <div class="b2b-mf-row">
+                <span class="b2b-mf-n">${rows.length - i}</span>
+                <span class="b2b-mf-what">${r.desc ? escapeHtml(r.desc) : '<i>Not described</i>'}</span>
+                <span class="b2b-mf-ser b2b-mono">${r.serial ? escapeHtml(r.serial) : '—'}</span>
+                <span class="b2b-mf-q">×${Number(r.qty) || 1}</span>
+                ${locked ? '' : `<button class="b2b-mf-x" aria-label="Remove" onclick="b2bManifestRemove(${i})">×</button>`}
+            </div>`).join('')}
+        </div>`;
+}
+
+function _b2bRepaintManifest() {
+    const el = document.getElementById('b2bMfList');
+    if (el) el.innerHTML = _b2bManifestList(false);
+}
+
+function b2bManifestToggle(on) {
+    _b2bManifest.open = !!on;
+    const body = document.querySelector('#b2bMf .b2b-mf-body');
+    if (body) body.hidden = !on;
+    document.getElementById('b2bMf')?.classList.toggle('open', !!on);
+    if (on) document.getElementById('b2bMfDesc')?.focus();
+}
+
+// Newest first on screen (the one just scanned is the one you look for); the
+// stored order is scan order reversed back on save, so the PDF and the pricing
+// lines run in the order things came off the shelf.
+function b2bManifestAdd(serialIn) {
+    const deal = _b2bModalDeal;
+    if (!deal || deal.custody_path) return;
+    const serEl = document.getElementById('b2bMfSerial');
+    const serial = String(serialIn != null ? serialIn : (serEl?.value || '')).replace(/,/g, ' ').trim();
+    const desc = String(document.getElementById('b2bMfDesc')?.value || _b2bManifest.desc || '').trim();
+    const qty = serial ? 1 : Math.max(1, parseInt(document.getElementById('b2bMfQty')?.value, 10) || 1);
+    if (!serial && !desc) { _b2bSay('Scan a serial or say what it is.', true); serEl?.focus(); return; }
+    if (serial && _b2bManifest.rows.some(r => r.serial.toLowerCase() === serial.toLowerCase())) {
+        _b2bSay(`${serial} is already on the list.`, true);
+        if (serEl) { serEl.select(); serEl.focus(); }
+        return;
     }
+    if (_b2bManifest.rows.length >= 2000) return _b2bSay('The list is limited to 2,000 rows.', true);
+    _b2bManifest.desc = desc;
+    _b2bManifest.rows.unshift({ serial, desc, qty });
+    if (serEl && serialIn == null) { serEl.value = ''; serEl.focus(); }
+    const q = document.getElementById('b2bMfQty'); if (q) q.value = '1';
+    _b2bRepaintManifest();
+    _b2bManifestQueueSave();
+    return true;
+}
+
+function b2bManifestRemove(i) {
+    if (!_b2bModalDeal || _b2bModalDeal.custody_path) return;
+    _b2bManifest.rows.splice(i, 1);
+    _b2bRepaintManifest();
+    _b2bManifestQueueSave();
+}
+
+function _b2bManifestQueueSave() {
+    clearTimeout(_b2bManifestTimer);
+    _b2bManifestTimer = setTimeout(() => { _b2bManifestTimer = null; _b2bManifestSaveNow(); }, 600);
+}
+// Resolves once whatever is pending has reached the server -- the custody form
+// waits on it, because the PDF and the pricing lines must be the same list.
+function _b2bManifestSaveNow() {
+    const id = _b2bManifest.dealId;
+    if (!id) return Promise.resolve();
+    if (_b2bManifestTimer) { clearTimeout(_b2bManifestTimer); _b2bManifestTimer = null; }
+    const manifest = _b2bManifest.rows.slice().reverse();
+    return _b2bEnqueue('mf:' + id, () => _b2bSend({ action: 'save_pickup_manifest', id, manifest, user: _b2bUser() }))
+        .catch(e => { _b2bSay(`Couldn't save the scanned list: ${e.message}`, true); throw e; });
+}
+
+// Camera scanning, where the browser has a barcode reader built in (Chrome on
+// Android, most current phones). A hardware scanner or typing works everywhere,
+// so the button simply is not drawn where this would not.
+let _b2bCamStream = null;
+async function b2bManifestCamera() {
+    if (typeof window.BarcodeDetector !== 'function') return;
+    b2bManifestCameraClose();
+    const pop = document.createElement('div');
+    pop.id = 'b2bCamPop';
+    pop.className = 'b2b-qrpop';
+    pop.innerHTML = `
+        <div class="b2b-qrpop-card b2b-cam-card" role="dialog" aria-modal="true">
+            <b>Point the camera at a barcode</b>
+            <video id="b2bCamVid" playsinline muted></video>
+            <span class="b2b-cam-msg" id="b2bCamMsg">Each new code is added to the list.</span>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bManifestCameraClose()">Done</button>
+        </div>`;
+    document.body.appendChild(pop);
+    try {
+        _b2bCamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    } catch (e) {
+        document.getElementById('b2bCamMsg').textContent = "Couldn't open the camera — " + (e.message || 'permission refused') + '.';
+        return;
+    }
+    const vid = document.getElementById('b2bCamVid');
+    if (!vid) return b2bManifestCameraClose();
+    vid.srcObject = _b2bCamStream;
+    await vid.play().catch(() => {});
+    const det = new window.BarcodeDetector();
+    const seen = new Set();
+    const tick = async () => {
+        if (!document.getElementById('b2bCamPop')) return;
+        try {
+            const codes = await det.detect(vid);
+            for (const c of codes) {
+                const v = String(c.rawValue || '').trim();
+                if (!v || seen.has(v)) continue;
+                seen.add(v);
+                const ok = b2bManifestAdd(v);
+                const msg = document.getElementById('b2bCamMsg');
+                if (msg) msg.textContent = ok ? `Added ${v}` : `${v} is already on the list`;
+                if (ok && navigator.vibrate) navigator.vibrate(60);
+            }
+        } catch (_) { /* a frame it could not read; try the next */ }
+        setTimeout(tick, 250);
+    };
+    tick();
+}
+function b2bManifestCameraClose() {
+    if (_b2bCamStream) { _b2bCamStream.getTracks().forEach(t => t.stop()); _b2bCamStream = null; }
+    document.getElementById('b2bCamPop')?.remove();
+}
+
+// What the custody form says, gathered once when it is opened so the screen the
+// client reads, the PDF and what is saved on the deal are all the same facts.
+//
+// ⚠️ THE WORDING IS NICK'S TO APPROVE. It says only what was asked -- that the
+// client accepts we are taking custody of the listed items -- and makes no
+// promise about price, ownership or payment, which the quote covers later.
+const B2B_CUSTODY_TITLE = 'Custody Acknowledgement';
+const B2B_CUSTODY_TERMS = 'By signing below, the client representative named on this form confirms that '
+    + 'the items listed were released to SPEEKS Technology (PayMore franchisee, Kansas City & St. Louis) '
+    + 'on the date shown, and accepts that SPEEKS Technology has taken custody of them as of that date.';
+
+let _b2bCustody = null;
+// A signed document carries the year: "Oct 15" is fine on a board, not on a
+// form someone may need to produce a year from now.
+function _b2bLongDate(day) {
+    if (!day) return '';
+    return new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+function _b2bCustodyData(deal) {
+    const w = _b2bIntake(deal);
+    const val = (id) => String(document.getElementById(id)?.value || '').trim();
+    return {
+        id: deal.id, ref: deal.ref || '',
+        company: deal.client?.company || '',
+        name: val('b2bPuSigned'),
+        date: w.key === 'walkin' ? new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) : val('b2bPuDate'),
+        desc: val('b2bPuDesc'),
+        recv: val('b2bPuRecv'),
+        store: deal.pricing_store || '',
+        staff: _b2bUser(),
+        // Scan order, oldest first -- the order it came off the shelf.
+        rows: _b2bManifest.rows.slice().reverse(),
+        walkIn: w.key === 'walkin',
+    };
+}
+
+function _b2bCustodyDocHtml(d) {
+    const units = d.rows.reduce((n, r) => n + (Number(r.qty) || 1), 0);
+    const facts = [
+        ['Client', d.company],
+        ['Released by', d.name],
+        [d.walkIn ? 'Brought in' : 'Collected', _b2bLongDate(d.date)],
+        ['Reference', d.ref],
+        d.store ? ['Held at', d.store] : null,
+        d.recv ? ['Received by', d.recv] : null,
+    ].filter(Boolean);
+    return `
+        <div class="b2b-cdoc">
+            <div class="b2b-cdoc-h">
+                <div><b>${escapeHtml(B2B_CUSTODY_TITLE)}</b>
+                    <span>SPEEKS Technology · PayMore franchisee</span></div>
+                <span class="b2b-mono">${escapeHtml(d.ref)}</span>
+            </div>
+            <div class="b2b-cdoc-facts">
+                ${facts.map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(v || '—')}</b></div>`).join('')}
+            </div>
+            ${d.desc ? `<div class="b2b-cdoc-sec"><span>Items</span><p>${escapeHtml(d.desc)}</p></div>` : ''}
+            ${d.rows.length ? `
+            <div class="b2b-cdoc-sec"><span>Itemized — ${units} unit${units === 1 ? '' : 's'}</span>
+                <table class="b2b-cdoc-tbl">
+                    <thead><tr><th>#</th><th>Item</th><th>Serial</th><th>Qty</th></tr></thead>
+                    <tbody>${d.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(r.desc || '—')}</td>
+                        <td class="b2b-mono">${escapeHtml(r.serial || '—')}</td><td>${Number(r.qty) || 1}</td></tr>`).join('')}</tbody>
+                </table></div>` : ''}
+            <p class="b2b-cdoc-terms">${escapeHtml(B2B_CUSTODY_TERMS)}</p>
+        </div>`;
+}
+
+// Open the form for the client to read and sign. Everything it prints has to be
+// there first: who released the goods, when, and what -- a custody form with a
+// blank where the items go is not worth the signature on it.
+async function b2bOpenCustody(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+    const d = _b2bCustodyData(deal);
+    if (!d.name) { alert("Enter the name of the person releasing the items first — it goes on the form."); return; }
+    if (!d.walkIn && !d.date) { alert('Pick the date the items were collected first — it goes on the form.'); return; }
+    if (!d.desc && !d.rows.length) { alert('Describe the items, or scan them, first — that is what the client is signing for.'); return; }
+    _b2bCapturePickupDraft(id);
+    try { await _b2bManifestSaveNow(); } catch (_) { return; }
+    _b2bCustody = d;
     _b2bModalDeal = deal;
     _b2bSigDrawn = false;
-    _b2bSignOnDevice = !!onDevice;
     _b2bShowDeal({
         stage: 'pickup',
         eyebrow: deal.ref,
-        title: 'Client Signature',
-        sub: onDevice ? 'Hand the device to the client to sign.' : 'Hand the phone to the client.',
+        title: 'Custody Form',
+        sub: 'Hand the device to the client to read and sign.',
         wide: true,
         body: `
-            <div class="b2b-sign-who">
-                <b>${escapeHtml(deal.client?.company || '')}</b>
-                ${deal.pickup_date ? `<span>Collected ${escapeHtml(_b2bDate(deal.pickup_date))}</span>` : ''}
-            </div>
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Items collected</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
-            <!-- Word for word the acknowledgement the pickup screen already
-                 asks staff to tick. The client is signing that sentence, so it
-                 has to be the sentence, not a paraphrase of it. -->
-            <p class="b2b-sign-ack">The client confirms the items above were collected by
-                SPEEKS Technology on the date shown.</p>
+            ${_b2bCustodyDocHtml(d)}
             <div class="b2b-sign-pad">
                 <canvas id="b2bSigPad" width="900" height="320"></canvas>
                 <span class="b2b-sign-hint" id="b2bSigHint">Sign here</span>
             </div>
-            <div class="b2b-sign-name">${escapeHtml(deal.signed_by || 'Signature')}</div>`,
+            <div class="b2b-sign-name">${escapeHtml(d.name)}</div>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bOpenDeal('pickup','${deal.id}')">Back</button>
             <button class="kpi-cancel-btn" onclick="b2bClearSign()">Clear</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bSigSave"
-                onclick="b2bSaveSign('${deal.id}',this)">Save Signature</button>`,
+                onclick="b2bSignCustody('${deal.id}',this)">Sign Custody Form</button>`,
         after: _b2bInitSigPad,
     });
 }
@@ -25444,26 +25905,177 @@ function b2bClearSign() {
     document.getElementById('b2bSigHint')?.classList.remove('gone');
 }
 
-async function b2bSaveSign(id, btn) {
+// Signing: the signature goes on the deal (capture_signature), then into the
+// PDF, then the PDF and the facts printed on it go on the deal (save_custody).
+// Back to the pickup screen after, which now shows the signed form.
+async function b2bSignCustody(id, btn) {
     if (!_b2bSigDrawn) return _b2bSay('Ask the client to sign first.', true);
     const cv = document.getElementById('b2bSigPad');
-    if (!cv) return;
+    const d = _b2bCustody;
+    if (!cv || !d || d.id !== id) return;
+    const png = cv.toDataURL('image/png');
+    const signedAt = new Date();
     await _b2bBusy(btn, 'Saving…', async () => {
-        await _b2bPost({ action: 'capture_signature', id, image: cv.toDataURL('image/png') },
-            "Couldn't save the signature");
-        closeAllModals();
-        await b2bRefresh();
-        if (_b2bSignOnDevice) {
-            // Signed on the pickup device itself -- go straight back to the pickup
-            // screen, where the signature now shows and the sign-off can finish.
-            _b2bSignOnDevice = false;
-            b2bOpenDeal('pickup', id);
-        } else {
-            // The phone's job is done in one screen; say so rather than dropping the
-            // person back onto a board they did not come here for.
-            alert('Signature saved. You can hand the phone back.');
+        try {
+            await _b2bSend({ action: 'capture_signature', id, image: png, user: _b2bUser() });
+            // A JPEG copy for the PDF: the PNG is lossless and, embedded raw,
+            // made a one-page form over a megabyte. On a white pad JPEG is
+            // indistinguishable. The PNG stays the signature of record.
+            const pdf = await _b2bCustodyPdf(d, cv.toDataURL('image/jpeg', 0.9), signedAt);
+            await _b2bSend({
+                action: 'save_custody', id, pdf, user: _b2bUser(),
+                signed_by: d.name, pickup_date: d.walkIn ? undefined : d.date,
+                pickup_desc: d.desc, received_by: d.recv || undefined,
+            });
+        } catch (e) {
+            _b2bSay(`Couldn't save the custody form: ${e.message}`, true);
+            return;
         }
+        _b2bCustody = null;
+        _b2bPickupDraft = null;
+        await b2bRefresh();
+        b2bOpenDeal('pickup', id);
     });
+}
+
+// jsPDF from CDN, loaded the first time a form is signed -- the same way the QR
+// library and SheetJS are, so nobody who never signs one pays for it.
+let _b2bPdfLoading = null;
+function _b2bEnsureJsPdf() {
+    if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+    if (_b2bPdfLoading) return _b2bPdfLoading;
+    const srcs = [
+        'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+        'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
+    ];
+    _b2bPdfLoading = new Promise((resolve, reject) => {
+        const tryNext = (i) => {
+            if (i >= srcs.length) { _b2bPdfLoading = null; return reject(new Error('the PDF library could not load')); }
+            const s = document.createElement('script');
+            s.src = srcs[i];
+            s.onload = () => (window.jspdf && window.jspdf.jsPDF) ? resolve(window.jspdf.jsPDF) : tryNext(i + 1);
+            s.onerror = () => tryNext(i + 1);
+            document.head.appendChild(s);
+        };
+        tryNext(0);
+    });
+    return _b2bPdfLoading;
+}
+
+// The PDF: the same facts, list and wording the client just read on screen,
+// with their signature placed under it. US Letter, plain type -- a document to
+// be printed and filed, not a brochure.
+async function _b2bCustodyPdf(d, sigImg, signedAt) {
+    const JsPDF = await _b2bEnsureJsPdf();
+    const doc = new JsPDF({ unit: 'pt', format: 'letter', compress: true });
+    const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+    const M = 54, R = W - M, BOTTOM = H - 64;
+    let y = M;
+    const ensure = (h) => { if (y + h > BOTTOM) { doc.addPage(); y = M; return true; } return false; };
+    const ink = () => doc.setTextColor(26, 28, 30);
+    const muted = () => doc.setTextColor(100, 112, 130);
+
+    // Heading
+    ink(); doc.setFont('helvetica', 'bold'); doc.setFontSize(20);
+    doc.text(B2B_CUSTODY_TITLE, M, y + 6);
+    doc.setFont('courier', 'bold'); doc.setFontSize(12);
+    doc.text(d.ref, R, y + 6, { align: 'right' });
+    y += 24;
+    muted(); doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+    doc.text('SPEEKS Technology · PayMore franchisee, Kansas City & St. Louis', M, y);
+    y += 14;
+    doc.setDrawColor(210, 216, 224); doc.line(M, y, R, y);
+    y += 22;
+
+    // Facts, two to a row
+    const facts = [
+        ['Client', d.company], ['Released by', d.name],
+        [d.walkIn ? 'Brought in' : 'Collected', _b2bLongDate(d.date)], ['Reference', d.ref],
+    ];
+    if (d.store) facts.push(['Held at', d.store]);
+    if (d.recv) facts.push(['Received by', d.recv]);
+    facts.push(['Prepared by', d.staff]);
+    const colW = (R - M) / 2;
+    for (let i = 0; i < facts.length; i += 2) {
+        ensure(34);
+        [facts[i], facts[i + 1]].forEach((f, j) => {
+            if (!f) return;
+            const x = M + j * colW;
+            muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+            doc.text(String(f[0]).toUpperCase(), x, y);
+            ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
+            doc.text(doc.splitTextToSize(String(f[1] || '—'), colW - 12)[0], x, y + 14);
+        });
+        y += 34;
+    }
+
+    // Items
+    if (d.desc) {
+        y += 4; ensure(40);
+        muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+        doc.text('ITEMS', M, y); y += 13;
+        ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5);
+        for (const line of doc.splitTextToSize(d.desc, R - M)) { ensure(14); doc.text(line, M, y); y += 14; }
+        y += 8;
+    }
+
+    // Itemized list, header repeated on every page it runs onto
+    if (d.rows.length) {
+        const units = d.rows.reduce((n, r) => n + (Number(r.qty) || 1), 0);
+        const cols = [M, M + 30, M + 290, R - 30];
+        const head = () => {
+            muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+            ['#', 'ITEM', 'SERIAL', 'QTY'].forEach((t, i) => doc.text(t, cols[i], y));
+            y += 6; doc.setDrawColor(210, 216, 224); doc.line(M, y, R, y); y += 12;
+        };
+        ensure(50);
+        muted(); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+        doc.text(`ITEMIZED — ${units} UNIT${units === 1 ? '' : 'S'}`, M, y); y += 16;
+        head();
+        d.rows.forEach((r, i) => {
+            if (ensure(14)) head();
+            ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+            doc.text(String(i + 1), cols[0], y);
+            doc.text(doc.splitTextToSize(r.desc || '—', 250)[0], cols[1], y);
+            doc.setFont('courier', 'normal');
+            doc.text(doc.splitTextToSize(r.serial || '—', 190)[0], cols[2], y);
+            doc.setFont('helvetica', 'normal');
+            doc.text(String(Number(r.qty) || 1), cols[3], y);
+            y += 14;
+        });
+        y += 8;
+    }
+
+    // The statement, then the signature under it -- kept together on one page.
+    // Font FIRST: splitTextToSize measures in whatever font is current, and the
+    // table above leaves it at 9.5pt -- measured there and printed at 11pt, the
+    // statement ran off the right edge of the page.
+    ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
+    const terms = doc.splitTextToSize(B2B_CUSTODY_TERMS, R - M);
+    ensure(terms.length * 15 + 170);
+    y += 6;
+    terms.forEach(line => { doc.text(line, M, y); y += 15; });
+    y += 18;
+    doc.addImage(sigImg, 'JPEG', M, y, 270, 96);
+    y += 100;
+    doc.setDrawColor(26, 28, 30); doc.line(M, y, M + 300, y);
+    y += 14;
+    ink(); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+    doc.text(d.name, M, y);
+    y += 14;
+    muted(); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+    const when = signedAt.toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'medium', timeStyle: 'short' });
+    doc.text(`Signed ${when} CT${d.company ? ` on behalf of ${d.company}` : ''}`, M, y);
+
+    // Footer on every page
+    const n = doc.getNumberOfPages();
+    for (let p = 1; p <= n; p++) {
+        doc.setPage(p);
+        muted(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
+        doc.text(`${d.ref} · ${B2B_CUSTODY_TITLE}`, M, H - 32);
+        doc.text(`Page ${p} of ${n}`, R, H - 32, { align: 'right' });
+    }
+    return doc.output('datauristring');
 }
 
 // --- moving a deal between stores ------------------------------------------
@@ -26162,7 +26774,17 @@ function _b2bLabelsShort(it) {
     if (_b2bIsPreval()) return 0;
     return Math.max(0, (Number(it.quantity) || 1) - (Number(it.label_printed_qty) || 0));
 }
-function _b2bUnlabelled() { return _b2bModalItems.filter(it => _b2bLabelsShort(it) > 0); }
+// Whether a line still OWES a label -- which is not the same question as how
+// many of its units are untagged. Nick, 2026-10-16: one label per unit is the
+// norm, "but only require 1 to be printed incase of edge cases where there a ton
+// in a single organized container". So a line with any label printed is tagged:
+// no amber, no submit warning, out of Print All's outstanding set. The per-unit
+// count (_b2bLabelsShort) still drives the DEFAULT of how many to print, because
+// one per unit is still what usually happens.
+function _b2bLabelOwed(it) {
+    return !!(it && it.sku) && !_b2bIsPreval() && !(Number(it.label_printed_qty) > 0);
+}
+function _b2bUnlabelled() { return _b2bModalItems.filter(_b2bLabelOwed); }
 
 // What a line costs us in certified wipes.
 function _b2bWipeTotal(it) {
@@ -26644,12 +27266,14 @@ async function b2bCopyItem(id, btn) {
     // MOCD: finishing a line and hitting copy drops you straight into the next
     // one, and the unit you just described walks off the bench untagged. Offered
     // here rather than enforced -- a printer that is down must not stop pricing.
-    const short = _b2bLabelsShort(src);
-    if (short > 0 && !_b2bIsPreval() && src.sku) {
-        if (confirm(`Print ${short} label${short === 1 ? '' : 's'} for "${_b2bItemName(src)}" first?\n\n`
+    // Asked only while the line owes its first label; the count is left to the
+    // print dialog, which defaults to one per unit but takes 1 for a lot kept
+    // together in one container.
+    if (_b2bLabelOwed(src)) {
+        if (confirm(`Print labels for "${_b2bItemName(src)}" first?\n\n`
             + 'Tag it now and it cannot be the box nobody can identify later. '
             + 'Cancel to carry on without printing.')) {
-            b2bPrintLabels(_b2bEditParent()?.id, id, short);
+            b2bPrintLabels(_b2bEditParent()?.id, id);
         }
     }
     await _b2bBusy(btn, '', async () => {
@@ -27487,12 +28111,12 @@ async function b2bSubmitPricing(id, btn) {
     // down would strand the whole pallet. So this is the last moment it can be
     // said, said plainly, with the count -- and the decision stays with whoever
     // is holding the goods.
+    // A line is tagged once ANY label is printed (see _b2bLabelOwed), so this
+    // names lines with none at all rather than counting untagged units.
     const short = _b2bUnlabelled();
     const shortNote = short.length
-        ? `\n\n${short.reduce((n, it) => n + _b2bLabelsShort(it), 0)} unit${
-            short.reduce((n, it) => n + _b2bLabelsShort(it), 0) === 1 ? '' : 's'} across ${
-            short.length} line${short.length === 1 ? '' : 's'} have no label printed yet:\n  · ${
-            short.slice(0, 8).map(it => `${_b2bItemName(it)} (${_b2bLabelsShort(it)})`).join('\n  · ')}${
+        ? `\n\n${short.length} line${short.length === 1 ? ' has' : 's have'} no label printed yet:\n  · ${
+            short.slice(0, 8).map(it => _b2bItemName(it)).join('\n  · ')}${
             short.length > 8 ? `\n  · …and ${short.length - 8} more` : ''}\n\nYou can still submit.`
         : '';
     if (!confirm('Submit this pricing? SKUs get assigned now so labels can be printed, '
@@ -27560,10 +28184,41 @@ function _b2bWhereLine(deal) {
 let _b2bReviewFull = false;
 function b2bReviewFull(on) { _b2bReviewFull = !!on; b2bOpenDeal('quote', _b2bModalDeal.id); }
 
+// Where a sent quote stands, in one line: how long the client has had it, how
+// many times it went, what we offered, and who priced it. The send control
+// stays here (Copy Quote is the whole send route), so a resend is where the
+// "sent" facts are. Days are the stores' days (Central), like every other age.
+function _b2bQuoteStatus(deal) {
+    const t = _b2bItemTotals();
+    const sentDay = deal.quote_sent_at ? _b2bCentralDay(deal.quote_sent_at) : '';
+    const days = sentDay ? Math.max(0, _b2bDayDiff(sentDay, _b2bCentralDay(new Date()))) : null;
+    const facts = [
+        days === null ? 'Not sent yet'
+            : `With the client <b>${days === 0 ? 'since today' : `${days} day${days === 1 ? '' : 's'}`}</b>`,
+        deal.quote_send_count ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}` : '',
+        `Offer <b>${_b2bMoney(t.offer, 2)}</b> on ${t.units} unit${t.units === 1 ? '' : 's'}`,
+        deal.priced_by ? `Priced by ${escapeHtml(deal.priced_by)}` : '',
+    ].filter(Boolean);
+    return `
+        <div class="b2b-sendbar b2b-qstatus${days !== null && days >= 7 ? ' urgent' : ''}">
+            <span class="b2b-qstatus-facts">${facts.map(f => `<span>${f}</span>`).join('')}</span>
+            <!-- One button, because Copy Quote is the whole route: it copies
+                 the quote AND records the send. The address field, Open In
+                 Email and Sent By Hand all went on 2026-09-10. -->
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                data-tip="Copies the quote and records it as sent — paste it into Gmail, Outlook or anywhere else">Copy Quote</button>
+        </div>`;
+}
+
 // The lines, as something to check rather than something to fill in. Offer is
 // the one editable cell -- it is the number being approved, and a typo there is
 // the one correction not worth a whole round trip through pricing.
-function _b2bReviewLines() {
+//
+// `full` (the sent quote, full width) leads with the line number (2026-10-16),
+// so a row there is the same "0003" as on the label, the pricing sheet and the
+// listing sheet. Approval's half-width split leaves it off: that column is
+// already the tightest on the screen.
+function _b2bReviewLines(full) {
     if (!_b2bModalItems.length) {
         return '<div class="b2b-empty sm"><div class="b2b-empty-t">No lines on this quote</div></div>';
     }
@@ -27575,6 +28230,7 @@ function _b2bReviewLines() {
         const spec  = _b2bQuoteDesc(it);
         return `
         <div class="b2b-rvw-row ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}" data-rvw="${it.id}">
+            ${full ? `<div class="b2b-rvw-line b2b-mono">${escapeHtml(_b2bLineNo(it))}</div>` : ''}
             <div class="b2b-rvw-what">
                 <div class="b2b-rvw-name">${escapeHtml(_b2bItemName(it))}
                     ${it.condition ? `<span class="b2b-chip b2b-chip-${_b2bCondChip(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
@@ -27602,7 +28258,7 @@ function _b2bReviewLines() {
     return `
         <div class="b2b-rvw">
             <div class="b2b-rvw-head">
-                <span>Item</span><span class="c">Qty</span><span class="r">Value ea.</span>
+                ${full ? '<span>Line</span>' : ''}<span>Item</span><span class="c">Qty</span><span class="r">Value ea.</span>
                 <span class="r">Offer ea.</span><span class="r" title="Gross margin — resale value − our offer">Margin</span>
                 <span class="r" title="Our freight cost per unit — never shown to the client">Ship</span>
                 <span class="r" title="Net margin — value − offer − shipping − selling fees + data wipe">Net</span>
@@ -27651,8 +28307,13 @@ function b2bReviewOffer(id) {
 function _b2bRepaintReview(focusId) {
     const el = document.getElementById('b2bReviewLines');
     if (!el) return;
-    el.innerHTML = _b2bReviewLines();
+    el.innerHTML = _b2bReviewLines(el.classList.contains('b2b-rvw-full'));
     _b2bPaintTotals();
+    if (_b2bModalDeal && document.getElementById('b2bReviewLines')?.classList.contains('b2b-rvw-full')) {
+        // The sent-quote status line carries the offer total.
+        const st = document.querySelector('.b2b-qstatus');
+        if (st) st.outerHTML = _b2bQuoteStatus(_b2bModalDeal);
+    }
     // Found by id, never by position: a recycle or no-residual line renders a
     // dash instead of a field, so the inputs and the items are different-length
     // lists and any index into one is the wrong line in the other.
@@ -27816,32 +28477,51 @@ function _b2bStageQuote(deal) {
         ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
         : 'Not sent yet';
 
-    // Default view for a SENT quote: the same calm split as approval -- offers
-    // editable on the left over the P&L, the client's document on the right.
-    // The full spreadsheet is the one-click escape hatch below (_b2bReviewFull).
+    // Default view for a SENT quote ("Out For Quote").
+    //
+    // Nick, 2026-09-29: "Out for Quote screen is a horrendous view of the items
+    // and lack of information", and 2026-10-16: compare it with any other view --
+    // it "looks bad as well as has a serious lack of information if you are
+    // trying to look at the deal at a glance".
+    //
+    // It used approval's split: the lines crushed into the left ~45% (names
+    // wrapping to three lines, chips stacked) beside a second copy of the same
+    // lines in the client's document, with the numbers below two full-width
+    // panels. A sent quote is not being proofread against its document any more
+    // -- it is being WAITED ON -- so it now reads like the pricing screen it came
+    // from: what state it is in, the P&L across the full width, every line at
+    // full width (line numbers included, so it lines up with labels and listing),
+    // then the evidence, the notes, and the client's copy folded away. Offers stay
+    // editable here, exactly as before. Approval keeps its split (_b2bStageReview)
+    // -- that screen IS a proofread.
+    //
+    // Built from the pieces the other stages already use (_b2bTotalsBar,
+    // _b2bReviewLines, the panels) so the coming stage-consistency pass has one
+    // fewer bespoke layout to fold in.
     if (!_b2bReviewFull) {
         return _b2bShowDeal({
             delDeal: deal,
             stage: deal.stage,
             eyebrow: deal.ref,
-            title: 'Quote',
-            sub: 'Adjust an offer if you need to while the client decides. Accepting locks the offers in as our cost.',
+            title: 'Out For Quote',
+            sub: 'Waiting on the client. Adjust an offer if you need to — accepting locks the offers in as our cost.',
             full: true,
             body: `
             ${_b2bSummary(deal)}
             ${_b2bWhereLine(deal)}
-            <div class="b2b-sendbar">
-                <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
-                <!-- One button, because Copy Quote is the whole route: it copies
-                     the quote AND records the send. The address field, Open In
-                     Email and Sent By Hand all went on 2026-09-10. -->
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
-                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <span class="b2b-sendbar-hint">Puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
+            ${_b2bQuoteStatus(deal)}
+            ${_b2bTotalsBar(true)}
+            <div class="b2b-rvw-cap b2b-rvw-cap-full">
+                <span>Quote lines</span>
+                <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
             </div>
+            <div id="b2bReviewLines" class="b2b-rvw-full">${_b2bReviewLines(true)}</div>
             ${_b2bProofPanel(deal)}
             ${_b2bNotesPanel(deal)}
-            ${_b2bReviewSplit(deal, 'Quote lines')}`,
+            <details class="b2b-sec b2b-qdoc-fold">
+                <summary class="b2b-sec-h"><span>The quote as the client sees it</span></summary>
+                <div class="b2b-qdoc-fold-body"><div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div></div>
+            </details>`,
             footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
@@ -28912,6 +29592,43 @@ function _b2bListProgress() {
         </div>`;
 }
 
+// SORTING THE LISTING SHEET BY PROJECTED VALUE.
+//
+// Eli, 2026-09-25: "We should be able to sort by value." Nick: on the listing
+// view, by projected value, "so they can know which items to prioritize". Two
+// value columns can answer that -- Value ea (what one unit should sell for) and
+// Line total (the whole pile) -- so both headers sort, highest first on the first
+// click, and the Line header puts it back in line order.
+//
+// View-only on purpose: sort_order is what arranges the client's quote, so the
+// listing sheet must never write it. Kept for the session rather than per deal,
+// because whoever sorts by value is going to want it on the next pallet too.
+// Recycle lines have no resale value and sink to the bottom either way; ties
+// keep line order so the sheet does not shuffle between repaints.
+let _b2bListSort = { key: 'line', dir: 'desc' };
+function b2bListSortBy(key) {
+    if (key === 'line' || !['value', 'total'].includes(key)) _b2bListSort = { key: 'line', dir: 'desc' };
+    else if (_b2bListSort.key === key) _b2bListSort.dir = _b2bListSort.dir === 'desc' ? 'asc' : 'desc';
+    else _b2bListSort = { key, dir: 'desc' };
+    _b2bRepaintListing();
+}
+function _b2bListSorted(items) {
+    const list = (items || []).slice();
+    if (_b2bListSort.key === 'line') return list;
+    const worth = (it) => {
+        if (_b2bIsScrap(it)) return null;
+        const v = Number(it.value) || 0;
+        return _b2bListSort.key === 'total' ? v * (Number(it.quantity) || 1) : v;
+    };
+    const sign = _b2bListSort.dir === 'asc' ? 1 : -1;
+    return list.map((it, i) => ({ it, i, w: worth(it) }))
+        .sort((a, b) => {
+            if (a.w === null || b.w === null) return (a.w === null) - (b.w === null) || a.i - b.i;
+            return (a.w - b.w) * sign || a.i - b.i;
+        })
+        .map(x => x.it);
+}
+
 // The listing sheet is the pricing grid's read-only twin: one dense row per
 // line showing everything the lister needs to build the Shopify listing --
 // specs, serials, condition, value and cost -- with the list / recycle / label
@@ -28924,16 +29641,25 @@ function _b2bListRows() {
     // The three required specs get their own columns (as on the pricing sheet);
     // the optional ones (GPU, battery) ride under the item name.
     const reqSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
+    const sortHd = (key, label) => {
+        const on = _b2bListSort.key === key;
+        // Line order is the resting state, not a direction -- no arrow on it.
+        const arrow = on && key !== 'line' ? (_b2bListSort.dir === 'asc' ? '▲' : '▼') : '';
+        return `<button type="button" class="b2b-lsort ${on ? 'on' : ''}" onclick="b2bListSortBy('${key}')"
+            aria-label="${key === 'line' ? 'Back to line order' : `Sort by ${escapeHtml(label)}${arrow ? (_b2bListSort.dir === 'asc' ? ', lowest first' : ', highest first') : ''}`}"
+            data-tip="${key === 'line' ? 'Back to line order' : `Sort by ${escapeHtml(label.toLowerCase())}`}">${escapeHtml(label)}${
+            arrow ? `<i aria-hidden="true">${arrow}</i>` : ''}</button>`;
+    };
     const head = `
         <div class="b2b-prow b2b-phead">
-            <span>Line</span><span>Item</span>
+            <span>${sortHd('line', 'Line')}</span><span>Item</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Serials</span>
-            <span class="r">Value ea</span><span class="r">Cost ea</span><span class="r">Line total</span>
+            <span class="r">${sortHd('value', 'Value ea')}</span><span class="r">Cost ea</span><span class="r">${sortHd('total', 'Line total')}</span>
             <span class="c">Listed</span><span></span>
         </div>`;
 
-    const rows = _b2bModalItems.map(it => {
+    const rows = _b2bListSorted(_b2bModalItems).map(it => {
         const qty = Number(it.quantity) || 1;
         const listed = Number(it.listed_qty) || 0;
         const recycled = Number(it.recycled_qty) || 0;
@@ -29957,7 +30683,8 @@ function b2bPrintLabels(dealId, itemId, count) {
                         `How many labels for "${_b2bItemName(it)}"?\n\n`
                         + `${qty} unit${qty === 1 ? '' : 's'} on the line`
                         + `${printed ? `, ${printed} label${printed === 1 ? '' : 's'} printed so far` : ', none printed yet'}`
-                        + `${short ? ` — ${short} still untagged` : ''}.`, String(left));
+                        + `${short ? ` — ${short} still untagged` : ''}.\n\n`
+                        + 'One per unit is usual; 1 is enough for a lot kept together in one container.', String(left));
                     if (raw === null) return;
                     n = parseInt(raw, 10) || 0;
                 }
@@ -29995,16 +30722,30 @@ function b2bPrintLabels(dealId, itemId, count) {
     // there was nothing on the box itself saying "this must not be listed".
     // Styled for a mono thermal printer rather than with colour: recycle is
     // knocked out of solid black, no-residual is boxed, a purchase is plain.
-    const DISP_LABEL = { purchase: 'Purchased', no_residual: 'No Residual Value', recycle: 'Recycle' };
+    //
+    // "Purchase", not "Purchased" -- the disposition names what the line IS, the
+    // same noun as the other two (Nick, 2026-09-28).
+    //
+    // QTY is the LINE's quantity, printed on every unit's label (Jon Rodriguez,
+    // 2026-09-25; Nick: "just a number like 'QTY:'"). A lot kept in one container
+    // may carry a single label, and that label then has to say how many units
+    // it stands for. It sits on the handling line rather than taking a row of its
+    // own, so the barcode keeps its height and it survives the 0.75in stock,
+    // which drops the description.
+    const DISP_LABEL = { purchase: 'Purchase', no_residual: 'No Residual Value', recycle: 'Recycle' };
     const DISP_CLASS = { purchase: 'buy', no_residual: 'nrv', recycle: 'rec' };
     const cells = labels.map(it => {
         const d = _b2bDispOf(it);
+        const qty = Math.max(1, Number(it.quantity) || 1);
         return `
         <div class="lb">
             ${_b2bBarcodeSvg(it.sku)}
             <div class="sku">${escapeHtml(it.sku)}</div>
             <div class="desc">${escapeHtml(_b2bItemName(it))}</div>
-            <div class="disp ${DISP_CLASS[d] || 'buy'}">${escapeHtml(DISP_LABEL[d] || DISP_LABEL.purchase)}</div>
+            <div class="foot">
+                <span class="disp ${DISP_CLASS[d] || 'buy'}">${escapeHtml(DISP_LABEL[d] || DISP_LABEL.purchase)}</span>
+                <span class="qty">QTY: ${qty}</span>
+            </div>
         </div>`;
     }).join('');
 
@@ -30040,9 +30781,13 @@ function b2bPrintLabels(dealId, itemId, count) {
   /* No colour: these go to a mono thermal printer, so the three outcomes are
      told apart by weight and inversion instead. Recycle is the one that must be
      unmissable -- it means do not list this -- so it takes the solid block. */
-  .lb .disp { margin-top: 0.025in; font-size: 7.5pt; font-weight: 800;
+  .lb .foot { margin-top: 0.025in; display: flex; align-items: center; justify-content: center;
+              gap: 0.08in; max-width: 100%; }
+  .lb .disp { font-size: 7.5pt; font-weight: 800;
               letter-spacing: .06em; text-transform: uppercase; line-height: 1.1;
-              max-width: 100%; white-space: nowrap; overflow: hidden; }
+              min-width: 0; white-space: nowrap; overflow: hidden; }
+  .lb .qty { flex: none; font-family: 'Consolas','SFMono-Regular',monospace; font-size: 8pt;
+             font-weight: 700; line-height: 1.1; color: #000; }
   .lb .disp.buy { color: #000; }
   .lb .disp.nrv { color: #000; border: 1pt solid #000; padding: 0 0.045in; border-radius: 2pt; }
   .lb .disp.rec { background: #000; color: #fff; padding: 0.008in 0.055in; border-radius: 2pt; }
@@ -30054,7 +30799,8 @@ function b2bPrintLabels(dealId, itemId, count) {
   body.sm .lb .bc { height: 0.30in; }
   body.sm .lb .sku { font-size: 9pt; }
   body.sm .lb .desc { display: none; }
-  body.sm .lb .disp { font-size: 7pt; margin-top: 0.02in; }
+  body.sm .lb .foot { margin-top: 0.02in; }
+  body.sm .lb .disp { font-size: 7pt; }
 
   @media print {
     body { background: #fff; }
@@ -30069,7 +30815,7 @@ function b2bPrintLabels(dealId, itemId, count) {
     <b>${escapeHtml(deal.ref)}</b>
     <button id="b1" class="on" onclick="setSize(false)">2.25 × 1 in</button>
     <button id="b2" onclick="setSize(true)">2.25 × 0.75 in</button>
-    <span>${labels.length} label${labels.length === 1 ? '' : 's'} — one per unit</span>
+    <span>${labels.length} label${labels.length === 1 ? '' : 's'}</span>
     <button class="go" onclick="window.print()">Print</button>
   </div>
   <div class="sheet">${cells}</div>
@@ -30173,6 +30919,189 @@ function closeB2BAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
+// THE NOTIFICATION REWORK (Nick, 2026-10-16).
+//
+// "Notifications for stores should be daily reminders of when a given b2b needs
+// to be finished pricing (always 1 week due date from when entering this
+// stage). Once its in the listing stage, It should be a weekly notification of
+// all combined unlisted B2B value for that location from all the deals they
+// have. For corp it should be similar, but have a notification bell/
+// notification settings in which they can turn off the notifications. ... their
+// weekly notification lists all unlisted B2B value from all stores and gives
+// information about which stores have what and how much. These weekly reports
+// should land on monday for all."
+//
+// So three cards where there was one:
+//   * B2B Pricing Due  -- every deal in pricing you price (corp: every deal),
+//     with its due date. Live for as long as the deal is in pricing, which is
+//     what "daily" means on a feed. A store cannot snooze it; corp can.
+//   * Unlisted B2B Value -- from Monday, the week's figure; "Mark read" puts it
+//     away until next Monday. Corp's lists every store.
+//   * B2B Deals Waiting -- the old card, now for every OTHER stage (pickup,
+//     routing, approval, the quote). Pricing and listing have a cadence of
+//     their own above, and repeating them here would be the same nag twice.
+//
+// The email half is the notify digest, off the same rules and the same view
+// (b2b_unlisted_value), so the inbox and the feed agree. Corp's on-site
+// switches are user_notify_prefs.feed_muted, edited in Settings ->
+// Notifications; the notify function refuses them for anyone else.
+const B2B_PRICING_DUE_DAYS = 7;
+
+// A day in Central time, as YYYY-MM-DD. The stores' day, not the browser's or
+// UTC's -- a deal that entered pricing at 8pm entered it that day.
+function _b2bCentralDay(ts) {
+    const d = ts instanceof Date ? ts : new Date(ts);
+    if (isNaN(d)) return '';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+// Whole days between two YYYY-MM-DD strings, at UTC noon so DST cannot tip it.
+function _b2bDayDiff(from, to) {
+    return Math.round((new Date(`${to}T12:00:00Z`) - new Date(`${from}T12:00:00Z`)) / 86400000);
+}
+function _b2bAddDays(day, n) {
+    const d = new Date(`${day}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+// When a deal in pricing is due: one week from the day it ENTERED pricing
+// (stage_changed_at), so a deal sent back from approval starts a fresh week.
+// Same rule as collectDue in the notify function.
+function _b2bPricingDue(deal, today) {
+    const entered = _b2bCentralDay(deal.stage_changed_at || deal.updated_at || deal.created_at);
+    if (!entered) return null;
+    const dueOn = _b2bAddDays(entered, B2B_PRICING_DUE_DAYS);
+    const left = _b2bDayDiff(today || _b2bCentralDay(new Date()), dueOn);
+    return { entered, dueOn, left, late: left < 0 };
+}
+function _b2bDueWords(due) {
+    if (!due) return '';
+    const n = Math.abs(due.left);
+    if (due.late) return `${n} day${n === 1 ? '' : 's'} overdue`;
+    if (due.left === 0) return 'due today';
+    return `due ${_b2bDate(due.dueOn)} (${n} day${n === 1 ? '' : 's'} left)`;
+}
+// The Monday that starts the week containing `day` (YYYY-MM-DD).
+function _b2bWeekMonday(day) {
+    const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
+    return _b2bAddDays(day, dow === 0 ? -6 : 1 - dow);
+}
+
+// Corp's on-site mutes, fetched once per page. Stores have none to fetch -- the
+// server clears the list for anyone who is not corp -- so they skip the call.
+let _b2bFeedMutedP = null;
+function _b2bFeedMuted() {
+    if (!_b2bIsCorp() || !sessionStorage.getItem('speeksUserPin')) return Promise.resolve(new Set());
+    if (typeof _nsData !== 'undefined' && _nsData && Array.isArray(_nsData.feed_muted)) {
+        return Promise.resolve(new Set(_nsData.feed_muted));
+    }
+    if (!_b2bFeedMutedP) {
+        _b2bFeedMutedP = fetch(`${NOTIFY_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': sessionStorage.getItem('speeksUserPin') || '' } })
+            .then(r => r.json())
+            .then(j => new Set(Array.isArray(j && j.feed_muted) ? j.feed_muted : []))
+            .catch(() => { _b2bFeedMutedP = null; return new Set(); });
+    }
+    return _b2bFeedMutedP;
+}
+
+// The two new cards' state-carriers. Feed-only, on the same contract as
+// _plBubbleEl: never visible (both ids are in the retired-bubble rule in
+// styles.css), live while display is not 'none', copy in data-summary.
+function _b2bFeedEl(id) {
+    let b = document.getElementById(id);
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = id;
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = `<span id="${id}Text"></span>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _b2bFeedSet(id, live, data) {
+    const b = _b2bFeedEl(id);
+    if (!b) return;
+    const t = document.getElementById(id + 'Text');
+    if (t) {
+        Object.keys(t.dataset).forEach(k => { delete t.dataset[k]; });
+        if (live) Object.entries(data || {}).forEach(([k, v]) => { if (v != null && v !== '') t.dataset[k] = String(v); });
+        t.textContent = live ? (data && data.summary) || '' : '';
+    }
+    b.style.display = live ? 'flex' : 'none';
+}
+
+// Pricing due: the deals in pricing this person prices -- their store's, via
+// _b2bActionFor -- or, for corp, every one. Soonest due first.
+function _b2bPricingCard(deals, muted) {
+    if (muted.has('b2b_pricing_due')) return _b2bFeedSet('b2bPricingAlertBubble', false);
+    const today = _b2bCentralDay(new Date());
+    const list = deals.filter(d => d.stage === 'pricing' && (_b2bIsCorp() || _b2bActionFor(d)))
+        .map(d => ({ d, due: _b2bPricingDue(d, today) }))
+        .filter(x => x.due)
+        .sort((a, b) => a.due.left - b.due.left);
+    if (!list.length) return _b2bFeedSet('b2bPricingAlertBubble', false);
+    const late = list.filter(x => x.due.late).length;
+    const shown = list.slice(0, 3).map(x => `${x.d.ref}${
+        _b2bIsCorp() && x.d.pricing_store ? ` (${x.d.pricing_store})` : ''} ${_b2bDueWords(x.due)}${
+        x.d.sendback_note ? ' · sent back' : ''}`);
+    _b2bFeedSet('b2bPricingAlertBubble', true, {
+        summary: shown.join(' · ') + (list.length > 3 ? ` · +${list.length - 3} more` : ''),
+        // Today's date is in the identity, so a corp snooze lasts the day and the
+        // reminder comes back tomorrow -- "daily" -- or sooner if the list moves.
+        sig: today + '|' + list.map(x => `${x.d.id}:${x.due.dueOn}`).join(','),
+        late: late ? String(late) : '',
+        count: String(list.length),
+    });
+}
+
+// Unlisted value: from Monday, until read. Read is remembered per person per
+// week in this browser -- a convenience, not a record; the email is the record.
+function _b2bUnlistedReadKey() {
+    return 'speeksB2bUnlistedRead_' + (sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase();
+}
+async function _b2bUnlistedCard(muted) {
+    const role = _b2bRole();
+    if (muted.has('b2b_unlisted') || (!_b2bIsCorp() && !B2B_STORE_ROLES.includes(role))) {
+        return _b2bFeedSet('b2bUnlistedAlertBubble', false);
+    }
+    const monday = _b2bWeekMonday(_b2bCentralDay(new Date()));
+    let read = '';
+    try { read = localStorage.getItem(_b2bUnlistedReadKey()) || ''; } catch (_) {}
+    if (read === monday) return _b2bFeedSet('b2bUnlistedAlertBubble', false);
+
+    const rows = await _b2bGet(`unlisted=1&store=${encodeURIComponent(_b2bFetchScope())}`);
+    const summary = _b2bUnlistedSummary(rows, _b2bIsCorp());
+    if (!summary) return _b2bFeedSet('b2bUnlistedAlertBubble', false);
+    _b2bFeedSet('b2bUnlistedAlertBubble', true, { summary, sig: monday, week: monday });
+}
+// "$17,975 unlisted across 72 units on 10 deals — SPFN-001 $6,585 · ..." for a
+// store; per-store totals, biggest first, for corp. '' when nothing is waiting.
+function _b2bUnlistedSummary(rows, corp) {
+    const list = (rows || []).filter(r => Number(r.unlisted_units) > 0);
+    if (!list.length) return '';
+    const money = n => _b2bMoney(Number(n) || 0);
+    const total = list.reduce((n, r) => n + (Number(r.unlisted_value) || 0), 0);
+    const units = list.reduce((n, r) => n + (Number(r.unlisted_units) || 0), 0);
+    const deals = new Set(list.map(r => r.deal_id)).size;
+    const head = `${money(total)} unlisted across ${units} unit${units === 1 ? '' : 's'} on ${deals} deal${deals === 1 ? '' : 's'}`;
+    if (corp) {
+        const by = new Map();
+        list.forEach(r => by.set(r.store, (by.get(r.store) || 0) + (Number(r.unlisted_value) || 0)));
+        return `${head} — ` + [...by].sort((a, b) => b[1] - a[1]).map(([s, v]) => `${s} ${money(v)}`).join(' · ');
+    }
+    const top = list.slice().sort((a, b) => (Number(b.unlisted_value) || 0) - (Number(a.unlisted_value) || 0));
+    return `${head} — ` + top.slice(0, 3).map(r => `${r.ref} ${money(r.unlisted_value)}`).join(' · ')
+        + (top.length > 3 ? ` · +${top.length - 3} more` : '');
+}
+function b2bUnlistedRead(ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    const t = document.getElementById('b2bUnlistedAlertBubbleText');
+    const week = (t && t.dataset.week) || _b2bWeekMonday(_b2bCentralDay(new Date()));
+    try { localStorage.setItem(_b2bUnlistedReadKey(), week); } catch (_) {}
+    _b2bFeedSet('b2bUnlistedAlertBubble', false);
+    try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
+}
+
 // Runs on every page, so it has to be cheap and quiet: one scoped read, and it
 // bails immediately for anyone whose role has no B2B duties at all.
 async function checkB2BReminders() {
@@ -30183,7 +31112,12 @@ async function checkB2BReminders() {
     try {
         const deals = (await _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=0`))
             .map(_b2bShapeDeal).filter(_b2bInScope);
-        const mine = deals.filter(_b2bActionFor);
+        const muted = await _b2bFeedMuted();
+        _b2bPricingCard(deals, muted);
+        // Its own try: the weekly card failing must not take the others with it.
+        _b2bUnlistedCard(muted).catch(() => {});
+        // Pricing and listing have their own cards now (see the banner above).
+        const mine = deals.filter(d => d.stage !== 'pricing' && d.stage !== 'listing').filter(_b2bActionFor);
         if (!mine.length) { b.style.display = 'none'; return; }
 
         // Lead with the oldest, since that's the one actually holding things up.
@@ -32094,7 +33028,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -34343,7 +35277,8 @@ const SCORECARD_BUCKETS = [
 
 // ============================================================================
 // PayMore practice Audit — exact transcription of Audit Playbook v3 (165 pts,
-// 94 items, 8 sections). Binary scoring: checked = full points, else 0.
+// 94 items, 8 sections; wording per PayMore's 7/22/26 checklist revision, 0140).
+// Binary scoring: checked = full points, else 0.
 // Pass = 80%, target = 90%+. Shared shape with the scorecard edge fn, which
 // re-derives earned/possible from the same point values (server-authoritative).
 // ============================================================================
@@ -34352,8 +35287,8 @@ const AUDIT_PASS_PCT = 80;
 const AUDIT_DEFINITION = [
     { key: "exterior", title: "Exterior", items: [
         { id: "ex1", pts: 1, text: "Sidewalks and entryways free of litter, debris, and obstructions" },
-        { id: "ex2", pts: 1, text: "Exterior and road signage clean, lit (if applicable), free of damage or fading" },
-        { id: "ex3", pts: 1, text: "Building exterior clean, well-maintained (windows, paint, no handmade signs on doors). Window decals and signage appropriate. Door hours match website" },
+        { id: "ex2", pts: 1, text: "Exterior & road signage clean, lit (if applicable), no damage/fading; banners within brand standard, hung straight, not ripped/torn; hours sign not handwritten" },
+        { id: "ex3", pts: 1, text: "Building exterior clean & well-maintained (windows, paint, no handmade signs); approved window decals only; door hours match website" },
     ]},
     { key: "entry", title: "Entry & Sales Floor", items: [
         { id: "ef1", pts: 1, text: "Floors swept/mopped; entry mats clean" },
@@ -34361,13 +35296,13 @@ const AUDIT_DEFINITION = [
         { id: "ef3", pts: 1, text: "Video games displayed on shelves and organized" },
         { id: "ef4", pts: 1, text: "Store lighting fully functional throughout (no burned out bulbs, adequate brightness and clean)" },
         { id: "ef5", pts: 1, text: "Walls, vents, and high surfaces free of dust and cobwebs" },
-        { id: "ef6", pts: 2, text: "Ceiling tiles in place and in good shape; less than 10% of tiles with no water damage" },
+        { id: "ef6", pts: 2, text: "Ceiling tiles in place & good shape; <10% affected; no water damage" },
         { id: "ef7", pts: 1, text: "Window ledges and sills clean; free of merchandise or debris" },
         { id: "ef8", pts: 1, text: "No recycling items in customer view" },
         { id: "ef9", pts: 1, text: "All customers greeted within 10 seconds of entering the store" },
         { id: "ef10", pts: 2, text: "Team acknowledges entering customers even while helping others" },
         { id: "ef11", pts: 1, text: "Customers asked for Google review at end of transaction" },
-        { id: "ef12", pts: 1, text: "No QR codes or signage for Google review signage in transaction area" },
+        { id: "ef12", pts: 1, text: "No QR codes / Google review signage in transaction area" },
         { id: "ef13", pts: 1, text: "Music playing from RockBot system and volume is appropriate" },
         { id: "ef14", pts: 3, text: "Retail Browsing iPads on and locked to store website" },
     ]},
@@ -34393,7 +35328,7 @@ const AUDIT_DEFINITION = [
         { id: "rc5", pts: 1, text: "No team member food or drink in customer view" },
         { id: "rc6", pts: 1, text: "PayMore branded retail bags stocked" },
         { id: "rc7", pts: 2, text: "All computers do not have any personal accounts open" },
-        { id: "rc8", pts: 1, text: "PayMore branded signage at counter; Freedom to Trade In trifold nearby; promo materials in plexi frames (not taped)" },
+        { id: "rc8", pts: 1, text: "PayMore signage at counter; Freedom to Trade In trifold nearby; promos in plexi frames (not taped); posters in frames not wrinkled or faded" },
     ]},
     { key: "buy", title: "Buy Transaction Area", items: [
         { id: "bt1", pts: 3, text: "Counter neatly arranged; no unbranded signage; testing equipment out of view (cables, gaming controllers, flashlights, etc); printer under cabinet" },
@@ -34405,7 +35340,7 @@ const AUDIT_DEFINITION = [
         { id: "bt7", pts: 2, text: "PayMore Seller Book under the counter" },
         { id: "bt8", pts: 3, text: "Last 10 transactions: at least one signature on each page half on/off sticker" },
         { id: "bt9", pts: 7, text: "Green bin (<$100), Red bin (>$100), Blue bin (video games) — labeled (not handwritten), out of view; items bubble-wrapped with purchase order receipt" },
-        { id: "bt10", pts: 3, text: "Larger items in white boxes: purchase order attached, bubble-wrapped, on shelving or neatly stacked on back counter (must be in boxes)" },
+        { id: "bt10", pts: 3, text: "Larger items in white boxes: PO attached, bubble-wrapped, on shelving or neatly stacked (must be boxed)" },
         { id: "bt11", pts: 3, text: "All intake merchandise logged immediately; no untagged or unlogged items" },
         { id: "bt12", pts: 4, text: "Cash drawer locked; keys out of customer reach" },
     ]},
@@ -34419,18 +35354,18 @@ const AUDIT_DEFINITION = [
         { id: "bh7", pts: 1, text: "All items tagged with purchase order and visible" },
         { id: "bh8", pts: 1, text: "Location on purchase order receipt matches shelf location" },
         { id: "bh9", pts: 2, text: "Shelves are organized and neat; all large items in boxes" },
-        { id: "bh10", pts: 1, text: "Items in holding bins have the Shopify barcode" },
+        { id: "bh10", pts: 1, text: "Holding bins have Shopify barcode" },
         { id: "bh11", pts: 2, text: "Ready-to-purchase shelves labeled (1, 2, 3, etc.). Not handwritten" },
-        { id: "bh12", pts: 2, text: "Black bins present, labeled correctly (E1, E2, etc.); items bubble-wrapped, not handwritten" },
+        { id: "bh12", pts: 2, text: "Black bins present, labeled E1/E2 etc. (not handwritten); items bubble-wrapped" },
         { id: "bh13", pts: 1, text: "Boxes on ready-to-purchase shelves have Shopify barcode displayed" },
         { id: "bh14", pts: 3, text: "Ready-to-purchase shelves organized and neat; all large items in boxes; items tagged" },
         { id: "bh15", pts: 1, text: "Listing Station: barcode label printer present" },
-        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized" },
+        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized; cords not loose, proper cable management" },
         { id: "bh17", pts: 3, text: "Testing Area: device cleaning material, external monitor, charging cables neat" },
         { id: "bh18", pts: 1, text: "Testing Area: troubleshooting accessories present (controllers, Spec-Finder, flash drives)" },
         { id: "bh19", pts: 2, text: "Testing Area: clean and organized" },
-        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap/peanuts; unused boxes neatly stacked by size" },
-        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, shipping label printer, scale, box re-adjusting tool, scanner present" },
+        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap / anti-static biodegradable peanuts (NOT white/pink polystyrene); unused boxes stacked by size" },
+        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, label printer, scale, scanner all present (box re-adjusting tool optional)" },
         { id: "bh22", pts: 2, text: "Shipping Area: clean and organized" },
         { id: "bh23", pts: 4, text: "Photography Area: photo box or well-lit table with clean white butcher paper on a roll" },
         { id: "bh24", pts: 1, text: "Adequate lighting throughout all back-of-house areas" },
@@ -34443,12 +35378,12 @@ const AUDIT_DEFINITION = [
         { id: "pa3", pts: 1, text: "Optional PayMore branded hat worn forward, or backwards during a transaction" },
         { id: "pa4", pts: 1, text: "Closed-toed shoes worn" },
         { id: "pa5", pts: 1, text: "No headphones or earbuds (unless testing a device)" },
-        { id: "pa6", pts: 1, text: "Team members conducting themselves professionally" },
+        { id: "pa6", pts: 1, text: "Team conducting themselves professionally at all times" },
     ]},
     { key: "safety", title: "Safety & Security", items: [
         { id: "ss1", pts: 3, text: "Fire extinguishers tagged, charged, and hung 3.5–5 feet above the floor" },
         { id: "ss2", pts: 2, text: "First aid kit stocked according to OSHA requirements" },
-        { id: "ss3", pts: 2, text: "Back door locked from outside, openable from inside without keys or bolts; no obstructions" },
+        { id: "ss3", pts: 2, text: "Back door locked from outside, opens from inside without keys/tools; no obstructions" },
         { id: "ss4", pts: 4, text: "Safe is locked; cash/bank deposits not sitting out" },
         { id: "ss5", pts: 5, text: "Store fully open and purchasing during all posted business hours" },
         { id: "ss6", pts: 2, text: "Labor law / workplace compliance poster displayed on the wall" },
@@ -35889,10 +36824,68 @@ function _claimStores() {
 const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 const _claimsIsOversight = () =>
     _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
-// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases'
+// A WORKSPACE TAB SINCE 2026-10-06, not a popup (Ethan: "moving it from a popup to
+// an entire page"). Both popups' bodies now live in workspace.html's
+// #ws-pane-claims under their old ids, so everything below runs unchanged; what
+// changed is only how the tool is OPENED. Every caller (the red claim bubble,
+// the notification feed, Ctrl+K's sub-entries) still calls openClaimsTool(tab):
+// on the Workspace page that switches to the tab, anywhere else it carries the
+// tab across in sessionStorage and goes there.
+//
+// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases' | 'payments'
+let _claimsPendingTab = null;
+// 'store' | 'ov' when a tab button chose the view; null = by role (_claimsIsOversight).
+let _claimsView = null;
+const _claimsOnPage = () => !!document.getElementById('ws-pane-claims');
 function openClaimsTool(tab) {
-    if (_claimsIsOversight()) { openClaimsOversight(); switchOversightTab(tab === 'view' ? 'claims' : tab); }
-    else { openClaimsModal(); switchClaimsTab(tab); }
+    tab = tab || 'view';
+    if (!_claimsOnPage()) {
+        try { sessionStorage.setItem('speeksClaimsTab', tab); } catch (e) { /* lands on the list */ }
+        window.location.href = 'workspace.html#claims';
+        return;
+    }
+    _claimsPendingTab = tab;
+    _claimsView = null;
+    switchWorkspaceTab('claims');
+}
+
+// The two tab buttons. Each opens its own view, so someone holding both keys
+// (a manager lent the DM version) can reach both — as with the two popups.
+function openClaimsView(view) {
+    _claimsView = view === 'ov' ? 'ov' : 'store';
+    switchWorkspaceTab('claims');
+}
+
+// What opening a popup used to do, run each time the tab is shown — so coming
+// back to the tab re-reads, the way re-opening the popup did. Same order as
+// before: the tool's own start-up (a blank form, the list, the badge load),
+// then the requested sub-tab.
+function _claimsShowInPage() {
+    let tab = _claimsPendingTab;
+    _claimsPendingTab = null;
+    if (!tab) {
+        try { tab = sessionStorage.getItem('speeksClaimsTab'); sessionStorage.removeItem('speeksClaimsTab'); }
+        catch (e) { tab = null; }
+    }
+    tab = tab || 'view';
+    const ov = _claimsView ? _claimsView === 'ov' : _claimsIsOversight();
+    document.getElementById('ws-tab-claims')?.classList.toggle('active', !ov);
+    document.getElementById('ws-tab-claimsdm')?.classList.toggle('active', ov);
+    const storeEl = document.getElementById('claims-ws-store');
+    const ovEl = document.getElementById('claims-ws-ov');
+    if (storeEl) storeEl.style.display = ov ? 'none' : '';
+    if (ovEl) ovEl.style.display = ov ? '' : 'none';
+    const sub = document.getElementById('claims-ws-sub');
+    if (sub) sub.textContent = ov
+        ? 'Claims, refund mismatches and eBay cases across every store.'
+        : 'Claims, refund mismatches and eBay cases — anywhere our money is held or not lining up.';
+    if (ov) {
+        openClaimsOversight();
+        if (tab !== 'view' && tab !== 'claims') switchOversightTab(tab);
+    } else {
+        openClaimsModal();
+        if (tab !== 'view') switchClaimsTab(tab);
+    }
 }
 
 // A blank form. Called both when the tool opens and every time New Claim is
@@ -35913,8 +36906,10 @@ function startNewClaim() {
     switchClaimsTab('new');
 }
 
+// The store tool's start-up. Named for the popup it used to open; off the
+// Workspace page it routes there instead (see openClaimsTool).
 function openClaimsModal() {
-    toggleModal('claimsModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     _resetClaimForm();
     switchClaimsTab('view'); // the list first; New Claim is a button on it
     // In the background, so the Mismatches / eBay Cases badges show how many
@@ -35946,6 +36941,10 @@ function switchClaimsTab(tab) {
         const b = document.getElementById(id);
         if (b) b.style.display = tab === 'new' ? '' : 'none';
     });
+    // On the page the footer bar itself goes too: a popup's empty footer read as
+    // its bottom edge, a page's reads as a stray white strip.
+    const foot = document.getElementById('claimsFooter');
+    if (foot) foot.style.display = tab === 'new' ? '' : 'none';
     if (tab === 'view') fetchMyClaims();
     // openClaimsModal already started a load (for the tab badges); only fetch
     // again if that one has finished, and without re-asking eBay.
@@ -37392,6 +38391,9 @@ async function _holdAfterWrite(ctx) {
     _holdOpenForm[ctx] = null;
     await _holdFetch(ctx, _holdStores(ctx));
     renderHoldItems(ctx);
+    // A resolution may be what clears the 4pm feed card — don't make the person
+    // who just pressed it wait for the broadcast to come back round.
+    if (typeof checkClaimsDueAlerts === 'function') checkClaimsDueAlerts();
 }
 
 async function _holdSave(ctx, idx, status) {
@@ -37507,8 +38509,9 @@ function _claimReminderLock(store) {
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
 }
 
+// The oversight view's start-up — same story as openClaimsModal.
 function openClaimsOversight() {
-    toggleModal('claimsOversightModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     switchOversightTab('claims');
     fetchAllClaims();
     loadHoldItems('ov'); // badges for the Mismatches / eBay Cases tabs
@@ -38257,6 +39260,84 @@ async function checkAgingClaimsDM() {
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
+}
+
+// --- THE 4PM "DUE TODAY" ALERT, AS A FEED CARD -------------------------------
+// Ethan, 2026-10-08: "add a feed notification for the claims and disputes tool
+// only for that 4:00pm due today reminder ... they can't snooze it and it doesn't
+// go away until they mark the line item as resolved in the tool". The email is
+// unchanged; this is the same alert, kept on screen.
+//
+// Nothing here decides what is due. claims-disputes returns `dueAlerts`: the
+// items the 4pm mail (claims-disputes-email, manager_nudge) actually went out
+// about, minus the ones the tool now calls finished — resolved, settled,
+// answered on the site, or covered by a claim. See DUE_ALERT_DONE there for why
+// it is those four. So the card appears when the mail does (the email function
+// broadcasts as it logs) and stays, day after day, until each line is dealt
+// with. Not snoozeable (noSnooze), and Mark-all-read passes over it.
+//
+// STORE MANAGERS ONLY: whoever has the store tool, for their own store(s). Not
+// the DM (Ethan, 2026-10-08: "the DM does not need this for now as I use those
+// emails to reach out to them every day"), nor the CEO or MOCD.
+//
+// "Resolved" is either side: the site settling it / showing our reply, or the
+// manager marking it resolved — see DUE_ALERT_DONE in claims-disputes.
+let _claimsDuePollStarted = false;
+function _claimsDueBubbleEl() {
+    let b = document.getElementById('claimsDueAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'claimsDueAlertBubble';
+    // FEED ONLY — an invisible state-carrier, same as _plBubbleEl. It shipped
+    // 2026-10-08 dressed as a red floating toast and missing from the retired-
+    // bubble rule in styles.css, so it popped up on screen (Ethan, 2026-10-12:
+    // "we outlawed that style of popup a long time ago"). It must still go to
+    // display:flex when live — that is how _samGatherReminders sees it.
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="claimsDueAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _claimsDueScope() {
+    if (_claimsIsOversight()) return [];
+    if (!_jumpFeatureVisible('tool-claims-store')) return [];
+    return _claimStores();
+}
+async function checkClaimsDueAlerts() {
+    const stores = _claimsDueScope();
+    const hide = () => { const b = document.getElementById('claimsDueAlertBubble'); if (b) b.style.display = 'none'; };
+    if (!stores.length) { hide(); return; }
+    if (!_claimsDuePollStarted) { _claimsDuePollStarted = true; setInterval(checkClaimsDueAlerts, 30 * 60 * 1000); }
+    try {
+        const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success) return;           // a failed read leaves the card as it was
+        const items = j.dueAlerts || [];
+        if (!items.length) { hide(); return; }
+        const b = _claimsDueBubbleEl();
+        const t = document.getElementById('claimsDueAlertBubbleText');
+        if (!b || !t) return;
+        const today = j.today || '';
+        const multi = stores.length > 1;
+        const line = it => {
+            const what = _holdKindChip(it.type, it) || (it.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
+            const amt = Number(it.amount) > 0 ? ' $' + Number(it.amount).toFixed(2) : '';
+            const when = it.overdue ? 'overdue' : it.due === today ? 'due today' : it.due ? 'due tomorrow' : '';
+            return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
+        };
+        const overdue = items.some(it => it.overdue);
+        const summary = (items.length > 1 ? 'Resolve ' + items.length + ': ' : '') + items.map(line).join(' · ');
+        t.dataset.summary = summary;
+        t.dataset.overdue = overdue ? '1' : '';
+        // The tab the first (most urgent) item lives on.
+        const first = items[0].type;
+        t.dataset.tab = first === 'payment' ? 'payments' : first === 'mismatch' ? 'mismatch' : 'cases';
+        t.dataset.stores = [...new Set(items.map(it => it.store_code))].join(',');
+        t.textContent = summary;
+        b.style.display = 'flex';
+    } catch (_) { /* next poll or ping retries */ }
 }
 
 // Keep the claim alert stacked UNDER the green store-comment bubble whenever that
@@ -40033,7 +41114,8 @@ window.toggleAuditPanel = function(event) {
 // on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
 // OFF is the exception and must stay uncapped: any number of people can be off
 // on the same day, and a cap of 1 would lock the chip after the first one.
-const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity };
+// TR (Training) is uncapped for the same reason — two trainees can share a day.
+const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity, TR: Infinity };
 
 window.updateRoleLocks = function() {
     // Role capacity is per STORE. Normally the page shows one store's dots, so the
@@ -41231,6 +42313,21 @@ function copyBoxOrder(button) {
 
 const RECYCLE_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
+// Why an item is being recycled — required on every new request (Ethan,
+// 2026-10-12), on top of the free-text note, so the review tab can filter and
+// total by it. The key is what the DB stores (migration 0145 checks the same
+// four), the label is what people see — relabel freely, never re-key.
+// Rows filed before the field existed have no reason; the filter calls them
+// 'none' so they stay findable instead of vanishing under every option.
+const RECYCLE_REASONS = [
+    { key: 'poor_testing', label: 'Poor Testing' },
+    { key: 'damaged',      label: 'Damaged/Broken' },
+    { key: 'low_value',    label: 'Low Value' },
+    { key: 'other',        label: 'Other' },
+];
+const _recycleReasonLabel = k => (RECYCLE_REASONS.find(x => x.key === k) || {}).label || '';
+const _recycleReasonKey = r => (RECYCLE_REASONS.some(x => x.key === r.reason) ? r.reason : 'none');
+
 // Which store(s) this user can file/view recycle requests for.
 function _recycleStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
@@ -41330,6 +42427,7 @@ function toggleRecycleInventory() {
     });
     const qty = document.getElementById('recycleInvQty');
     if (qty) qty.value = '1';
+    _buildRecycleReasonPicker();
     switchRecycleTab('new');
 }
 
@@ -41367,9 +42465,22 @@ function _buildRecycleStorePicker() {
     else if (sel.options.length) sel.selectedIndex = 0;
 }
 
+// The reason dropdown on New Request. Built from RECYCLE_REASONS so the five
+// pages' markup only carries an empty <select>, and it opens on a placeholder
+// rather than the first reason — a preselected "Poor Testing" would get
+// submitted by everyone who didn't look, which defeats making it required.
+function _buildRecycleReasonPicker() {
+    const sel = document.getElementById('recycleInvReason');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Select a reason —</option>'
+        + RECYCLE_REASONS.map(x => `<option value="${x.key}">${x.label}</option>`).join('');
+    sel.value = '';
+}
+
 async function submitRecycleRequest() {
     const val = id => (document.getElementById(id) || {}).value;
     const store = (val('recycleInvStoreSelect') || '').toUpperCase();
+    const reason = val('recycleInvReason') || '';
     const sku = (val('recycleInvSku') || '').trim();
     const desc = (val('recycleInvDescription') || '').trim();
     const qty = Math.floor(Number(val('recycleInvQty')));
@@ -41382,6 +42493,7 @@ async function submitRecycleRequest() {
     if (costRaw === '' || costRaw == null || !Number.isFinite(Number(costRaw))) {
         alert('Please enter the item cost (per unit).'); return;
     }
+    if (!RECYCLE_REASONS.some(x => x.key === reason)) { alert('Please choose a reason for recycling.'); return; }
     if (!desc) { alert('Please describe the item and why it is being recycled.'); return; }
 
     const btn = document.getElementById('submitRecycleBtn');
@@ -41391,7 +42503,7 @@ async function submitRecycleRequest() {
         const res = await fetch(RECYCLE_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                action: 'submit_request', store, sku, description: desc, quantity: qty,
+                action: 'submit_request', store, sku, reason, description: desc, quantity: qty,
                 value: valueRaw === '' ? null : Number(valueRaw),
                 cost: Number(costRaw),
                 created_by: sessionStorage.getItem('speeksUserName') || null,
@@ -41408,6 +42520,10 @@ async function submitRecycleRequest() {
         });
         const qtyEl = document.getElementById('recycleInvQty');
         if (qtyEl) qtyEl.value = '1';
+        // Reason resets too: carrying the last one over is how a batch of five
+        // "Damaged/Broken" picks up a sixth item that was really Low Value.
+        const reasonEl = document.getElementById('recycleInvReason');
+        if (reasonEl) reasonEl.value = '';
         const skuEl = document.getElementById('recycleInvSku');
         if (skuEl) skuEl.focus();
         if (btn) {
@@ -41510,6 +42626,19 @@ function _buildRecycleViewFilters(stores) {
         // when it's actually there.
         if (pinned && [...mSel.options].some(o => o.value === pinned)) mSel.value = pinned;
     }
+    // Reason filter — shown to managers and DM/CEO alike, so both sides of the
+    // tool can see what a month's recycling was FOR. "No reason (older)" is only
+    // offered while some fetched row actually lacks one; once those age out of
+    // the 12-month window it disappears on its own.
+    const rSel = document.getElementById('recycle-reason-filter');
+    if (rSel) {
+        const cur = rSel.value;
+        const hasNone = _recycleMine.some(r => _recycleReasonKey(r) === 'none');
+        rSel.innerHTML = '<option value="">All reasons</option>'
+            + RECYCLE_REASONS.map(x => `<option value="${x.key}">${x.label}</option>`).join('')
+            + (hasNone ? '<option value="none">No reason (older)</option>' : '');
+        if ([...rSel.options].some(o => o.value === cur)) rSel.value = cur;
+    }
     const row = document.getElementById('recycle-view-filter-row');
     const sel = document.getElementById('recycle-view-filter');
     if (!row || !sel) return;
@@ -41542,7 +42671,7 @@ let _recycleQuery = '';
 // of reading the row.
 function _recycleMatches(r, q) {
     if (!q) return true;
-    const hay = [r.sku, r.description, r.created_by, r.store]
+    const hay = [r.sku, r.description, r.created_by, r.store, _recycleReasonLabel(r.reason)]
         .map(v => String(v == null ? '' : v).toLowerCase()).join(' \u0001 ');
     // Every word must appear somewhere, in any order: "iphone lee" finds the
     // LEE iPhone line without anybody having to guess the column order.
@@ -41577,6 +42706,13 @@ function renderMyRecycleTable() {
     const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
     let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
     if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    // Reason narrows the rows BEFORE any total is summed, so every footer line —
+    // the headline, Against/For, Ignored, Denied — is the total for that reason
+    // alone. It is a filter like the store one, not a search, so it also comes
+    // before monthCount: "3 of 12" under a reason means 3 of that reason's 12.
+    const filterReason = (document.getElementById('recycle-reason-filter') || {}).value || '';
+    const reasonName = filterReason === 'none' ? 'No reason' : _recycleReasonLabel(filterReason);
+    if (filterReason) rows = rows.filter(r => _recycleReasonKey(r) === filterReason);
     const q = _recycleQuery;
     // Counted BEFORE the search narrows anything, because "3 of 47" is the
     // number that tells somebody whether their search worked.
@@ -41591,6 +42727,7 @@ function renderMyRecycleTable() {
     const elsewhere = q && !rows.length
         ? _recycleMine.filter(r => _recycleMonthKey(r.created_at) !== month
                                    && (!filterStore || (r.store || '').toUpperCase() === filterStore)
+                                   && (!filterReason || _recycleReasonKey(r) === filterReason)
                                    && _recycleMatches(r, q))
         : [];
     // Keep the Store column whenever the user spans multiple stores — even with
@@ -41612,7 +42749,9 @@ function renderMyRecycleTable() {
         // another month and here is the button that takes you there.
         let emptyMsg;
         if (!q) {
-            emptyMsg = `No recycle requests for ${_recycleMonthLabel(month)}.`;
+            emptyMsg = filterReason
+                ? `No “${escapeHtml(reasonName)}” recycle requests for ${_recycleMonthLabel(month)}.`
+                : `No recycle requests for ${_recycleMonthLabel(month)}.`;
         } else if (elsewhere.length) {
             const months = [...new Set(elsewhere.map(r => _recycleMonthKey(r.created_at)))]
                 .sort().reverse();
@@ -41779,7 +42918,7 @@ function renderMyRecycleTable() {
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`, '', 'Date')}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`, '', 'Store') : ''}
             ${td(`${siteSkuSpan(r.sku || '', 'font-weight:700; color:var(--slate-charcoal);')}${siteCopyBtn(r.sku, 'SKU')}`, 'min-width:110px;', 'SKU')}
-            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
+            ${td(`${r.reason && _recycleReasonLabel(r.reason) ? `<span class="recycle-reason-chip">${escapeHtml(_recycleReasonLabel(r.reason))}</span> ` : ''}<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;', 'Qty')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;', 'Unit Cost')}
             ${td(struck
@@ -41814,8 +42953,8 @@ function renderMyRecycleTable() {
     const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
     html += `</tbody><tfoot><tr>
         ${footLabel(q
-            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”`
-            : `Total recycled cost · ${_recycleMonthLabel(month)}`)}
+            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”${filterReason ? ` · ${escapeHtml(reasonName)}` : ''}`
+            : `Total recycled cost · ${_recycleMonthLabel(month)}${filterReason ? ` · ${escapeHtml(reasonName)}` : ''}`)}
         <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
         <td colspan="2"></td>
     </tr>`;
@@ -42337,7 +43476,7 @@ function _recipientsFor(key, fallback) {
 }
 
 // ---- the DM/CEO management tool ----
-// FOUR groups, not one per report. Eleven bars for twenty lists meant most of
+// FOUR groups, not one per report. Eleven bars for twenty lists (now forty-odd) meant most of
 // the panel was bars, and half of them opened onto a single address box. They
 // are grouped by what the mail IS — a scheduled performance report, an
 // operations report, an alert that fires only when something is wrong, or a
@@ -42350,7 +43489,13 @@ const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const EMAIL_LIST_GROUPS = [
     {
         title: 'Store Performance Reports',
-        desc: 'Monday morning performance emails, sent automatically.',
+        // Checked against the senders 2026-10-16 (Nick asked for a full check
+        // that this tool is accurate). Every scheduled report falls back to a
+        // built-in address when its list is empty, and only b2b_quote_ready used
+        // to say so -- so clearing a list looked like switching a report off.
+        desc: 'Monday morning performance emails, sent automatically. An empty list does not stop '
+            + 'one: it falls back to the built-in address (a store\'s report to its usual manager, '
+            + 'leadership to Ethan and Paul).',
         lists: [
             { key: 'weekly_leadership', label: 'Leadership Report', desc: 'The district-wide roll-up.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} Manager Report` })),
@@ -42359,14 +43504,16 @@ const EMAIL_LIST_GROUPS = [
     {
         title: 'Operations Reports',
         desc: 'Scheduled reports on how the stores are running, plus the mail the '
-            + 'site sends on someone else\'s behalf.',
+            + 'site sends on someone else\'s behalf. Emptying a scheduled report\'s list does not '
+            + 'stop it — it goes to its built-in address instead.',
         lists: [
             { key: 'unlisted_report', label: 'Unlisted Inventory Weekly Update',
               desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
             { key: 'cash_report', label: 'Cash On Hand',
-              desc: '7am closing-cash table, read off each store\'s Day End Report.' },
+              desc: 'Shortly after 6:05am, at the end of the morning sales import (9am if that '
+                  + 'import failed) — closing cash per store, read off each Day End Report.' },
             { key: 'processed_report', label: 'Processed Stats',
-              desc: '8:10am — how many items each store listed yesterday and what '
+              desc: '6:15am — how many items each store listed yesterday and what '
                   + 'they were worth, off the Day End Report.' },
             { key: 'record_watch_leadership', label: 'Company Records — Leadership',
               desc: '6:40am, only on a morning a store broke or came within 5% of a record: daily '
@@ -42386,7 +43533,8 @@ const EMAIL_LIST_GROUPS = [
     },
     {
         title: 'System Alerts',
-        desc: 'Silent unless something is broken or a decision is waiting.',
+        desc: 'Silent unless something is broken or a decision is waiting. An empty list still '
+            + 'sends, to the built-in address.',
         lists: [
             { key: 'connect_alerts', label: 'SPEEKS Connect Errors',
               desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.' },
@@ -42406,7 +43554,8 @@ const EMAIL_LIST_GROUPS = [
                   + 'times its manager has been told.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `refund_mismatch_${s}`, label: `Refund Mismatch — ${s}`,
               desc: '8:20am. Refunded on eBay but not Shopify, or the reverse, for 3 days '
-                  + '(1 day at month end). Raised again every 3 days until fixed. '
+                  + '(1 day at month end). On every morning\'s mail until fixed. Left empty, it '
+                  + `goes to the ${s} Manager Report list instead. `
                   + 'Being retired: Claims & Disputes below covers mismatches too.' })),
             // Claims & Disputes. These take over from the two refund-mismatch
             // lists above — a mismatch is one of four kinds of held money, and
@@ -42418,13 +43567,13 @@ const EMAIL_LIST_GROUPS = [
             { key: 'claims_disputes_dm', label: 'Claims & Disputes — District Manager',
               desc: '8:20am, a count per store of what still needs a person, plus missed reply '
                   + 'windows (said once) and anyone who marked something resolved that the site '
-                  + 'disagrees with. 4:00pm again only when a deadline falls today and the store '
-                  + 'still has not answered it.' },
+                  + 'disagrees with. 4:00pm again only when a deadline falls today or tomorrow and '
+                  + 'the store still has not answered it.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `claims_disputes_${s}`, label: `Claims & Disputes — ${s}`,
               desc: '8:20am. Everything eBay or Shopify is waiting on this store for — cases, '
-                  + 'payment disputes, chargebacks, item-not-received and mismatches — soonest '
-                  + 'deadline first. 4:00pm again only if something closes today and is still '
-                  + 'unanswered.' })),
+                  + 'payment disputes, chargebacks, item-not-received, mismatches and unpaid '
+                  + 'Shopify orders — soonest deadline first. 4:00pm again only if something is due '
+                  + 'today or tomorrow and is still unanswered.' })),
         ],
     },
     {
@@ -42445,13 +43594,13 @@ async function openEmailRecipients() {
 }
 
 // ---- the collapsible list, its search, and which bar is open ----
-// Four groups over twenty lists: fully expanded this ran several screens and
+// Four groups over forty-odd lists: fully expanded this ran several screens and
 // the one you came for was never the one on screen. One group open at a time,
 // same shape as the Margin Guide rebuttal accordion.
 //
 // The search matches ADDRESSES as well as report names on purpose — you
 // usually arrive here knowing the person you want to remove, not which of the
-// twenty lists they happen to sit on.
+// forty-odd lists they happen to sit on.
 let _erOpen = null;     // title of the open group, or null for all closed
 let _erQuery = '';
 
@@ -42734,12 +43883,10 @@ const FEATURE_CATALOG = [
     // board has no inbox; it is on the ordinary nav now and would otherwise be
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
-    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multistore-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Claims & Disputes (Store)',     tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (Oversight)', tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
-    { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
@@ -42803,8 +43950,12 @@ const FEATURE_CATALOG = [
     // their manager, cost and margin included, is the decision these panels were
     // built around. Those rows exist so a store that would rather not can switch
     // them off, not as a default-off gate.
-    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
-    { key: 'widget-command-center',    label: 'Command Center (Whole Card)',   tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    // The two Command Center keys gate different elements (index.html): the CARD
+    // itself, and the dashboard ROW it sits in. The old labels ("Whole Widget" /
+    // "Whole Card") could not be told apart; switch both together, or you get an
+    // empty row or a card with nowhere to show. (Feature Access check, 2026-10-16.)
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (Card)',          tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-command-center',    label: 'Command Center (Dashboard Row)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
     // now — so the switch is gone too rather than left as a control that does
@@ -42848,6 +43999,13 @@ const FEATURE_CATALOG = [
     { key: 'cap-kpi-dm',               label: 'Store KPIs · All Stores (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Claims & Disputes — a Workspace tab since 2026-10-06 (was two SPEEKS Tools
+    // popups). The KEYS are unchanged on purpose: feature_overrides rows, the
+    // claims emails' audience in notify and the Ctrl+K sub-entries all name them.
+    // Two keys because the tool has two views: the store's own (managers) and
+    // every store (DM/CEO); each gates its own tab button in workspace.html.
+    { key: 'tool-claims-store',        label: 'Claims & Disputes — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (DM)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo'] },
     // Margin Replies — PARKED (2026-07-29), UNFINISHED. Deliberately absent from
     // the catalog, not merely defaulted off: a catalog entry would let someone
     // switch a half-built tool on from Feature Access. With no entry,
@@ -42856,18 +44014,28 @@ const FEATURE_CATALOG = [
     // bring it back:
     // { key: 'widget-margin-replies', label: 'Margin Replies (Tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     // { key: 'cap-bmargin-dm',        label: 'Margin Replies (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Aging Inventory — PAUSED (2026-10-06) while Ethan decides whether to keep
+    // it. Same parking as Margin Replies: with no catalog entry Ctrl+K, Feature
+    // Access and the nav dot resolve hidden, and _agEnabled() turns off the popups
+    // and login checks. ⚠️ The TAB is hidden by commenting its button out of
+    // workspace.html — applyRoleBasedUI never reads this catalog, so dropping
+    // the entry alone left the tab showing for every role. The emails are paused separately in notify
+    // (PAUSED_FEATURES). Data is untouched. Restore these two lines, and drop
+    // the key from PAUSED_FEATURES, to bring it back:
+    // { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
+    // { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-marginguide',   label: 'Margin Guide (Tab)',            tab: 'widgets', group: 'Operations', def: 'all' },
-    // The editor behind the Margin Guide's "Edit" button. Listed so it can
-    // be delegated or pulled back without a code change; mgCanEditLadder() gates it
-    // in JS as well, and the edge function enforces the same roles on every write.
-    { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // The editor behind the Margin Guide's "Edit" button. It can be PULLED BACK
+    // here, but not handed out: mgCanEditLadder() checks MG_EDIT_ROLES (DM, CEO,
+    // MOCD) first and the edge function enforces the same roles on every write,
+    // so granting it to anyone else draws nothing. MOCD added to def to match.
+    { key: 'tool-margin-manage',       label: 'Margin Guide — Edit (DM/CEO/MOCD only)', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-ops-pictureguide',  label: 'Picture Guide (Tab)',           tab: 'widgets', group: 'Operations', def: 'all' },
     // The editor behind the Picture Guide's "Edit" button. Same shape as
-    // tool-margin-manage: pgCanEdit() gates it in JS and the edge function
-    // enforces the same roles on every write, so this is only who SEES it.
-    { key: 'tool-picture-manage',      label: 'Picture Guide — Edit',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // tool-margin-manage: pgCanEdit() checks PG_EDIT_ROLES (DM, CEO) and the edge
+    // function enforces the same roles on every write, so this can only take it
+    // away -- granting it to anyone else draws nothing.
+    { key: 'tool-picture-manage',      label: 'Picture Guide — Edit (DM/CEO only)',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
@@ -42904,8 +44072,18 @@ const FEATURE_CATALOG = [
     // Guide. DM and CEO only while it is new (Ethan, 2026-09-23); it widens to
     // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
     // picture-quality function, for the same reason ec-view-titles must match.
-    { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
-    { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
+    // ⏸ PARKED 2026-10-20 (v3.9.3). Ethan: it went live by accident with an
+    // earlier merge and is still being built — "make it as if it was never added
+    // to the live site", for everyone, him included. With the entry commented
+    // out _featureEffectiveVisible says no, so nothing fetches picture-quality
+    // and Listing Health draws No Photos the way it did before the grader (see
+    // _pqHtml, _lhHtml and the All Stores card). The function, the data and the
+    // nightly (paused anyway) are untouched. Restore by uncommenting this line.
+    // { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // LENDS the corp hat to someone outside the corp roles. DM, CEO and MOCD have
+    // corp powers by role whatever this says (_b2bIsCorp), which is why only the
+    // DM column is on and switching CEO/MOCD off does nothing.
+    { key: 'cap-b2b-corp',             label: 'B2B Corp Powers (Lend To Others)',           tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // Live bench intake: the capture tool on a machine being tested posts its
     // own specs into the open deal. `def: []` is the whole point -- it ships off
     // for everyone, including CEO and DM, and is turned on per role or per person
@@ -43142,7 +44320,7 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
-    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory', 'tool-claims-store', 'tool-claims-oversight'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
@@ -43168,6 +44346,14 @@ const _SECTION_TABS = {
 // READ-ONLY form for everyone, DM included (Ethan, 2026-09-20). See pgCanEdit().
 const _TABLET_SECTION_TABS = new Set(['widget-ops-pictureguide']);
 
+// THE PHONE'S ONE EXCEPTION (2026-10-16). Nick: "have on mobile the b2b module
+// enabled now" -- the pickup and its custody form are done at the client's door,
+// on a phone. The B2B tab itself carries no data-mobile cut any more; this is
+// the other half, the Operations link that reaches it, which IS cut on a phone
+// and stays cut for anyone who cannot see B2B (they would land on an empty
+// page). A link opts in with data-phone="show", and only these keys count.
+const _PHONE_SECTION_TABS = new Set(['widget-ops-b2b']);
+
 function _applySectionNavVisibility(userRoleClass, userName) {
     const compact = _isMobileLayout();
     const tablet = compact && typeof _isTabletLayout === 'function' && _isTabletLayout();
@@ -43187,9 +44373,12 @@ function _applySectionNavVisibility(userRoleClass, userName) {
         // without this line is set to display:none a few microseconds later by a
         // function that never heard of the attribute.
         const earnedBack = link.getAttribute('data-tablet') === 'show' && tablet;
-        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && compact && !earnedBack;
+        const phoneBack = link.getAttribute('data-phone') === 'show' && compact && !tablet;
+        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && compact && !earnedBack && !phoneBack;
         const keys = earnedBack
-            ? _SECTION_TABS[href].filter(k => _TABLET_SECTION_TABS.has(k))
+            ? _SECTION_TABS[href].filter(k => _TABLET_SECTION_TABS.has(k) || _PHONE_SECTION_TABS.has(k))
+            : phoneBack
+            ? _SECTION_TABS[href].filter(k => _PHONE_SECTION_TABS.has(k))
             : _SECTION_TABS[href];
         const vis = !cutOnMobile
             && keys.some(k => _featureEffectiveVisible(k, userRoleClass, userName));
@@ -44010,6 +45199,7 @@ const JUMP_PLACES = [
     { id: 'ws-brief',    label: 'Monthly Breakdown',  sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-monthly-breakdown', page: 'workspace.html',  hash: 'brief',     fn: 'switchWorkspaceTab' },
     { id: 'ws-kpis',     label: 'Store KPIs',         sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-weekly-kpis',       page: 'workspace.html',  hash: 'kpis',      fn: 'switchWorkspaceTab' },
     { id: 'ws-vrep',     label: 'Variance Replies',   sub: 'Workspace',  kind: 'tab', feature: 'widget-variance-replies',     page: 'workspace.html',  hash: 'vreplies',  fn: 'switchWorkspaceTab' },
+    { id: 'ws-claims',   label: 'Claims & Disputes',  sub: 'Workspace',  kind: 'tab', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'claim claims disputes insurance shopify usps ups damaged lost refund mismatch returns cases chargeback payments', page: 'workspace.html', hash: 'claims', fn: 'switchWorkspaceTab' },
     // Margin Replies is parked (see FEATURE_CATALOG) — restore with its catalog entry:
     // { id: 'ws-mrep',  label: 'Margin Replies',     sub: 'Workspace',  kind: 'tab', feature: 'widget-margin-replies',       page: 'workspace.html',  hash: 'mreplies',  fn: 'switchWorkspaceTab' },
     { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },
@@ -44695,13 +45885,14 @@ const _vrDayPast = (ms, addDays = 0) => {
 // checks never got told. Without the guard WSP's phantom deadline quietly
 // elapsed, which opened the DM note columns, painted seven read-only lines red
 // as "missed", and put an Edit button on a report the banner called clear.
+// An ENDED period is the same: the DM closed it, so nothing is late any more.
 function _vrIsPastDue(p) {
-    if (!p || p.all_clear || !p.manager_due_at) return false;
+    if (!p || p.all_clear || p.ended_at || !p.manager_due_at) return false;
     return _vrDayPast(new Date(p.manager_due_at).getTime());
 }
 // The seventh day itself — still on time, but the last day it will be.
 function _vrIsDueToday(p) {
-    if (!p || p.all_clear) return false;
+    if (!p || p.all_clear || p.ended_at) return false;
     const d = _vrDueDay(p);
     return !!d && _vrCtDay(Date.now()) === d;
 }
@@ -44713,6 +45904,8 @@ function _vrSubtitleText() {
     // The banner in the body already says what's going on; a "replies due"
     // date next to it would only contradict it.
     if (p.all_clear) return '';
+    // Ended: the banner says who closed it and when; no deadline to show.
+    if (p.ended_at) return 'Reply cycle ended';
     // Count the lines that were ASKED for, not every line stored. A targeted
     // upload also stores the rest of the store's report as read-only context,
     // and counting those made a 16-line ask read as "0/40 explained" — a
@@ -44826,14 +46019,19 @@ function renderVarianceReplies() {
     // Nothing was owed this period. The manager still gets the report to read —
     // that is the whole point of an all-clear upload rather than no upload.
     if (p.all_clear) html += _vrAllClearBannerHtml(p);
+    const ended = !!p.ended_at;
+    if (ended) html += _vrEndedBannerHtml(p);
     // A manager whose store is "in the clear" views the report read-only — no
     // reply obligation — so they can't edit notes (canGm off) but still see the
     // line items, team variance and download. A banner explains it.
     // The store-wide view of a targeted report is read-only for the same reason.
     // An all-clear period is read-only for the manager: the banner above already
     // says why, and there is nothing to answer.
-    const canGm = _vrIsManager() && !p.all_clear && !storeView;
+    // Ended is read-only for both sides. canDm stays true so the DM keeps the
+    // header actions (Reopen, Delete); dmCanEdit is what an ended period turns off.
+    const canGm = _vrIsManager() && !p.all_clear && !ended && !storeView;
     const canDm = _vrIsDM() && !storeView;
+    const dmCanEdit = canDm && !ended;
 
     // The reply cycle reveals columns as each side takes its turn:
     //   1. Managers fill GM Notes (extra-wide while it's the only note column);
@@ -44866,7 +46064,7 @@ function renderVarianceReplies() {
     const gmUnexplained = items.some(i => !i.gm_note);
     const replyPending = items.some(i => i.dm_note && i.dm_reply_requested && !i.mgr_reply);
     const mgrHasWork = !anyDmNote || gmUnexplained || replyPending;
-    const canEditNow = items.length > 0 && ((canGm && mgrHasWork) || (canDm && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
+    const canEditNow = items.length > 0 && ((canGm && mgrHasWork) || (dmCanEdit && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
     const editBtn = document.getElementById('vr-edit-btn');
     const saveBtn = document.getElementById('vr-save-btn');
     const cancelEditBtn = document.getElementById('vr-edit-cancel-btn');
@@ -44888,6 +46086,9 @@ function renderVarianceReplies() {
         </div>
         <div class="align-center gap-8" style="margin-right:14px;">
             ${dlBtn}
+            ${canDm && !p.all_clear && !_vrEditing ? (ended
+                ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrEndPeriod('${p.id}', false)" title="Open the reply cycle again — reminders resume where they left off">Reopen period</button>`
+                : `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrEndPeriod('${p.id}', true)" title="Close the reply cycle: no more reminders for you or the manager. The report stays.">End period</button>`) : ''}
             ${canDm ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrDeletePeriod('${p.id}')">Delete this upload</button>` : ''}
         </div>
     </div>`;
@@ -44926,7 +46127,7 @@ function renderVarianceReplies() {
             ${showDmCol ? td((() => {
                 // Same lock the other way: a DM note the manager already
                 // replied to can't be edited out from under the reply.
-                const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
+                const dmEditing = dmCanEdit && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
                 let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
                 // Only the note that WANTS something carries a chip (user,
                 // 2026-08-10). There used to be an "FYI — no reply needed" chip on
@@ -44964,6 +46165,9 @@ function _vrDmNotesOpen(p) {
     // A cleared period has no reply cycle to open, so the DM gets no note
     // columns and no Edit button on it — the green banner is the whole story.
     if (p && p.all_clear) return false;
+    // Ended: the columns open so whatever explanations DID come in can be read.
+    // Editing is switched off separately (canGm / dmCanEdit in the renderer).
+    if (p && p.ended_at) return true;
     return !p.manager_due_at || _vrIsPastDue(p);
 }
 
@@ -45072,6 +46276,33 @@ async function vrSaveEdits(btn) {
     renderVarianceReplies();
 }
 
+// End (or reopen) a period's reply cycle — DM only. The way out for a store
+// that never replied and won't be made to: every reminder about the period stops
+// on both sides, and the report stays. Reopening puts it back exactly as it was.
+async function vrEndPeriod(id, ended) {
+    if (ended && !confirm('End this period? No more reminders go to you or the manager, and the notes become read-only. You can reopen it later.')) return;
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'end_period', id, ended, by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const patch = { ended_at: json.ended_at || null, ended_by: json.ended_by || null };
+        if (_vrCurrent && _vrCurrent.period && _vrCurrent.period.id === id) Object.assign(_vrCurrent.period, patch);
+        const row = _vrPeriods.find(p => p.id === id);
+        if (row) Object.assign(row, patch);
+        _vrEditing = false;
+        renderVarianceReplies();
+        // Ending IS the thing the review card was nagging about — recompute now
+        // rather than at the next 30-minute poll.
+        if (typeof checkVarianceDmReminders === 'function') checkVarianceDmReminders();
+    } catch (e) {
+        alert('Could not ' + (ended ? 'end' : 'reopen') + ' the period: ' + e.message);
+    }
+}
+window.vrEndPeriod = vrEndPeriod;
+
 async function vrDeletePeriod(id) {
     if (!confirm('Delete this entire variance upload (all line items and replies)?')) return;
     try {
@@ -45148,6 +46379,20 @@ function _vrViewToggleHtml(p, allRows, storeView) {
                 ? 'Every line at ' + _VR_VARIANCE_CUTOFF + '% or worse — read only.'
                 : (names ? 'Replies requested from ' + escapeHtml(names) + '.' : '')
         }</span>
+    </div>`;
+}
+
+// Shown on an ENDED period (0146), to both sides. Says who ended it and when so
+// a manager opening an old report knows it was closed on purpose, not lost.
+function _vrEndedBannerHtml(p) {
+    const who = p.ended_by ? ' by ' + escapeHtml(p.ended_by) : '';
+    const when = p.ended_at
+        ? ' on ' + new Date(p.ended_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' })
+        : '';
+    return `<div style="display:flex; align-items:center; gap:9px; background:#f1f5f9; border:1.5px solid #cbd5e1;
+        border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:12.5px; font-weight:700; color:#475569;">
+        <span style="font-size:15px;">■</span>
+        <span>This period was ended${who}${when} — no more replies are needed.</span>
     </div>`;
 }
 
@@ -45601,7 +46846,10 @@ async function checkVarianceReminders() {
         // Cleared stores stay in the cache (they still get the "report is live"
         // announcement) — the dot + reply nags are gated on cleared separately.
         const cutoff = Date.now() - 45 * 86400000;
-        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        // An ENDED period (the DM closed its reply cycle, 0146) owes nothing and
+        // announces nothing, so it never enters the cache — dot, feed card and
+        // every row of _vrMaybePopup go quiet together.
+        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff && !p.ended_at);
         applyKpiReminder(); // re-evaluates the shared workspace nav dot + tab dot
         _vrMaybePopup();
     } catch (e) { /* next poll retries */ }
@@ -45644,9 +46892,12 @@ async function checkVarianceDmReminders() {
         if (!json || json.success === false) return;
         const now = Date.now();
         const cutoff = now - 45 * 86400000;
-        // Skip stores the DM has marked "in the clear" — no review nudges for them.
+        // Skip stores the DM has marked "in the clear" — no review nudges for them —
+        // and periods the DM has ENDED. Before End existed the only way out of the
+        // "ready for review" card was writing DM notes, so a store that never
+        // replied nagged forever (Ethan, 2026-10-12).
         const periods = (json.data || []).filter(p =>
-            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear);
+            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear && !p.ended_at);
         // State-based, like the manager side: persists until the DM acts, then
         // clears — no one-shot localStorage that vanished on navigation.
         // Track WHICH stores need the DM's eyes, so clicking the alert lands on one
@@ -46524,8 +47775,17 @@ function _agHasDmDelegation() {
     const name = sessionStorage.getItem('speeksUserName') || '';
     return _featureOverrideFor('cap-aging-dm', roleClass, name) === true;
 }
-function _agIsDM() { return _agRole() === 'district manager' || _agHasDmDelegation(); }
-function _agIsStoreUser() { return _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
+// PAUSED (2026-10-06) — see the FEATURE_CATALOG note. Hiding the tab isn't
+// enough: the login checks, the realtime re-checks and the purple bubble all
+// start from _agIsDM / _agIsStoreUser, so both answer false while it's parked.
+function _agEnabled() {
+    if (typeof _featureEffectiveVisible !== 'function') return false;
+    const roleClass = 'role-' + _agRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    return _featureEffectiveVisible('widget-aging-inventory', roleClass,
+        sessionStorage.getItem('speeksUserName') || '') === true;
+}
+function _agIsDM() { return _agEnabled() && (_agRole() === 'district manager' || _agHasDmDelegation()); }
+function _agIsStoreUser() { return _agEnabled() && _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
 
 // The store user's own store(s) — an MSM sees both, stacked in one list.
 function _agMyStores() {
@@ -46642,6 +47902,7 @@ function agCancelItemEdit() { _agEditItem = null; _agClearNeDrafts(); renderAgin
 async function loadAgingInventory() {
     const body = document.getElementById('ag-body');
     if (!body) return;
+    if (!_agEnabled()) { body.innerHTML = '<div class="status-message">Aging Inventory is paused.</div>'; return; }
     body.innerHTML = '<div class="status-message">Loading aging inventory…</div>';
     const stores = _agIsDM() ? ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'] : _agMyStores();
     if (!stores.length) {
@@ -47327,7 +48588,7 @@ function _agAckedSet(key) {
 }
 
 function _agDotNeeded() {
-    return _agMyItemsCache.some(_agAwaitingStore);
+    return _agEnabled() && _agMyItemsCache.some(_agAwaitingStore);
 }
 
 async function checkAgingInvReminders() {
@@ -48887,7 +50148,9 @@ function samMarkAllRead() {
     // about, which is exactly the failure the two separate controls avoid.
     const map = _samGetHidden();
     const until = Date.now() + 20 * 3600000;
-    _samGatherReminders().forEach(r => { map[r.key] = { sig: r.sig, until }; });
+    // Not the noSnooze cards: they have no Snooze of their own, so a bulk one
+    // must not supply it (see _samGatherReminders).
+    _samGatherReminders().forEach(r => { if (!r.noSnooze) map[r.key] = { sig: r.sig, until }; });
     _samSetHidden(map);
     if (typeof updateMainBadge === 'function') updateMainBadge();
     renderActionFeed();
@@ -49074,11 +50337,20 @@ function _samReminderCfg() {
     const _rcReplyOnly = !!(_rcT && _rcT.dataset && _rcT.dataset.replyonly);
     // Same flag, same meaning as the claims one below — see checkRecycleReminders.
     const _rcDel = (_rcT && _rcT.dataset && _rcT.dataset.del) || '';
+    // B2B pricing: stamped by _b2bPricingCard off the same list as its snippet.
+    const _b2bPrT = document.getElementById('b2bPricingAlertBubbleText');
+    const _b2bPricingLate = !!(_b2bPrT && _b2bPrT.dataset && _b2bPrT.dataset.late);
     // Claims: is a manager waiting on the DM to approve a deletion? 'only' when
     // that is all there is, 'mixed' when claims are ageing too. Stamped by
     // checkAgingClaimsDM, so it is never set for a manager.
     const _clT = document.getElementById('claimAlertBubbleText');
     const _clDel = (_clT && _clT.dataset && _clT.dataset.del) || '';
+    // The 4pm due-today card: stamped by checkClaimsDueAlerts off the same items
+    // as its summary. The tab is one of a fixed four, never free text.
+    const _cdT = document.getElementById('claimsDueAlertBubbleText');
+    const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
+    const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
+        ? _cdT.dataset.tab : 'cases';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
@@ -49098,6 +50370,15 @@ function _samReminderCfg() {
           title: _clDel === 'only' ? 'Claim Delete Requests' : 'Claims & Disputes',
           urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
           action: "openClaimsTool('view')" },
+        // The 4pm "due today" mail, kept on screen (checkClaimsDueAlerts). No
+        // Snooze, and Mark-all-read skips it: it leaves when each line is
+        // resolved in the tool, and only then. Overdue once a deadline on it
+        // has passed — it stays after that too, until somebody records what
+        // happened.
+        { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
+          title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
+          urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true,
+          action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
         // data-replyonly: no line is actually awaiting a verdict, a manager just
@@ -49141,6 +50422,19 @@ function _samReminderCfg() {
           title: 'Store Goals to Set', urgency: 2, due: 'Set', cls: 'sam-due-amber',
           noSnooze: true, action: "openGpGoals()" },
         { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
+        // The rework's two cards (see the banner over checkB2BReminders). Pricing
+        // turns red once anything is overdue; a store cannot snooze it, corp can
+        // (and can switch it off in Settings). Unlisted value is a weekly report,
+        // so it is news with a "Mark read", not a task with a due badge.
+        { key: 'b2bPricing', id: 'b2bPricingAlertBubble', text: 'b2bPricingAlertBubbleText',
+          title: _b2bPricingLate ? 'B2B Pricing Overdue' : 'B2B Pricing Due',
+          urgency: _b2bPricingLate ? 2 : 1, due: _b2bPricingLate ? 'Overdue' : 'Due',
+          cls: _b2bPricingLate ? 'sam-due-red' : 'sam-due-amber',
+          noSnooze: !(typeof _b2bIsCorp === 'function' && _b2bIsCorp()),
+          action: "window.location.href='operations.html#b2b'" },
+        { key: 'b2bUnlisted', id: 'b2bUnlistedAlertBubble', text: 'b2bUnlistedAlertBubbleText',
+          title: 'Unlisted B2B Value', urgency: 0, due: '', cls: 'sam-due-grey', noDue: true,
+          readAction: "b2bUnlistedRead(event)", action: "window.location.href='operations.html#b2b'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.
@@ -49438,7 +50732,12 @@ function _samGatherReminders() {
         // a new sender — counts as new information and breaks through the snooze
         // rather than staying buried until tomorrow.
         const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
-        if (_samIsHidden(c.key, sig)) return;
+        // A noSnooze card has no Snooze button, but Mark-all-read used to snooze
+        // it anyway (it writes every card on screen into the same map), which
+        // hid the KPI and Listing Goals deadlines for 20 hours with one click.
+        // So the map is not consulted for them at all — including any entry
+        // written before this was fixed.
+        if (!c.noSnooze && _samIsHidden(c.key, sig)) return;
         // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
         // covered stores on data-stores), clicking it opens that store's tool even
         // while he's on the other store's dashboard — without switching dashboards.
@@ -49504,7 +50803,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
     bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
@@ -50874,7 +52173,7 @@ function renderDmListingModal() {
     }
 
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', OFF: 'Off' };
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', TR: 'Training', OFF: 'Off' };
     pane = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
         + '<div class="dmx-ps">Goal ' + sel.target + ' listings · ceiling ' + (sel.capacity || '–')
@@ -54529,12 +55828,32 @@ function renderNotifySettings(d) {
     // than silently muted.
     const muted = new Set(d.muted || []);
 
+    // ON THE SITE -- corp only (the function sends an empty list to everyone
+    // else). Above the email block and outside it on purpose: these govern the
+    // feed cards, not mail, so the email master switch must not grey them out.
+    // Nick, 2026-10-16: corp can turn the B2B cards off; stores always get them.
+    const feed = Array.isArray(d.feed) ? d.feed : [];
+    const feedOff = new Set(d.feed_muted || []);
+    const feedHtml = feed.length ? `
+      <div class="ns-feed">
+        <div class="ns-label">On the site</div>
+        <div class="ns-hint">Cards in your feed. Switching one off here hides it for you only.</div>
+        <div class="ns-cats">
+          ${feed.map(f => `
+            <label class="ns-cat">
+              <input type="checkbox" class="ns-feed-box" data-feed="${_samEsc(f.key)}" ${feedOff.has(f.key) ? '' : 'checked'}>
+              <span class="ns-cat-copy"><b>${_samEsc(f.label)}</b><i>${_samEsc(f.blurb)}</i></span>
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="ns-label ns-label-gap">By email</div>` : '';
+
     // Master switch first, then the address, then what to hear about — in that
     // order because the address is meaningless without the switch and the
     // categories are meaningless without both. The block below the switch dims
     // when it is off, so the state reads at a glance instead of being inferred
     // from a row of ticked boxes that aren't doing anything.
-    body.innerHTML = `
+    body.innerHTML = `${feedHtml}
       <div class="ns-master ${on ? 'is-on' : ''}">
         <label class="ns-switch">
           <input type="checkbox" id="nsEnabled" ${on ? 'checked' : ''} onchange="_nsSyncEnabled()">
@@ -54667,6 +55986,11 @@ function _nsForm() {
     const muted = [];
     document.querySelectorAll('#notifySettingsBody .ns-sub-box')
         .forEach(b => { if (!b.checked) muted.push(b.dataset.sub); });
+    // Sent only when the on-site block is drawn (corp), so a store's save never
+    // touches the column at all.
+    const feedBoxes = document.querySelectorAll('#notifySettingsBody .ns-feed-box');
+    const feedMuted = feedBoxes.length
+        ? [...feedBoxes].filter(b => !b.checked).map(b => b.dataset.feed) : null;
     return {
         enabled: en.checked,
         email: (mail.value || '').trim().toLowerCase(),
@@ -54683,6 +56007,7 @@ function _nsForm() {
         cadence: 'instant',
         categories,
         muted,
+        ...(feedMuted ? { feed_muted: feedMuted } : {}),
     };
 }
 
@@ -54695,6 +56020,7 @@ function _nsDirty() {
     const p = _nsData.prefs;
     if (f.enabled !== !!p.enabled) return true;
     if (f.email !== String(p.email || '').trim().toLowerCase()) return true;
+    if (f.feed_muted && f.feed_muted.slice().sort().join() !== (_nsData.feed_muted || []).slice().sort().join()) return true;
     return Object.keys(f.categories).some(k => f.categories[k] !== (p['cat_' + k] !== false));
 }
 
@@ -54739,6 +56065,13 @@ async function saveNotifySettings() {
         if (_nsData) {
             _nsData.prefs = { ...(_nsData.prefs || {}), enabled: f.enabled, email: f.email, cadence: f.cadence };
             Object.keys(f.categories).forEach(k => { _nsData.prefs['cat_' + k] = f.categories[k]; });
+            if (f.feed_muted) _nsData.feed_muted = f.feed_muted.slice();
+        }
+        // The feed reads the on-site switches through _b2bFeedMuted; drop its
+        // cached copy and repaint so a card switched off goes now, not next page.
+        if (f.feed_muted && typeof checkB2BReminders === 'function') {
+            _b2bFeedMutedP = null;
+            checkB2BReminders().then(() => { try { renderActionFeed(); } catch (_) {} });
         }
         _setRefreshStateHints();
     } catch (e) {
@@ -55133,7 +56466,14 @@ function _ecSyncChrome() {
         const bits = [];
         if (_lhPhotoErr) bits.push('Photo Check Failed');
         else if (pics) bits.push(`${pics} Missing A Photo`);
-        if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
+        // EVERY TOOL ON THE PAGE, not only Categories (Ethan, 2026-10-15: "LEE ·
+        // All Clear" sat over Title and Picture Quality rows — "This should have
+        // the total to submit include everything available not just one or two of
+        // the 3 tools"). The same counts as the tab chips, from _lhTabCounts, so
+        // the header and the chips can never disagree.
+        const total = _lhTabCounts().reduce((s, t) => s + t.n, 0);
+        if (total) bits.push(`${total} To Submit`);
+        else if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
         sub.textContent = _ecView === 'cats'
             ? `${_ecStore || ''} · ${bits.length ? bits.join(' · ') : 'All Clear'}`
             : _ecView === 'health' ? 'Every store, at a glance'
@@ -55705,7 +57045,9 @@ function _ecHealthCats(store) {
          + (hasTitles ? grp('Title Quality', [
                { k: 'Wrong Titles', n: titlesBad, bad: 'ec-bad' },
                { k: 'Titles To Review', n: titles }]) : '')
-         + (pqParts.length ? grp('Picture Quality', pqParts) : '')
+         // No grader (ec-view-picture-quality parked): No Photos goes back on the
+         // face of the card as the plain red row it was before the drawer.
+         + (pq ? grp('Picture Quality', pqParts) : hasPics ? row('No Photos', pics, 'ec-bad') : '')
          + (hasCats ? grp('Categories', [
                { k: 'In &ldquo;Other&rdquo;', n: other },
                { k: 'No Suggestion', n: none },
@@ -55839,6 +57181,23 @@ let _lhTab = null;   // 'titles' | 'photos' | 'cats' — null until somebody pic
 function lhSetTab(t) { _lhTab = t; ecRender(); }
 window.lhSetTab = lhSetTab;
 
+// The three tools' counts, for the tab chips AND the header line (_ecSyncChrome)
+// — one place, so they always agree. Only the tools this reader holds.
+function _lhTabCounts() {
+    const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
+    const catN = _rcData?.counts
+        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
+        : (_rcData?.queue || []).length;
+    return [
+        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
+          n: (_ltData?.queue || []).length, bad: !!_ltErr },
+        { v: 'photos', label: _lhMay('pictures') ? 'Picture Quality' : 'No Photos', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
+          // Passed rows ride in the same queue (for the Passed tab) but are not work.
+          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).filter(r => r.verdict !== 'pass').length, bad: noPhotos > 0 || !!_lhPhotoErr },
+        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
+    ].filter(t => t.on);
+}
+
 function _lhHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
@@ -55847,16 +57206,7 @@ function _lhHtml() {
     // ec-view-photos, only the DM holds Picture Quality for now, so a manager
     // sees this tab with the one sub-tab they have.
     const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
-    const catN = _rcData?.counts
-        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
-        : (_rcData?.queue || []).length;
-    const tabs = [
-        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
-          n: (_ltData?.queue || []).length, bad: !!_ltErr },
-        { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
-          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).length, bad: noPhotos > 0 || !!_lhPhotoErr },
-        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
-    ].filter(t => t.on);
+    const tabs = _lhTabCounts();
     // Reachable only by a race: the pill needs one of the switches, so losing
     // all of them between the click and the render means an override changed
     // underneath. Say that, rather than drawing an empty page that looks broken.
@@ -56057,13 +57407,68 @@ const _PQ_TIERS = [
     { v: 'nophotos', label: 'No Photos',        cls: 'lt-t-bad',  half: 'photos' },
     { v: 'retake',   label: 'Retake',           cls: 'lt-t-bad',  half: 'pictures' },
     { v: 'fix',      label: 'Fix These Photos', cls: 'lt-t-warn', half: 'pictures' },
-    { v: 'reorder',  label: 'Reorder',          cls: 'lt-t-ok',   half: 'pictures' },
+    // QUICK FIXES (Ethan, 2026-10-11 — first named One-Click Fixes, renamed the
+    // same day): the photos are fine, and the fix is a
+    // change the tool makes when a manager approves it — a new order, or deleting
+    // a duplicate. The verdict is still called 'reorder' in the table and the
+    // API; only the words on screen changed.
+    { v: 'reorder',  label: 'Quick Fixes',  cls: 'lt-t-ok',   half: 'pictures' },
+    // PASSED (Ethan, 2026-10-11: "Can I see all of the OVL ones on the tool even
+    // if they passed so I can confirm that I agree with the pass?"). The last 14
+    // days of passes, for agreeing with — not work, so it never counts toward the
+    // section's total and is never the tab the section lands on. `review` marks
+    // it. "Should Flag" on a row is the disagreement, with a note.
+    { v: 'pass',     label: 'Passed',       cls: 'lt-t-ok',   half: 'pictures', review: true },
 ];
+
+// ⚠️ ROWS STAY WHERE THEY WERE (Ethan, 2026-10-15, LEE: "when I delete or
+// reorder, the line will disappear and just move up or down the list, please
+// keep it static so the user can just go down the list without thinking if they
+// have fixed something or not"). The queue comes back newest-graded first and an
+// approval re-saves the row, so it jumped; a Quick Fix it closed vanished. Now
+// each tab keeps the order it was first shown in, for this store, until the page
+// is reloaded: a row approved here keeps its slot and says what was done. New
+// rows go at the end. A row with NOTHING LEFT goes away (Ethan, the same
+// evening, looking at the done cards: "When they are good now, shouldn't they
+// just go away?") — the rest keep their order, so nothing jumps.
+// RECHECK STAYS ON THE ROW, IN ITS SLOT (Ethan, 2026-10-16): "Checking…" on
+// the button while it runs, then "✓ Passed On Recheck" — or "Rechecked —
+// still needs:" over the new findings. No popup, and the row does not jump to
+// another tab. A pass shows the row as it WAS, its findings struck through.
+// Held in _pqPlaces.rechecked, so it is this page's only: "a passed on recheck
+// row should go away after a refresh".
+let _pqPlaces = { store: null, order: new Map(), done: new Map(), rechecked: new Map() };
+function _pqPlace(tier, all) {
+    if (_pqPlaces.store !== _ecStore) _pqPlaces = { store: _ecStore, order: new Map(), done: new Map(), rechecked: new Map() };
+    const live = new Map(all.map(r => [r.productId, r]));
+    const done = _pqPlaces.done, rc = _pqPlaces.rechecked;
+    const rcHere = id => rc.get(id)?.tier === tier;
+    const here = all.filter(r => r.verdict === tier && !(rc.has(r.productId) && !rcHere(r.productId))).map(r => r.productId);
+    const shown = id => here.includes(id) || (rcHere(id) && (live.has(id) || rc.get(id).verdict === 'pass'));
+    const was = (_pqPlaces.order.get(tier) || []).filter(id => shown(id) || done.get(id)?.tier === tier);
+    // A row acted on in ANOTHER tab that has moved here stays in its own tab.
+    const ids = [...was, ...here.filter(id => !was.includes(id) && !(done.has(id) && done.get(id).tier !== tier))];
+    _pqPlaces.order.set(tier, ids);
+    return ids.filter(shown).map(id => {
+        const c = rcHere(id) ? rc.get(id) : null;
+        return { r: c && c.verdict === 'pass' ? c.before : live.get(id), done: done.get(id)?.said || null, rc: c, gone: false };
+    });
+}
+function _pqMarkDone(pid, row, what) {
+    if (_pqPlaces.store !== _ecStore) return;
+    const d = _pqPlaces.done.get(pid);
+    _pqPlaces.done.set(pid, { tier: d ? d.tier : _pqTier, row, said: d ? [...d.said, what] : [what] });
+}
 
 function _pqHtml() {
     const head = (inner, badge) => _lhSec('Photos', 'Picture Quality', inner, badge);
     const store = _ecEsc(_ecStore || '');
     const mayPics = _lhMay('pictures');
+    // Without the grader this tab is No Photos and nothing else — drawn as its
+    // own section, the way it was before Picture Quality existed. That also keeps
+    // Confirm Shots (gated on role, not on the switch) off the screen while
+    // ec-view-picture-quality is parked.
+    if (!mayPics) return _lhMay('photos') ? _lhPhotosHtml() : '';
     // Only the tabs this reader holds. See _lhHtml: two switches, one section.
     const tiers = _PQ_TIERS.filter(t => _lhMay(t.half));
     if (!tiers.length) return '';
@@ -56073,7 +57478,7 @@ function _pqHtml() {
     // Land on the worst tab with anything in it — No Photos first, because a
     // listing a shopper sees as an empty square outranks every photo it does have.
     if (!_pqTier || !tiers.some(t => t.v === _pqTier) || (!_pqPicked && !count(_pqTier))) {
-        const first = tiers.find(t => count(t.v));
+        const first = tiers.find(t => !t.review && count(t.v));
         _pqTier = first ? first.v : tiers[0].v;
     }
     const tabs = tiers.length < 2 ? '' : `<div class="rc-modes lt-modes">${tiers.map(t => {
@@ -56083,6 +57488,7 @@ function _pqHtml() {
                 <span class="rc-chip-n ${n ? t.cls : ''}">${n}</span></button>`;
     }).join('')}</div>`;
 
+    const placed = _pqTier === 'nophotos' || !_pqData ? [] : _pqPlace(_pqTier, all);
     let inner;
     if (_pqTier === 'nophotos') {
         inner = _lhPhotosHtml(true);
@@ -56094,18 +57500,30 @@ function _pqHtml() {
           </div>`;
     } else if (!_pqData) {
         inner = '';
-    } else if (!count(_pqTier)) {
-        inner = `<div class="lh-clear">
+    } else if (!placed.length) {
+        inner = _pqTier === 'pass'
+          ? `<div class="lh-clear"><span>No Listings Passed At ${store} In The Last 14 Days</span></div>`
+          : `<div class="lh-clear">
             <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
             <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
           </div>`;
     } else {
-        const rows = all.filter(r => r.verdict === _pqTier);
-        inner = `<div class="lt-rows">${rows.map(_pqRow).join('')}</div>`;
+        inner = `<div class="lt-rows">${placed.map(x => _pqRow(x.r, x.done, x.rc)).join('')}</div>`;
     }
-    const total = tiers.reduce((s, t) => s + count(t.v), 0);
+    const total = tiers.filter(t => !t.review).reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
-    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
+    // Train The Checker is RETIRED from the screen (Ethan, 2026-10-14: "we don't
+    // need it anymore"). pqTrainOpen and the trainer stay in the file, and his
+    // 395 labels stay in pq_photo_labels — framing is to be revisited.
+    // Confirm Shots (2026-10-16) takes its place: the gold set's shot labels.
+    // ABOVE the tabs, not under the queue: at the bottom it sat 4,000px down on
+    // OVL Quick Fixes and Ethan could not find it (2026-10-16).
+    const train = _pqcMayUse() ? `<div class="pqt-entry pqt-entry-top">
+        <button type="button" class="pqt-btn" onclick="pqConfirmOpen()">Confirm Shots</button>
+        <button type="button" class="pqt-btn" onclick="pqConfirmOpen('', true)"
+          title="Listings you passed in your store reviews, weakest sheets first: confirming them makes them training material">More For Training</button>
+        <span>Say which shot each photo is — the answer key a cheaper model is tested and trained on.</span></div>` : '';
+    return head(train + tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
 
@@ -56141,7 +57559,7 @@ function _pqDismissedHtml(tier) {
             <div class="lt-dn-title">${_ecEsc(r.title || '')}</div>
             <div class="lt-dn-meta">
               <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
-              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : 'Photos Are Fine'}</span>
+              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : r.as === 'flag' ? 'Should Have Flagged' : 'Photos Are Fine'}</span>
               <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + _lhWhen(r.at) : ''}</span>
             </div>
             ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
@@ -56177,6 +57595,815 @@ window.pqReopen = pqReopen;
 // already say it, so the sentence was a second reading of the same thing.
 
 function pqSetTier(v) { _pqTier = v; _pqPicked = true; ecRender(); }
+
+// ============================================================================
+// TRAIN THE CHECKER — a person grades single photos (2026-10-08)
+// ============================================================================
+// Framing — centred, level, big enough — is the call the checker could not get
+// right: four approaches scored against Ethan's answer key, and each either
+// missed what he would flag or flagged what he passed. The key only said which
+// LISTINGS were off; this collects which PHOTOS are, one at a time, beside the
+// guide's example of the same shot, into pq_photo_labels (0141). A framing
+// rule is then scored against these labels offline, for free, before any paid
+// run. Ethan: "I like building a tool to train the system on this before we
+// start spending money."
+//
+// ⚠️ ONE KEYPRESS PER PHOTO. Hundreds of photos is only bearable if a fine one
+// costs a single key: 1 = Fine, 0 = Not The Item, 2–6 toggle a problem and
+// Enter saves them, ← goes back to change an answer, → skips. Re-answering a
+// photo overwrites it (one row per photo).
+// ⚠️ NOTHING HERE CALLS A MODEL. The photos come from listings already graded,
+// read live; saving writes one row. Free to use for as long as it takes.
+let _pqTrain = null;
+const _PQ_TRAIN_PROBS = [
+    ['off_center', 'Off-Centre', '2'], ['crooked', 'Crooked', '3'], ['too_small', 'Too Small', '4'],
+    ['blurry', 'Blurry', '5'], ['cut_off', 'Cut Off', '6'],
+    // Ethan, 2026-10-08: a scuffed table "looks gross and would totally be the
+    // reason that it might not sell" — costed 5/10/15 by price on the server.
+    ['dirty_backdrop', 'Dirty Table', '7'],
+    // …and anything in frame besides the item and the white backdrop (the Onyx's
+    // grey lightbox edge, the same day). Same price scale on the server.
+    ['clutter', 'Off Backdrop', '8'],
+    // Reflections in the item (3/6/9 by price). Not on a Screen Off shot, which
+    // is meant to show them — the server skips those.
+    ['reflection', 'Reflection', '9'],
+    // Not taken in the same spot as the listing's other photos (OVL iPhone SE 2,
+    // 2026-10-08). A letter, because the digits ran out; either case works.
+    ['different_spot', 'Different Spot', 'S'],
+];
+
+async function pqTrainOpen() {
+    _pqTrain = { store: _ecStore || '', queue: [], i: 0, picks: new Set(), busy: true, err: null, skipped: 0 };
+    document.addEventListener('keydown', _pqTrainKey);
+    _pqTrainRender();
+    await _pqTrainLoad();
+}
+window.pqTrainOpen = pqTrainOpen;
+
+async function _pqTrainLoad() {
+    const t = _pqTrain;
+    if (!t) return;
+    t.busy = true; _pqTrainRender();
+    try {
+        const d = await _pqFetch(`?view=train&store=${encodeURIComponent(t.store)}&skip=${t.skipped}`);
+        if (_pqTrain !== t) return;
+        Object.assign(t, { queue: d.queue || [], i: 0, total: d.total || 0, done: d.done || 0,
+                           left: d.left || 0, store: d.store || t.store, err: null });
+    } catch (e) { t.err = e.message || String(e); }
+    t.busy = false;
+    _pqTrainRender();
+}
+
+function pqTrainClose() {
+    document.removeEventListener('keydown', _pqTrainKey);
+    _pqTrain = null;
+    const el = document.getElementById('pqTrainOverlay');
+    if (el) el.remove();
+}
+window.pqTrainClose = pqTrainClose;
+
+function pqTrainToggle(k) {
+    const t = _pqTrain;
+    if (!t || t.busy || !t.queue[t.i]) return;
+    t.picks.has(k) ? t.picks.delete(k) : t.picks.add(k);
+    _pqTrainRender();
+}
+window.pqTrainToggle = pqTrainToggle;
+
+function pqTrainMove(step) {
+    const t = _pqTrain;
+    if (!t || t.busy) return;
+    // A photo passed over unanswered stays unlabelled on the server; counting
+    // it is what keeps the next lot from starting with it again.
+    if (step > 0 && t.queue[t.i] && !t.queue[t.i].saved) t.skipped++;
+    t.i = Math.max(0, Math.min(t.queue.length, t.i + step));
+    if (t.i >= t.queue.length && t.left > t.skipped) { _pqTrainLoad(); return; }
+    // Going back shows the answer already given, so it can be changed.
+    const p = t.queue[t.i];
+    t.picks = new Set(p && p.saved === 'problem' ? p.savedProblems || [] : []);
+    _pqTrainRender();
+}
+window.pqTrainMove = pqTrainMove;
+
+async function pqTrainLabel(label) {
+    const t = _pqTrain;
+    const p = t && t.queue[t.i];
+    if (!p || t.busy) return;
+    if (label === 'problem' && !t.picks.size) return;
+    t.busy = true; _pqTrainRender();
+    const r = await _pqPost({ action: 'label', store: t.store, productId: p.productId, src: p.src, n: p.n,
+                              sheet: p.sheet, shot: p.shot, label, problems: [...t.picks] });
+    if (_pqTrain !== t) return;
+    t.busy = false;
+    if (!r.ok) { t.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqTrainRender(); return; }
+    if (!p.saved) { t.done++; t.left--; }
+    p.saved = label; p.savedProblems = label === 'problem' ? [...t.picks] : [];
+    t.err = null; t.picks = new Set(); t.i++;
+    // The server hands out sixty at a time; past the end, fetch the next lot.
+    if (t.i >= t.queue.length && t.left > t.skipped) { await _pqTrainLoad(); return; }
+    _pqTrainRender();
+}
+window.pqTrainLabel = pqTrainLabel;
+
+function _pqTrainKey(e) {
+    if (!_pqTrain || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    const k = e.key;
+    const prob = _PQ_TRAIN_PROBS.find(x => x[2] === (k.length === 1 ? k.toUpperCase() : k));
+    if (k === 'Escape') pqTrainClose();
+    else if (k === '1') pqTrainLabel('fine');
+    else if (k === '0') pqTrainLabel('not_item');
+    else if (prob) pqTrainToggle(prob[0]);
+    else if (k === 'Enter') pqTrainLabel('problem');
+    else if (k === 'ArrowLeft') pqTrainMove(-1);
+    else if (k === 'ArrowRight') pqTrainMove(1);
+    else return;
+    e.preventDefault();
+}
+
+function _pqTrainHtml() {
+    const t = _pqTrain;
+    const head = `<div class="pqt-head">
+        <div><div class="pqt-eyebrow">Picture Quality · ${_ecEsc(t.store)}</div>
+             <div class="pqt-title">Train The Checker</div></div>
+        <div class="pqt-count">${t.done || 0} Graded · ${Math.max(0, t.left || 0)} To Go</div>
+        <button type="button" class="pqt-x" onclick="pqTrainClose()" aria-label="Close">×</button>
+      </div>`;
+    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading photos…</div>`;
+    const err = t.err ? `<div class="pqt-err">${_ecEsc(t.err)}</div>` : '';
+    const p = t.queue[t.i];
+    if (!p) {
+        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the next photos…'
+            : t.skipped ? `Done for now. The ${t.skipped} photo${t.skipped === 1 ? '' : 's'} you skipped will come back next time.`
+            : `All caught up — every photo from the graded listings at ${_ecEsc(t.store)} has an answer.`}</div>`;
+    }
+    const pick = t.picks;
+    const was = p.saved ? `<span class="pqt-was">Answered: ${_ecEsc(p.saved === 'problem'
+        ? (p.savedProblems || []).map(k => (_PQ_TRAIN_PROBS.find(x => x[0] === k) || [k, k])[1]).join(', ')
+        : p.saved === 'fine' ? 'Fine' : 'Not The Item')}</span>` : '';
+    return head + err + `
+      <div class="pqt-ask">Judge only how the photo is <b>taken</b>: centred, level, big enough, sharp, on a clean white backdrop with nothing else in frame and no reflections — the way the guide's example is.
+        Not every difference matters; would you reshoot it?</div>
+      <div class="pqt-pair">
+        <figure class="pqt-fig">
+          <div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt="Listing photo ${p.n}"></div>
+          <figcaption><b>Photo ${p.n} of ${p.of}</b>${p.w && p.h && p.w !== p.h ? ` · ${p.w}×${p.h}` : ''}<br>
+            ${_ecEsc(p.title || '')} <span class="lh-sku">${_ecEsc(p.sku || '')}</span></figcaption>
+        </figure>
+        <figure class="pqt-fig">
+          <div class="pqt-frame">${p.example ? `<img src="${_ecEsc(p.example)}" alt="Guide example">`
+            : `<span class="pqt-noex">${p.shot ? 'No example photo for this shot' : 'Not matched to a guide shot'}</span>`}</div>
+          <figcaption><b>Guide: ${_ecEsc(p.shot || (p.said && p.said.length ? p.said.join(', ') : '—'))}</b><br>
+            ${_ecEsc(p.sheetName || '')}</figcaption>
+        </figure>
+      </div>
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqTrainLabel('fine')" ${t.busy ? 'disabled' : ''}>Fine <kbd>1</kbd></button>
+        ${_PQ_TRAIN_PROBS.map(([k, label, key]) => `<button type="button" class="pqt-btn pqt-prob${pick.has(k) ? ' pqt-on' : ''}"
+            onclick="pqTrainToggle('${k}')" ${t.busy ? 'disabled' : ''}>${label} <kbd>${key}</kbd></button>`).join('')}
+        <button type="button" class="pqt-btn pqt-save" onclick="pqTrainLabel('problem')" ${t.busy || !pick.size ? 'disabled' : ''}>Save Problems <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqTrainLabel('not_item')" ${t.busy ? 'disabled' : ''}
+            title="A closeup of a detail, the box, a cable — framing does not apply">Not The Item <kbd>0</kbd></button>
+      </div>
+      <div class="pqt-nav">
+        <button type="button" class="pqt-link" onclick="pqTrainMove(-1)" ${t.i ? '' : 'disabled'}>← Back</button>
+        ${was}
+        <button type="button" class="pqt-link" onclick="pqTrainMove(1)">Skip →</button>
+      </div>`;
+}
+
+function _pqTrainRender() {
+    if (!_pqTrain) return;
+    let el = document.getElementById('pqTrainOverlay');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pqTrainOverlay';
+        el.className = 'pqt-overlay';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Train The Checker');
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pqt-box">${_pqTrainHtml()}</div>`;
+}
+
+// ============================================================================
+// CONFIRM SHOTS — Ethan says which shot each photo is (2026-10-16)
+// ============================================================================
+// The answer key for a local vision model. The gold set (scripts/pq-gold/)
+// found no human shot labels in the database: the trainer above judged framing
+// beside the model's shot and could not say the shot was wrong. Here a graded
+// listing's photos come up one at a time with the saved grade's label
+// prefilled. The label is kept or changed, and the whole listing is saved to
+// pq_shot_labels (0148) when its last photo is answered.
+//
+// ⚠️ ONE KEY PER PHOTO. Most labels are right, so Enter keeps the label and
+// moves on; a listing that is right throughout is Shift+Enter, once. A wrong
+// label is one key: 1–9, 0 for the sheet's first ten shots, A S D F G H J K L ;
+// for the next ten, X = Extra, B = Box. Shift with a shot key ADDS it (one photo
+// can be two shots: front AND lens open). ← goes back.
+// ⚠️ THE FLAGS ARE EVERYTHING ELSE THE RULES READ (0149; Ethan, 2026-10-16: "add
+// in anything else that you see our rules use if this is for the purpose of
+// training"). Each one is named after the model's own field: framing problems,
+// the issues rules.ts costs, closeup (= whole_item false) and "repeats photo
+// N". The flags start BLANK, not prefilled from the grade, because a prefilled
+// "no reflection" would train the eye to agree with the model. On a photo that
+// was answered, blank means NO (flags_checked). That is the only way a flag can
+// be scored, so it only works if every answered photo gets a glance for them.
+// Click only, so the common path is still one key. The listing-level facts (the
+// lead photo, a hidden serial, the main flaw shown…) sit in their own panel,
+// and only the questions that apply to the listing are asked.
+// ⚠️ DM / CEO ONLY — the server enforces it too. Nothing here calls a model.
+// The queue order (busiest sheet with the least gold first) is the server's.
+let _pqc = null;
+const _PQC_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'];
+// Grouped the way they're judged. Only mark an issue a buyer would notice:
+// rules.ts acts on MAJOR issues only.
+const _PQC_FLAGS = [
+    ['Framing', [['crooked', 'Crooked'], ['off_center', 'Off-Centre'], ['too_small', 'Too Small'], ['cut_off', 'Cut Off'],
+                 ['turned', 'Turned'], ['wrong_angle', 'Wrong Angle']]],
+    ['Photo', [['blurry', 'Blurry'], ['too_dark_or_glare', 'Dark / Glare'], ['reflection', 'Reflection']]],
+    ['Setting', [['clutter', 'Off Backdrop'], ['dirty_backdrop', 'Dirty Table'], ['loose_cord', 'Loose Cord'],
+                 ['not_on_stand', 'Not On Stand'], ['different_spot', 'Different Spot']]],
+    ['Shows', [['closeup', 'Closeup'], ['screen_on', 'Screen On'], ['label_legible', 'Serial Legible'],
+               ['personal_info', 'Personal Info'], ['stock_photo', 'Stock Photo'], ['fake_or_edited', 'Fake / Edited'],
+               ['wrong_item', 'Wrong Item']]],
+];
+const _PQC_BOX = ['new-in-box', 'new-open-box'];
+// A title that itself states the defect ("Broken …", "… For Parts") gives the
+// model a main flaw with source "title", so the question is asked for it too.
+const _PQC_TITLE_FLAW = /\b(broken|for parts|parts only|cracked|damaged|as[- ]is|not working|read desc)/i;
+const _PQC_MULTI = ['item-lots', 'speaker-pairs'];
+// Which listing-level questions apply. Asked only where the rule can fire, so a
+// plain used game is two toggles, not seven.
+// The cosmetic sentences as the person now reads them: the code's call on each,
+// turned over where the person said it was wrong (l.flip, by index).
+const _pqcNotes = l => (l.notes || []).map((n, i) => ({ ...n, real: l.flip && l.flip.has(i) ? !n.unit : n.unit }));
+function _pqcAsks(l) {
+    // Main Flaw Shown is asked when a sentence names a flaw on this unit, AS THE
+    // PERSON READS IT. Mark the only "flaw" sentence as standard wording and the
+    // question goes away; mark a dismissed one as a real flaw and it appears.
+    // ⚠️ NOT the functional notes. The grading prompt takes the main flaw only
+    // from a cosmetic line about THIS unit or from the title (source unit |
+    // title), and nearly every listing has functional notes ("powers on and off
+    // properly…"). Counting them asked the question on almost every listing with
+    // nothing to answer it about (Ethan, 2026-10-16). Functional notes matter to
+    // the rules only for LCD Flaws, and they are still shown for that.
+    const flaw = !!(_pqcNotes(l).some(n => n.real) || _PQC_TITLE_FLAW.test(l.title || ''));
+    return {
+        flaw,
+        isNew: /\b(new|sealed)\b/i.test(l.title || '') || /\b(new|sealed)\b/i.test(l.condition || ''),
+        multi: _PQC_MULTI.includes(l.pickedSheet)
+            || /\b(lot|pair|bundle|set of)\b|\b\d+\s*-?\s*(pack|pk)\b/i.test(l.title || ''),
+        box: _PQC_BOX.includes(l.pickedSheet),
+    };
+}
+const _pqcMayUse = () => ['district manager', 'ceo'].includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+
+// forTraining (2026-10-17): the "More For Training" queue. It reopens listings
+// he passed in a store review, weakest sheets first. They count as gold for
+// measuring, but they're Opus's answers, and he trains only on his own; see
+// confirmView's `more`.
+async function pqConfirmOpen(sheet, forTraining) {
+    if (!_pqcMayUse()) return;
+    _pqc = { sheet: sheet || '', data: null, li: 0, pi: 0, busy: true, err: null, skip: new Set(), saved: 0, started: Date.now(),
+             forTraining: !!forTraining,
+             // One photo at a time is the default again (Ethan, 2026-10-16, after
+             // trying the whole-listing view: "can you go back to the original
+             // form of me grading one picture at a time?"). The whole-listing
+             // view stays behind its button. The prefill stays in both.
+             grid: false, zoom: null };
+    document.addEventListener('keydown', _pqcKey);
+    _pqcRender();
+    await _pqcLoad();
+}
+window.pqConfirmOpen = pqConfirmOpen;
+
+async function _pqcLoad(sheet) {
+    const c = _pqc;
+    if (!c) return;
+    if (sheet !== undefined) c.sheet = sheet;
+    c.busy = true; c.err = null; _pqcRender();
+    try {
+        const d = await _pqFetch(`?view=confirm&sheet=${encodeURIComponent(c.sheet)}&skip=${encodeURIComponent([...c.skip].join(','))}${c.forTraining ? '&more=1' : ''}`);
+        if (_pqc !== c) return;
+        for (const id of d.misaligned || []) c.skip.add(id);
+        // Each photo starts from the grade's label; `seen` marks it answered.
+        for (const l of d.listings || []) {
+            l.pickedSheet = l.sheet;
+            l.facts = { lead_unclear: false, serial_hidden: false, new_claim_wrong: false, units_apart: false,
+                        flat_package: false, main_flaw_shown: null, needed: [] };
+            // Older queue payloads only had unitNotes; read those as the code's flaws.
+            if (!Array.isArray(l.notes)) l.notes = (l.unitNotes || []).map(text => ({ text, unit: true }));
+            l.flip = new Set();
+            _pqcPrefill(l);
+        }
+        c.data = d; c.sheet = d.sheet || ''; c.li = 0; c.pi = 0;
+    } catch (e) { c.err = e.message || String(e); }
+    c.busy = false;
+    _pqcRender();
+}
+
+function pqConfirmClose() {
+    document.removeEventListener('keydown', _pqcKey);
+    _pqc = null;
+    const el = document.getElementById('pqConfirmOverlay');
+    if (el) el.remove();
+}
+window.pqConfirmClose = pqConfirmClose;
+
+const _pqcListing = () => _pqc && _pqc.data && _pqc.data.listings[_pqc.li];
+// The shots offered for a listing: its sheet's, then Extra and Box, the two
+// labels the grading prompt uses for anything that is not a sheet shot.
+function _pqcChoices(l) {
+    const g = (_pqc.data.guide || {})[l.pickedSheet];
+    const shots = g ? g.shots.map(s => s.label) : [];
+    return [...new Set(shots)];
+}
+
+function pqConfirmPick(i, add) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    const p = l.photos[_pqc.pi];
+    const label = i === 'x' ? 'Extra' : i === 'b' ? 'Box' : _pqcChoices(l)[i];
+    if (!p || !label) return;
+    if (add) p.shots = p.shots.includes(label) ? p.shots.filter(s => s !== label) : [...p.shots, label];
+    else p.shots = [label];
+    if (!p.shots.length) p.shots = [label];
+    // Replacing a label answers the photo; adding one waits for Enter, because
+    // a second shot is usually followed by a third look.
+    if (add) { _pqcRender(); return; }
+    pqConfirmNext();
+}
+window.pqConfirmPick = pqConfirmPick;
+
+function pqConfirmFlag(k, i) {
+    const l = _pqcListing();
+    const p = l && l.photos[i == null ? _pqc.pi : i];
+    if (!p || _pqc.busy || !k) return;
+    if (p.flags.has(k)) { p.flags.delete(k); delete p.flagFrom[k]; }
+    else { p.flags.add(k); p.flagFrom[k] = 'you'; }
+    _pqcRender();
+}
+window.pqConfirmFlag = pqConfirmFlag;
+
+// This photo repeats an earlier one (the model's `repeats`; it drives Approve
+// Deletion). Only an EARLIER photo can be named, the way the model reports it.
+function pqConfirmRepeat(v, i) {
+    const l = _pqcListing();
+    const p = l && l.photos[i == null ? _pqc.pi : i];
+    if (!p || _pqc.busy) return;
+    const n = Number(v);
+    p.repeatOf = Number.isInteger(n) && n >= 1 && n < p.n ? n : null;
+    _pqcRender();
+}
+window.pqConfirmRepeat = pqConfirmRepeat;
+
+// A listing-level fact: a yes/no toggles; main_flaw_shown takes yes/partly/no;
+// `needed` toggles an If-Needed shot the listing calls for.
+function pqConfirmFact(k, v) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    if (k === 'main_flaw_shown') l.facts.main_flaw_shown = l.facts.main_flaw_shown === v ? null : v;
+    else if (k === 'flip') { const i = Number(v); l.flip.has(i) ? l.flip.delete(i) : l.flip.add(i); }
+    else if (k === 'needed') l.facts.needed = l.facts.needed.includes(v) ? l.facts.needed.filter(x => x !== v) : [...l.facts.needed, v];
+    else l.facts[k] = !l.facts[k];
+    _pqcRender();
+}
+window.pqConfirmFact = pqConfirmFact;
+
+function pqConfirmGo(i) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    _pqc.pi = Math.max(0, Math.min(l.photos.length - 1, i));
+    _pqcRender();
+}
+window.pqConfirmGo = pqConfirmGo;
+
+// Keep this photo's label and move on; past the last photo, save the listing.
+async function pqConfirmNext(all) {
+    const c = _pqc;
+    const l = _pqcListing();
+    if (!l || c.busy) return;
+    if (all) l.photos.forEach(p => { p.seen = true; });
+    else l.photos[c.pi].seen = true;
+    // The next unanswered photo after this one, else the first one left.
+    const after = l.photos.findIndex((p, i) => i > c.pi && !p.seen);
+    const open = after >= 0 ? after : l.photos.findIndex(p => !p.seen);
+    if (open >= 0) { c.pi = open; _pqcRender(); return; }
+    if (l.photos.some(p => !p.shots.length)) { c.err = 'Every photo needs a shot.'; _pqcRender(); return; }
+    const a = _pqcAsks(l);
+    // The one question with no safe blank: a missing answer to "was the flaw
+    // shown" is not a no.
+    if (a.flaw && !l.facts.main_flaw_shown) {
+        c.err = 'Answer "Main Flaw Shown" under This Listing, then save.'; _pqcRender(); return;
+    }
+    const facts = { ...l.facts,
+        // A question not asked is answered by the rule's own default.
+        new_claim_wrong: a.isNew && l.facts.new_claim_wrong, units_apart: a.multi && l.facts.units_apart,
+        flat_package: a.box && l.facts.flat_package, // Not asked = no unit line and no title flaw, which is the model's
+        // "not_applicable" by the prompt's own definition, so it is still a label.
+        main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : 'not_applicable',
+        // Every sentence with the code's call and the person's: unclicked = agreed.
+        sentences: _pqcNotes(l).map(n => ({ text: n.text, system: !!n.unit, real: !!n.real })),
+        prefill: _pqcProvenance(l) };
+    c.busy = true; _pqcRender();
+    const r = await _pqPost({ action: 'confirm-shots', store: l.store, productId: l.productId, sheet: l.pickedSheet,
+        modelSheet: l.sheet, model: l.model, stamp: l.stamp, checked: true, listing: facts,
+        photos: l.photos.map(p => ({ n: p.n, src: p.src, said: p.said, shots: p.shots, flags: [...p.flags], repeatOf: p.repeatOf })) });
+    if (_pqc !== c) return;
+    c.busy = false;
+    if (!r.ok) { c.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqcRender(); return; }
+    c.saved++; c.err = null;
+    const st = (c.data.sheets || []).find(s => s.slug === l.pickedSheet);
+    if (st) { st.confirmed++; st.need = Math.max(0, st.need - 1); }
+    const was = (c.data.sheets || []).find(s => s.slug === l.sheet);
+    if (was) was.left = Math.max(0, was.left - 1);
+    c.data.total = (c.data.total || 0) + 1;
+    c.li++; c.pi = 0;
+    if (c.li >= c.data.listings.length) { await _pqcLoad(); return; }
+    _pqcRender();
+}
+window.pqConfirmNext = pqConfirmNext;
+
+function pqConfirmSkip() {
+    const c = _pqc;
+    const l = _pqcListing();
+    if (!l || c.busy) return;
+    c.skip.add(l.productId);
+    c.li++; c.pi = 0;
+    if (c.li >= c.data.listings.length) { _pqcLoad(); return; }
+    _pqcRender();
+}
+window.pqConfirmSkip = pqConfirmSkip;
+
+function pqConfirmSheet(slug) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy || !_pqc.data.guide[slug]) return;
+    l.pickedSheet = slug;
+    _pqcRender();
+}
+window.pqConfirmSheet = pqConfirmSheet;
+
+function _pqcKey(e) {
+    const c = _pqc;
+    if (!c || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    if (c.grid) {
+        if (e.key === 'Escape') { if (c.zoom != null) pqConfirmZoom(null); else pqConfirmClose(); }
+        else if (e.key === 'Enter') pqConfirmNext(true);
+        else return;
+        e.preventDefault();
+        return;
+    }
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // Shift turns 1 into ! on most layouts; e.code still says which key it was.
+    const code = (e.code || '').replace(/^Digit/, '').replace(/^Key/, '').toLowerCase().replace('semicolon', ';');
+    const slot = _PQC_KEYS.indexOf(e.shiftKey ? code : k);
+    if (k === 'Escape') pqConfirmClose();
+    else if (k === 'Enter') pqConfirmNext(e.shiftKey);
+    else if (k === 'ArrowRight') pqConfirmNext(false);
+    else if (k === 'ArrowLeft' || k === 'Backspace') pqConfirmGo(c.pi - 1);
+    else if ((e.shiftKey ? code : k) === 'x') pqConfirmPick('x', e.shiftKey);
+    else if ((e.shiftKey ? code : k) === 'b') pqConfirmPick('b', e.shiftKey);
+    else if (slot >= 0) pqConfirmPick(slot, e.shiftKey);
+    else return;
+    e.preventDefault();
+}
+
+// ---------------------------------------------------------------------------
+// THE WHOLE LISTING AT ONCE, EVERYTHING PREFILLED (Ethan, 2026-10-16: "this is
+// a lot and kind of hard to judge one photo at a time … give me everything you
+// need from me"). Every photo is a card with its label and flags, the guide's
+// shots sit below with what's covered, and one Save (Enter) confirms the lot.
+// Answers start from the best source there is:
+//   green "you": his own earlier call (a Train The Checker grade on that photo;
+//                a shot label from a Quick Fix he approved)
+//   grey  "model": the saved grade's guess
+// and he only corrects. ⚠️ A prefilled guess nobody looks at hard turns into a
+// "yes", which drifts the answer key toward the model. So where every answer
+// STARTED is saved beside it (listing.prefill). The scorer can then leave
+// untouched model guesses out of the numbers it trusts.
+// His comments on the listing ("You said …") are shown, not applied: most were
+// about an older grade, and a deletion renumbers photos.
+const _PQC_FRAMING_KEYS = ['off_center', 'crooked', 'too_small', 'blurry', 'cut_off', 'dirty_backdrop', 'clutter', 'reflection', 'different_spot'];
+const _pqcFlagName = k => { for (const [, list] of _PQC_FLAGS) for (const [key, label] of list) if (key === k) return label; return k; };
+
+function _pqcPrefill(l) {
+    const ms = l.modelSays || { photos: [], facts: {} };
+    for (const p of l.photos) {
+        p.shots = [...p.said];
+        p.shotsFrom = l.accepted ? 'accepted' : 'model';
+        p.flags = new Set(); p.flagFrom = {}; p.seen = false;
+        // His own framing grade on this exact photo outranks the model on those
+        // nine kinds; "fine" means none of them.
+        if (p.framing) for (const k of (p.framing.label === 'problem' ? p.framing.problems : []))
+            if (_PQC_FRAMING_KEYS.includes(k)) { p.flags.add(k); p.flagFrom[k] = 'earlier'; }
+        const m = (ms.photos || []).find(x => x.n === p.n) || { flags: [], repeatOf: null };
+        for (const k of m.flags || []) {
+            if (p.framing && _PQC_FRAMING_KEYS.includes(k)) continue;
+            if (!p.flags.has(k)) { p.flags.add(k); p.flagFrom[k] = 'model'; }
+        }
+        p.repeatOf = m.repeatOf || null;
+        p.pre = { shots: [...p.shots], flags: { ...p.flagFrom }, repeatOf: p.repeatOf };
+    }
+    const mf = ms.facts || {};
+    l.facts = { lead_unclear: !!mf.lead_unclear, serial_hidden: !!mf.serial_hidden, new_claim_wrong: !!mf.new_claim_wrong,
+                units_apart: !!mf.units_apart, flat_package: !!mf.flat_package,
+                main_flaw_shown: ['yes', 'partly', 'no', 'not_applicable'].includes(mf.main_flaw_shown) ? mf.main_flaw_shown : null,
+                needed: [] };
+    l.preFacts = { ...l.facts };
+}
+
+// What started where, and what was changed: saved with the listing.
+function _pqcProvenance(l) {
+    return {
+        accepted: l.accepted || null,
+        photos: l.photos.map(p => {
+            const pre = p.pre || { shots: [], flags: {}, repeatOf: null };
+            const now = [...p.flags];
+            return { n: p.n, shots: p.shotsFrom || 'model', shotsChanged: p.shots.join('|') !== pre.shots.join('|'),
+                     flags: pre.flags,
+                     added: now.filter(k => !(k in pre.flags)), removed: Object.keys(pre.flags).filter(k => !p.flags.has(k)),
+                     repeatChanged: (p.repeatOf || null) !== (pre.repeatOf || null) };
+        }),
+        facts: { from: 'model', changed: Object.keys(l.preFacts || {}).filter(k => k !== 'needed' && (l.preFacts || {})[k] !== l.facts[k]) },
+    };
+}
+
+function pqConfirmMode(grid) {
+    if (!_pqc) return;
+    _pqc.grid = !!grid; _pqc.zoom = null;
+    _pqcRender();
+}
+window.pqConfirmMode = pqConfirmMode;
+
+function pqConfirmZoom(i) {
+    if (!_pqc) return;
+    _pqc.zoom = i == null ? null : Number(i);
+    _pqcRender();
+}
+window.pqConfirmZoom = pqConfirmZoom;
+
+// slot 0 replaces the photo's main label; slot 1 sets ('' clears) a second one.
+function pqConfirmSetShot(i, slot, label) {
+    const l = _pqcListing();
+    const p = l && l.photos[i];
+    if (!p || _pqc.busy) return;
+    if (slot === 0) { if (label) p.shots = [label, ...p.shots.slice(1).filter(x => x !== label)]; }
+    else p.shots = label ? [p.shots[0], label].filter(Boolean) : p.shots.slice(0, 1);
+    _pqcRender();
+}
+window.pqConfirmSetShot = pqConfirmSetShot;
+
+function _pqcGridHtml(l) {
+    const c = _pqc;
+    const busy = c.busy ? 'disabled' : '';
+    const choices = [..._pqcChoices(l), 'Extra', 'Box'];
+    const guide = (c.data.guide || {})[l.pickedSheet] || { name: l.pickedSheet, shots: [] };
+    const opts = (cur, blank) => (blank ? `<option value="">${blank}</option>` : '')
+        + [...new Set([...(cur && !choices.includes(cur) ? [cur] : []), ...choices])]
+            .map(x => `<option value="${_ecEsc(x)}"${x === cur ? ' selected' : ''}>${_ecEsc(x)}${choices.includes(x) ? '' : ' (not on sheet)'}</option>`).join('');
+    const allFlags = _PQC_FLAGS.flatMap(([g, list]) => list.map(([k, label]) => [g, k, label]));
+    const sheetOpts = Object.entries(c.data.guide).sort((a, b) => a[1].name.localeCompare(b[1].name))
+        .map(([slug, g]) => `<option value="${_ecEsc(slug)}"${slug === l.pickedSheet ? ' selected' : ''}>${_ecEsc(g.name)}</option>`).join('');
+
+    const said = [
+        ...(l.youSaid || []).map(x => `<div class="pqc-you"><b>You said</b> <span>${_ecEsc(String(x.at || '').slice(5))}</span> ${_ecEsc(x.said)}</div>`),
+        ...(l.accepted ? [`<div class="pqc-you"><b>You approved</b> ${_ecEsc(l.accepted)}: these shot labels were accepted then.</div>`] : []),
+    ].join('');
+
+    const cards = l.photos.map((p, i) => {
+        const chips = [...p.flags].map(k => `<button type="button" class="pqc-fchip pqc-from-${p.flagFrom[k] || 'you'}"
+            title="${p.flagFrom[k] === 'model' ? 'The model\'s guess' : p.flagFrom[k] === 'earlier' ? 'Your earlier grade' : 'Added now'} — click to remove"
+            onclick="pqConfirmFlag('${k}', ${i})" ${busy}>${_ecEsc(_pqcFlagName(k))} ×</button>`).join('');
+        const addFlag = `<select class="pqc-add" onchange="pqConfirmFlag(this.value, ${i})" ${busy}>
+            <option value="">+ Flag</option>
+            ${_PQC_FLAGS.map(([g, list]) => `<optgroup label="${g}">${list.filter(([k]) => !p.flags.has(k))
+                .map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</optgroup>`).join('')}
+          </select>`;
+        const changed = p.shots.join('|') !== (p.pre ? p.pre.shots.join('|') : '');
+        return `<div class="pqc-card${changed ? ' pqc-card-changed' : ''}">
+          <button type="button" class="pqc-card-img" onclick="pqConfirmZoom(${i})" title="Look closer">
+            <img src="${_ecEsc(p.img)}" alt="Photo ${p.n}" loading="lazy"><span class="pqc-thumb-n">${p.n}</span></button>
+          <select class="pqc-shot pqc-from-${changed ? 'you' : p.shotsFrom === 'accepted' ? 'earlier' : 'model'}"
+            onchange="pqConfirmSetShot(${i}, 0, this.value)" ${busy}>${opts(p.shots[0], p.shots[0] ? '' : '— pick a shot —')}</select>
+          ${p.shots[1] ? `<select class="pqc-shot pqc-shot2" onchange="pqConfirmSetShot(${i}, 1, this.value)" ${busy}>
+              ${opts(p.shots[1], '— no second shot —')}</select>`
+            : `<select class="pqc-add" onchange="pqConfirmSetShot(${i}, 1, this.value)" ${busy}>${opts('', '+ Second Shot')}</select>`}
+          <div class="pqc-fchips">${chips}${addFlag}</div>
+          ${p.n > 1 ? `<select class="pqc-add${p.repeatOf ? ' pqc-add-on' : ''}" onchange="pqConfirmRepeat(this.value, ${i})" ${busy}>
+              <option value="">Not a repeat</option>
+              ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Same shot as photo ${q.n}</option>`).join('')}
+            </select>` : ''}
+        </div>`;
+    }).join('');
+
+    // What the labels cover, against the sheet: a missing shot is visible at a glance.
+    const have = new Set(l.photos.flatMap(p => p.shots).map(x => x.toLowerCase()));
+    const always = [...new Map(guide.shots.filter(x => !x.cond).map(x => [x.label, x])).values()];
+    const strip = always.map(x => `<div class="pqc-gshot${have.has(x.label.toLowerCase()) ? '' : ' pqc-gshot-miss'}">
+        ${x.img ? `<img src="${_ecEsc(x.img)}" alt="" loading="lazy">` : '<span class="pqc-gshot-none"></span>'}
+        <span>${have.has(x.label.toLowerCase()) ? '✓' : '✗ Missing'} ${_ecEsc(x.label)}</span></div>`).join('');
+
+    let zoom = '';
+    if (c.zoom != null && l.photos[c.zoom]) {
+        const p = l.photos[c.zoom];
+        const ex = guide.shots.find(x => p.shots.includes(x.label) && x.img);
+        zoom = `<div class="pqc-zoom" onclick="pqConfirmZoom(null)" title="Click to close">
+          <div class="pqt-pair">
+            <figure class="pqt-fig"><div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt=""></div>
+              <figcaption><b>Photo ${p.n}</b> · ${_ecEsc(p.shots.join(' + ') || '—')}</figcaption></figure>
+            <figure class="pqt-fig"><div class="pqt-frame">${ex ? `<img src="${_ecEsc(ex.img)}" alt="">` : '<span class="pqt-noex">No example photo</span>'}</div>
+              <figcaption><b>Guide:</b> ${_ecEsc(ex ? ex.label : (p.shots[0] || '—'))}</figcaption></figure>
+          </div></div>`;
+    }
+
+    return `${zoom}
+      <div class="pqc-listing">
+        <div class="pqc-title">${_ecEsc(l.title || '')}</div>
+        <div class="pqc-meta"><span class="lh-sku">${_ecEsc(l.sku || '')}</span> · ${_ecEsc(l.store)} · listing ${c.li + 1} of ${c.data.listings.length}
+          <label class="pqc-sheet-pick">Sheet <select onchange="pqConfirmSheet(this.value)" ${busy}>${sheetOpts}</select></label>
+          ${l.pickedSheet !== l.sheet ? '<span class="pqc-warn">Changed From The Grade</span>' : ''}</div>
+      </div>
+      ${said ? `<div class="pqc-yous">${said}</div>` : ''}
+      <div class="pqc-legend"><span class="pqc-fchip pqc-from-earlier">Your earlier call</span>
+        <span class="pqc-fchip pqc-from-model">The model's guess</span><span class="pqc-fchip pqc-from-you">Changed now</span>
+        Fix what's wrong, then Save. Click a photo to see it beside the guide. Mark only what a buyer would notice.</div>
+      <div class="pqc-grid">${cards}</div>
+      <div class="pqc-guide"><div class="pqc-flaghead">${_ecEsc(guide.name)} <span>— the sheet's shots, against your labels</span></div>
+        <div class="pqc-gstrip">${strip}</div></div>
+      ${_pqcListingPanel(l)}
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${busy}>Save Listing <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmSkip()" ${busy}>Skip Listing</button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmMode(false)">One Photo At A Time</button>
+      </div>`;
+}
+
+function _pqcHtml() {
+    const c = _pqc;
+    const d = c.data;
+    const mins = Math.max(1, Math.round((Date.now() - c.started) / 60000));
+    const head = `<div class="pqt-head">
+        <div><div class="pqt-eyebrow">Picture Quality · Gold Set${c.forTraining ? ' · More For Training' : ''}</div>
+             <div class="pqt-title">Confirm Shots</div>
+             ${c.forTraining ? '<div class="pqc-trainnote">You passed these in a store review. Confirming them is what lets the model train on them, so fix anything Opus got wrong.</div>' : ''}</div>
+        <div class="pqt-count">${d ? `${d.total || 0} Listings Confirmed` : ''}${c.saved ? ` · ${c.saved} This Session (${mins} Min)` : ''}</div>
+        <button type="button" class="pqt-x" onclick="pqConfirmClose()" aria-label="Close">×</button>
+      </div>`;
+    const err = c.err ? `<div class="pqt-err">${_ecEsc(c.err)}</div>` : '';
+    if (!d) return head + err + `<div class="pqt-empty">${c.busy ? 'Loading listings…' : ''}</div>`;
+    // Progress per sheet, busiest-with-least-gold first, each a way in.
+    const target = d.target || 40;
+    const sheetBtn = s => `<button type="button" class="pqc-sheet${s.slug === c.sheet ? ' pqc-sheet-on' : ''}"
+        onclick="_pqcLoad('${_ecEsc(s.slug)}')" ${c.busy || !s.left ? 'disabled' : ''}
+        title="${s.graded} graded · ${s.confirmed} confirmed here · ${s.judged || 0} judged already (a review, a comment, an approved fix) · ${s.left} never seen">
+        <span class="pqc-sheet-name">${_ecEsc(s.name)}</span>
+        <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * (s.confirmed + (c.forTraining ? 0 : s.judged || 0)) / Math.min(target, s.graded || 1)))}%"></span></span>
+        <span class="pqc-sheet-n">${Math.min(s.confirmed + (c.forTraining ? 0 : s.judged || 0), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span></button>`;
+    // A FINISHED sheet gets a ✓ in its own row (Ethan, 2026-10-17: "it just
+    // isn't showing as checked off"). It used to sink into the collapsed "More
+    // Sheets" list, so a sheet he'd just finished seemed to vanish.
+    const count = s => s.confirmed + (c.forTraining ? 0 : s.judged || 0);
+    // Done also when nothing on the sheet is LEFT to confirm (Ethan, 2026-10-17:
+    // camcorders and New In Box sat at "1 left" with their buttons greyed out).
+    // The last one was a listing the queue won't offer: one he dismissed (Death
+    // Stranding 2, a game on the wrong sheet) or one whose photos changed since its
+    // grade (an approved deletion), which can't be confirmed against it.
+    const isDone = s => count(s) >= Math.min(target, s.graded) || (!c.busy && !s.left);
+    const doneSheets = (d.sheets || []).filter(isDone), active = (d.sheets || []).filter(s => !isDone(s));
+    const top = active.slice(0, 8), more = active.slice(8);
+    const sheets = `<div class="pqc-sheets">${top.map(sheetBtn).join('')}</div>`
+        + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '')
+        + (doneSheets.length ? `<div class="pqc-done"><span class="pqc-done-h">✓ Done (${doneSheets.length})</span>${doneSheets.map(s =>
+            `<span class="pqc-done-s" title="${s.confirmed} confirmed by you of ${s.graded} graded${count(s) < Math.min(target, s.graded) ? ' — the rest were dismissed, or their photos changed since the grade, so they can’t be confirmed' : ''}">✓ ${_ecEsc(s.name)} ${Math.min(count(s), Math.min(target, s.graded))}/${Math.min(target, s.graded)}${count(s) < Math.min(target, s.graded) ? ' (rest can’t be confirmed)' : ''}</span>`).join('')}</div>` : '');
+    const l = _pqcListing();
+    if (!l) {
+        return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
+            : c.forTraining ? 'Nothing left to confirm on this sheet. Pick another sheet above.'
+            : `Nothing left here that you haven't already judged. Pick another sheet above, or
+               <button type="button" class="pqt-btn" onclick="pqConfirmClose(); pqConfirmOpen('', true)">More For Training</button>`}</div>`;
+    }
+    if (c.grid) return head + err + sheets + _pqcGridHtml(l);
+    const p = l.photos[c.pi];
+    const choices = _pqcChoices(l);
+    const guide = d.guide[l.pickedSheet] || { name: l.pickedSheet, shots: [] };
+    const ex = guide.shots.find(s => p.shots.includes(s.label) && s.img);
+    const offSheet = p.shots.filter(s => !choices.includes(s) && s !== 'Extra' && s !== 'Box');
+    const sheetOpts = Object.entries(d.guide).sort((a, b) => a[1].name.localeCompare(b[1].name))
+        .map(([slug, g]) => `<option value="${_ecEsc(slug)}"${slug === l.pickedSheet ? ' selected' : ''}>${_ecEsc(g.name)}</option>`).join('');
+    const chip = (label, key, i) => `<button type="button" class="pqc-chip${p.shots.includes(label) ? ' pqc-chip-on' : ''}"
+        onclick="pqConfirmPick(${typeof i === 'number' ? i : `'${i}'`}, event.shiftKey)" ${c.busy ? 'disabled' : ''}>${_ecEsc(label)}${key ? ` <kbd>${_ecEsc(key.toUpperCase())}</kbd>` : ''}</button>`;
+    const thumbs = l.photos.map((q, i) => `<button type="button" class="pqc-thumb${i === c.pi ? ' pqc-thumb-on' : ''}${q.seen ? ' pqc-thumb-done' : ''}"
+        onclick="pqConfirmGo(${i})" title="${_ecEsc(q.shots.join(', '))}">
+        <img src="${_ecEsc(q.img)}" alt="" loading="lazy"><span class="pqc-thumb-n">${q.n}</span>
+        <span class="pqc-thumb-l">${_ecEsc(q.shots.join(' + ') || '—')}${q.shots.join('|') !== q.said.join('|') ? ' ✎' : ''}</span>
+        ${q.flags.size || q.repeatOf ? `<span class="pqc-thumb-f">${q.repeatOf ? `= ${q.repeatOf}` : ''}${q.flags.size ? `${q.repeatOf ? ' · ' : ''}${q.flags.size} flag${q.flags.size === 1 ? '' : 's'}` : ''}</span>` : ''}</button>`).join('');
+    return head + err + sheets + `
+      <div class="pqc-listing">
+        <div class="pqc-title">${_ecEsc(l.title || '')}</div>
+        <div class="pqc-meta"><span class="lh-sku">${_ecEsc(l.sku || '')}</span> · ${_ecEsc(l.store)} · listing ${c.li + 1} of ${d.listings.length}
+          <label class="pqc-sheet-pick">Sheet <select onchange="pqConfirmSheet(this.value)" ${c.busy ? 'disabled' : ''}>${sheetOpts}</select></label>
+          ${l.pickedSheet !== l.sheet ? '<span class="pqc-warn">Changed From The Grade</span>' : ''}</div>
+      </div>
+      <div class="pqt-pair">
+        <figure class="pqt-fig">
+          <div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt="Listing photo ${p.n}"></div>
+          <figcaption><b>Photo ${p.n} of ${l.photos.length}</b> · the grade said: ${_ecEsc(p.said.join(' + ') || 'nothing')}</figcaption>
+        </figure>
+        <figure class="pqt-fig">
+          <div class="pqt-frame">${ex ? `<img src="${_ecEsc(ex.img)}" alt="Guide example">`
+            : `<span class="pqt-noex">${p.shots.some(s => s === 'Extra' || s === 'Box') ? 'Not a sheet shot' : 'No example photo for this shot'}</span>`}</div>
+          <figcaption><b>Now: ${_ecEsc(p.shots.join(' + ') || '—')}</b>${offSheet.length ? ` <span class="pqc-warn">Not On This Sheet</span>` : ''}<br>${_ecEsc(guide.name)}</figcaption>
+        </figure>
+      </div>
+      <div class="pqc-chips">${choices.map((s, i) => chip(s, _PQC_KEYS[i], i)).join('')}${chip('Extra', 'x', 'x')}${chip('Box', 'b', 'b')}</div>
+      <div class="pqc-flagbox">
+        <div class="pqc-flaghead">This Photo <span>— mark only what a buyer would notice; blank means no</span></div>
+        ${_PQC_FLAGS.map(([group, list]) => `<div class="pqc-flags"><span class="pqc-flaggroup">${group}</span>${list.map(([k, label]) =>
+            // An "on" flag says where it came from, as in the whole-listing view:
+            // amber = his own, grey = the model's guess, green = his earlier grade.
+            `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' + (p.flagFrom && p.flagFrom[k] === 'model' ? ' pqc-flag-model' : p.flagFrom && p.flagFrom[k] === 'earlier' ? ' pqc-flag-earlier' : '') : ''}"
+              title="${p.flags.has(k) ? (p.flagFrom && p.flagFrom[k] === 'model' ? "The model’s guess — click to remove" : p.flagFrom && p.flagFrom[k] === 'earlier' ? 'Your earlier grade — click to remove' : 'Click to remove') : 'Click to add'}"
+              onclick="pqConfirmFlag('${k}')" ${c.busy ? 'disabled' : ''}>${label}</button>`).join('')}</div>`).join('')}
+        ${p.n > 1 ? `<div class="pqc-flags"><span class="pqc-flaggroup">Repeat</span>
+          <label class="pqc-repeat">Same shot as <select onchange="pqConfirmRepeat(this.value)" ${c.busy ? 'disabled' : ''}>
+            <option value="">— not a repeat —</option>
+            ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Photo ${q.n}</option>`).join('')}
+          </select></label></div>` : ''}
+      </div>
+      ${_pqcListingPanel(l)}
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(false)" ${c.busy ? 'disabled' : ''}>Keep <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${c.busy ? 'disabled' : ''}
+            title="Every photo not yet answered keeps the label it shows">All Right — Save Listing <kbd>Shift+Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmSkip()" ${c.busy ? 'disabled' : ''}>Skip Listing</button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmMode(true)">Whole Listing View</button>
+      </div>
+      <div class="pqt-ask">A shot key replaces the label and moves on; with Shift it adds a second shot. ← goes back.</div>
+      <div class="pqc-thumbs">${thumbs}</div>`;
+}
+
+// The listing-level facts rules.ts reads, asked once per listing. What the
+// listing SAYS is shown beside the questions that depend on it.
+function _pqcListingPanel(l) {
+    const a = _pqcAsks(l);
+    const f = l.facts;
+    const busy = _pqc.busy ? 'disabled' : '';
+    const tog = (k, label, title) => `<button type="button" class="pqc-flag${f[k] ? ' pqc-flag-on' : ''}" title="${_ecEsc(title)}"
+        onclick="pqConfirmFact('${k}')" ${busy}>${label}</button>`;
+    const guide = (_pqc.data.guide || {})[l.pickedSheet] || { shots: [] };
+    const ifNeeded = [...new Set(guide.shots.filter(s => s.cond).map(s => s.label))];
+    // Cosmetic sentences one per line, each with the code's call and a button to
+    // overrule it. Standard wording is shown faded, so a real flaw the code
+    // dismissed can still be caught (Ethan, 2026-10-16: the system can be wrong
+    // about a flaw).
+    const notes = _pqcNotes(l).map((n, i) => {
+        const flipped = l.flip.has(i);
+        return `<div class="pqc-note${n.real ? '' : ' pqc-note-std'}${flipped ? ' pqc-note-flip' : ''}">
+          <span class="pqc-note-t"><b>${n.real ? 'Flaw' : 'Standard'}:</b> ${_ecEsc(n.text)}</span>
+          <button type="button" class="pqc-note-b" onclick="pqConfirmFact('flip', ${i})" ${busy}
+            title="${flipped ? 'Undo: go back to what the system said' : n.unit ? 'This is PayMore\'s standard wording, not a flaw on this unit' : 'This names a real flaw on this unit'}">${flipped ? 'Undo' : n.unit ? 'Standard Wording' : 'Real Flaw'}</button></div>`;
+    }).join('');
+    const said = [
+        ...(String(l.functional || '').trim() ? [['Functional', l.functional]] : []),
+        ...(String(l.included || '').trim() ? [['Included', l.included]] : []),
+    ];
+    return `<div class="pqc-flagbox pqc-listbox">
+      <div class="pqc-flaghead">This Listing <span>— asked once; starts from the model's guess; blank means no</span></div>
+      ${notes ? `<div class="pqc-notes">${notes}</div>` : ''}
+      ${said.length ? `<div class="pqc-said">${said.map(([k, x]) => `<div><b>${k}:</b> ${_ecEsc(x)}</div>`).join('')}</div>` : ''}
+      <div class="pqc-flags">
+        ${tog('lead_unclear', 'Lead Photo Unclear', 'Photo 1 does not clearly show what the item is')}
+        ${tog('serial_hidden', 'Serial Hidden Behind A Cover', 'The serial is only under a battery cover or similar')}
+        ${a.isNew ? tog('new_claim_wrong', 'Says New, Looks Used', 'The listing says new/sealed and the photos show a used item') : ''}
+        ${a.multi ? tog('units_apart', 'Not Every Unit Shown Together', 'A lot/pair/pack where the whole-item shots do not show every unit') : ''}
+        ${a.box ? tog('flat_package', 'Flat Package', 'A blister pack or hanging card, not a box') : ''}
+      </div>
+      ${a.flaw ? `<div class="pqc-flags"><span class="pqc-flaggroup">Main Flaw Shown</span>
+        ${[['yes', 'Yes'], ['partly', 'Partly'], ['no', 'No'], ['not_applicable', 'No Real Flaw']].map(([v, label]) => `<button type="button" class="pqc-flag${f.main_flaw_shown === v ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFact('main_flaw_shown','${v}')" ${busy}
+          ${v === 'not_applicable' ? 'title="The notes name no flaw on this unit, whatever the system read"' : ''}>${label}</button>`).join('')}</div>` : ''}
+      ${ifNeeded.length ? `<div class="pqc-flags"><span class="pqc-flaggroup">Listing Calls For</span>
+        ${ifNeeded.map(s => `<button type="button" class="pqc-flag${f.needed.includes(s) ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFact('needed', this.dataset.s)" data-s="${_ecEsc(s)}" ${busy}>${_ecEsc(s)}</button>`).join('')}</div>` : ''}
+    </div>`;
+}
+
+function _pqcRender() {
+    if (!_pqc) return;
+    let el = document.getElementById('pqConfirmOverlay');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pqConfirmOverlay';
+        el.className = 'pqt-overlay';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Confirm Shots');
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pqt-box">${_pqcHtml()}</div>`;
+}
+
 window.pqSetTier = pqSetTier;
 
 // One strip of photos, in the order given, numbered by their CURRENT position so
@@ -56249,40 +58476,66 @@ function _pqDay(iso) {
     return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// The retake sentence for ONE listing, with the check's count of what is
-// missing kept ("3 of 5 required shots are missing") — the guide strip below
-// names which, so the names are not repeated here.
+// The retake line for ONE listing, with the check's count kept ("4 of 6
+// required shots missing") — the guide strip below names which.
 function _pqRetakeSaid(findings) {
     const f = (findings || []).find(x => x.code === 'retake');
-    const m = f && /(\d+ of \d+ required shots are missing)/.exec(f.text || '');
-    return `This listing is missing so much of the Picture Guide that a buyer cannot judge the item${
-        m ? ' — ' + _ecEsc(m[1]) : ''}. <strong>Retake it following the guide</strong>, then press Recheck.`;
+    const m = f && /(\d+ of \d+) required shots are missing/.exec(f.text || '');
+    return `<b>Retake Following The Guide</b>${m ? ' — ' + _ecEsc(m[1]) + ' required shots missing' : ''}`;
 }
 
-// ⚠️ ONE LINE PER PROBLEM, NOT PER PHOTO (Ethan, 2026-09-30, on a RAM listing
-// that read "Photo 2 … wrong angle / Photo 3 … wrong angle / Photo 4 … wrong
-// angle / Photo 2 is blurry / Photo 3 is blurry …": "any way to make this look
-// not as chaotic?"). The same three photos named twice, seven lines for two
-// problems. Grouped, it is "Taken From The Wrong Angle — Photos 2, 3, 4" and
-// "Blurry — Photos 2, 3, 4", which is also the order the store fixes them in.
-// The server's sentences are unchanged (the notes and the ask still quote
-// them); this only regroups them for reading.
-//   not square  → "Not Square (Should Be 1×1)" — the size it IS was noise; the
-//                 size it should be is what the store needs (Ethan, same day)
-//   framing     → one group per problem it names ("…standard: crooked, cut off")
-//   missing     → one line naming the shots
-//   anything else with a photo → its own words, with the photo stripped off
+// ⚠️ ONE SHORT LINE PER PROBLEM (Ethan, 2026-09-30: "any way to make this look
+// not as chaotic?"; and 2026-10-13: "Too many words and people won't read it
+// fully"). Every line is "<b>Label</b> — Photos 2, 3 · what to do", the photos
+// grouped per problem — never the server's full sentence. The server's
+// sentences are unchanged (Listing Health Notes and the ask still quote them).
+//   missing   → one line naming the shots; Everything Included adds what the
+//               listing says comes with it (Ethan, OVL GTX 1660)
+//   framing   → one group per problem it names ("…standard: crooked, cut off")
+//   repeat    → "Photo 4 (same as 1)" · Approve Deletion
+//   the rest  → a short label from _PQ_SHORT, else its own words, photo stripped
+const _PQ_SHORT = {
+    mixed_setups: ['Different Spot', 'retake so every photo is shot the same way — all on the stand, or all off it'],
+    reflection: ['Reflection', 'angle the item or the light'],
+    dirty_backdrop: ['Dirty Table', 'clean it, then retake'],
+    clutter: ['Something Else In The Frame', 'clear it out, then retake'],
+    loose_cords: ['Loose Cord', 'wrap it up'],
+    not_on_stand: ['Not On The Stand'],
+    turned: ['Turned The Wrong Way', 'turn it to match the guide'],
+    order: ['Out Of Order', 'use the guide\'s order when you retake'],
+    // Not a photo — the words (Ethan, 2026-10-15, LEE Payday 2).
+    new_claim: ['Listing Says Brand New', 'the photos show it used — correct the condition and description'],
+};
 function _pqFindingLines(findings) {
     const cap = s => String(s).replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase());
     const groups = new Map(), misses = [], loose = [];
-    const add = (label, n) => {
-        if (!groups.has(label)) groups.set(label, new Set());
-        groups.get(label).add(n);
+    const add = (label, n, hint) => {
+        if (!groups.has(label)) groups.set(label, { nums: new Set(), hint: hint || '' });
+        if (n) groups.get(label).nums.add(n);
     };
+    let included = '';
+    // WHAT THE LISTING SAYS THE FLAW IS, beside a missing Cosmetic / LCD Flaws
+    // shot (Ethan, 2026-10-15, LEE: "give a brief description of what cosmetic or
+    // functionality flaws we stated in the listing when flagging for this").
+    const flawSaid = [];
     for (const f of findings || []) {
         const text = String(f.text || '');
-        if (f.code === 'missing_shot') { misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, '')); continue; }
-        if (!f.photo) { loose.push(text); continue; }
+        if (f.code === 'missing_shot') {
+            misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, ''));
+            if (/^everything included/i.test(f.shot || '') && f.included) included = f.included;
+            if (f.said) flawSaid.push(`${f.shot}: “${f.said}”`);
+            continue;
+        }
+        if (f.code === 'repeat') {
+            // "Photo 4 is the same shot as photo 1; Photo 6 is the same shot as photo 2."
+            const pairs = [...text.matchAll(/Photo (\d+) is the same shot as photo (\d+)/g)].map(m => `${m[1]} (same as ${m[2]})`);
+            const many = pairs.length > 1;
+            loose.push(`<b>Repeat</b> — ${many ? 'Photos' : 'Photo'} ${_ecEsc(pairs.join(', '))} · Approve Deletion removes ${many ? 'them' : 'it'}`);
+            continue;
+        }
+        const short = _PQ_SHORT[f.code];
+        if (short) { (f.photos || [f.photo]).forEach(n => add(short[0], n, short[1])); continue; }
+        if (!f.photo) { loose.push(_ecEsc(text)); continue; }
         if (f.code === 'not_square') { add('Not Square (Should Be 1×1)', f.photo); continue; }
         if (f.code === 'framing') {
             const m = /standard:\s*(.+?)\.?$/.exec(text);
@@ -56294,37 +58547,66 @@ function _pqFindingLines(findings) {
         add(cap(said), f.photo);
     }
     const nums = s => { const a = [...s].sort((x, y) => x - y); return (a.length === 1 ? 'Photo ' : 'Photos ') + a.join(', '); };
+    const missLine = misses.length
+        ? `<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}${included ? ` (the listing says it comes with: ${_ecEsc(included)})` : ''}${
+            flawSaid.length ? `<span class="pq-said">The listing says — ${_ecEsc(flawSaid.join(' · '))}</span>` : ''}</li>`
+        : '';
     return [
-        ...(misses.length ? [`<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}</li>`] : []),
-        ...[...groups].map(([label, s]) => `<li><b>${_ecEsc(label)}</b> — ${nums(s)}</li>`),
-        ...loose.map(t => `<li>${_ecEsc(t)}</li>`),
+        missLine,
+        ...[...groups].map(([label, g]) =>
+            `<li><b>${_ecEsc(label)}</b>${g.nums.size ? ' — ' + nums(g.nums) : ''}${g.hint ? ' · ' + _ecEsc(g.hint) : ''}</li>`),
+        ...loose.map(t => `<li>${t}</li>`),
     ].join('');
 }
 
-function _pqRow(r) {
+function _pqRow(r, done, rc) {
     const id = String(r.productId || '');
     const numeric = _ecEsc(id.split('/').pop());
     const shop = _ecEsc(_pqData?.shop || '');
-    const busy = _pqBusy.has(id);
     const checking = _pqChecking.has(id);
+    // Passed on recheck: the row as it was, nothing left to press.
+    const passed = !!rc && rc.verdict === 'pass' && !checking;
+    const busy = _pqBusy.has(id) || passed;
+    const rcAt = rc ? `${_pqDay(rc.at.toISOString())}, ${rc.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
+    // While it runs, only the buttons say so — "Checking…" and Dismiss, both
+    // disabled. The greyed row and its "Reviewing…" line were tried and taken
+    // back the same day (Ethan, 2026-10-16: "I like your original design").
+    const rcLine = checking ? ''
+        : passed ? `<div class="pq-passed" role="status">✓ Passed On Recheck — ${_ecEsc(rcAt)}</div>`
+        : rc ? `<div class="pq-rechecked" role="status">Rechecked ${_ecEsc(rcAt)} — Still Needs:</div>` : '';
     const photos = r.photos || [];
-    const flagged = new Set((r.findings || []).map(f => f.photo).filter(Boolean));
+    // A listing-wide finding (a dirty table, a repeat) names its photos in `photos`.
+    const flagged = new Set((r.findings || []).flatMap(f => [f.photo, ...(f.photos || [])]).filter(Boolean));
     const now = photos.map((_, i) => i + 1);
     const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
+    // A suggested order on a FIX / RETAKE row too (Ethan, 2026-10-14: "things
+    // that are in fix these photos can still have quick fix deletion and re
+    // orders"): the same Now / Suggested / Guide strips, and Approve Order on
+    // its own line under Recheck. Approving it keeps the row open for the rest.
+    const hasOrder = r.verdict !== 'pass' && r.reorder && Array.isArray(r.reorder.suggested);
+    const extraOrder = hasOrder && !isReorder && !r.stale;
+    // A duplicate photo the tool can delete on approval — on any tab: a flagged
+    // listing with a repeat gets the button too, under its Recheck.
+    const del = !r.stale && r.deletion && Array.isArray(r.deletion.photos) && r.deletion.photos.length ? r.deletion : null;
+    const oneClick = r.verdict === 'reorder';
+    const delWhat = del ? `photo${del.photos.length > 1 ? 's' : ''} ${del.photos.join(', ')}` : '';
     const findings = (r.verdict === 'retake' ? `<li class="pq-retake-said">${_pqRetakeSaid(r.findings)}</li>` : '')
         + _pqFindingLines((r.findings || []).filter(f => r.verdict !== 'retake' || f.code !== 'retake'));
     // The row's own reason, now there is no tab sentence above it.
     const why = isReorder
         ? `<li>The photos are good but in the wrong order${(r.reorder.why || []).length
             ? ' — ' + _ecEsc(r.reorder.why.join('; ')) : ''}.</li>` : '';
-    const titleNotes = (r.titleNotes || []).length
+    // ⚠️ TITLE NOTES ARE OFF THE ROW (Ethan, 2026-10-14): once this is tied to
+    // the title tool, a photo fact sends the listing to the TITLE tool's own
+    // screen instead of sitting in a drawer here. Still saved (title_notes).
+    const titleNotes = false && (r.titleNotes || []).length
         ? `<details class="lt-comps pq-tnotes"><summary>${r.titleNotes.length} Title Note${r.titleNotes.length === 1 ? '' : 's'} From The Photos (Not Checked Yet)</summary>
              <ul>${r.titleNotes.map(t => `<li>${_ecEsc(t.issue || '')}${t.suggestion ? ' → ' + _ecEsc(t.suggestion) : ''}</li>`).join('')}</ul>
            </details>` : '';
 
     const missing = _pqMissing(r.findings);
-    const moved = isReorder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
-    const body = isReorder
+    const moved = hasOrder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
+    const body = hasOrder
         // ⚠️ ONE SCROLL FOR ALL THREE ROWS, ONE BOX SIZE (Ethan, 2026-09-30: "do
         // you have a better way to make this not feel so chaotic looking?"). The
         // three strips used to scroll separately, at two box sizes, so slot 3 of
@@ -56348,15 +58630,20 @@ function _pqRow(r) {
                ? `<br><span class="pq-lab-miss">${missing.size} Missing</span>` : ''}</span>${_pqGuideStrip(r.sheet, missing)}</div>
            </div>`;
 
-    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}">
+    // NEW: graded by the nightly random sample in the last 3 days — outlined all
+    // the way round so the reviewer can find the fresh ones (Ethan, 2026-10-15).
+    const isNew = !!r.sample && Date.now() - new Date(r.sample).getTime() < 3 * 86400000;
+    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}${isNew ? ' pq-row-new' : ''}${passed ? ' pq-row-passed' : ''}"${checking ? ' aria-busy="true"' : ''}>
       <div class="lt-main">
-        <div class="pq-title">${_ecEsc(r.title || 'Untitled Listing')}</div>
+        <div class="pq-title">${isNew ? '<span class="pq-new-tag" title="Graded by the nightly random sample">New</span>' : ''}${_ecEsc(r.title || 'Untitled Listing')}</div>
         <div class="pq-sheet">Checked ${_pqDay(r.reviewedAt)} Against: <b>${_ecEsc(r.sheetName || '—')}</b></div>
         ${r.stale ? `<div class="pq-stale">${r.staleWhy === 'recipe'
             ? 'The check has been improved since this listing was graded'
             : 'The photos or notes changed after this was checked'} —
             press Recheck before acting on it.</div>` : ''}
-        <ul class="lt-why">${findings}${why}</ul>
+        ${done ? `<div class="pq-done">✓ ${_ecEsc(done.join(' · '))}</div>` : ''}
+        ${rcLine}
+        <ul class="lt-why${passed ? ' pq-why-fixed' : ''}">${findings}${why}</ul>
         ${body}
         ${titleNotes}
       </div>
@@ -56371,20 +58658,55 @@ function _pqRow(r) {
           ${r.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(r.handle)}"
                target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
         </div>
+        <!-- WHO LISTED IT (Ethan, 2026-10-08: "so the managers can coach their
+             teams on pictures"). The title tool's pill, resolved server-side
+             from the product's live Shopify tags — see _ltListerPill for why it
+             is always there and never a raw tag. Its own line, not a third pill
+             beside the links: those are two columns the SKU and photo count
+             centre over. -->
+        <!-- The price beside who listed it (Ethan, 2026-10-11): it is what the
+             dirty-table and reflection points are scaled by, and how much a
+             reshoot is worth. -->
+        <!-- A tag that matches nobody in users shows AS the tag (Ethan, 10-14:
+             "Instead of unknown, just put the raw tag"), titled so it reads as
+             a Shopify tag, not a confirmed employee. -->
+        <div class="pq-lister">${r.listerRaw
+          ? `<span class="lt-lister" title="Shopify tag — no SPEEKSNET user matches it yet. Add them in Permissions to show their name.">${_ecEsc(r.lister)}</span>`
+          : _ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}${
+          r.price > 0 ? `<span class="pq-price">$${Number(r.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>` : ''}</div>
         <div class="lt-acts pq-acts">
-          ${isReorder && !r.stale
-            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve'}</button>
+          ${r.verdict === 'pass'
+            ? `<button class="lt-no" onclick="pqShouldFlag('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
+                  title="You would have flagged this. Say what was missed, and the note comes to Listing Health Notes.">Should Flag</button>`
+            : isReorder && !r.stale
+            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Order'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
                   title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+            : oneClick && del
+            ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Deletion'}</button>
+               <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
+                  title="Keep the photo. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
             : `<button class="lt-ok" onclick="pqRecheck('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
                   title="After the photos are retaken in Shopify, this grades them again now instead of waiting for the next sweep. About a minute.">${checking ? 'Checking…' : 'Recheck'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
                   title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Dismiss</button>`}
         </div>
-        <!-- What Recheck is FOR, on the row. Ethan asked what "Check Again"
+        <!-- A duplicate to delete beside a reorder, or on a flagged row: its own
+             line, so the row's main pair keeps its one job. -->
+        ${(del && r.verdict !== 'pass' && (isReorder || !oneClick)) || extraOrder ? `<div class="lt-acts pq-acts">
+            ${extraOrder ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Order</button>` : ''}
+            ${del && r.verdict !== 'pass' && (isReorder || !oneClick) ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Deletion</button>` : ''}</div>` : ''}
+        <!-- What each button DOES, on the row. Ethan asked what "Check Again"
              meant; a button that needs asking about needs a sentence. -->
-        ${isReorder && !r.stale ? `<span class="pq-hint">Approve saves this order to Shopify.</span>`
-          : `<span class="pq-hint">Retook the photos? Recheck grades them now.</span>`}
+        ${(r.verdict === 'pass'
+          // A pass can carry small notes — shown, nothing to approve (Ethan,
+          // 10-15: the SanDisk belongs in Passed, its note still on the card).
+          ? [(r.findings || []).length && 'Passed — the notes are small things to fix on the next retake.',
+             'Agree it passes? Nothing to do. Would you have flagged it? Should Flag, and say what was missed.']
+          : [hasOrder && !r.stale && 'Approve Order saves this order to Shopify.',
+           del && `Approve Deletion removes ${delWhat} from Shopify.`,
+           !(isReorder && !r.stale) && !(oneClick && del) && 'Retook the photos? Recheck grades them now.'])
+          .filter(Boolean).map(x => `<span class="pq-hint">${x}</span>`).join('')}
       </div>
     </div>`;
 }
@@ -56414,6 +58736,32 @@ async function pqDismiss(pid, isReorder) {
 }
 window.pqDismiss = pqDismiss;
 
+// The Passed tab's disagreement. The same note-required answer as a dismissal,
+// from the other side; the row moves to the tab's dismissed drawer, labelled
+// Should Have Flagged, and the note waits in Listing Health Notes.
+async function pqShouldFlag(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality', title: 'Should This Have Been Flagged?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>`,
+        note: { label: 'What Did The Check Miss?', required: true,
+                placeholder: 'e.g. photos 6 and 7 are crooked',
+                hint: 'Required — this note is how a missed rule gets fixed. Nothing on the listing changes.' },
+        go: 'Send It', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'should-flag', store: _ecStore, productId: pid, reason: said.note || '' });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('That Was Not Recorded', res.body?.detail || res.body?.error || 'Could not record that.');
+        ecRender();
+        return;
+    }
+    await _pqReload();
+}
+window.pqShouldFlag = pqShouldFlag;
+
 async function pqReorder(pid) {
     const row = (_pqData?.queue || []).find(r => r.productId === pid);
     if (!row || !row.reorder) return;
@@ -56432,21 +58780,53 @@ async function pqReorder(pid) {
         await _pqReload();
         return;
     }
+    _pqMarkDone(pid, row, 'Order Saved To Shopify');
     await _pqReload();
 }
 window.pqReorder = pqReorder;
 
-async function pqRecheck(pid) {
-    _pqBusy.add(pid); _pqChecking.add(pid); ecRender();
-    const res = await _pqPost({ action: 'recheck', store: _ecStore, productId: pid });
-    _pqBusy.delete(pid); _pqChecking.delete(pid);
+// APPROVE DELETION — a duplicate photo, removed from the Shopify listing by the
+// tool (Ethan, 2026-10-11: "say approve deletion. Don't imply that the user
+// should delete it themselves"). The server refuses if the photos changed since
+// the check, so the numbers here always point at the photos shown.
+async function pqDeletePhotos(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    const del = row && row.deletion;
+    if (!del || !Array.isArray(del.photos) || !del.photos.length) return;
+    const pairs = del.photos.map((n, i) => `Photo ${n} is the same shot as photo ${(del.of || [])[i]}.`).join(' ');
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality', title: 'Approve Deletion?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>
+               ${_pqStrip(row.photos || [], del.photos, new Set(del.photos))}
+               <p class="lt-ask-say">${_ecEsc(pairs)} ${del.photos.length > 1 ? 'They are' : 'It is'} removed from the Shopify listing — every other photo stays as it is.</p>`,
+        go: 'Approve Deletion', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'delete-photos', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid);
     if (!res.ok) {
+        await _pqSay('Nothing Was Deleted', res.body?.detail || res.body?.error || 'Shopify did not take the change.');
+    } else {
+        _pqMarkDone(pid, row, `${del.photos.length > 1 ? 'Photos' : 'Photo'} ${del.photos.join(', ')} Deleted`);
+    }
+    await _pqReload();
+}
+window.pqDeletePhotos = pqDeletePhotos;
+
+async function pqRecheck(pid) {
+    const before = (_pqData?.queue || []).find(r => r.productId === pid);
+    const tier = _pqTier, store = _ecStore;
+    _pqBusy.add(pid); _pqChecking.add(pid); ecRender();
+    const res = await _pqPost({ action: 'recheck', store, productId: pid });
+    _pqBusy.delete(pid); _pqChecking.delete(pid);
+    if (!res.ok || !res.body?.ok) {
         await _pqSay('Could Not Check It Again', res.body?.detail || res.body?.error || 'The check did not finish.');
         ecRender();
         return;
     }
-    if (res.body.verdict === 'pass') {
-        await _pqSay('These Photos Now Pass', 'The listing meets the guide and has left the list.', 'ok');
+    // The store may have been switched while it ran: _pqPlace starts over then.
+    if (before && _pqPlaces.store === store) {
+        _pqPlaces.rechecked.set(pid, { tier, before, verdict: res.body.verdict, at: new Date() });
     }
     await _pqReload();
 }
@@ -57014,9 +59394,12 @@ window.lhToolDone = lhToolDone;
 // the tag verbatim, because "JSmith" still tells you who a leaver was — the
 // server only sends tags that matched somebody, but a rename between the sweep
 // and the read would land here and a bare tag is better than nothing.
-function _ltLister(tag) {
+// `listers` is for a caller with its own map (Picture Quality); the title tool
+// passes nothing and reads _ltData's.
+function _ltLister(tag, listers) {
     if (!tag) return '';
-    return (_ltData && _ltData.listers && _ltData.listers[tag]) || tag;
+    const map = listers || (_ltData && _ltData.listers);
+    return (map && map[tag]) || tag;
 }
 
 // ⚠️ THE PILL IS ALWAYS THERE — a name, or "Unknown". Never nothing.
@@ -57035,8 +59418,8 @@ function _ltLister(tag) {
 // ⚠️ AND IT IS NEVER A GUESS. Unknown says the tool cannot tell you, which is
 // honest; a tag rendered raw would look like an accusation the tool cannot
 // stand behind.
-function _ltListerPill(r) {
-    const name = r && r.listerTag ? _ltLister(r.listerTag) : '';
+function _ltListerPill(r, listers) {
+    const name = r && r.listerTag ? _ltLister(r.listerTag, listers) : '';
     if (!name) {
         return `<span class="lt-lister lt-lister-unknown"
             title="No employee tag on this listing, or the tag belongs to somebody who has left. Shopify tags are where this comes from.">Unknown</span>`;

@@ -66,25 +66,40 @@ const corsHeaders = {
 };
 
 const CATEGORIES = [
-  "announcements", "store_messages", "requests",
+  "announcements", "store_messages", "requests", "b2b",
   "claims", "variance_aging", "deadlines", "scores", "categories", "listing_photos",
 ] as const;
 type Category = typeof CATEGORIES[number];
+
+// Tools switched off for everyone, overrides included. Parking a tool on the site
+// (commenting out its FEATURE_CATALOG entry) leaves feature_overrides empty for
+// it, which featureAllows reads as "use the default" — i.e. still mail everyone.
+// So a parked tool's emails need naming here too. A queued row for a paused tool
+// is dropped, not held: un-pausing should not flush weeks of stale "item added".
+// Aging Inventory: PAUSED 2026-10-06 while Ethan decides whether to keep it.
+const PAUSED_FEATURES = new Set<string>(["widget-aging-inventory"]);
+const AGING_PAUSED = PAUSED_FEATURES.has("widget-aging-inventory");
 
 // Popout copy. Kept here rather than in the page so the labels and the routing
 // can never drift apart — the frontend renders whatever this returns.
 const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   announcements:  { label: "Announcements & Patch Notes", blurb: "New announcements, and what changed in a release." },
   store_messages: { label: "Store Messages",             blurb: "A message sent to your store by a manager, the DM or the CEO." },
-  // B2B is named here again as of 2026-09-07. It was deliberately left out
-  // while the module was being rebuilt, because b2b-deals carried no hook and
-  // promising "B2B deals" would have been a toggle that quietly did nothing.
-  // It now queues on every stage transition that leaves a deal waiting on
-  // somebody -- pricing location, pricing, approval, sendback, listing location
-  // and listing -- so the promise is real. See notifyStage in b2b-deals.
-  requests:       { label: "Requests Waiting On Me" ,     blurb: "B2B deals waiting on you, plus purchase and recycle requests." },
+  // B2B moved out to its own category on 2026-10-16 (see `b2b` below and
+  // migration 0148), so this is purchase, recycle and delete requests again.
+  requests:       { label: "Requests Waiting On Me" ,     blurb: "Purchase and recycle requests, and delete requests, waiting on you." },
+  // Its own category since 2026-10-16, when it grew from one stage ping to
+  // three notifications (Nick's rework): the stage events b2b-deals queues, a
+  // daily reminder for every deal in pricing (due a week after it entered), and
+  // Monday's unlisted-value report. The two reminders are due-date slugs from
+  // collectDue; the stage events are queued rows. Same switch either way.
+  b2b:            { label: "B2B Deals",                  blurb: "Deals waiting on you, a daily pricing reminder, and Monday's unlisted value." },
   claims:         { label: "Insurance Claims",           blurb: "A claim that has gone unresolved past a week." },
-  variance_aging: { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
+  // While Aging Inventory is paused the category is Variance alone. The KEY stays
+  // variance_aging so every saved preference still lines up when aging returns.
+  variance_aging: AGING_PAUSED
+    ? { label: "Variance Replies", blurb: "New sheets, the DM's review, and the reply deadline." }
+    : { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
   deadlines:      { label: "My Deadlines",               blurb: "Store KPIs, listing goals, store goals, expense reports." },
   scores:         { label: "Scores & Audits"  ,            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
   // Named for the queue, not the mechanism: a manager knows what "a listing
@@ -184,9 +199,20 @@ const metaFor = (c: Category, role: string) => {
 // `roles`, when present, narrows a sub the same way CATEGORY_ROLES narrows a
 // category: an ASM receives no variance at all, so showing them a "Variance
 // replies" switch would be the same lie one level down.
-type Sub = { key: string; label: string; blurb: string; kinds: string[]; roles?: Set<string> };
+// `feature` ties a sub to a tool, so a paused tool's switch is not drawn (see
+// PAUSED_FEATURES) — offering a toggle for mail that cannot arrive is the same lie.
+type Sub = { key: string; label: string; blurb: string; kinds: string[]; roles?: Set<string>; feature?: string };
 
 const STORE_SIDE_ROLES = ["manager", "owner (manager)", "owner manager"];
+
+// Who the two B2B reminders (pricing due, unlisted value) reach: corp, plus the
+// store roles that price and own the listing work -- the same people the site's
+// feed shows those cards to (B2B_STORE_ROLES in speeks.js). Employees can list
+// B2B units but neither price nor answer for the backlog, so they keep the
+// stage pings and are not chased by these.
+const B2B_REMINDER_CORP = new Set(["district manager", "ceo", "mocd"]);
+const B2B_REMINDER_STORE = new Set(["manager", "owner (manager)", "owner manager", "assistant manager"]);
+const B2B_REMINDER_ROLES = new Set([...B2B_REMINDER_CORP, ...B2B_REMINDER_STORE]);
 
 const SUBS: Record<Category, Sub[]> = {
   announcements: [
@@ -206,7 +232,12 @@ const SUBS: Record<Category, Sub[]> = {
       roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
     { key: "req_out", label: "Verdicts And Replies", blurb: "The DM's answer on something you sent up.",
       kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
-    // B2B, one switch for the whole pipeline. Deliberately not split per stage:
+  ],
+  b2b: [
+    // The stage events, moved here from `requests` with the same key, so a
+    // muted_kinds entry saved before the move still mutes them.
+    //
+    // One switch for the whole pipeline. Deliberately not split per stage:
     // which transitions reach you is already decided by your store and role
     // (see notifyStage in b2b-deals), so a per-stage toggle would be six
     // switches where five are inert for any given person. b2b_delete_request
@@ -219,6 +250,14 @@ const SUBS: Record<Category, Sub[]> = {
       blurb: "A B2B deal that has reached a stage you own: pricing, approval, or listing.",
       kinds: ["b2b_pricing_location", "b2b_pricing", "b2b_quote_ready", "b2b_sendback",
               "b2b_listing_location", "b2b_listing", "b2b_delete_request"] },
+    // The two reminders. Their keys are ALSO the on-site switches (feed_muted),
+    // so "Pricing reminders" means the same thing in the feed and in email.
+    { key: "b2b_pricing_due", label: "Pricing Reminders",
+      blurb: "Every day a deal is in pricing: when it is due. Due one week after it entered pricing.",
+      kinds: ["b2bPricingDue"], roles: B2B_REMINDER_ROLES },
+    { key: "b2b_unlisted", label: "Unlisted Value — Mondays",
+      blurb: "Monday's total of B2B value still waiting to be listed. Corp sees every store.",
+      kinds: ["b2bUnlistedWeekly"], roles: B2B_REMINDER_ROLES },
   ],
   claims: [],
   variance_aging: [
@@ -233,7 +272,8 @@ const SUBS: Record<Category, Sub[]> = {
       roles: new Set([...STORE_SIDE_ROLES, "district manager", "ceo"]) },
     { key: "aging",    label: "Aging Inventory", blurb: "New items, the DM's replies, and the review deadline.",
       kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply",
-              "agingDue", "agingDmReview", "agingMgrReview"] },
+              "agingDue", "agingDmReview", "agingMgrReview"],
+      feature: "widget-aging-inventory" },
   ],
   deadlines: [
     { key: "kpis",     label: "Store KPIs", blurb: "Weekly and monthly entry.",
@@ -258,8 +298,11 @@ const SUBS: Record<Category, Sub[]> = {
 };
 
 // The subs worth showing this role. Fewer than two is not a split worth drawing.
+const liveSubs = (c: Category, role: string) =>
+  (SUBS[c] || []).filter((x) => (!x.roles || x.roles.has(role))
+    && !(x.feature && PAUSED_FEATURES.has(x.feature)));
 const subsFor = (c: Category, role: string) => {
-  const list = (SUBS[c] || []).filter((x) => !x.roles || x.roles.has(role));
+  const list = liveSubs(c, role);
   return list.length > 1 ? list : [];
 };
 
@@ -288,6 +331,9 @@ const KIND_LABEL: Record<string, string> = {
   agingDmReview: "Aging Inventory", agingMgrReview: "Aging Inventory",
   audit_practice_submitted: "PayMore Audit", audit_official_submitted: "PayMore Audit",
   scorecard_submitted: "SPEEKS Scorecard",
+  b2b_pricing_location: "B2B Deal", b2b_pricing: "B2B Deal", b2b_quote_ready: "B2B Deal",
+  b2b_sendback: "B2B Deal", b2b_listing_location: "B2B Deal", b2b_listing: "B2B Deal",
+  b2b_delete_request: "B2B Delete Request",
 };
 
 // WHICH ROLES CAN ACTUALLY RECEIVE EACH CATEGORY.
@@ -327,6 +373,18 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   requests: new Set([
     "district manager", "ceo",
     "manager", "owner (manager)", "owner manager", "assistant manager",
+  ]),
+  // Everyone who can hold the Business-to-Business tab by default (its
+  // FEATURE_CATALOG `def` in speeks.js), MOCD included -- Haydn works B2B daily,
+  // and b2b-deals has always mailed the corp stages to "mocd" through
+  // ACCEPT_ROLES while this popout gave him no switch for it. The tab is a
+  // limited rollout (Feature Access turns it off per role and back on per
+  // person), so the GET below also hides this category from anyone the
+  // widget-ops-b2b override takes the tab away from.
+  b2b: new Set([
+    "district manager", "ceo", "mocd",
+    "manager", "owner (manager)", "owner manager", "assistant manager",
+    "employee", "training",
   ]),
   // _CLAIM_ALERT_ROLES + checkAgingClaimsDM. Not the CEO — see the claims block.
   claims: new Set(["manager", "owner (manager)", "owner manager", "district manager"]),
@@ -370,10 +428,14 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
 };
 
 // The categories worth showing THIS person, in the canonical order.
+// A category that IS split into subs, but none survive for this role, has
+// nothing to send them — an ASM's variance_aging while aging is paused (they get
+// no variance). Categories with no subs at all are unaffected.
 const categoriesFor = (role: string) =>
   CATEGORIES.filter((c) => {
     const allowed = CATEGORY_ROLES[c];
-    return !allowed || allowed.has(role);
+    if (allowed && !allowed.has(role)) return false;
+    return !(SUBS[c] || []).length || liveSubs(c, role).length > 0;
   });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -548,6 +610,7 @@ function passesAudience(row: any, person: Person, overrides: Map<string, any[]>)
   const byRole = !roles?.length
     || roles.map((r: string) => r.toLowerCase().trim()).includes(person.role);
   const key = row.audience_feature ? String(row.audience_feature) : null;
+  if (key && PAUSED_FEATURES.has(key)) return false;
   return key ? featureAllows(overrides.get(key) || [], person, byRole) : byRole;
 }
 
@@ -1146,10 +1209,12 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // Gate: _VR_MANAGER_ROLES = manager / owner (manager) / owner manager. One
   // email per uploaded PERIOD (the dedupe period is the period id), so a fresh
   // upload notifies again but an unanswered one doesn't nag daily.
+  // A period the DM has ENDED (ended_at, 0146) is skipped here and in the
+  // "replies are in" pass below: its reply cycle is over by the DM's decision.
   {
     const { data: periods } = await sb.from("variance_reply_periods")
       .select("id, store, manager_due_at, all_clear, uploaded_at")
-      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
+      .eq("all_clear", false).is("ended_at", null).gte("uploaded_at", vrCutoff);
     for (const per of periods || []) {
       // gm_note, NOT mgr_reply. This notification is "explain your variance
       // lines", and gm_note is the explanation; mgr_reply is the answer to a DM
@@ -1293,7 +1358,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   {
     const { data: periods } = await sb.from("variance_reply_periods")
       .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear, uploaded_at")
-      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
+      .eq("all_clear", false).is("ended_at", null).gte("uploaded_at", vrCutoff);
 
     for (const per of periods || []) {
       const store = String(per.store || "").toUpperCase();
@@ -1573,6 +1638,106 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
     }
   }
 
+  // ---- B2B: pricing due (daily) and unlisted value (Mondays) -------------
+  // Nick, 2026-10-16: stores get "daily reminders of when a given b2b needs to
+  // be finished pricing (always 1 week due date from when entering this
+  // stage)", and once a deal is listing, "a weekly notification of all combined
+  // unlisted B2B value for that location". Corp gets the same, with the weekly
+  // one covering every store and saying which store has what. "These weekly
+  // reports should land on monday for all."
+  //
+  // The site's feed shows the same two cards (checkB2BReminders in speeks.js),
+  // off the same rule and the same view, so a reminder in the inbox and on the
+  // site never disagree about a date or a dollar figure.
+  //
+  // Store side is B2B_REMINDER_STORE at that store; corp is B2B_REMINDER_CORP.
+  // Both are revoke-only through widget-ops-b2b, which is how the limited
+  // rollout keeps managers without the tab out of it.
+  {
+    const B2B_STORE_ROLES = B2B_REMINDER_STORE;
+    const B2B_CORP_ROLES = B2B_REMINDER_CORP;
+    const money = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
+    const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+    // Pricing: one card per deal per day. The period is deal + day, so each
+    // deal is mailed at most once a day and a second digest run is a no-op.
+    // "Entered pricing" is stage_changed_at: a deal sent back from approval
+    // re-enters pricing and gets a fresh week, which is what "from when
+    // entering this stage" says.
+    const { data: pricing } = await sb.from("b2b_deal_list")
+      .select("id, ref, company, pricing_store, stage_changed_at").eq("stage", "pricing");
+    for (const d of pricing || []) {
+      const entered = centralDay(new Date(d.stage_changed_at));
+      const dueOn = addDays(entered, 7);
+      const left = Math.round((parseDate(dueOn).getTime() - parseDate(t.date).getTime()) / dayMs);
+      const late = left < 0;
+      const store = String(d.pricing_store || "").toUpperCase();
+      const atStore = STORES.includes(store);       // CORP-priced deals are corp's alone
+      const when = late ? `${plural(-left, "day")} overdue`
+        : left === 0 ? "due today" : `${plural(left, "day")} left`;
+      due.push({
+        slug: "b2bPricingDue", period: `${d.id}:${t.date}`, cat: "b2b",
+        store: atStore ? store : undefined,
+        title: `${late ? "Pricing overdue" : "Finish pricing"} ${d.ref} — ${STORE_NAME[store] || store || "Corp"}`,
+        body: `Pricing for ${d.company || d.ref} is due ${prettyDate(dueOn)} (${when}).`
+          + ` Due one week after it entered pricing on ${prettyDate(entered)}.`,
+        link: "operations.html#b2b", tone: late ? "red" : "amber",
+        meta: late ? "Overdue" : `Due ${prettyDate(dueOn)}`,
+        for: (p) => B2B_CORP_ROLES.has(p.role)
+          || (atStore && B2B_STORE_ROLES.has(p.role) && covers(p, store)),
+        feature: "widget-ops-b2b",
+      });
+    }
+
+    // Unlisted value: Mondays only, once per store per week, plus one corp
+    // card with the per-store breakdown. Read from b2b_unlisted_value (0148).
+    if (t.dow === 1) {
+      const week = weekStamp(t.date);
+      const { data: rows } = await sb.from("b2b_unlisted_value")
+        .select("ref, company, store, unlisted_units, unlisted_value");
+      const byStore = new Map<string, { value: number; units: number; deals: { ref: string; value: number }[] }>();
+      for (const r of rows || []) {
+        const s = String(r.store || "").toUpperCase();
+        if (!byStore.has(s)) byStore.set(s, { value: 0, units: 0, deals: [] });
+        const b = byStore.get(s)!;
+        b.value += Number(r.unlisted_value) || 0;
+        b.units += Number(r.unlisted_units) || 0;
+        b.deals.push({ ref: String(r.ref), value: Number(r.unlisted_value) || 0 });
+      }
+      // Biggest first, because the point is knowing where the money is sitting.
+      const dealList = (list: { ref: string; value: number }[]) => {
+        const top = list.slice().sort((a, b) => b.value - a.value);
+        return top.slice(0, 6).map((d) => `${d.ref} ${money(d.value)}`).join(", ")
+          + (top.length > 6 ? `, and ${top.length - 6} more` : "");
+      };
+      let total = 0;
+      for (const [store, s] of byStore) {
+        total += s.value;
+        due.push({
+          slug: "b2bUnlistedWeekly", period: `${week}:${store}`, cat: "b2b", store,
+          title: `Unlisted B2B value — ${STORE_NAME[store] || store}: ${money(s.value)}`,
+          body: `Waiting to be listed: ${money(s.value)} across ${plural(s.units, "unit")}`
+            + ` on ${plural(s.deals.length, "deal")}. ${dealList(s.deals)}.`,
+          link: "operations.html#b2b", tone: "sage", meta: "This week",
+          for: (p) => B2B_STORE_ROLES.has(p.role) && covers(p, store),
+          feature: "widget-ops-b2b",
+        });
+      }
+      if (byStore.size) {
+        const parts = [...byStore].sort((a, b) => b[1].value - a[1].value)
+          .map(([store, s]) => `${STORE_NAME[store] || store} ${money(s.value)} (${plural(s.deals.length, "deal")})`);
+        due.push({
+          slug: "b2bUnlistedWeekly", period: `${week}:ALL`, cat: "b2b",
+          title: `Unlisted B2B value — all stores: ${money(total)}`,
+          body: `By store: ${parts.join(" · ")}.`,
+          link: "operations.html#b2b", tone: "sage", meta: "This week",
+          for: (p) => B2B_CORP_ROLES.has(p.role),
+          feature: "widget-ops-b2b",
+        });
+      }
+    }
+  }
+
   return due;
 }
 
@@ -1601,6 +1766,7 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
       // Revoke-only: `for` already said they owe it, so the override's only job
       // is to take it away from somebody the tool is hidden from.
       const fk = typeof d.feature === "function" ? d.feature(person) : (d.feature || null);
+      if (fk && PAUSED_FEATURES.has(fk)) continue;
       if (fk && !featureAllows(dueOverrides.get(fk) || [], person, true)) continue;
       if (!wants(prefs.get(person.key), d.cat, d.slug)) continue;
       hits.push({ d, person, key: `due:${d.slug}:${d.period}:${person.key}` });
@@ -1713,6 +1879,18 @@ async function whoAmI(sb: any, pin: string) {
   return { name: String(data.name || ""), key: nameKey(data.name), role, rawRole: raw };
 }
 
+// THE ON-SITE SWITCHES. The QuickPortal feed draws its cards in the browser, so
+// nothing here sends them; this is only where the choice is stored and who may
+// make it. Keys match the email sub-switches on purpose (see SUBS.b2b).
+const FEED_ROLES = new Set(["district manager", "ceo", "mocd"]);
+const FEED_SWITCHES = [
+  { key: "b2b_pricing_due", label: "B2B Pricing Reminders",
+    blurb: "The card listing every deal in pricing and when each one is due." },
+  { key: "b2b_unlisted", label: "B2B Unlisted Value",
+    blurb: "Monday's card with the unlisted value at every store." },
+];
+const FEED_KEYS = new Set(FEED_SWITCHES.map((s) => s.key));
+
 const DEFAULT_PREFS = () => ({
   email: null, enabled: false, cadence: "instant",
   ...Object.fromEntries(CATEGORIES.map((c) => [`cat_${c}`, true])),
@@ -1802,16 +1980,28 @@ Deno.serve(async (req: Request) => {
     const me = await whoAmI(sb, pin);
     if (!me) return json({ error: "Invalid PIN" }, 401);
     const { data } = await sb.from("user_notify_prefs").select("*").eq("user_name", me.key).maybeSingle();
+    // B2B is a limited rollout: Feature Access takes the tab away per role and
+    // hands it back per person. Somebody without the tab gets no B2B mail (the
+    // digest checks widget-ops-b2b), so they get no B2B switches either.
+    const b2bRows = (await loadFeatureOverrides(sb, ["widget-ops-b2b"])).get("widget-ops-b2b") || [];
+    const hasB2b = featureAllows(b2bRows, { ...me, store: "", stores: [], isMsm: false } as Person,
+      !!CATEGORY_ROLES.b2b?.has(me.role));
+    const isCorp = FEED_ROLES.has(me.role);
     return json({
       success: true,
       me: { name: me.name, role: me.role },
       prefs: data || { user_name: me.key, ...DEFAULT_PREFS() },
+      // The ON-SITE switches -- corp only (Nick, 2026-10-16: stores always get
+      // their B2B cards; corp can turn them off). Empty for everyone else, and
+      // the page draws nothing for an empty list.
+      feed: isCorp && hasB2b ? FEED_SWITCHES : [],
+      feed_muted: Array.isArray(data?.feed_muted) ? data.feed_muted : [],
       // Only the categories this role can actually be sent — see CATEGORY_ROLES.
       // The stored row still carries all seven cat_* flags; the ones not shown are
       // simply never consulted for this person, so promoting somebody (Employee ->
       // ASM) reveals the extra switches already at their default rather than
       // needing a backfill.
-      categories: categoriesFor(me.role).map((c) => ({
+      categories: categoriesFor(me.role).filter((c) => c !== "b2b" || hasB2b).map((c) => ({
         key: c, ...metaFor(c, me.role),
         // Empty array = render a plain row. The page draws whatever is here, so
         // adding a sub is a change in this file only.
@@ -1864,6 +2054,15 @@ Deno.serve(async (req: Request) => {
       row.muted_kinds = body.muted
         .map((k: unknown) => String(k))
         .filter((k: string) => ALL_SUB_KEYS.has(k));
+    }
+
+    // On-site mutes are corp's alone. Anyone else's list is cleared rather than
+    // kept, so a role change (corp -> store) cannot leave a store user with a
+    // card switched off that they have no switch to turn back on.
+    if (Array.isArray(body.feed_muted)) {
+      row.feed_muted = FEED_ROLES.has(me.role)
+        ? body.feed_muted.map((k: unknown) => String(k)).filter((k: string) => FEED_KEYS.has(k))
+        : [];
     }
 
     const { error } = await sb.from("user_notify_prefs").upsert(row, { onConflict: "user_name" });

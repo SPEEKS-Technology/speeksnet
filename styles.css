@@ -6933,6 +6933,17 @@ input.vr-up-input[type="file"] {
 .recycle-review-cell { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
 .recycle-review-cell .dd-host { flex: 1 1 auto; }
 
+/* The request's reason (Poor Testing, Damaged/Broken…) as a small tag at the
+   front of the Description cell rather than a column of its own — the table is
+   already ten columns wide in a modal, and the reason reads as part of "what is
+   this and why". */
+.recycle-reason-chip {
+  display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .2px;
+  color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0;
+  border-radius: 20px; padding: 1px 8px; margin-right: 4px; white-space: nowrap;
+  vertical-align: 1px;
+}
+
 .recycle-new-dot {
     position: relative;
     display: inline-block;
@@ -7869,6 +7880,48 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    under the fixed .top-nav at 60px. */
 .ws-panel-vreplies { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
 .ws-panel-vreplies .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+/* Claims & Disputes (a Workspace tab since 2026-10-06, was two popups): the Aging
+   treatment, so a long list of claims or cases grows the page instead of hiding
+   behind an inner scrollbar. Its body is the popups' markup unchanged, which
+   brings .manage-content's popup sizing with it (a flat 60vh and its own
+   scroller) — undone here, and the modal-scoped grey body and footer re-applied
+   since .modal-menu.manage-menu no longer wraps them. */
+.ws-panel-claims { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-claims .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-claims .ws-head { position: sticky; top: 60px; z-index: 4; background: #fff; border-bottom: 1px solid #eef2f6; }
+.ws-panel-claims .manage-content { height: auto; overflow: visible; background: #f6f8fa; padding: 20px 22px; }
+.ws-panel-claims .manage-footer { background: #ffffff; border-top: 1px solid #eef1f5; padding: 12px 18px; }
+/* Compact like the rest of the tool (Ethan, 2026-10-06: "make the claim filling
+   out page smaller to match the rest of the pages design"). The popups used the
+   site-wide form-input-lg / btn-primary sizing — 15px text, 12px padding, 24px
+   buttons — while every control the tool draws itself (the oversight filters,
+   the check-in buttons) is 12.5px / 8px. Scoped here so other forms keep theirs. */
+.ws-panel-claims .manage-content { padding: 16px 18px; }
+.ws-panel-claims .form-label-caps { font-size: 10.5px; letter-spacing: 0.04em; color: #64748b; margin-bottom: 0; }
+.ws-panel-claims .form-input-lg { padding: 8px 10px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 12.5px; font-weight: 600; margin-top: 4px; background-color: #fff; }
+.ws-panel-claims .form-input-lg:disabled { background-color: #f1f5f9; color: #64748b; }
+.ws-panel-claims .btn-primary,
+.ws-panel-claims .btn-secondary { padding: 8px 14px; font-size: 12px; border-radius: 8px; letter-spacing: 0.3px; box-shadow: none; }
+.ws-panel-claims .btn-primary:hover { transform: none; box-shadow: none; }
+/* The form fields span the panel (Ethan: "stretch the whole box like before");
+   only their height and look are compact. The Store box is the exception: it
+   only ever holds a store code. */
+.ws-panel-claims #claims-store-row .form-input-lg { max-width: 180px; }
+/* Its Cancel / Save sit under the form, not at the far right edge of the panel. */
+.ws-panel-claims #claimsFooter { justify-content: flex-start; }
+/* Text with no size of its own (the "Nothing needs attention" lines) took the
+   page body size, 15px, and read louder than anything around it. */
+.ws-panel-claims .manage-content { font-size: 13px; }
+/* The claim rows' status pills. The row writes an 11px pill inline on its
+   <select>, but the DROPDOWNS module draws a .dd-btn over every select and
+   copies its classes, not its inline style, so on screen it was the house 13px /
+   34px face. That is the same in the old popup, and the reason the rows'
+   Denied / Recovered boxes looked heavier than every other control. Rows only
+   (td), so the oversight view's filters keep their face. */
+.ws-panel-claims td .dd-host { display: inline-block; }
+.ws-panel-claims td .dd-btn { min-height: 0; padding: 5px 10px 5px 12px; gap: 6px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+.ws-panel-claims td .dd-chev { width: 12px; height: 12px; }
+.ws-panel-claims td button[onclick^="requestClaimDelete"] { width: 28px !important; height: 28px !important; }
 /* SPEEKS Connect gets the Aging treatment too: the listing table grows with the
    store and the shared pane height would put most of it behind an inner
    scrollbar, taking the SKU box out of reach the moment you scrolled to check a
@@ -10629,6 +10682,9 @@ body.sam-active .hotbar-btn:hover {
 #preferredOwnerAlertBubble,
 #preferredMineAlertBubble,
 #b2bAlertBubble,
+/* Added 2026-10-16 with the B2B notification rework, in the same commit. */
+#b2bPricingAlertBubble,
+#b2bUnlistedAlertBubble,
 #listingGoalAlertBubble,
 #listingGoalsDailyAlertBubble,
 #expenseFileAlertBubble,
@@ -10644,7 +10700,12 @@ body.sam-active .hotbar-btn:hover {
 /* Added 2026-09-04 with the dismissed-with-a-note card, listed here in the
    same commit that created it — see the note above for what happens
    otherwise. */
-#titleNoteAlertBubble {
+#titleNoteAlertBubble,
+/* Added 2026-10-12 — the claims 4pm "due today" card (2026-10-08) shipped
+   without this line and floated a red "Card expired … overdue" toast on every
+   store manager's screen. scripts/retired-bubble-check.js now fails any
+   *AlertBubble id speeks.js creates that is missing from this list. */
+#claimsDueAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -11868,6 +11929,11 @@ body.sam-active .hotbar-btn:hover {
 /* Cost is context for the two figures either side of it, not a headline — quieter
    so Net and Gross profit stay the numbers the eye lands on. */
 .lv-tbl .lv-quietnum { color: #94a3b8; }
+/* "Through Yesterday" under the Today tab's % to goal header (see _lvPaceThru).
+   Its own line, not beside the key: the column is ~100px at the 1080px floor and
+   every header is nowrap, so side by side it spilled into the next column. */
+.lv-thru { display: block; margin-top: 2px; font-size: 8px; font-weight: 700; letter-spacing: .04em; color: #94a3b8; }
+.lvc-goal-k .lv-thru { display: inline; margin: 0 0 0 5px; }
 /* Margin: charcoal and heavy like Net and GP, but left at the body size so the
    row still has a clear order of emphasis. */
 .lv-tbl .lv-boldnum { color: var(--slate-charcoal); font-weight: 850; }
@@ -13961,6 +14027,13 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    assumed -- it is the half of the line the client actually reads. */
 .b2b-rvw-note { font-size: 11.5px; color: #475569; margin-top: 3px; font-style: italic; }
 .b2b-rvw-qty { font-size: 13px; font-weight: 700; color: var(--b2b-faint); }
+.b2b-rvw-line { font-size: 11px; color: var(--b2b-faint); }
+/* At full width (the sent quote) the money columns get room to breathe; the
+   item column takes whatever is left, so names stay on one line. */
+.b2b-rvw-full .b2b-rvw-head, .b2b-rvw-full .b2b-rvw-row {
+    grid-template-columns: 40px minmax(180px, 1fr) 40px 80px 96px 60px 60px 60px 96px;
+    gap: 10px; padding: 10px 14px; min-width: 900px;
+}
 .b2b-rvw-val, .b2b-rvw-ship { font-size: 12.5px; color: #475569; }
 .b2b-rvw-mgn, .b2b-rvw-net { font-size: 12.5px; font-weight: 700; }
 .b2b-rvw-tot { font-size: 13.5px; font-weight: 800; color: #1a1c1e; }
@@ -14233,6 +14306,17 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     text-transform: uppercase; color: var(--b2b-muted);
 }
 .b2b-phead .r { text-align: right; }
+/* A sortable column header: the header's own type, so it reads as a label that
+   happens to be clickable rather than a button sitting in the header. */
+.b2b-lsort {
+    all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
+    font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit;
+    border-radius: 4px; white-space: nowrap;
+}
+.b2b-lsort:hover { color: var(--b2b-ink, #1a1c1e); }
+.b2b-lsort:focus-visible { outline: 2px solid var(--b2b-accent, #1f9d57); outline-offset: 2px; }
+.b2b-lsort.on { color: var(--b2b-ink, #1a1c1e); }
+.b2b-lsort i { font-style: normal; font-size: 8px; }
 
 .b2b-pline {
     padding: 3px var(--b2b-prow-pad);
@@ -14936,6 +15020,24 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-sendbar-s { font-size: 11px; font-weight: 750; color: var(--b2b-muted); }
 .b2b-sendbar-i { flex: 1; min-width: 190px; }
 .b2b-sendbar-hint { flex: 1 0 100%; font-size: 11px; color: var(--b2b-faint); line-height: 1.5; }
+/* The sent quote's status line (_b2bQuoteStatus): facts on the left, the one
+   send control on the right. Warms after a week with the client, the same
+   threshold the board's age tone uses. */
+.b2b-qstatus { gap: 12px; }
+.b2b-qstatus-facts { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0;
+                     font-size: 12.5px; color: var(--b2b-muted); }
+.b2b-qstatus-facts b { color: #1a1c1e; font-weight: 800; }
+/* Full-width lines on the sent quote. The narrow-column floor (min-width:520px
+   and horizontal scroll) still applies, so a phone scrolls rather than crushes. */
+.b2b-rvw-full { margin-bottom: 18px; }
+.b2b-rvw-cap-full { margin-top: 14px; }
+/* The client's copy, folded. It is the same lines again, so it waits until
+   asked for rather than doubling the screen. */
+.b2b-qdoc-fold > summary { cursor: pointer; list-style: none; }
+.b2b-qdoc-fold > summary::-webkit-details-marker { display: none; }
+.b2b-qdoc-fold > summary::after { content: '▸'; margin-left: 8px; font-size: 11px; color: var(--b2b-faint); }
+.b2b-qdoc-fold[open] > summary::after { content: '▾'; }
+.b2b-qdoc-fold-body { border: 1px solid var(--b2b-line); border-radius: 12px; background: #f7f9fa; padding: 12px; }
 
 /* The confirm step before the draft opens, so the paste is never a surprise. */
 .b2b-sendstep { max-width: 520px; margin: 0 auto; padding: 22px 4px 8px; text-align: center; }
@@ -19641,6 +19743,16 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .pq-v-retake  { border-left: 3px solid #d1443b; }
 .pq-v-fix     { border-left: 3px solid #d69e2e; }
 .pq-v-reorder { border-left: 3px solid var(--cb-sage); }
+.pq-v-pass    { border-left: 3px solid var(--cb-line, #d6d3cd); }
+/* NEW — graded by the nightly random sample: the WHOLE border in the verdict's
+   colour, not just the left edge (Ethan, 2026-10-15: "have the entire box border
+   for these highlighted so I know which ones are new for me to review"). */
+.pq-row-new.pq-v-retake  { border: 3px solid #d1443b; }
+.pq-row-new.pq-v-fix     { border: 3px solid #d69e2e; }
+.pq-row-new.pq-v-reorder { border: 3px solid var(--cb-sage); }
+.pq-row-new.pq-v-pass    { border: 3px solid #8a8f98; }
+.pq-new-tag { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    color: #fff; background: #2f6fed; border-radius: 6px; padding: 2px 6px; margin-right: 6px; vertical-align: 1px; }
 .pq-title { font-size: 13px; font-weight: 800; color: var(--cb-ink); line-height: 1.4; overflow-wrap: anywhere; }
 .pq-sheet { font-size: 11px; font-weight: 600; color: var(--cb-faint); }
 .pq-sheet b { font-weight: 800; color: var(--cb-muted); }
@@ -19712,9 +19824,225 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .pq-row .lt-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; justify-items: center; }
 .pq-row .rc-links { display: flex; gap: 6px; }
 .pq-row .rc-links .ec-pill { flex: 1 1 0; justify-content: center; }
-.pq-acts { width: 100%; }
+/* Who listed it: its own line, centred under the two links. */
+.pq-lister { display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* The price beside it: plain figures, the same weight as the photo count. */
+.pq-price { font-size: 12px; font-weight: 800; color: var(--cb-ink); font-variant-numeric: tabular-nums; }
+
+/* TRAIN THE CHECKER (2026-10-08) — one photo beside the guide's example of the
+   same shot, and a row of answers. The photo is shown WHOLE inside a square
+   frame with a visible edge: the question is where the item sits in the frame,
+   so the frame's edge has to be on screen, never cropped by object-fit: cover. */
+.pqt-entry {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--cb-line, #e3e8ee);
+    font-size: 12px; color: var(--cb-muted, #647082);
+}
+/* Confirm Shots sits above the tabs: the line goes under it instead. */
+.pqt-entry-top { margin: 0 0 12px; padding: 0 0 12px; border-top: 0; border-bottom: 1px solid var(--cb-line, #e3e8ee); }
+.pqt-overlay {
+    position: fixed; inset: 0; z-index: 10050; background: rgba(15, 23, 42, .55);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.pqt-box {
+    background: #fff; border-radius: 14px; width: min(1100px, 100%); max-height: 100%;
+    overflow: auto; padding: 18px 20px; box-shadow: 0 20px 50px rgba(15, 23, 42, .3);
+}
+.pqt-head { display: flex; align-items: flex-start; gap: 12px; }
+.pqt-head > div:first-child { flex: 1 1 auto; }
+.pqt-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--cb-faint, #8a94a3); }
+.pqt-title { font-size: 18px; font-weight: 800; color: #1e293b; }
+.pqt-count { font-size: 12px; font-weight: 700; color: var(--cb-muted, #647082); padding-top: 6px; white-space: nowrap; }
+.pqt-x {
+    border: 0; background: none; font-size: 26px; line-height: 1; color: #94a3b8; cursor: pointer; padding: 0 4px;
+}
+.pqt-ask { margin: 10px 0 12px; font-size: 13px; color: #334155; }
+.pqt-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.pqt-fig { margin: 0; min-width: 0; }
+.pqt-frame {
+    aspect-ratio: 1 / 1; width: min(100%, 56vh); margin: 0 auto;
+    border: 2px solid #cbd5e1; border-radius: 8px; background: #f8fafc;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.pqt-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pqt-noex { font-size: 12px; font-weight: 700; color: #94a3b8; text-align: center; padding: 12px; }
+.pqt-fig figcaption { margin-top: 6px; font-size: 12px; color: var(--cb-muted, #647082); line-height: 1.4; overflow-wrap: anywhere; }
+.pqt-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.pqt-btn {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff;
+    font: inherit; font-size: 12.5px; font-weight: 700; color: #334155; cursor: pointer; white-space: nowrap;
+}
+.pqt-btn:disabled { opacity: .45; cursor: default; }
+.pqt-btn kbd {
+    margin-left: 4px; padding: 0 5px; border-radius: 4px; background: #f1f5f9; border: 1px solid #e2e8f0;
+    font-size: 10.5px; font-family: inherit; color: #64748b;
+}
+.pqt-fine { border-color: #86efac; background: #f0fdf4; color: #166534; }
+.pqt-prob.pqt-on { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+.pqt-save { border-color: #b91c1c; background: #b91c1c; color: #fff; }
+.pqt-save kbd { background: rgba(255, 255, 255, .2); border-color: transparent; color: #fff; }
+.pqt-skip { color: #64748b; }
+.pqt-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+.pqt-link { border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #475569; cursor: pointer; }
+.pqt-link:disabled { opacity: .35; cursor: default; }
+.pqt-was { font-size: 12px; font-weight: 700; color: #475569; }
+.pqt-err { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #fef2f2; color: #b91c1c; font-size: 12.5px; font-weight: 600; }
+.pqt-empty { padding: 40px 10px; text-align: center; font-size: 14px; font-weight: 600; color: var(--cb-muted, #647082); }
+@media (max-width: 700px) {
+    .pqt-pair { grid-template-columns: 1fr; }
+    .pqt-frame { width: min(100%, 42vh); }
+    .pqt-box { padding: 14px 16px; }
+}
+/* CONFIRM SHOTS (2026-10-16): the gold set's shot labels. It reuses the
+   trainer's overlay, frames and buttons and adds three parts: per-sheet
+   progress, the shot chips (keys printed on them), and a strip of the
+   listing's photos showing each one's current label, with a pencil where the
+   label was changed. */
+.pqc-sheets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pqc-sheet {
+    display: grid; grid-template-columns: minmax(0, auto) 60px auto; align-items: center; gap: 6px;
+    padding: 5px 9px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff;
+    font: inherit; font-size: 11.5px; font-weight: 700; color: #334155; cursor: pointer; max-width: 100%;
+}
+.pqc-sheet:disabled { opacity: .45; cursor: default; }
+.pqc-sheet-on { border-color: #2563eb; background: #eff6ff; }
+.pqc-sheet-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pqc-bar { height: 5px; border-radius: 3px; background: #e2e8f0; overflow: hidden; }
+.pqc-bar span { display: block; height: 100%; background: #16a34a; }
+.pqc-sheet-n { font-variant-numeric: tabular-nums; color: #64748b; }
+.pqc-more { margin-top: 6px; font-size: 12px; font-weight: 700; color: #475569; }
+.pqc-more summary { cursor: pointer; }
+.pqc-listing { margin: 12px 0 10px; }
+.pqc-title { font-size: 14px; font-weight: 800; color: #1e293b; overflow-wrap: anywhere; }
+.pqc-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 4px; font-size: 12px; color: #64748b; }
+.pqc-sheet-pick { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+.pqc-sheet-pick select { font: inherit; font-size: 12px; max-width: 220px; }
+.pqc-warn { font-size: 11px; font-weight: 800; color: #b45309; }
+.pqc-chips, .pqc-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.pqc-chip {
+    padding: 6px 10px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff;
+    font: inherit; font-size: 12px; font-weight: 700; color: #334155; cursor: pointer;
+}
+.pqc-chip kbd {
+    margin-left: 3px; padding: 0 4px; border-radius: 4px; background: #f1f5f9; border: 1px solid #e2e8f0;
+    font-size: 10px; font-family: inherit; color: #64748b;
+}
+.pqc-chip-on { border-color: #16a34a; background: #f0fdf4; color: #166534; }
+.pqc-flags { margin-top: 8px; }
+.pqc-flag {
+    padding: 4px 9px; border-radius: 999px; border: 1px dashed #cbd5e1; background: #fff;
+    font: inherit; font-size: 11px; font-weight: 700; color: #64748b; cursor: pointer;
+}
+.pqc-flag-on { border-style: solid; border-color: #b45309; background: #fffbeb; color: #92400e; }
+.pqc-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin-top: 12px; }
+.pqc-thumb {
+    position: relative; display: flex; flex-direction: column; gap: 3px; padding: 4px; min-width: 0;
+    border: 2px solid #e2e8f0; border-radius: 8px; background: #fff; cursor: pointer; font: inherit; text-align: left;
+}
+.pqc-thumb img { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f8fafc; border-radius: 4px; }
+.pqc-thumb-on { border-color: #2563eb; }
+.pqc-thumb-done { background: #f0fdf4; }
+.pqc-thumb-n {
+    position: absolute; top: 6px; left: 6px; padding: 0 5px; border-radius: 4px;
+    background: rgba(15, 23, 42, .7); color: #fff; font-size: 10.5px; font-weight: 800;
+}
+.pqc-thumb-l { font-size: 10.5px; font-weight: 700; color: #475569; line-height: 1.25; overflow-wrap: anywhere; }
+/* Confirm Shots flags (0149): everything else the rules read, in labelled rows,
+   per photo and then once per listing. Kept quiet (dashed, small) so the shot
+   chips stay the thing the eye goes to; an "on" flag turns amber. */
+.pqc-flagbox { margin-top: 12px; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.pqc-flagbox .pqc-flags { margin-top: 6px; align-items: center; }
+.pqc-flaghead { font-size: 11.5px; font-weight: 800; color: #334155; }
+.pqc-flaghead span { font-weight: 600; color: #64748b; }
+.pqc-flaggroup {
+    flex: 0 0 auto; min-width: 64px; font-size: 10.5px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase; color: #94a3b8;
+}
+.pqc-repeat { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: #475569; }
+.pqc-repeat select { font: inherit; font-size: 12px; }
+.pqc-said {
+    margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: #fff; border: 1px solid #e2e8f0;
+    font-size: 11.5px; color: #475569; line-height: 1.4; max-height: 96px; overflow-y: auto; overflow-wrap: anywhere;
+}
+.pqc-thumb-f { font-size: 10px; font-weight: 800; color: #b45309; }
+/* The cosmetic notes, one line each, with the system's call and a button to
+   overrule it: a flaw line reads normally, a standard-wording line is faded,
+   and a line the person turned over gets an amber edge. */
+.pqc-notes { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.pqc-note {
+    display: flex; align-items: flex-start; gap: 8px; padding: 5px 8px; border-radius: 6px;
+    background: #fff; border: 1px solid #e2e8f0; font-size: 11.5px; color: #334155; line-height: 1.4;
+}
+.pqc-note-std { color: #94a3b8; background: #f8fafc; }
+.pqc-note-flip { border-color: #f59e0b; box-shadow: inset 3px 0 0 #f59e0b; }
+.pqc-note-t { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.pqc-note-b {
+    flex: 0 0 auto; padding: 2px 8px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff;
+    font: inherit; font-size: 10.5px; font-weight: 700; color: #475569; cursor: pointer; white-space: nowrap;
+}
+.pqc-note-b:disabled { opacity: .45; cursor: default; }
+/* Confirm Shots, whole-listing view (2026-10-16). Every photo is a card, and
+   where each answer came from is its colour: green = Ethan's earlier call,
+   grey = the model's guess, blue = changed now. The guide strip underneath
+   marks each sheet shot covered or missing. */
+.pqc-yous { margin: 0 0 10px; display: flex; flex-direction: column; gap: 4px; }
+.pqc-you {
+    padding: 6px 9px; border-radius: 8px; background: #f0fdf4; border: 1px solid #bbf7d0;
+    font-size: 12px; color: #14532d; line-height: 1.4; overflow-wrap: anywhere;
+}
+.pqc-you span { font-size: 10.5px; font-weight: 700; color: #4d7c0f; }
+.pqc-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 11.5px; color: #64748b; }
+.pqc-fchip {
+    display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; border: 1px solid #cbd5e1;
+    background: #fff; font: inherit; font-size: 10.5px; font-weight: 700; color: #475569; cursor: pointer; white-space: nowrap;
+}
+.pqc-from-earlier { border-color: #86efac; background: #f0fdf4; color: #166534; }
+.pqc-from-model { border-color: #cbd5e1; background: #f1f5f9; color: #475569; }
+.pqc-from-you { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.pqc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.pqc-card {
+    display: flex; flex-direction: column; gap: 5px; padding: 6px; min-width: 0;
+    border: 1px solid #e2e8f0; border-radius: 10px; background: #fff;
+}
+.pqc-card-changed { border-color: #93c5fd; }
+.pqc-card-img { position: relative; padding: 0; border: 0; background: #f8fafc; border-radius: 6px; cursor: zoom-in; }
+.pqc-card-img img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: contain; border-radius: 6px; }
+.pqc-shot, .pqc-add { width: 100%; min-width: 0; font: inherit; font-size: 11.5px; padding: 3px 4px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; }
+.pqc-shot { font-weight: 700; }
+.pqc-shot.pqc-from-earlier { border-color: #86efac; background: #f0fdf4; }
+.pqc-shot.pqc-from-model { border-color: #cbd5e1; background: #f8fafc; }
+.pqc-shot.pqc-from-you { border-color: #93c5fd; background: #eff6ff; }
+.pqc-add { color: #64748b; border-style: dashed; }
+.pqc-add-on { color: #b45309; border-style: solid; border-color: #f59e0b; background: #fffbeb; font-weight: 700; }
+.pqc-fchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.pqc-fchips .pqc-add { width: auto; flex: 1 1 90px; }
+.pqc-guide { margin-top: 12px; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.pqc-gstrip { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; margin-top: 6px; }
+.pqc-gshot { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 10.5px; font-weight: 700; color: #166534; line-height: 1.25; overflow-wrap: anywhere; }
+.pqc-gshot img, .pqc-gshot-none { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; }
+.pqc-gshot-none { display: block; }
+.pqc-gshot-miss { color: #b91c1c; }
+.pqc-gshot-miss img, .pqc-gshot-miss .pqc-gshot-none { border-color: #fca5a5; opacity: .7; }
+.pqc-zoom {
+    position: sticky; top: 0; z-index: 2; margin: -4px 0 12px; padding: 10px; border-radius: 10px;
+    background: #fff; border: 2px solid #2563eb; box-shadow: 0 10px 30px rgba(15, 23, 42, .25); cursor: zoom-out;
+}
+/* One-photo view: a prefilled flag shows its source, as the whole-listing view does. */
+.pqc-flag-model { border-color: #94a3b8; background: #f1f5f9; color: #334155; }
+.pqc-flag-earlier { border-color: #86efac; background: #f0fdf4; color: #166534; }
+/* More For Training: one line under the title saying why these listings are back. */
+.pqc-trainnote { margin-top: 4px; font-size: 12px; font-weight: 600; color: #b45309; max-width: 640px; }
+.pqt-entry .pqt-btn + .pqt-btn { margin-left: 2px; }
+/* Finished sheets, ticked off in their own row instead of vanishing. */
+.pqc-done { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; }
+.pqc-done-h { font-size: 11px; font-weight: 800; color: #166534; margin-right: 2px; }
+.pqc-done-s { padding: 2px 8px; border-radius: 999px; background: #f0fdf4; border: 1px solid #bbf7d0; font-size: 11px; font-weight: 700; color: #166534; white-space: nowrap; }
+/* Even halves, but never narrower than the label — "Approve Deletion" was
+   clipped to "Approve Deletio" by min-width: 0 (Ethan, 2026-10-11). Too narrow
+   for both, and Dismiss drops to its own line instead of anything being cut. */
+.pq-acts { width: 100%; flex-wrap: wrap; }
 .pq-acts .lt-ok, .pq-acts .lt-no {
-    flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;
+    flex: 1 1 0; min-width: max-content; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;
     border-radius: 7px; white-space: nowrap; text-align: center;
 }
 .pq-hint { font-size: 10.5px; font-weight: 600; color: var(--cb-faint); line-height: 1.35; text-align: center; }
@@ -19754,6 +20082,21 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 /* Red, like the outlines on the photos it names (Ethan, 2026-09-30). */
 .pq-row .lt-why b { font-weight: 800; color: #b3322a; }
 .pq-lab-miss { color: #b3322a; }
+/* What the listing says the flaw is, under a missing Cosmetic / LCD Flaws line. */
+.pq-said { display: block; font-size: 11.5px; font-weight: 600; color: var(--cb-faint); margin-top: 2px; }
+/* A row approved here stays in its place, saying what was done (Ethan, 2026-10-15). */
+.pq-done { font-size: 11.5px; font-weight: 800; color: #1f7a3d; background: #e8f5ec;
+    border-radius: 8px; padding: 7px 10px; margin-top: 6px; }
+/* RECHECK on the row (Ethan, 2026-10-16): while it runs only the buttons change
+   ("Checking…", both disabled — the greyed row was taken back the same day);
+   then green "Passed On Recheck" over the struck-through findings, or the new
+   findings under "Rechecked — Still Needs". Gone on refresh. */
+.pq-passed, .pq-rechecked { display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; font-weight: 800; border-radius: 8px; padding: 7px 10px; margin-top: 6px; }
+.pq-passed { color: #1f7a3d; background: #e8f5ec; }
+.pq-rechecked { color: #8a5a00; background: var(--cb-gold-tint, #fdf3e1); }
+.pq-why-fixed > li, .pq-why-fixed > li b { text-decoration: line-through; color: var(--cb-faint); }
+.pq-row-passed .pq-acts { display: none; }
 /* Patch Notes: Add New and Edit Previous are the same width (Ethan, 2026-09-30). */
 #pnmTab-add, #pnmTab-edit { width: 140px; justify-content: center; text-align: center; }
 /* Narrow: the side column goes under the photos rather than squeezing them. */
@@ -23802,8 +24145,8 @@ select.dd-native {
 .pg-ename { flex: 1; min-width: 0; }
 .pg-ename b { display: block; font-size: 13px; font-weight: 750; color: var(--pg-ink); }
 .pg-ename small { font-size: 11px; color: var(--pg-muted); }
-.pg-etools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
-/* The file input is the label, so the camera glyph IS the control — a visible
+/* A crucial photo (Picture Quality: missing it flags the listing). */
+.pg-etools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }/* The file input is the label, so the camera glyph IS the control — a visible
    "Choose file" reads as a form to fill in rather than a photo to swap. */
 .pg-ephoto {
     display: inline-flex; align-items: center; justify-content: center;
@@ -24815,3 +25158,83 @@ select.dd-native {
 #calendarDropdown .scal-company.scal-company-ro { grid-template-columns: minmax(0, 1fr); }
 #calendarDropdown .scal-company-ro .scal-clist { border-right: 0; }
 #calendarDropdown .scal-company-ro .scal-crow { grid-template-columns: 60px minmax(0, 1fr) minmax(0, 240px); }
+
+/* --- the custody form and the itemized pickup (2026-10-16) ---------------- */
+/* The phone-QR popout: a card over a dimmed page, closed by Close, Escape or a
+   tap outside. It only ever carries the site's sign-in address. */
+.b2b-qrpop {
+    position: fixed; inset: 0; z-index: 10050; display: grid; place-items: center;
+    background: rgba(16, 24, 34, .45); padding: 16px;
+}
+.b2b-qrpop-card {
+    width: min(340px, 100%); display: flex; flex-direction: column; align-items: center; gap: 12px;
+    padding: 20px; background: #fff; border-radius: 16px; text-align: center;
+    box-shadow: 0 18px 48px rgba(16, 24, 34, .28);
+}
+.b2b-qrpop-card b { font-size: 16px; font-weight: 800; color: #1a1c1e; }
+.b2b-qrpop-card p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--b2b-muted); }
+.b2b-qrpop-qr {
+    width: 200px; height: 200px; display: grid; place-items: center;
+    border: 1px solid var(--b2b-line); border-radius: 12px; padding: 8px; background: #fff;
+}
+.b2b-qrpop-qr svg { width: 100%; height: 100%; display: block; }
+.b2b-qrpop-url { font-size: 11px; color: var(--b2b-faint); word-break: break-all; }
+.b2b-cam-card { width: min(420px, 100%); }
+.b2b-cam-card video { width: 100%; max-height: 50vh; border-radius: 12px; background: #000; object-fit: cover; }
+.b2b-cam-msg { font-size: 12.5px; color: var(--b2b-muted); min-height: 1.5em; }
+
+/* The itemized list: folded until asked for, then the entry row and the list. */
+.b2b-mf {
+    margin-top: 14px; padding: 12px 14px; border: 1px solid var(--b2b-line);
+    border-radius: 12px; background: var(--b2b-surface);
+}
+.b2b-mf-toggle { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; color: var(--b2b-muted); line-height: 1.5; cursor: pointer; }
+.b2b-mf-toggle input { margin-top: 3px; flex: none; }
+.b2b-mf-toggle b { color: #1a1c1e; }
+.b2b-mf-body { margin-top: 12px; }
+.b2b-mf-entry { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 72px auto auto; gap: 8px; align-items: center; }
+.b2b-mf-entry .form-input-lg { margin: 0; min-width: 0; }
+@media (max-width: 720px) {
+    /* A phone gets the scan field full width -- it is the one in use all day. */
+    .b2b-mf-entry { grid-template-columns: minmax(0, 1fr) 72px; }
+    .b2b-mf-entry #b2bMfDesc, .b2b-mf-entry #b2bMfSerial { grid-column: 1 / -1; }
+}
+.b2b-mf-empty { font-size: 12px; color: var(--b2b-faint); padding: 8px 2px 0; }
+.b2b-mf-sum { font-size: 12px; color: var(--b2b-muted); margin: 10px 2px 6px; }
+.b2b-mf-sum b { color: #1a1c1e; }
+.b2b-mf-rows { max-height: 320px; overflow-y: auto; border: 1px solid var(--b2b-line-2); border-radius: 10px; background: #fff; }
+.b2b-mf-row {
+    display: grid; grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr) 44px 28px;
+    gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--b2b-line-2); font-size: 12.5px;
+}
+.b2b-mf-row:last-child { border-bottom: 0; }
+.b2b-mf-n { color: var(--b2b-faint); font-size: 11px; }
+.b2b-mf-what, .b2b-mf-ser { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b2b-mf-what i { color: var(--b2b-faint); }
+.b2b-mf-q { text-align: right; color: var(--b2b-muted); font-weight: 700; }
+.b2b-mf-x {
+    width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--b2b-line);
+    background: #fff; color: var(--b2b-muted); cursor: pointer; font-size: 15px; line-height: 1;
+}
+
+/* The custody document, as the client reads it before signing. The same facts,
+   list and wording go into the PDF. */
+.b2b-cdoc { border: 1px solid var(--b2b-line); border-radius: 12px; background: #fff; padding: 16px 18px; }
+.b2b-cdoc-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+              padding-bottom: 10px; border-bottom: 1px solid var(--b2b-line); }
+.b2b-cdoc-h b { display: block; font-size: 18px; font-weight: 800; color: #1a1c1e; }
+.b2b-cdoc-h span { font-size: 11.5px; color: var(--b2b-muted); }
+.b2b-cdoc-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 10px 16px; margin: 12px 0; }
+.b2b-cdoc-facts span, .b2b-cdoc-sec > span {
+    display: block; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--b2b-faint);
+}
+.b2b-cdoc-facts b { font-size: 13.5px; color: #1a1c1e; }
+.b2b-cdoc-sec { margin-top: 10px; }
+.b2b-cdoc-sec p { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: #1a1c1e; white-space: pre-wrap; }
+.b2b-cdoc-tbl { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 12.5px; }
+.b2b-cdoc-tbl th { text-align: left; font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--b2b-faint);
+                   border-bottom: 1px solid var(--b2b-line); padding: 4px 6px; }
+.b2b-cdoc-tbl td { padding: 5px 6px; border-bottom: 1px solid var(--b2b-line-2); word-break: break-word; }
+/* Bigger than body copy: this is the sentence being signed. */
+.b2b-cdoc-terms { margin: 14px 0 0; font-size: 14px; line-height: 1.55; color: #1a1c1e; }
+.b2b-sum-link { font-weight: 700; color: var(--sage-professional, #1f9d57); }

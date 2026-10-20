@@ -72,13 +72,102 @@ function _rowCells(detail, code) {
     return null;
 }
 
-t('Today: the pace pill is NP pace (OVL 178, BAL 39), not GP', function () {
+// Ethan 2026-10-06: % to goal on the Today tab is THROUGH YESTERDAY — the NP
+// pace at yesterday's close (prev.paceIndex: OVL 159, BAL 56), never the live
+// pace that counts today's estimate (178 / 39).
+t('Today: the pace pill is NP pace through yesterday (OVL 159, BAL 56), not live or GP', function () {
     var r = _render(true, 'today');
     var ovl = _rowCells(r.detail, 'OVL'), bal = _rowCells(r.detail, 'BAL');
     if (!ovl || !bal) return 'rows missing';
     var o = _pace(ovl), b = _pace(bal);
-    if (o.indexOf('178') < 0 || b.indexOf('39') < 0) return 'pace cells: OVL "' + o + '", BAL "' + b + '"';
+    if (o.indexOf('159') < 0 || b.indexOf('56') < 0) return 'pace cells: OVL "' + o + '", BAL "' + b + '"';
     return true;
+});
+
+t('Today: the district pace is derived at yesterday\'s close too (3,475 / 92,000 over 3.23% = 117)', function () {
+    var r = _render(true, 'today');
+    var foot = r.detail.querySelector('table.lv-tbl:not(.lv-tbl-buy) tfoot tr');
+    if (!foot) return 'no district row';
+    var p = _pace(foot.children);
+    if (p.indexOf('117') < 0) return 'district pace "' + p + '"';
+    return true;
+});
+
+t('Through Yesterday tag: on the Today % to goal header only, and on the phone card', function () {
+    var r = _render(true, 'today');
+    var hs = Array.prototype.map.call(r.detail.querySelectorAll('table.lv-tbl:not(.lv-tbl-buy) thead th'), function (h) { return h.textContent; });
+    var g = hs.filter(function (h) { return /% to goal/i.test(h); })[0] || '';
+    if (g.indexOf('Through Yesterday') < 0) return 'today header: ' + g;
+    var card = r.detail.querySelector('.lvc-goal-k');
+    if (!card || card.textContent.indexOf('Through Yesterday') < 0) return 'phone card: ' + (card && card.textContent);
+    var bad = '';
+    ['prev', 'mtd'].forEach(function (m) {
+        var x = _render(true, m);
+        if (x.detail.textContent.indexOf('Through Yesterday') >= 0) bad += m + ' carries the tag / ';
+    });
+    return bad || true;
+});
+
+t('Phone card on Today shows the through-yesterday pace, same as the table', function () {
+    var r = _render(true, 'today');
+    var goal = r.detail.querySelector('.lvc-goal');
+    // The deck opens on the District roll-up for a DM.
+    if (!goal || goal.textContent.indexOf('117%') < 0) return 'card: ' + (goal && goal.textContent);
+    return true;
+});
+
+t('Today on the 1st: no through-yesterday pace (yesterday was last month)', function () {
+    var p = _payload(true);
+    p.prev.inMonth = false;
+    _lvData = p; _lvMode = 'today'; renderLiveDashboard();
+    var detail = document.querySelector('.lv-dist-detail');
+    var o = _pace(_rowCells(detail, 'OVL'));
+    if (o !== '—') return 'OVL pace on the 1st: "' + o + '"';
+    return true;
+});
+
+// Ethan 2026-10-06: Gross margin back on the dashboard, in front of Net margin.
+// Revenue less cost over revenue: OVL 5,000 / 9,000 = 55.6%, BAL 440 / 800 = 55.0%.
+t('NP table: Gross margin sits in front of Net margin, and every row has a cell for it', function () {
+    var bad = '';
+    ['today', 'prev', 'mtd'].forEach(function (m) {
+        var r = _render(true, m);
+        var hs = Array.prototype.map.call(r.detail.querySelectorAll('table.lv-tbl:not(.lv-tbl-buy) thead th'), function (h) { return h.textContent; });
+        var gi = hs.indexOf('Gross margin');
+        if (gi < 0 || hs[gi + 1] !== 'Net margin') { bad += m + ' headers: ' + hs.join('|') + ' / '; return; }
+        var ovl = _rowCells(r.detail, 'OVL'), bal = _rowCells(r.detail, 'BAL');
+        var foot = r.detail.querySelector('table.lv-tbl:not(.lv-tbl-buy) tfoot tr').children;
+        if (ovl.length !== hs.length || foot.length !== hs.length) bad += m + ' cell count ' + ovl.length + '/' + foot.length + ' vs ' + hs.length + ' / ';
+        if (ovl[gi].textContent !== '55.6%') bad += m + ' OVL gross ' + ovl[gi].textContent + ' / ';
+        if (bal[gi].textContent !== '55.0%') bad += m + ' BAL gross ' + bal[gi].textContent + ' / ';
+        // District 5,440 / 9,800 = 55.5%
+        if (foot[gi].textContent !== '55.5%') bad += m + ' district gross ' + foot[gi].textContent + ' / ';
+    });
+    return bad || true;
+});
+
+t('A store that is not reporting spans exactly the table, on every tab, NP and GP', function () {
+    var bad = '';
+    [true, false].forEach(function (np) {
+        ['today', 'prev', 'mtd'].forEach(function (m) {
+            var p = _payload(np);
+            p.stores[1] = { code: 'BAL', error: 'timeout' };
+            _lvData = p; _lvMode = m; renderLiveDashboard();
+            var detail = document.querySelector('.lv-dist-detail');
+            var n = detail.querySelectorAll('table.lv-tbl:not(.lv-tbl-buy) thead th').length;
+            var err = detail.querySelector('.lv-row-err');
+            if (!err) { bad += (np ? 'np ' : 'gp ') + m + ' no error row / '; return; }
+            var span = 1 + Number(err.children[1].getAttribute('colspan'));
+            if (span !== n) bad += (np ? 'np ' : 'gp ') + m + ' spans ' + span + ' of ' + n + ' / ';
+        });
+    });
+    return bad || true;
+});
+
+t('GP payload: no extra Gross margin column (its one Margin column already is gross)', function () {
+    var r = _render(false, 'today');
+    var h = r.detail.querySelector('table.lv-tbl thead').textContent;
+    return h.indexOf('Gross margin') < 0 ? true : 'headers: ' + h;
 });
 
 t('Today: the table says Net profit, and the month column is NP of the NP goal', function () {

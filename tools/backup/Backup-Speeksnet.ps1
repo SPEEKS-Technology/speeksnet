@@ -47,6 +47,28 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is 10x slower with the progress bar
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# NOTHING MAY DIE UNSEEN. Oct 16-20: every scheduled start (seven of them, 2am,
+# logon and unlock) was gone in 1-11 seconds, before the log existed. There was no
+# .partial, no BACKUP-PROBLEM.txt line, and conhost said exit 0. A run of the same
+# script by hand at 8:33 on Oct 20 was fine, and so were the opening checks under
+# the scheduler a few minutes later. So the cause was something at trigger time
+# that nothing recorded. From here on, every run keeps a transcript on this PC,
+# and any error nobody caught lands in BACKUP-PROBLEM.txt with its line number.
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+$transcriptDir = Join-Path $WorkDir 'run-transcripts'
+try {
+    New-Item -ItemType Directory -Force -Path $transcriptDir | Out-Null
+    Get-ChildItem $transcriptDir -Filter '*.txt' | Sort-Object Name -Descending |
+        Select-Object -Skip 60 | Remove-Item -Force -ErrorAction SilentlyContinue
+    Start-Transcript -Path (Join-Path $transcriptDir ((Get-Date -Format 'yyyy-MM-dd_HHmmss') + '.txt')) | Out-Null
+} catch { }
+trap {
+    $msg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm')  BACKUP DIED: line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
+    try { Add-Content -Path (Join-Path $WorkDir 'BACKUP-PROBLEM.txt') -Value $msg -Encoding UTF8 } catch { }
+    Write-Host $msg
+    exit 1
+}
+
 $stamp    = Get-Date -Format 'yyyy-MM-dd_HHmm'
 $started  = Get-Date
 $snapName = $stamp

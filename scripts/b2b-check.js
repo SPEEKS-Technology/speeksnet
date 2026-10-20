@@ -172,7 +172,9 @@ t('2.3 a repeat scan bumps the listing units', function () {
 // it deleted signing client name and all of the item pickup field."
 t('2.2 pickup draft capture is shared, not open-coded', function () {
     if (typeof _b2bCapturePickupDraft !== 'function') return 'helper missing';
-    var callers = ['b2bSignHere', 'b2bSkipSign', 'b2bRetakeSign', 'b2bPrintHoldingLabel'];
+    // b2bSignHere and b2bRetakeSign went with the QR signing route (2026-10-16);
+    // the custody form is now the round-trip that has to hold the form.
+    var callers = ['b2bOpenCustody', 'b2bSkipSign', 'b2bPrintHoldingLabel'];
     var missing = callers.filter(function (fn) {
         return window[fn].toString().indexOf('_b2bCapturePickupDraft') === -1;
     });
@@ -2800,4 +2802,320 @@ t('decline: the dialog no longer promises a reopen', function () {
 });
 t('decline: the Move dialog does not mention reopening', function () {
     return !/reopen/i.test(_srcOf(b2bOpenTransfer)) || 'Move hint still talks about a reopen';
+});
+
+// --- October 2026 batch: labels -------------------------------------------
+// Captures the document b2bPrintLabels builds, without opening a window.
+function _b2bLabelDoc(items, itemId, count) {
+    var keepItems = _b2bModalItems, keepOpen = _b2bOpenSheet, doc = '';
+    _b2bModalItems = items;
+    _b2bOpenSheet = function (d) { doc = d; };
+    try { b2bPrintLabels(B2B_FIXTURE_DEAL.id, itemId, count); }
+    finally { _b2bModalItems = keepItems; _b2bOpenSheet = keepOpen; }
+    return doc;
+}
+t('oct 1.1 a purchase label says Purchase, not Purchased', function () {
+    var doc = _b2bLabelDoc([{ id: 'p1', sku: 'LBL-0001', make: 'Dell', quantity: 1 }], 'p1', 1);
+    if (!doc) return 'no label document was built';
+    if (/>\s*Purchased\s*</.test(doc)) return 'still prints "Purchased"';
+    return />\s*Purchase\s*</.test(doc) || 'no "Purchase" handling line on the label';
+});
+t('oct 1.2 every unit label carries the line quantity as QTY: n', function () {
+    var doc = _b2bLabelDoc([{ id: 'q1', sku: 'LBL-0002', make: 'HP', quantity: 20 }], 'q1', 3);
+    var hits = doc.match(/QTY: 20</g) || [];
+    return hits.length === 3 || 'expected QTY: 20 on all 3 labels, found ' + hits.length;
+});
+t('oct 1.2 one printed label is enough for a multi-unit line', function () {
+    var keep = _b2bModalItems;
+    _b2bModalItems = [{ id: 'one', sku: 'LBL-0003', quantity: 40, label_printed_qty: 1, listings: [] }];
+    try {
+        if (_b2bUnlabelled().length) return 'a line with one label still counts as untagged';
+        var btn = _b2bPrintAllBtn(B2B_FIXTURE_DEAL);
+        if (btn.indexOf('b2b-btn-count') > -1) return 'Print All still shows an outstanding count';
+        var acts = _b2bRowActsBtn(_b2bModalItems[0], false);
+        if (acts.indexOf('b2b-rowacts-todo') > -1) return 'the row still flags amber';
+        return acts.indexOf('b2b-rowacts-done') > -1 || 'the row does not read as tagged';
+    } finally { _b2bModalItems = keep; }
+});
+t('oct 1.2 a line with nothing printed still owes its labels', function () {
+    var keep = _b2bModalItems;
+    _b2bModalItems = [{ id: 'none', sku: 'LBL-0004', quantity: 5, label_printed_qty: 0, listings: [] }];
+    try {
+        if (_b2bUnlabelled().length !== 1) return 'an unprinted line is not counted';
+        // The default count is still one per unit.
+        return /class="b2b-btn-count">5</.test(_b2bPrintAllBtn(B2B_FIXTURE_DEAL))
+            || 'Print All should offer one label per unit (5)';
+    } finally { _b2bModalItems = keep; }
+});
+
+// --- October 2026 batch: sort the listing sheet by projected value --------
+function _b2bSortFixture() {
+    return [
+        { id: 's1', sku: 'SRT-0001', line_no: 1, make: 'A', quantity: 10, value: 40,  disposition: 'purchase', listings: [] },
+        { id: 's2', sku: 'SRT-0002', line_no: 2, make: 'B', quantity: 1,  value: 300, disposition: 'purchase', listings: [] },
+        { id: 's3', sku: 'SRT-0003', line_no: 3, make: 'C', quantity: 2,  value: 0,   disposition: 'recycle',  listings: [] },
+        { id: 's4', sku: 'SRT-0004', line_no: 4, make: 'D', quantity: 3,  value: 90,  disposition: 'purchase', listings: [] },
+    ];
+}
+function _b2bSortIds(key, dir) {
+    var keep = _b2bListSort;
+    _b2bListSort = { key: key, dir: dir || 'desc' };
+    try { return _b2bListSorted(_b2bSortFixture()).map(function (it) { return it.id; }).join(','); }
+    finally { _b2bListSort = keep; }
+}
+t('oct 2.1 line order is the default', function () {
+    var r = _b2bSortIds('line'); return r === 's1,s2,s3,s4' || r;
+});
+t('oct 2.1 Value ea sorts highest first, recycle last', function () {
+    var r = _b2bSortIds('value'); return r === 's2,s4,s1,s3' || r;
+});
+t('oct 2.1 Line total sorts by value x quantity', function () {
+    // 10x40=400, 1x300=300, 3x90=270 -- s1 is last per unit but first per line.
+    var r = _b2bSortIds('total'); return r === 's1,s2,s4,s3' || r;
+});
+t('oct 2.1 ascending keeps recycle at the bottom', function () {
+    var r = _b2bSortIds('value', 'asc'); return r === 's1,s4,s2,s3' || r;
+});
+t('oct 2.1 sorting never writes sort_order', function () {
+    var before = B2B_SENT.length, keep = _b2bModalItems, keepS = _b2bListSort;
+    _b2bModalItems = _b2bSortFixture();
+    try { b2bListSortBy('total'); b2bListSortBy('total'); b2bListSortBy('line'); }
+    finally { _b2bModalItems = keep; _b2bListSort = keepS; }
+    return B2B_SENT.length === before || 'sorting sent ' + (B2B_SENT.length - before) + ' request(s)';
+});
+t('oct 2.1 the headers carry the sort controls', function () {
+    var keep = _b2bModalItems; _b2bModalItems = _b2bSortFixture();
+    try {
+        var h = _b2bListRows();
+        return (h.indexOf("b2bListSortBy('value')") > -1 && h.indexOf("b2bListSortBy('total')") > -1
+            && h.indexOf("b2bListSortBy('line')") > -1) || 'a sort header is missing';
+    } finally { _b2bModalItems = keep; }
+});
+
+// --- October 2026 batch: notification rework ------------------------------
+// Nick, 2026-10-16: pricing is due one week from entering the stage; stores get
+// a daily card they cannot dismiss, corp can; listing becomes a Monday report.
+function _b2bFeedAnchor() {
+    if (!document.getElementById('claimAlertBubble')) {
+        var wrap = document.createElement('div');
+        var a = document.createElement('div'); a.id = 'claimAlertBubble';
+        wrap.appendChild(a); document.body.appendChild(wrap);
+    }
+}
+t('oct 3.1 due is one week from the Central day the deal entered pricing', function () {
+    // 2026-10-13 03:00Z is still the 12th in Chicago.
+    var due = _b2bPricingDue({ stage_changed_at: '2026-10-13T03:00:00Z' }, '2026-10-16');
+    if (!due) return 'no due date';
+    if (due.entered !== '2026-10-12') return 'entered ' + due.entered + ', expected 2026-10-12 (Central)';
+    if (due.dueOn !== '2026-10-19') return 'due ' + due.dueOn;
+    return (due.left === 3 && !due.late) || 'left ' + due.left;
+});
+t('oct 3.1 a deal past its week reads overdue', function () {
+    var due = _b2bPricingDue({ stage_changed_at: '2026-10-01T15:00:00Z' }, '2026-10-16');
+    return (due.late && due.left === -8 && /8 days overdue/.test(_b2bDueWords(due))) || JSON.stringify(due);
+});
+t('oct 3.5 the week starts on Monday', function () {
+    var a = _b2bWeekMonday('2026-10-19'), b = _b2bWeekMonday('2026-10-18'), c = _b2bWeekMonday('2026-10-16');
+    return (a === '2026-10-19' && b === '2026-10-12' && c === '2026-10-12') || [a, b, c].join(' ');
+});
+t("oct 3.1 the pricing card lists the store's own deals, soonest first, and flags overdue", function () {
+    _b2bFeedAnchor();
+    var today = _b2bCentralDay(new Date());
+    var late = new Date(Date.now() - 10 * 86400000).toISOString();
+    var fresh = new Date(Date.now() - 1 * 86400000).toISOString();
+    return _asRole('manager', 'OVL', function () {
+        _b2bPricingCard([
+            { id: 'p1', ref: 'NEW-001', stage: 'pricing', pricing_store: 'OVL', stage_changed_at: fresh },
+            { id: 'p2', ref: 'OLD-001', stage: 'pricing', pricing_store: 'OVL', stage_changed_at: late },
+            { id: 'p3', ref: 'WSP-001', stage: 'pricing', pricing_store: 'WSP', stage_changed_at: late },
+            { id: 'l1', ref: 'LST-001', stage: 'listing', listing_store: 'OVL', stage_changed_at: late },
+        ], new Set());
+        var b = document.getElementById('b2bPricingAlertBubble');
+        var tx = document.getElementById('b2bPricingAlertBubbleText');
+        if (!b || b.style.display === 'none') return 'card not live';
+        var s = tx.dataset.summary || '';
+        if (s.indexOf('WSP-001') > -1) return "another store's deal is on the card: " + s;
+        if (s.indexOf('LST-001') > -1) return 'a listing deal is on the pricing card';
+        if (s.indexOf('OLD-001') > s.indexOf('NEW-001')) return 'not soonest-due first: ' + s;
+        if (tx.dataset.late !== '1') return 'overdue not flagged';
+        return tx.dataset.sig.indexOf(today) === 0 || 'sig does not carry the day, so a snooze would outlive it';
+    });
+});
+t("oct 3.4 corp sees every store's pricing, and can switch the card off", function () {
+    _b2bFeedAnchor();
+    var d = new Date(Date.now() - 2 * 86400000).toISOString();
+    var deals = [
+        { id: 'c1', ref: 'AAA-001', stage: 'pricing', pricing_store: 'OVL', stage_changed_at: d },
+        { id: 'c2', ref: 'BBB-001', stage: 'pricing', pricing_store: 'WSP', stage_changed_at: d },
+    ];
+    return _asRole('ceo', 'CORP', function () {
+        _b2bPricingCard(deals, new Set());
+        var s = document.getElementById('b2bPricingAlertBubbleText').dataset.summary || '';
+        if (s.indexOf('AAA-001 (OVL)') === -1 || s.indexOf('BBB-001 (WSP)') === -1) return 'corp card missing a store: ' + s;
+        _b2bPricingCard(deals, new Set(['b2b_pricing_due']));
+        return document.getElementById('b2bPricingAlertBubble').style.display === 'none' || 'muted card still live';
+    });
+});
+t('oct 3.4 only corp may snooze the pricing card', function () {
+    _b2bFeedAnchor();
+    var pick = function () { return _samReminderCfg().filter(function (c) { return c.key === 'b2bPricing'; })[0]; };
+    var store = _asRole('manager', 'OVL', pick), corp = _asRole('ceo', 'CORP', pick);
+    if (!store || !corp) return 'no b2bPricing card in the feed config';
+    return (store.noSnooze === true && corp.noSnooze === false) || 'store ' + store.noSnooze + ', corp ' + corp.noSnooze;
+});
+t("oct 3.2 a store's unlisted summary leads with its total and biggest deals", function () {
+    var s = _b2bUnlistedSummary([
+        { deal_id: 'a', ref: 'SPFN-001', store: 'WSP', unlisted_units: 72, unlisted_value: 6585 },
+        { deal_id: 'b', ref: 'MXS-001',  store: 'WSP', unlisted_units: 30, unlisted_value: 2950 },
+    ], false);
+    return /^\$9,535 unlisted across 102 units on 2 deals — SPFN-001 \$6,585 · MXS-001 \$2,950$/.test(s) || s;
+});
+t("oct 3.3 corp's unlisted summary breaks it down by store, biggest first", function () {
+    var s = _b2bUnlistedSummary([
+        { deal_id: 'a', ref: 'MARI-001', store: 'OVL', unlisted_units: 10, unlisted_value: 3410 },
+        { deal_id: 'b', ref: 'SPFN-001', store: 'WSP', unlisted_units: 72, unlisted_value: 6585 },
+        { deal_id: 'c', ref: 'MXS-001',  store: 'WSP', unlisted_units: 30, unlisted_value: 2950 },
+    ], true);
+    return /— WSP \$9,535 · OVL \$3,410$/.test(s) || s;
+});
+t('oct 3.2 nothing waiting means no card', function () {
+    return _b2bUnlistedSummary([], false) === '' || 'expected empty';
+});
+t('oct 3 the waiting card leaves pricing and listing to their own cards', function () {
+    var src = _srcOf(checkB2BReminders);
+    return (src.indexOf("d.stage !== 'pricing'") > -1 && src.indexOf("d.stage !== 'listing'") > -1)
+        || 'the generic card still repeats pricing/listing deals';
+});
+t('oct 3.4 settings draw the on-site switches only when the server sends them', function () {
+    var host = document.getElementById('notifySettingsBody');
+    if (!host) { host = document.createElement('div'); host.id = 'notifySettingsBody'; document.body.appendChild(host); }
+    renderNotifySettings({ prefs: {}, categories: [], feed: [], feed_muted: [] });
+    if (host.querySelector('.ns-feed-box')) return 'a store got on-site switches';
+    if ('feed_muted' in _nsForm()) return 'a store save would send feed_muted';
+    renderNotifySettings({ prefs: {}, categories: [], feed_muted: ['b2b_unlisted'],
+        feed: [{ key: 'b2b_pricing_due', label: 'P', blurb: '' }, { key: 'b2b_unlisted', label: 'U', blurb: '' }] });
+    var f = _nsForm();
+    return (Array.isArray(f.feed_muted) && f.feed_muted.join() === 'b2b_unlisted') || JSON.stringify(f.feed_muted);
+});
+
+// --- October 2026 batch: the Out For Quote screen ---------------------------
+// Nick, 2026-09-29 / 2026-10-16: "a horrendous view of the items and lack of
+// information" at a glance. The sent quote now leads with its status and runs
+// its lines full width with line numbers; approval keeps its split.
+t('oct 4.1 the sent quote says how long the client has had it, what was offered and who priced it', function () {
+    var keep = _b2bModalItems;
+    _b2bModalItems = [{ id: 'q1', quantity: 3, offer: 100, value: 250, disposition: 'purchase' }];
+    try {
+        var sentDay = _b2bAddDays(_b2bCentralDay(new Date()), -9);
+        var h = _b2bQuoteStatus({ quote_sent_at: sentDay + 'T18:00:00Z', quote_send_count: 2, priced_by: 'Jon Rodriguez' });
+        if (h.indexOf('9 days') === -1) return 'no days-with-client: ' + h;
+        if (h.indexOf('$300.00') === -1) return 'no offer total';
+        if (h.indexOf('Priced by Jon Rodriguez') === -1) return 'no pricer';
+        if (h.indexOf('Sent 2×') === -1) return 'no send count';
+        if (h.indexOf('urgent') === -1) return 'a week+ with the client is not flagged';
+        return h.indexOf('b2bCopyQuote()') > -1 || 'the send control went missing';
+    } finally { _b2bModalItems = keep; }
+});
+t('oct 4.1 full-width lines carry the line number; approval\'s split does not', function () {
+    var keep = _b2bModalItems;
+    _b2bModalItems = [{ id: 'q2', sku: 'X-0003', line_no: 3, make: 'Dell', model: 'Latitude', quantity: 1, offer: 1, value: 2, disposition: 'purchase' }];
+    try {
+        var full = _b2bReviewLines(true), split = _b2bReviewLines();
+        if (full.indexOf('b2b-rvw-line') === -1 || full.indexOf('>Line<') === -1) return 'full view has no line column';
+        return split.indexOf('b2b-rvw-line') === -1 || 'the approval split grew a line column';
+    } finally { _b2bModalItems = keep; }
+});
+t('oct 4.1 the sent quote no longer uses the side-by-side split', function () {
+    var src = _srcOf(_b2bStageQuote);
+    var sent = src.slice(0, src.indexOf('_b2bGridMode'));
+    if (sent.indexOf('_b2bReviewSplit(') > -1) return 'still renders the split';
+    return (sent.indexOf('_b2bQuoteStatus(') > -1 && sent.indexOf('b2b-qdoc-fold') > -1) || 'status or folded client copy missing';
+});
+
+// --- October 2026 batch: pickup custody form, itemized pickup, phone -------
+// Nick, 2026-10-16: the QR-to-a-phone signing route is gone; B2B runs on the
+// phone; signing produces a custody PDF; an optional scanned list becomes
+// pricing lines and prints on the form.
+function _pkDeal(o) {
+    return Object.assign({ id: 'pk1', ref: 'PK-001', stage: 'pickup', pricing_store: 'WSP', intake_kind: 'pickup',
+        client: { company: 'Pickup Co' }, pickup_manifest: [], custody_path: null, signature_path: null }, o || {});
+}
+t('oct 6 the old QR signing route is gone', function () {
+    var gone = ['b2bOpenSign', 'b2bSignHere', 'b2bSaveSign', '_b2bSignUrl'].filter(function (n) { return typeof window[n] === 'function'; });
+    if (gone.length) return 'still defined: ' + gone.join(', ');
+    var src = _srcOf(_b2bSignBlock);
+    return (src.indexOf('b2bSignQR') === -1 && src.indexOf('b2b-sign-') === -1) || 'the sign block still draws the phone QR';
+});
+t('oct 6 an unsigned pickup offers the custody form, the phone QR and (corp) the skip', function () {
+    var h = _asRole('ceo', 'CORP', function () { return _b2bSignBlock(_pkDeal()); });
+    if (h.indexOf("b2bOpenCustody('pk1')") === -1) return 'no custody form button';
+    if (h.indexOf('b2bPhoneQR()') === -1) return 'no Use a phone';
+    return h.indexOf("b2bSkipSign('pk1')") > -1 || 'corp lost the skip';
+});
+t('oct 6 a signed pickup offers the PDF and a retake', function () {
+    var h = _b2bSignBlock(_pkDeal({ custody_path: 'pk1/1.pdf', custody_at: '2026-10-16T18:00:00Z', signed_by: 'Dana', signature_path: 'x.png' }));
+    if (h.indexOf('custody=pk1') === -1) return 'no PDF link';
+    if (h.indexOf('&dl=1') === -1) return 'no download link';
+    return h.indexOf("b2bRetakeCustody('pk1')") > -1 || 'no retake';
+});
+t('oct 6 the phone QR points at the site sign-in, nothing deal-specific', function () {
+    var u = _b2bSiteUrl();
+    return (/index\.html$/.test(u) && u.indexOf('#') === -1) || u;
+});
+t('oct 6.3 scans are held newest-first and saved in scan order', function () {
+    _b2bManifest = { dealId: null, rows: [], open: false, desc: '' };
+    _b2bManifestFor(_pkDeal({ id: 'pk2', pickup_manifest: [{ serial: 'A', desc: 'X', qty: 1 }, { serial: 'B', desc: 'X', qty: 1 }] }));
+    if (_b2bManifest.rows.map(function (r) { return r.serial; }).join() !== 'B,A') return 'not newest-first: ' + JSON.stringify(_b2bManifest.rows);
+    var keepD = _b2bModalDeal; _b2bModalDeal = _pkDeal({ id: 'pk2' });
+    try {
+        b2bManifestAdd('C');
+        return _b2bManifest.rows.slice().reverse().map(function (r) { return r.serial; }).join() === 'A,B,C' || 'save order wrong';
+    } finally { _b2bModalDeal = keepD; clearTimeout(_b2bManifestTimer); _b2bManifestTimer = null; }
+});
+t('oct 6.3 a serial already on the list is refused', function () {
+    _b2bManifest = { dealId: 'pk3', rows: [{ serial: 'S1', desc: 'X', qty: 1 }], open: true, desc: 'X' };
+    var keepD = _b2bModalDeal; _b2bModalDeal = _pkDeal({ id: 'pk3' });
+    try {
+        var r = b2bManifestAdd('s1');
+        return (r !== true && _b2bManifest.rows.length === 1) || 'a duplicate (case-insensitive) went on the list';
+    } finally { _b2bModalDeal = keepD; clearTimeout(_b2bManifestTimer); _b2bManifestTimer = null; }
+});
+t('oct 6.3 a signed form locks the list', function () {
+    _b2bManifest = { dealId: 'pk4', rows: [], open: true, desc: 'X' };
+    var keepD = _b2bModalDeal; _b2bModalDeal = _pkDeal({ id: 'pk4', custody_path: 'x.pdf' });
+    try {
+        b2bManifestAdd('NEW');
+        if (_b2bManifest.rows.length) return 'added to a signed list';
+        _b2bManifest.rows = [{ serial: 'A', desc: 'X', qty: 1 }];
+        var h = _b2bManifestBlock(_b2bModalDeal);
+        return (h.indexOf('b2bMfSerial') === -1 && h.indexOf('b2bManifestRemove') === -1) || 'a signed list can still be edited';
+    } finally { _b2bModalDeal = keepD; }
+});
+t('oct 6.2 the custody document carries the facts, the list and the statement', function () {
+    var h = _b2bCustodyDocHtml({ ref: 'PK-001', company: 'Pickup Co', name: 'Dana Whitlock', date: '2026-10-15', desc: '2 pallets',
+        recv: 'Jon', store: 'WSP', staff: 'Nick', walkIn: false,
+        rows: [{ serial: 'S1', desc: 'Dell', qty: 1 }, { serial: '', desc: 'Cables', qty: 3 }] });
+    var need = ['Pickup Co', 'Dana Whitlock', 'October 15, 2026', 'PK-001', '2 pallets', 'S1', 'Cables', '4 units', B2B_CUSTODY_TERMS];
+    var miss = need.filter(function (s) { return h.indexOf(escapeHtml(s)) === -1; });
+    return miss.length === 0 || 'missing: ' + miss.join(' | ');
+});
+t('oct 6.2 the form will not open without the facts it prints', function () {
+    var host = document.createElement('div');
+    host.innerHTML = '<textarea id="b2bPuDesc"></textarea><input id="b2bPuSigned"><input id="b2bPuDate">';
+    document.body.appendChild(host);
+    var alerts = [], keepA = window.alert; window.alert = function (m) { alerts.push(m); };
+    try {
+        _b2bManifest = { dealId: 'pk5', rows: [], open: false, desc: '' };
+        var keepDeals = _b2bDeals; _b2bDeals = [_pkDeal({ id: 'pk5' })];
+        b2bOpenCustody('pk5');
+        _b2bDeals = keepDeals;
+        return (alerts.length === 1 && /name/i.test(alerts[0])) || 'opened with no client name: ' + JSON.stringify(alerts);
+    } finally { window.alert = keepA; host.remove(); }
+});
+t('oct 6.1 the B2B module is reachable on a phone for people who have it', function () {
+    if (!_PHONE_SECTION_TABS.has('widget-ops-b2b')) return 'B2B is not a phone section tab';
+    return _srcOf(_applySectionNavVisibility).indexOf("'data-phone'") > -1 || 'the nav pass ignores data-phone';
+});
+t('oct 6 the pickup footer has a message line, so scans never alert()', function () {
+    return _srcOf(_b2bStagePickup).indexOf('id="b2bDealMsg"') > -1 || 'no b2bDealMsg on the pickup screen';
 });

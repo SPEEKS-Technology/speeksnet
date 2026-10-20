@@ -226,6 +226,10 @@ const DEAL_COLS = [
   // paid_at / paid_by / paid_amount left with the mark-paid feature on
   // 2026-09-10; the columns still exist on the deal but nothing reads them.
   "listing_stores", "listing_parts",
+  // The pickup custody form and the optional scanned list (0150). The manifest
+  // is carried so the phone and the desktop draw the same list mid-pickup; the
+  // custody columns so every later stage can offer the signed PDF.
+  "pickup_manifest", "custody_path", "custody_at", "custody_by",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
@@ -609,7 +613,8 @@ async function notifyStage(n: {
   priority?: "normal" | "high";
 }) {
   await queueNotification({
-    category: "requests",
+    // Its own category since 0148 (Nick's notification rework, 2026-10-16).
+    category: "b2b",
     kind: n.kind,
     title: n.title,
     body: n.body,
@@ -736,6 +741,56 @@ const namesOf = (bad: any[]) => bad.length ? bad.map(lineName).join(", ") : null
 // item read and the quote, so the three cannot disagree about what counts.
 function serialList(v: unknown): string[] {
   return String(v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// THE ITEMIZED PICKUP (Nick, 2026-10-16): optional, for the more secure
+// clients -- what was collected, scanned unit by unit at the client's door.
+// "Becomes pricing lines and is put on the document for signing custody."
+//
+// One row per scan: { serial, desc, qty }. A row may have a serial and no
+// description (scan first, say what it is later), a description and no serial
+// (a box of cables), or both. Commas are stripped from serials because the
+// line's serials column is comma-separated (serialList).
+const MANIFEST_MAX = 2000;
+function cleanManifest(v: unknown): { serial: string; desc: string; qty: number }[] {
+  if (!Array.isArray(v)) throw new Invalid("The pickup list must be a list.");
+  if (v.length > MANIFEST_MAX) throw new Invalid(`The pickup list is limited to ${MANIFEST_MAX} rows.`);
+  return v.map((r: any) => ({
+    serial: (str(r?.serial, 120, "Serial") || "").replace(/,/g, " ").trim(),
+    desc: str(r?.desc, 200, "What it is") || "",
+    qty: count(r?.qty, 1, 100000, "Quantity", 1),
+  })).filter((r) => r.serial || r.desc);
+}
+
+// The scanned list as pricing lines: one line per distinct description, its
+// serials joined, its quantity the sum. Grouping is what makes this useful --
+// forty scans of the same laptop are one line of forty to price, not forty
+// lines. A line's serials column caps at 4000 characters (b2b_deal_items_
+// text_len), so a very long group spills into a second line of the same name
+// rather than failing the sign-off.
+const MANIFEST_NOTE = "From the itemized pickup";
+function manifestLines(rows: { serial: string; desc: string; qty: number }[]) {
+  const groups = new Map<string, { model: string; rows: typeof rows }>();
+  for (const r of rows) {
+    const k = r.desc.trim().toLowerCase();
+    if (!groups.has(k)) groups.set(k, { model: r.desc.trim() || "Unidentified item", rows: [] });
+    groups.get(k)!.rows.push(r);
+  }
+  const out: { model: string; quantity: number; serials: string | null }[] = [];
+  for (const g of groups.values()) {
+    let qty = 0, serials: string[] = [], len = 0;
+    const flush = () => {
+      if (qty) out.push({ model: g.model, quantity: qty, serials: serials.length ? serials.join(",") : null });
+      qty = 0; serials = []; len = 0;
+    };
+    for (const r of g.rows) {
+      if (r.serial && len + r.serial.length + 1 > 4000) flush();
+      qty += r.qty;
+      if (r.serial) { serials.push(r.serial); len += r.serial.length + 1; }
+    }
+    flush();
+  }
+  return out;
 }
 
 // A line downgraded to Fair or Broken must carry a client-facing reason --
@@ -910,6 +965,96 @@ Deno.serve(async (req: Request) => {
 
       // ==================================================== stage transitions
 
+      // The itemized pickup list, saved as it is built (see cleanManifest). Only
+      // while the deal is still a pickup, and only until the custody form is
+      // signed -- after that the list is part of a signed document, and changing
+      // it means taking the signature again.
+      if (action === "save_pickup_manifest") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        if (deal.custody_path) {
+          return jsonResponse({ success: false, error: "The custody form is already signed. Take the signature again to change the list." }, 409);
+        }
+        const manifest = cleanManifest(body.manifest);
+        const { error } = await supabase.from("b2b_deals").update({ pickup_manifest: manifest }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, rows: manifest.length });
+      }
+
+      // THE SIGNED CUSTODY FORM (Nick, 2026-10-16). The client reads a document
+      // saying we are taking custody of the items, signs it, and the signature
+      // is placed into the document, kept as a downloadable PDF. Built in the
+      // browser from exactly what the client was shown (capture_signature has
+      // already stored the signature image); this stores the PDF, and the facts
+      // on it, so the pickup form and the document can never disagree -- and so
+      // a pickup signed on a phone at the client's door can be finished at the
+      // store without retyping anything.
+      if (action === "save_custody") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        if (!deal.signature_path) {
+          return jsonResponse({ success: false, error: "Capture the client's signature before saving the custody form." }, 409);
+        }
+        const raw = String(body.pdf || "");
+        const m = raw.match(/^data:application\/pdf;(?:[a-z]+=[^;]+;)*base64,([A-Za-z0-9+/=]+)$/);
+        if (!m) return jsonResponse({ success: false, error: "That doesn't look like a PDF." }, 400);
+        let bytes: Uint8Array;
+        try {
+          bytes = Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
+        } catch (_) {
+          return jsonResponse({ success: false, error: "The custody PDF was malformed." }, 400);
+        }
+        // %PDF magic, and the bucket's own 10MB ceiling, checked here so the
+        // answer is a sentence rather than a storage error.
+        if (bytes.length < 5 || bytes[0] !== 0x25 || bytes[1] !== 0x50 || bytes[2] !== 0x44 || bytes[3] !== 0x46) {
+          return jsonResponse({ success: false, error: "That doesn't look like a PDF." }, 400);
+        }
+        if (bytes.length > 10_000_000) return jsonResponse({ success: false, error: "The custody PDF is too large." }, 400);
+
+        const walkIn = deal.intake_kind === "walkin";
+        const fields = {
+          signed_by: str(body.signed_by, 120, "The client's name", true),
+          pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
+          pickup_date: isoDate(body.pickup_date, "Pickup date", !walkIn) || (walkIn ? todayCentral() : null),
+          received_by: str(body.received_by, 120, "Received by"),
+        };
+        // Timestamped, never overwritten: a re-signed form keeps the earlier one
+        // in the bucket, the same as the signature does.
+        const path = `${deal.id}/${Date.now()}.pdf`;
+        const up = await supabase.storage.from("b2b-custody")
+          .upload(path, bytes, { contentType: "application/pdf", upsert: false });
+        if (up.error) return jsonResponse({ success: false, error: up.error.message }, 500);
+        const at = new Date().toISOString();
+        const { error } = await supabase.from("b2b_deals").update({
+          ...fields,
+          custody_path: path, custody_at: at, custody_by: str(body.user, 120, "User"),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, custody_at: at });
+      }
+
+      // "Take it again": the signed form and its signature stop being current,
+      // which unlocks the details and the scanned list. Both files stay in their
+      // buckets -- nothing signed is ever deleted -- the deal just stops pointing
+      // at them. The signature goes too, or sign_pickup would accept the old one
+      // for a form that no longer exists.
+      if (action === "reset_custody") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        const { error } = await supabase.from("b2b_deals").update({
+          custody_path: null, custody_at: null, custody_by: null,
+          signature_path: null, signature_at: null, signature_by: null,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
       if (action === "sign_pickup") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
@@ -940,20 +1085,62 @@ Deno.serve(async (req: Request) => {
         // anything actually sent, since the fallback is a default, not an
         // override.
         const walkIn = deal.intake_kind === "walkin";
+        // A signed custody form (save_custody) has already put these on the row,
+        // and they are what the client signed -- so they win over anything sent,
+        // and a pickup signed on a phone finishes at the store with no retyping.
+        const custody = !!deal.custody_path;
+        const signedBy = custody ? deal.signed_by : str(body.signed_by, 120, "The client's name", true);
+        if (!signedBy) throw new Invalid("The client's name is required.");
+
+        // The itemized pickup becomes pricing lines (cleanManifest /
+        // manifestLines). Inserted BEFORE the stage moves, so a failure here
+        // leaves the pickup unsigned and retryable rather than signed with half
+        // its lines; and skipped if this deal already has lines from a previous
+        // attempt, so a retry after a failed stage update cannot double them.
+        const manifest = Array.isArray(deal.pickup_manifest) ? deal.pickup_manifest : [];
+        let manifestAdded = 0;
+        if (manifest.length) {
+          const { data: already } = await supabase.from("b2b_deal_items")
+            .select("id").eq("deal_id", deal.id).eq("staff_notes", MANIFEST_NOTE).limit(1);
+          if (!already?.length) {
+            const lines = manifestLines(cleanManifest(manifest));
+            const { data: last } = await supabase.from("b2b_deal_items")
+              .select("line_no").eq("deal_id", deal.id).order("line_no", { ascending: false }).limit(1).maybeSingle();
+            const { data: lastSort } = await supabase.from("b2b_deal_items")
+              .select("sort_order").eq("deal_id", deal.id).order("sort_order", { ascending: false }).limit(1).maybeSingle();
+            let lineNo = Number(last?.line_no) || 0;
+            let sortOrder = Number(lastSort?.sort_order) || 0;
+            const rows = lines.map((l) => {
+              lineNo += 1; sortOrder += 10;
+              return {
+                deal_id: deal.id, line_no: lineNo, sort_order: sortOrder,
+                sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, lineNo),
+                item_type: "other", model: l.model, quantity: l.quantity, serials: l.serials,
+                disposition: "purchase", value: 0, offer: 0, staff_notes: MANIFEST_NOTE,
+              };
+            });
+            if (rows.length) {
+              const { error: insErr } = await supabase.from("b2b_deal_items").insert(rows);
+              if (insErr) return jsonResponse({ success: false, error: `Couldn't add the scanned items as lines: ${insErr.message}` }, 500);
+              manifestAdded = rows.length;
+            }
+          }
+        }
+
         const { error } = await supabase.from("b2b_deals").update({
           stage: holding ? "pricing" : "pricing_location",
-          pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
-          signed_by: str(body.signed_by, 120, "The client's name", true),
+          pickup_desc: custody ? deal.pickup_desc : str(body.pickup_desc, 2000, "Pickup description"),
+          signed_by: signedBy,
           signed_at: new Date().toISOString(),
-          pickup_date: isoDate(body.pickup_date, "Pickup date", !walkIn)
+          pickup_date: (custody ? deal.pickup_date : isoDate(body.pickup_date, "Pickup date", !walkIn))
             || (walkIn ? todayCentral() : null),
           // Whoever took the goods in. Corp-created pickups capture this at
           // assign_pricing instead; neither a store-origin deal nor a walk-in
           // ever visits that stage, so this is their only chance to record it.
           received_by: walkIn
-            ? (str(body.received_by, 120, "Received by") || str(body.user, 120, "User"))
+            ? ((custody ? deal.received_by : str(body.received_by, 120, "Received by")) || str(body.user, 120, "User"))
             : holding
-            ? str(body.received_by, 120, "Received by")
+            ? (custody ? deal.received_by : str(body.received_by, 120, "Received by"))
             : deal.received_by,
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
@@ -975,13 +1162,14 @@ Deno.serve(async (req: Request) => {
             body: `${dealRef(deal)}${dealWho(deal)} has been collected and signed off. Choose which store prices it.`,
           });
         }
-        return jsonResponse({ success: true, next_stage: holding ? "pricing" : "pricing_location" });
+        return jsonResponse({ success: true, next_stage: holding ? "pricing" : "pricing_location", lines_added: manifestAdded });
       }
 
       // ========================================================== signature
-      // Captured on a staff member's phone, which scanned the QR on the pickup
-      // screen and is therefore a signed-in session like any other -- there is
-      // no public route here and no anonymous write path.
+      // Captured on the custody form, on whatever signed-in device the pickup is
+      // open on -- the B2B module runs on phones since 2026-10-16, which retired
+      // the old phone-only QR route. There is no public route here and no
+      // anonymous write path.
       //
       // Stored in a PRIVATE bucket, so nothing hands back a URL: the path goes
       // on the deal and `signature=<id>` below streams the bytes back through
@@ -2895,7 +3083,7 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         const ref = `${deal.client?.acronym || "B2B"}-${pad(deal.deal_no, 3)}`;
         await queueNotification({
-          category: "requests",
+          category: "b2b",
           kind: "b2b_delete_request",
           title: `Delete request — B2B deal ${ref}`,
           body: `${who || "Someone"} asked to delete deal ${ref}${deal.client?.company ? ` (${deal.client.company})` : ""}. Nothing is removed until you approve it.`,
@@ -2955,6 +3143,27 @@ Deno.serve(async (req: Request) => {
     // than redirected to a signed URL: a signed URL is a link that keeps working
     // after it leaves the page, and this is the one asset here where that is
     // worth avoiding.
+    // ?custody=<deal id> → the signed custody PDF, named for the deal so it
+    // saves as something Windows will open. Private bucket, streamed through
+    // here like the signature and the proofs -- a signed URL would keep working
+    // after it left the page.
+    const custodyFor = url.searchParams.get("custody");
+    if (custodyFor) {
+      const { data: d } = await supabase.from("b2b_deal_list")
+        .select("custody_path, ref").eq("id", custodyFor).maybeSingle();
+      if (!d?.custody_path) return jsonResponse({ success: false, error: "No custody form on that deal." }, 404);
+      const dl = await supabase.storage.from("b2b-custody").download(d.custody_path);
+      if (dl.error || !dl.data) return jsonResponse({ success: false, error: "Couldn't read the custody form." }, 500);
+      const name = `Custody ${String(d.ref || "B2B").replace(/[\\/:*?"<>|\r\n]+/g, " ")}.pdf`;
+      return new Response(await dl.data.arrayBuffer(), {
+        headers: {
+          ...corsHeaders, "Content-Type": "application/pdf",
+          "Content-Disposition": `${url.searchParams.get("dl") ? "attachment" : "inline"}; filename="${name}"`,
+          "Cache-Control": "private, max-age=60",
+        },
+      });
+    }
+
     const sigFor = url.searchParams.get("signature");
     if (sigFor) {
       const { data: d } = await supabase.from("b2b_deals")
@@ -3023,6 +3232,27 @@ Deno.serve(async (req: Request) => {
         tq = tq.or(`from_store.in.(${tStores.join(",")}),to_store.in.(${tStores.join(",")})`);
       }
       const { data, error } = await tq.order("created_at", { ascending: true }).limit(1000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?unlisted=1[&store=<CODE,...>] → B2B value still waiting to be listed,
+    // per deal per listing store, biggest first.
+    //
+    // For the Monday "Unlisted B2B value" card (Nick, 2026-10-16). It reads
+    // b2b_unlisted_value (0148), the same view the notify digest mails from,
+    // so the card and the email can never disagree about a figure. Scoped like
+    // every other read here: a store gets its own rows, corp asks for ALL.
+    if (url.searchParams.get("unlisted")) {
+      const raw = String(url.searchParams.get("store") || "ALL").toUpperCase();
+      const uStores = raw === "ALL" ? [] : storeList(raw, STORES);
+      if (raw !== "ALL" && !uStores.length) {
+        return jsonResponse({ success: false, error: "Unknown store." }, 400);
+      }
+      let uq = supabase.from("b2b_unlisted_value")
+        .select("deal_id, ref, company, store, listing_since, open_lines, unlisted_units, unlisted_value");
+      if (uStores.length) uq = uq.in("store", uStores);
+      const { data, error } = await uq.order("unlisted_value", { ascending: false }).limit(1000);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
       return jsonResponse({ success: true, data: data || [] });
     }
