@@ -25238,3 +25238,135 @@ select.dd-native {
 /* Bigger than body copy: this is the sentence being signed. */
 .b2b-cdoc-terms { margin: 14px 0 0; font-size: 14px; line-height: 1.55; color: #1a1c1e; }
 .b2b-sum-link { font-weight: 700; color: var(--sage-professional, #1f9d57); }
+
+/* ============================================================================
+   QUICKPORTAL LAYOUT — rows of 1–3 cards, the Customize bar, the drop targets
+   ============================================================================
+   speeks.js (QUICKPORTAL LAYOUT) moves every data-qp-block into a .qp-cell in a
+   .qp-row. The row is a flex line; each cell's flex-grow is its share of the
+   width (1:1, 2:1, or the page's own 3:2 and 3:1 defaults). Colours are the
+   dashboard's own — this is the existing page with handles on it, not a new
+   look. */
+.qp-row { display: flex; gap: 20px; align-items: stretch; margin-bottom: 22px; }
+.qp-row[hidden], .qp-cell[hidden] { display: none !important; }
+.qp-cell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+/* The row owns the spacing now. Each block's own margin was written for a plain
+   stack (the deck's 22px, Performance's mb-30, Quick Links' -6px tuck under the
+   deck) and would double up or misalign inside a row. */
+.main-content .qp-cell > [data-qp-block] { margin: 0 !important; flex: 1 1 auto; min-width: 0; }
+/* The High Priority section is the deck's old outer shell; with nothing to show
+   it must not keep the deck's bottom margin. */
+.speeks-action-menu.sam-hero-wrap:not(:has(> .sam-hero:not([hidden]))) { margin-bottom: 0; }
+
+/* The feed and the action items were two columns of one grid; each is its own
+   block now, so each board has one column. The feed card used to be pinned at
+   300px so the two columns lined up; now the ROW lines them up, so the card
+   takes 300px as a floor and grows to the row. `contain: size` stops the list
+   inside counting toward that height — without it a busy feed would make the
+   whole row as tall as every announcement it holds. */
+.speeks-action-menu.qp-part .sam-board { grid-template-columns: minmax(0, 1fr); flex: 1 1 auto; }
+.speeks-action-menu.qp-part .sam-board > .sam-card { height: auto; min-height: 300px; }
+.speeks-action-menu.qp-part .sam-feed { contain: size; }
+
+/* Quick Links is a wrapping chip bar. In a row taller than it (beside the feed,
+   say) a wrapping flex line stretches to share the height, which turned each chip
+   into a tall empty tile. Pack the lines at the top instead. */
+.qp-cell > .hotbars-stack { align-content: flex-start; align-items: flex-start; }
+
+/* Performance: the chart and the leaderboard are two cards now. */
+.ew-perf.qp-part .ew-perf-body { grid-template-columns: minmax(0, 1fr); }
+.ew-perf-lb .ew-standings { border-left: none; }
+
+/* --- Customize bar --- */
+.qp-bar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 10px; margin: -8px 0 14px; }
+/* Just the two buttons in edit mode — no sentence of instructions (Ethan,
+   2026-10-21): the handles and drop bars say what to do. */
+.qp-btn {
+    font: inherit; font-size: 13px; font-weight: 600; min-height: 34px; padding: 0 14px; border-radius: 9px; cursor: pointer;
+    border: 1px solid #d5dce4; background: #fff; color: #1a1c1e;
+}
+.qp-btn:hover { background: #f1f4f7; }
+.qp-btn[hidden] { display: none; }
+.qp-bar.is-editing .qp-btn-main { background: #1f9d57; border-color: #1f9d57; color: #fff; }
+.qp-bar.is-editing .qp-btn-main:hover { background: #178048; }
+
+/* --- edit mode: a handle over each card --- */
+.main-content.qp-editing .qp-cell > [data-qp-block] { outline: 2px dashed #b8c2ce; outline-offset: 4px; border-radius: 14px; }
+.main-content.qp-editing .qp-cell > [data-qp-block].qp-drop { outline: 2px solid #1f9d57; }
+.qp-ctl {
+    flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin: 0 0 10px; padding: 6px 8px 6px 10px;
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 10px; cursor: grab; user-select: none;
+    box-shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+.qp-ctl:active { cursor: grabbing; }
+.qp-ctl.qp-dragging { opacity: .5; }
+.qp-grip { display: inline-flex; width: 18px; height: 18px; }
+.qp-grip svg { width: 18px; height: 18px; fill: #9aa6b5; }
+.qp-ctl-label { flex: 1 1 auto; min-width: 0; font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #3c4654; }
+.qp-ctl-hint { font-size: 11.5px; font-weight: 600; color: #8a94a3; white-space: nowrap; }
+
+/* Card widths, above a two-card row. Each choice is a picture of the row (the
+   wider box filled) over the name of the card it widens — no fractions. */
+.qp-rowbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -8px 0 10px; }
+.qp-rowbar-lab { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; margin-right: 4px; }
+.qp-size {
+    font: inherit; font-size: 12.5px; font-weight: 600; min-height: 36px; padding: 4px 12px 4px 8px; border-radius: 9px; cursor: pointer;
+    border: 1px solid #d5dce4; background: #fff; color: #3c4654; display: inline-flex; align-items: center; gap: 8px;
+}
+.qp-size:hover { background: #f1f4f7; }
+.qp-size svg { width: 30px; height: 16px; flex: none; }
+.qp-size svg rect { fill: #e3e8ee; stroke: #9aa6b5; stroke-width: 1; }
+.qp-size svg rect.on { fill: #9aa6b5; }
+.qp-size.on { border-color: #1f9d57; background: #e8f7ee; color: #14532d; box-shadow: inset 0 0 0 1px #1f9d57; }
+.qp-size.on svg rect { stroke: #178048; }
+.qp-size.on svg rect.on { fill: #1f9d57; }
+/* While dragging, the drop bars take the gaps; the width strips would only crowd them. */
+.main-content.qp-dragging-any .qp-rowbar { display: none; }
+
+/* --- drop targets, only while dragging --- */
+/* The + between rows: a card dropped on it gets a row of its own there. A round
+   plus on a dashed line, like the "add here" target other dashboards use. */
+.qp-slot-row { position: relative; height: 34px; margin: -8px 0 14px; display: flex; align-items: center; justify-content: center; }
+.qp-slot-row::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dashed #c9d3dd; }
+.qp-plus { position: relative; width: 30px; height: 30px; border-radius: 99px; background: #fff; border: 2px solid #c9d3dd; color: #8a94a3; display: grid; place-items: center; pointer-events: none; transition: .12s; }
+.qp-plus svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+.qp-slot-row.qp-drop::before { border-top-color: #1f9d57; }
+.qp-slot-row.qp-drop .qp-plus { background: #1f9d57; border-color: #1f9d57; color: #fff; transform: scale(1.15); }
+
+/* The hint over the card under the pointer. Laid over the card itself (the
+   cell is the positioning box; top/height are set to the card's, below its
+   handle) and never in the way of the drop: pointer-events off. */
+.qp-cell { position: relative; }
+.qp-ov { position: absolute; left: 0; right: 0; z-index: 6; pointer-events: none; border-radius: 14px; }
+.qp-ov-combine { background: rgba(232,247,238,.94); border: 2px solid #1f9d57; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 20px; box-sizing: border-box; }
+.qp-ov-ico { width: 44px; height: 44px; border-radius: 12px; background: #1f9d57; color: #fff; display: grid; place-items: center; }
+.qp-ov-ico svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.qp-ov-big { font-size: 17px; font-weight: 800; color: #14532d; }
+.qp-ov-small { font-size: 12.5px; font-weight: 600; color: #178048; max-width: 340px; }
+.qp-ov-edge { width: 120px; display: flex; align-items: center; justify-content: center; }
+.qp-ov-edge.l { left: 0; right: auto; background: linear-gradient(90deg, rgba(31,157,87,.18), rgba(31,157,87,0)); border-left: 4px solid #1f9d57; border-radius: 14px 0 0 14px; }
+.qp-ov-edge.r { right: 0; left: auto; background: linear-gradient(270deg, rgba(31,157,87,.18), rgba(31,157,87,0)); border-right: 4px solid #1f9d57; border-radius: 0 14px 14px 0; }
+.qp-ov-edge span { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #14532d; background: #fff; border: 1px solid #bfe5cf; border-radius: 6px; padding: 4px 7px; white-space: nowrap; }
+.qp-ov-edge.full.l { border-left-color: #9aa6b5; background: linear-gradient(90deg, rgba(154,166,181,.18), rgba(154,166,181,0)); }
+.qp-ov-edge.full.r { border-right-color: #9aa6b5; background: linear-gradient(270deg, rgba(154,166,181,.18), rgba(154,166,181,0)); }
+.qp-ov-edge.full span { color: #647082; border-color: #d5dce4; }
+
+/* CARD PIECES — "Command Center" tag on a handle whose card holds only some of
+   its group, and the grab cursor on a tab or action row that can be dragged out. */
+.qp-fam { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .06em; color: #178048; background: #e8f7ee; border-radius: 5px; padding: 2px 6px; margin-right: 7px; vertical-align: 1px; }
+.main-content.qp-editing .qp-piece-drag { cursor: grab; }
+.main-content.qp-editing .qp-piece-drag:active { cursor: grabbing; }
+.qp-piece-drag.qp-dragging { opacity: .45; }
+/* A Command Center card split out of the original fills its cell like the
+   original does inside .ew-dash — whose rule beats .employee-widget-card's
+   max-width: calc(33.33% - 20px) with !important, so this has to as well, or a
+   split card sat at a third of its own cell. */
+.qp-cell > .cc-widget.qp-shell { flex: 1 1 auto; min-width: 0; max-width: none !important; }
+
+/* Phones and touch tablets stack every row, as the deck and the dashboard rows
+   already did at this breakpoint. !important because each cell's share is an
+   inline flex-grow, and a stacked cell must not grow in the column direction. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .qp-row { flex-direction: column; }
+    .qp-cell { flex: none !important; }
+}

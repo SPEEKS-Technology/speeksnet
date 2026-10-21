@@ -688,8 +688,16 @@
   <!-- ===== SPEEKS ACTION MENU (Priority-Hero briefing deck) ===== -->
   <!-- Managers + ASMs. Replaces the info-ticker + nav bell. Cards trigger the
        existing modals/panels; the unified feed (announcements + store notes +
-       reminders) is built by renderActionFeed() in the SPEEKS ACTION MENU block. -->
-  <section class="speeks-action-menu dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" id="speeksActionMenu">
+       reminders) is built by renderActionFeed() in the SPEEKS ACTION MENU block.
+
+       Since the QuickPortal layout (2026-10-21) this one deck is THREE elements:
+       this section holds only the High Priority bar, and the feed and the action
+       items are their own sections below, each a block that can be moved. The
+       High Priority bar is deliberately not a block (Ethan: it has to stay at the
+       top because of what it is). All three carry .speeks-action-menu, because
+       every deck rule in styles.css is scoped under it; samInit still reads this
+       section's visibility to decide whether the deck is on at all. -->
+  <section class="speeks-action-menu sam-hero-wrap dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" id="speeksActionMenu">
 
     <div class="sam-hero" id="samHero" hidden onclick="toggleNotifs()">
       <div class="sam-hero-ico">
@@ -706,7 +714,19 @@
       <div class="sam-hero-cta" id="samHeroCta">Read now <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
       <button type="button" class="sam-hero-read" id="samHeroRead" hidden><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>
     </div>
+  </section>
 
+  <!-- ===== CUSTOMIZE BAR — arrange the QuickPortal (QUICKPORTAL LAYOUT in speeks.js) =====
+       Every element with data-qp-block is a block that can be moved; data-qp-label
+       is the name its handle shows. This bar and the High Priority bar above are
+       deliberately NOT blocks, so they stay on top whatever the layout. Managers
+       only for now (qp-customize in FEATURE_CATALOG) — widen it from Feature Access. -->
+  <div class="qp-bar dynamic-module-flex role-manager" id="qpBar" data-feature="qp-customize" data-mobile="hide" data-tablet="show">
+    <button type="button" class="qp-btn" id="qpResetBtn" hidden onclick="qpReset()">Reset to Default</button>
+    <button type="button" class="qp-btn qp-btn-main" id="qpEditBtn" aria-pressed="false" onclick="qpToggleEdit()">Customize</button>
+  </div>
+
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="feed" data-qp-label="Your Feed">
     <div class="sam-board">
       <!-- LEFT: the feed — announcements + store notes + reminders/due dates -->
       <div class="sam-card">
@@ -718,7 +738,11 @@
         </div>
         <div class="sam-feed" id="samFeed"><div class="sam-empty">Syncing your feed...</div></div>
       </div>
+    </div>
+  </section>
 
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="actions" data-qp-label="Action Items">
+    <div class="sam-board">
       <!-- RIGHT: action items -->
       <div class="sam-rail">
         <div class="sam-card">
@@ -775,8 +799,8 @@
     </div>
   </section>
 
-  <div class="hotbars-stack">
-      
+  <div class="hotbars-stack" data-qp-block="links" data-qp-label="Quick Links">
+
     <div class="dynamic-module-flex role-ceo hotbar-wrapper">
         <div class="hotbar-container">
           <span class="hotbar-label">CEO</span>
@@ -917,7 +941,7 @@
        inside a row that was still display:none, so the grant silently did
        nothing. A container whose children are grantable must be grantable too.
        Default matches the role classes it used to be gated by. -->
-  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row" data-feature="widget-command-center">
+  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row" data-feature="widget-command-center" data-qp-block="command" data-qp-label="Command Center">
     <!-- ===== COMMAND CENTER — ONE widget for every role =====
          Managers, ASMs and employees all get this same card; which TABS they see is
          the only difference, and that is entirely Feature Access (cc-live, cc-ebay,
@@ -1096,7 +1120,7 @@
        Feature Access is unchanged: widget-district-command gates the card and
        widget-district-live gates the Live tab. No new keys. -->
   <div class="card ew-airy cc-widget dynamic-module-block role-district-manager role-ceo mb-30"
-       id="dcWidget" data-feature="widget-district-command">
+       id="dcWidget" data-feature="widget-district-command" data-qp-block="district" data-qp-label="District Command Center">
       <div class="ew-head">
           <div class="ew-titles">
               <span class="ew-eyebrow">District</span>
@@ -1209,7 +1233,11 @@
       </div>
   </div>
 
-  <div class="ew-airy ew-perf mb-30">
+  <!-- Performance is two blocks since the QuickPortal layout: the chart, and the
+       leaderboard that used to sit in its right-hand column. Both keep .ew-perf so
+       every rule for the card (and the store board's hide) still reaches them;
+       .qp-part collapses .ew-perf-body to the one column each now has. -->
+  <div class="ew-airy ew-perf qp-part mb-30" data-qp-block="chart" data-qp-label="Performance Chart">
       <div class="ew-head">
           <div class="ew-titles">
               <span class="ew-eyebrow">The Company</span>
@@ -1250,6 +1278,11 @@
                   <canvas id="mainKpiChart"></canvas>
               </div>
           </div>
+      </div>
+  </div>
+
+  <div class="ew-airy ew-perf ew-perf-lb qp-part mb-30" data-qp-block="leaderboard" data-qp-label="Leaderboard">
+      <div class="ew-perf-body">
           <div class="ew-standings">
               <div class="ew-standings-head">
                   <span class="ew-standings-title">Leaderboard</span>

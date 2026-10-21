@@ -64,6 +64,79 @@ if (document.readyState === 'loading') {
 const _BASE = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1';
 const _SUPABASE_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co';
 const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqemFxbXl4eHJrbXh2emJqZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNzA2NjAsImV4cCI6MjA5NDY0NjY2MH0.-SrbSaF-n8WkNW6tieDiA2FhGHB7qP4b6XrEyy2JF74';
+
+// --- TEST SESSION: reads are live, writes go nowhere ---
+// scripts/test-login.html signs a tab in as a test user (first: an OVL manager,
+// for the QuickPortal layout work) WITHOUT a users row — a real row would move
+// OVL's listing goal, KPI roster, usage report and nudges (see that file).
+// But the session is otherwise a real one, and identity on this site is
+// whatever name the browser asserts, so every save would land in live tables as
+// "Test Manager OVL": a ticked OVL checklist, a read receipt, usage rows.
+//
+// So a test session refuses every non-GET call to Supabase, here, at the one
+// door they all go through, rather than at each of the hundreds of call sites.
+// A refused call rejects like a network failure — the code paths that already
+// handle "offline" handle it — and says so in the console. Localhost only: the
+// flag is sessionStorage, so on speeksnet.com it could be set by hand, and a
+// guard that someone can switch on in production is one that can break it.
+//
+// READ_POSTS: calls that READ through a POST, by endpoint AND body action —
+// the same URL often takes a write too (district-watch: 'board' reads,
+// 'save_config' writes). Each was checked against the function's handler; add
+// to it only after reading that handler.
+(function () {
+    const local = ['localhost', '127.0.0.1', '[::1]'].indexOf(location.hostname) !== -1;
+    let on = false;
+    // The Claude desktop app's browser pane re-opens its tab with an empty
+    // sessionStorage when it is hidden and shown again, which signed the test
+    // user out four times in an afternoon (2026-10-21). So test-login.html also
+    // leaves its keys in localStorage (speeksTestRestore), and a fresh tab on
+    // localhost with no session takes them back. Signing out — the nav button or
+    // the test-login page — removes them. Never on a real host: that would be a
+    // login that outlives the browser.
+    try {
+        const saved = local && !sessionStorage.getItem('speeksUnlocked') && localStorage.getItem('speeksTestRestore');
+        if (saved) {
+            const keys = JSON.parse(saved);
+            Object.keys(keys).forEach(function (k) { sessionStorage.setItem(k, keys[k]); });
+        }
+    } catch (e) {}
+    try { on = local && sessionStorage.getItem('speeksTestSession') === '1'; } catch (e) {}
+    window._speeksTestSession = on;
+    if (!on) return;
+    const READ_POSTS = [
+        { path: '/functions/v1/district-watch', actions: ['board', 'history'] },
+    ];
+    function isReadPost(url, init) {
+        let action = '';
+        try { action = String(JSON.parse((init && init.body) || '{}').action || ''); } catch (e) {}
+        return READ_POSTS.some(function (r) {
+            return url.split('?')[0].endsWith(r.path) && r.actions.indexOf(action) !== -1;
+        });
+    }
+    const realFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD' && url.indexOf(_SUPABASE_URL) === 0
+            && !isReadPost(url, init)) {
+            console.warn('[test session] blocked ' + method + ' ' + url.split('?')[0]);
+            return Promise.reject(new TypeError('Test session: writes are disabled'));
+        }
+        return realFetch(input, init);
+    };
+    if (navigator.sendBeacon) {
+        const realBeacon = navigator.sendBeacon.bind(navigator);
+        navigator.sendBeacon = function (url, data) {
+            if (String(url).indexOf(_SUPABASE_URL) === 0) {
+                console.warn('[test session] blocked beacon ' + String(url).split('?')[0]);
+                return true;
+            }
+            return realBeacon(url, data);
+        };
+    }
+})();
+
 const CMS_URL           = `${_BASE}/cms`;
 const HOTKEYS_URL       = `${_BASE}/hotkeys`;
 const DOCS_URL          = `${_BASE}/docs`;
@@ -12178,6 +12251,10 @@ function handleSignOut() {
     // per session, so a fresh login should surface it again. Cleared BEFORE the
     // name is dropped, since the key is scoped to the signing-out user.
     try { sessionStorage.removeItem(_seenAgingKey()); } catch (e) { /* non-fatal */ }
+    // A local test login keeps a copy so the browser pane can't drop it (TEST
+    // SESSION, top of file). Signing out has to drop the copy too, or the next
+    // load would sign the test user straight back in.
+    try { localStorage.removeItem('speeksTestRestore'); sessionStorage.removeItem('speeksTestSession'); } catch (e) {}
 
     // Every key the login sets has to be cleared here, plus the comment tracker
     // so store comments pop again next login. speeksUserPin and
@@ -12804,8 +12881,14 @@ const _DC_BOARD = { prefix: 'dc', tabs: () => DC_TABS, widget: 'dcWidget' };
 
 function _tabSwitch(cfg, tab) {
     const p = cfg.prefix;
-    const widget = document.getElementById(cfg.widget);
     const btn = document.getElementById(p + '-tab-' + tab);
+    // THE CARD IS THE ONE THE TAB IS IN. Customize can split the Command Center
+    // into several cards (QUICKPORTAL LAYOUT, "card pieces"), each holding the
+    // real tab, tiles, strip and panel of the pieces it was given — same ids,
+    // moved, not copied. So a tab switches inside its own card and leaves every
+    // other card's tabs alone; un-split, that card is #ccWidget as it always was.
+    const widget = (btn && btn.closest('.cc-widget')) || document.getElementById(cfg.widget);
+    const mine = el => !!el && (!widget || widget.contains(el));
     // Clicking the open tab closes it — ON A DESKTOP, where closing lands you on
     // the summary. Every compact screen cuts that summary, so the same tap would
     // leave a card with nothing in it at all: no panel, no strip, no summary, and
@@ -12817,25 +12900,25 @@ function _tabSwitch(cfg, tab) {
     cfg.tabs().forEach(t => {
         const on = !collapse && t === tab;
         const b = document.getElementById(p + '-tab-' + t);
-        if (b) b.classList.toggle('active', on);
+        if (mine(b)) b.classList.toggle('active', on);
         // Strips and panels are each stacked in one grid cell and toggled by class (opacity,
         // not display) so every tab reserves the height of the tallest — the card never
         // resizes when switching, and no hidden panel paints over the active one.
         const strip = document.getElementById(p + '-strip-' + t);
-        if (strip) strip.classList.toggle('cc-active', on);
+        if (mine(strip)) strip.classList.toggle('cc-active', on);
         const panel = document.getElementById(p + '-panel-' + t);
-        if (panel) panel.classList.toggle('cc-active', on);
+        if (mine(panel)) panel.classList.toggle('cc-active', on);
     });
     // Expand to chart height only while a tab is open; collapsed → natural summary height.
     if (widget) {
         widget.classList.toggle('cc-expanded', !collapse);
         // Weekly KPIs has no tile strip. Every strip shares one grid cell, so leaving
         // the band in place would show a blank stripe the height of the tallest one.
-        widget.classList.toggle('cc-nostrip', !collapse && !document.getElementById(p + '-strip-' + tab));
+        widget.classList.toggle('cc-nostrip', !collapse && !mine(document.getElementById(p + '-strip-' + tab)));
     }
     // Show the explicit "back to summary" control while a tab is open.
     const coll = document.getElementById(p + '-collapse');
-    if (coll) coll.style.display = collapse ? 'none' : '';
+    if (mine(coll)) coll.style.display = collapse ? 'none' : '';
     return collapse;
 }
 
@@ -12864,12 +12947,16 @@ function _ccHeaderFor(tab) {
 // Explicit "back to the one-line summary" (in addition to clicking the open tab again).
 function _tabCollapse(cfg) {
     const p = cfg.prefix;
+    // The board's own card only — a piece split out into its own card keeps
+    // whatever tab it has open (see _tabSwitch).
+    const widget = document.getElementById(cfg.widget);
+    const mine = el => !!el && (!widget || widget.contains(el));
     cfg.tabs().forEach(t => {
-        const b = document.getElementById(p + '-tab-' + t); if (b) b.classList.remove('active');
-        const strip = document.getElementById(p + '-strip-' + t); if (strip) strip.classList.remove('cc-active');
-        const panel = document.getElementById(p + '-panel-' + t); if (panel) panel.classList.remove('cc-active');
+        const b = document.getElementById(p + '-tab-' + t); if (mine(b)) b.classList.remove('active');
+        const strip = document.getElementById(p + '-strip-' + t); if (mine(strip)) strip.classList.remove('cc-active');
+        const panel = document.getElementById(p + '-panel-' + t); if (mine(panel)) panel.classList.remove('cc-active');
     });
-    const widget = document.getElementById(cfg.widget); if (widget) widget.classList.remove('cc-expanded');
+    if (widget) widget.classList.remove('cc-expanded');
     const coll = document.getElementById(p + '-collapse'); if (coll) coll.style.display = 'none';
 }
 function collapseCommand() {
@@ -13031,7 +13118,11 @@ function _ccSyncCompactOpen() {
 function _openDefaultTab(cfg, open) {
     const widget = document.getElementById(cfg.widget);
     if (!widget || getComputedStyle(widget).display === 'none') return false;
-    const btns = cfg.tabs().map(t => document.getElementById(cfg.prefix + '-tab-' + t));
+    // Only this card's tabs: one split out into a card of its own (QUICKPORTAL
+    // LAYOUT) is that card's business, and opening it from here would leave
+    // this one shut on a phone, where a shut card shows nothing.
+    const inCard = b => !!b && widget.contains(b);
+    const btns = cfg.tabs().map(t => document.getElementById(cfg.prefix + '-tab-' + t)).filter(inCard);
     const active = btns.filter(b => b && b.classList.contains('active'));
     // Genuinely open: leave it. Calling open() here would CLOSE it, because
     // switchCommandTab treats the active tab as a toggle on a desktop.
@@ -13045,7 +13136,7 @@ function _openDefaultTab(cfg, open) {
     active.forEach(b => b.classList.remove('active'));
     const first = cfg.tabs().find(t => {
         const b = document.getElementById(cfg.prefix + '-tab-' + t);
-        return b && getComputedStyle(b).display !== 'none';
+        return inCard(b) && getComputedStyle(b).display !== 'none';
     });
     if (!first) return false;
     open(first);      // nothing is active, so this opens rather than toggles
@@ -32751,6 +32842,10 @@ function applyRoleBasedUI() {
     // The nav and the action buttons carry no data-feature, so the allow-list
     // cannot see them. This is the other half.
     _applyBoardChrome();
+
+    // Last: it moves blocks, and wants every display above already decided so
+    // it knows which ones are on screen to offer arrows for.
+    try { _qpApplyLayout(); } catch (e) { console.warn('QuickPortal layout failed:', e); }
 }
 
 // ── THE PICTURE-STATION iPAD'S CHROME ───────────────────────────────────────
@@ -43956,6 +44051,10 @@ const FEATURE_CATALOG = [
     // empty row or a card with nowhere to show. (Feature Access check, 2026-10-16.)
     { key: 'widget-scorecard-alerts',  label: 'Command Center (Card)',          tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'widget-command-center',    label: 'Command Center (Dashboard Row)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    // QuickPortal "Customize" — arrange your own QuickPortal (QUICKPORTAL LAYOUT).
+    // Managers only while it is new (Ethan 2026-10-21: start with one role, go
+    // slowly); widen it here or per person from Feature Access.
+    { key: 'qp-customize',             label: 'QuickPortal · Customize (arrange)', tab: 'widgets', group: 'Dashboard', def: ['manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
     // now — so the switch is gone too rather than left as a control that does
@@ -49506,6 +49605,901 @@ function startDailyBriefReminder() {
 }
 
 
+// ============================================================================
+// QUICKPORTAL LAYOUT — "Customize": arrange your QuickPortal in rows
+// ============================================================================
+// Step one of the QuickPortal revamp (Ethan, 2026-10-21: "very slowly"). The
+// page keeps every block it has today; this lets a person arrange them. Widgets
+// you can add, connectors, reports are later steps — see the DM mockup.
+//
+// THE MODEL IS ROWS. A row holds one, two or three cards, never more (Ethan:
+// "1 big per row, 2 50% per row, or 3 33% per row"). Dropping a card near the
+// left or right edge of another puts it in that row and the row shares its
+// width; dropping it on a + between rows gives it a row of its own. A two-card
+// row can also be weighted ⅔·⅓ either way, because the page's own pairs were
+// never 50/50: the feed ran 1.5 : 1 against the action items and the chart
+// ~3 : 1 against the leaderboard. The default rows keep exactly those weights,
+// so nobody's page changes until they change it.
+//
+// A block is any element carrying data-qp-block (index.html tags eight). Each
+// is MOVED into a generated .qp-cell inside a generated .qp-row — the element
+// itself, not a copy — so its ids, role classes and data-feature go with it,
+// and applyRoleBasedUI and every renderer that finds a card by id keep working.
+// The High Priority bar and the Customize bar are not blocks: they stay on top.
+// Rows are rebuilt in front of whatever followed the blocks in <main>, so the
+// modals and side panels after them never move.
+//
+// CARD PIECES. Two blocks are made of pieces that can be split apart and put
+// back together in any combination (Ethan, 2026-10-21, after the "Split into
+// cards" mockup): the Command Center (Live Sales, eBay, Scorecard & Audit — one
+// per tab) and the Action Items (one per row). Drag a card over the MIDDLE of
+// another card from the same group and they combine; drag a tab, or an action
+// row, out to a card's edge or a + and it becomes a card of its own.
+//   · A split-out card is a SHELL this code builds with the original's own
+//     classes, and the piece's real elements — tab, tiles, strip, panel, or
+//     action button — are moved into it with their ids. Every renderer keeps
+//     filling them wherever they are, and the card looks like the original
+//     because it is made of the original. _tabSwitch switches tabs inside the
+//     card a tab is in, which is what makes a second Command Center card work.
+//   · The original card always stays, holding whatever pieces no shell has, so
+//     the layout only has to name the shells: "command:ebay,score" is a card of
+//     those two, and "command" is the original with the rest. A shell's key is
+//     its pieces, so nothing has to be remembered about what was together:
+//     every card says what it holds.
+//   · The original must keep at least one piece you can see, or it would be an
+//     empty card. Pulling a piece out needs two in the card, and combining the
+//     original INTO a shell keeps the original and retires the shell instead.
+//
+// The SPA router replaces .main-content's innerHTML on a hop back to the
+// QuickPortal, which brings the blocks back loose, in markup order and with
+// every piece at home. So the rows are rebuilt from applyRoleBasedUI, which every
+// hop runs — and only rebuilt when the arrangement actually differs, because that
+// runs again on every Feature Access refresh and moving the chart's canvas for
+// nothing is waste.
+//
+// Hidden blocks keep their place. A manager has seven of the eight; the district
+// board is display:none for them. Its row is hidden, it is never counted toward
+// a row's three, and no drop target is offered next to it. Pieces the same: the
+// DM's three action rows sit hidden in a manager's Action Items wherever it goes.
+//
+// SAVED PER PERSON, ON THIS DEVICE for now (localStorage, keyed by name like the
+// patch-notes flags). Syncing it to the database so it follows you between
+// devices is the next step, not this one.
+const QP_LAYOUT_KEY = 'speeksQpLayout_';
+const QP_MAX_PER_ROW = 3;
+const QP_DEFAULT_ROWS = [
+    { items: ['feed', 'actions'], w: [3, 2] },
+    { items: ['links'] },
+    { items: ['command'] },
+    { items: ['district'] },
+    { items: ['chart', 'leaderboard'], w: [3, 1] },
+];
+// The two-block weightings offered in Customize. Default rows may carry their
+// own (above); picking one of these replaces it. The buttons NAME THE CARD that
+// gets wider ("Your Feed wider") under a little picture of the two widths —
+// the first cut showed "½ · ½ / ⅔ · ⅓ / ⅓ · ⅔", and Ethan's verdict was that
+// people won't just know what that is. `wide` is which shown card it widens.
+const QP_SPLITS = [
+    { w: [1, 1], wide: -1 },
+    { w: [2, 1], wide: 0 },
+    { w: [1, 2], wide: 1 },
+];
+// The blocks made of pieces. For the Command Center a piece is the ids of its
+// tab, tiles, strip and panel (the tab first: it is the one checked to see
+// whether the piece is shown to this person). For the Action Items a piece is
+// one row of the rail, found by its data-feature inside the deck's own rail —
+// the same data-feature also tags a Listing Goals card elsewhere on the page.
+// `kind` says which shell to build.
+const QP_FAMILIES = {
+    command: {
+        label: 'Command Center', kind: 'cc',
+        pieces: [
+            { key: 'live', label: 'Live Sales', ids: ['cc-tab-live', 'cc-sum-live', 'cc-sum-mtd', 'cc-sum-refunds', 'cc-sum-goal', 'cc-sum-reviews', 'cc-strip-live', 'cc-panel-live'] },
+            { key: 'ebay', label: 'eBay', ids: ['cc-tab-ebay', 'cc-sum-ebay', 'cc-strip-ebay', 'cc-panel-ebay'] },
+            { key: 'score', label: 'Scorecard & Audit', ids: ['cc-tab-scorecard', 'cc-sum-score', 'cc-sum-audit', 'cc-strip-scorecard', 'cc-panel-scorecard'] },
+        ],
+    },
+    actions: {
+        label: 'Action Items', kind: 'rail',
+        pieces: [
+            { key: 'checklist', label: 'Manager Checklist', feature: 'widget-checklist-panel' },
+            { key: 'cleaning', label: 'Cleaning Checklist', feature: 'widget-audit-panel' },
+            { key: 'goals', label: 'Goals & Initiatives', feature: 'widget-goals-panel' },
+            { key: 'listing', label: 'Listing Goals', feature: 'widget-listing-goals' },
+            { key: 'dmcleaning', label: 'Cleaning Checklist', feature: 'widget-dm-audit' },
+            { key: 'dmgoals', label: 'Monthly Team Goals', feature: 'widget-dm-goals' },
+            { key: 'dmlisting', label: 'Listing Goals', feature: 'widget-dm-listing-goals' },
+        ],
+    },
+};
+// The shell's slots, by the class of the container a piece's element lives in
+// at home. Each element goes into the shell's container of the same class.
+const QP_SLOTS = ['cc-seg', 'cc-summary', 'cc-strips', 'cc-body', 'sam-card'];
+
+let _qpEditing = false;
+let _qpDrag = null;          // { key } for a card, { fam, piece, from } for a piece
+
+function _qpMain() {
+    const main = document.querySelector('.main-content');
+    return main && main.querySelector('[data-qp-block]') ? main : null;
+}
+// Blocks that are ours to arrange: loose in <main>, or already in one of our cells.
+function _qpBlocks(main) {
+    return Array.from(main.querySelectorAll('[data-qp-block]')).filter(function (b) {
+        return b.parentElement === main || (b.parentElement && b.parentElement.classList.contains('qp-cell'));
+    });
+}
+function _qpKey(b) { return b.getAttribute('data-qp-block'); }
+function _qpStoreKey() {
+    return QP_LAYOUT_KEY + String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase();
+}
+function _qpSaved() {
+    try {
+        const v = JSON.parse(localStorage.getItem(_qpStoreKey()) || 'null');
+        return v && v.v === 2 && Array.isArray(v.rows) ? v.rows : null;
+    } catch (e) { return null; }
+}
+function _qpSave(rows) {
+    try {
+        if (rows) localStorage.setItem(_qpStoreKey(), JSON.stringify({ v: 2, rows: rows }));
+        else localStorage.removeItem(_qpStoreKey());
+    } catch (e) { /* private mode: the layout just won't survive a reload */ }
+}
+function _qpSig(rows) {
+    return rows.map(function (r) { return r.items.join(',') + '@' + (r.w ? r.w.join(':') : ''); }).join('|');
+}
+
+// ---- card pieces ---------------------------------------------------------
+function _qpShellKey(fam, pieces) {
+    const order = QP_FAMILIES[fam].pieces.map(function (p) { return p.key; });
+    return fam + ':' + pieces.slice().sort(function (a, b) { return order.indexOf(a) - order.indexOf(b); }).join(',');
+}
+function _qpParse(key) {
+    const i = key.indexOf(':');
+    if (i === -1) return QP_FAMILIES[key] ? { fam: key, shell: false } : null;
+    const fam = key.slice(0, i);
+    return QP_FAMILIES[fam] ? { fam: fam, shell: true, pieces: key.slice(i + 1).split(',').filter(Boolean) } : null;
+}
+
+// Find each piece's elements the first time this <main> is seen, tag them, and
+// leave a marker comment where each one lives so it can go home again. The
+// router's rebuild brings fresh elements, which simply get found again.
+function _qpDiscover(main) {
+    Object.keys(QP_FAMILIES).forEach(function (fam) {
+        const home = main.querySelector('[data-qp-block="' + fam + '"]');
+        if (!home) return;
+        home.setAttribute('data-qp-family', fam);
+        QP_FAMILIES[fam].pieces.forEach(function (p) {
+            let els;
+            if (p.ids) els = p.ids.map(function (id) { return document.getElementById(id); }).filter(Boolean);
+            else {
+                const btn = main.querySelector('[data-qp-piece="' + fam + '/' + p.key + '"]')
+                    || home.querySelector('.sam-rail [data-feature="' + p.feature + '"]');
+                els = btn ? [btn] : [];
+            }
+            els.forEach(function (el, i) {
+                if (el._qpHome) return;
+                el.setAttribute('data-qp-piece', fam + '/' + p.key);
+                if (i === 0) el.setAttribute('data-qp-piece-main', '');
+                const mark = document.createComment('qp:' + fam + '/' + p.key);
+                el.parentNode.insertBefore(mark, el);
+                el._qpHome = mark;
+            });
+        });
+    });
+}
+function _qpPieceEls(main, fam, piece) {
+    return Array.from(main.querySelectorAll('[data-qp-piece="' + fam + '/' + piece + '"]'));
+}
+function _qpPieceShown(main, fam, piece) {
+    const m = main.querySelector('[data-qp-piece="' + fam + '/' + piece + '"][data-qp-piece-main]');
+    return !!m && getComputedStyle(m).display !== 'none';
+}
+// Pieces a family has on this page, in its own order.
+function _qpFamPieces(main, fam) {
+    return QP_FAMILIES[fam].pieces.map(function (p) { return p.key; })
+        .filter(function (k) { return _qpPieceEls(main, fam, k).length; });
+}
+// What a card holds: a shell says so in its key; the original holds the rest.
+function _qpCardPieces(main, rows, key) {
+    const k = _qpParse(key);
+    if (!k) return [];
+    if (k.shell) return k.pieces;
+    const taken = {};
+    rows.forEach(function (r) {
+        r.items.forEach(function (it) {
+            const o = _qpParse(it);
+            if (o && o.shell && o.fam === k.fam) o.pieces.forEach(function (p) { taken[p] = true; });
+        });
+    });
+    return _qpFamPieces(main, k.fam).filter(function (p) { return !taken[p]; });
+}
+function _qpShownPieces(main, rows, key) {
+    const k = _qpParse(key);
+    return k ? _qpCardPieces(main, rows, key).filter(function (p) { return _qpPieceShown(main, k.fam, p); }) : [];
+}
+// The card's name: the family's own when it holds every piece this person can
+// see, otherwise the pieces it holds ("Live Sales + eBay").
+function _qpCardName(main, rows, key) {
+    const k = _qpParse(key);
+    const fam = QP_FAMILIES[k.fam];
+    const shown = _qpShownPieces(main, rows, key);
+    const all = _qpFamPieces(main, k.fam).filter(function (p) { return _qpPieceShown(main, k.fam, p); });
+    if (!shown.length || shown.length === all.length) return { name: fam.label, whole: true };
+    return {
+        name: shown.map(function (p) { return fam.pieces.find(function (x) { return x.key === p; }).label; }).join(' + '),
+        whole: false,
+    };
+}
+
+function _qpMakeShell(main, key) {
+    const k = _qpParse(key);
+    const el = document.createElement(QP_FAMILIES[k.fam].kind === 'rail' ? 'section' : 'div');
+    el.setAttribute('data-qp-block', key);
+    el.setAttribute('data-qp-family', k.fam);
+    el.setAttribute('data-qp-shell', '');
+    if (QP_FAMILIES[k.fam].kind === 'cc') {
+        // The original's own classes and skeleton, so every .cc-widget rule —
+        // collapsed summary, opening a tab, the stacked strips and panels — is
+        // the one the original card already uses.
+        el.className = 'card employee-widget-card ew-airy cc-widget qp-shell';
+        const store = sessionStorage.getItem('speeksUserStore') || '';
+        el.innerHTML =
+            '<div class="ew-head"><div class="ew-titles">'
+            + '<span class="ew-eyebrow">' + escapeHtml(store && store !== 'ALL' ? store + ' · This Month' : 'This Month') + '</span>'
+            + '<span class="ew-title qp-shell-title"></span></div></div>'
+            + '<div class="cc-tabbar"><div class="ew-seg cc-seg"></div></div>'
+            + '<div class="cc-summary"></div><div class="cc-strips"></div><div class="cc-body"></div>';
+    } else {
+        el.className = 'speeks-action-menu qp-part qp-shell';
+        el.innerHTML = '<div class="sam-board"><div class="sam-rail"><div class="sam-card"></div></div></div>';
+    }
+    return el;
+}
+function _qpSlotOf(el) {
+    const home = el._qpHome && el._qpHome.parentNode;
+    if (!home) return null;
+    return QP_SLOTS.find(function (c) { return home.classList && home.classList.contains(c); }) || null;
+}
+function _qpSendHome(el) {
+    if (!el._qpHome || !el._qpHome.parentNode) return;
+    if (el.previousSibling === el._qpHome) return;
+    el._qpHome.parentNode.insertBefore(el, el._qpHome.nextSibling);
+    el.classList.remove('active', 'cc-active');
+}
+
+// Put every piece where the layout says: into the shell named for it, or home.
+// Runs before the rows are arranged, so the shells exist for _qpBuild to place.
+function _qpDistribute(main, rows) {
+    _qpDiscover(main);
+    const want = {};
+    rows.forEach(function (r) { r.items.forEach(function (it) { const o = _qpParse(it); if (o && o.shell) want[it] = o; }); });
+    // Shells nobody wants any more: their pieces go home and the shell goes.
+    main.querySelectorAll('[data-qp-shell]').forEach(function (sh) {
+        if (want[_qpKey(sh)]) return;
+        sh.querySelectorAll('[data-qp-piece]').forEach(_qpSendHome);
+        const cell = sh.parentElement && sh.parentElement.classList.contains('qp-cell') ? sh.parentElement : null;
+        sh.remove();
+        if (cell) cell.remove();
+    });
+    // Pieces outside the shell they now belong to go home first, then fill.
+    const owner = {};
+    Object.keys(want).forEach(function (key) { want[key].pieces.forEach(function (p) { owner[want[key].fam + '/' + p] = key; }); });
+    main.querySelectorAll('[data-qp-piece]').forEach(function (el) {
+        const sh = el.closest('[data-qp-shell]');
+        const belongs = owner[el.getAttribute('data-qp-piece')] || null;
+        if ((sh ? _qpKey(sh) : null) !== belongs) _qpSendHome(el);
+    });
+    Object.keys(want).forEach(function (key) {
+        const o = want[key];
+        let sh = main.querySelector('[data-qp-shell][data-qp-block="' + key + '"]');
+        if (!sh) { sh = _qpMakeShell(main, key); main.insertBefore(sh, _qpAnchor(main)); }
+        o.pieces.forEach(function (p) {
+            _qpPieceEls(main, o.fam, p).forEach(function (el) {
+                if (el.closest('[data-qp-shell]') === sh) return;
+                const slot = _qpSlotOf(el);
+                const into = slot ? sh.querySelector('.' + slot) : null;
+                if (!into) return;
+                into.appendChild(el);
+                el.classList.remove('active', 'cc-active');
+            });
+        });
+    });
+    // A card left showing an opened tab it no longer holds goes back to its
+    // summary, as if the tab had been closed.
+    main.querySelectorAll('.cc-widget.cc-expanded').forEach(function (w) {
+        if (!w.querySelector('.cc-seg .toggle-btn.active')) {
+            w.classList.remove('cc-expanded', 'cc-nostrip');
+            const coll = w.querySelector('.cc-collapse');
+            if (coll) coll.style.display = 'none';
+        }
+    });
+    // Names: the handle reads data-qp-label, and a shell's title says what it is.
+    Object.keys(QP_FAMILIES).forEach(function (fam) {
+        main.querySelectorAll('[data-qp-family="' + fam + '"]').forEach(function (card) {
+            const n = _qpCardName(main, rows, _qpKey(card));
+            card.setAttribute('data-qp-label', n.name);
+            card.toggleAttribute('data-qp-partial', !n.whole);
+            const t = card.querySelector('.qp-shell-title');
+            if (t) t.textContent = n.name;
+        });
+    });
+}
+
+// The saved rows, reconciled with the blocks this page actually has: a key that
+// no longer exists is dropped (an emptied row with it), a row is cut back to
+// three, a shell loses any piece an earlier shell already holds, and a block a
+// release ADDED after the layout was saved gets a row of its own at the bottom
+// rather than vanishing. Last, the original card of a family must keep a piece
+// this person can see: if the shells took them all, the last shell is retired.
+function _qpResolve(saved, keys, main) {
+    const seen = {};
+    const used = {};
+    const rows = [];
+    (saved || []).forEach(function (r) {
+        if (!r || !Array.isArray(r.items)) return;
+        const items = [];
+        r.items.forEach(function (k) {
+            const o = _qpParse(String(k));
+            if (o && o.shell) {
+                if (keys.indexOf(o.fam) === -1) return;
+                const have = main ? _qpFamPieces(main, o.fam) : o.pieces;
+                const ps = o.pieces.filter(function (p) {
+                    if (have.indexOf(p) === -1 || used[o.fam + '/' + p]) return false;
+                    used[o.fam + '/' + p] = true; return true;
+                });
+                if (!ps.length) return;
+                k = _qpShellKey(o.fam, ps);
+            } else if (keys.indexOf(k) === -1) return;
+            if (seen[k]) return;
+            seen[k] = true;
+            items.push(k);
+        });
+        const kept = items.slice(0, QP_MAX_PER_ROW);
+        if (!kept.length) return;
+        const w = Array.isArray(r.w) && r.w.length === kept.length ? r.w.slice() : null;
+        rows.push({ items: kept, w: w });
+    });
+    keys.forEach(function (k) { if (!seen[k]) rows.push({ items: [k], w: null }); });
+    if (main) {
+        Object.keys(QP_FAMILIES).forEach(function (fam) {
+            if (keys.indexOf(fam) === -1) return;
+            const shown = _qpFamPieces(main, fam).filter(function (p) { return _qpPieceShown(main, fam, p); });
+            if (!shown.length) return;
+            for (let guard = 0; guard < 10; guard++) {
+                const mine = _qpCardPieces(main, rows, fam).filter(function (p) { return shown.indexOf(p) !== -1; });
+                if (mine.length) break;
+                let last = null;
+                rows.forEach(function (r) { r.items.forEach(function (it) { const o = _qpParse(it); if (o && o.shell && o.fam === fam) last = it; }); });
+                if (!last) break;
+                _qpTakeOut(rows, last);
+            }
+        });
+        return rows.filter(function (r) { return r.items.length; });
+    }
+    return rows;
+}
+function _qpDefaults(keys) { return _qpResolve(QP_DEFAULT_ROWS, keys, null); }
+
+function _qpVisible(b) {
+    if (b.hidden) return false;
+    if (b.hasAttribute('data-qp-shell')) {
+        return Array.from(b.querySelectorAll('[data-qp-piece-main]')).some(function (m) { return getComputedStyle(m).display !== 'none'; });
+    }
+    return getComputedStyle(b).display !== 'none';
+}
+
+// Where the rows go: in front of whatever followed the last block or row.
+function _qpAnchor(main) {
+    const kids = Array.from(main.children);
+    let last = -1;
+    kids.forEach(function (c, i) { if (c.hasAttribute('data-qp-block') || c.classList.contains('qp-row')) last = i; });
+    return last >= 0 ? kids[last].nextSibling : null;
+}
+
+function _qpCurrentRows(main) {
+    return Array.from(main.querySelectorAll(':scope > .qp-row')).map(function (row) {
+        const cells = Array.from(row.querySelectorAll(':scope > .qp-cell'));
+        return {
+            items: cells.map(function (c) { const b = c.querySelector(':scope > [data-qp-block]'); return b ? _qpKey(b) : ''; }).filter(Boolean),
+            w: row.hasAttribute('data-qp-w') ? row.getAttribute('data-qp-w').split(':').map(Number) : null,
+        };
+    });
+}
+
+function _qpBuild(main, rows) {
+    _qpDistribute(main, rows);
+    const blocks = _qpBlocks(main);
+    const byKey = {};
+    blocks.forEach(function (b) { byKey[_qpKey(b)] = b; });
+    if (_qpSig(_qpCurrentRows(main)) !== _qpSig(rows) || blocks.some(function (b) { return b.parentElement === main; })) {
+        const anchor = _qpAnchor(main);
+        const frag = document.createDocumentFragment();
+        rows.forEach(function (r) {
+            const row = document.createElement('div');
+            row.className = 'qp-row';
+            if (r.w) row.setAttribute('data-qp-w', r.w.join(':'));
+            r.items.forEach(function (k, i) {
+                if (!byKey[k]) return;
+                const cell = document.createElement('div');
+                cell.className = 'qp-cell';
+                cell.style.flexGrow = String(r.w ? r.w[i] : 1);
+                cell.appendChild(byKey[k]);
+                row.appendChild(cell);
+            });
+            frag.appendChild(row);
+        });
+        main.insertBefore(frag, anchor);
+        // Old rows are empty shells now — their blocks were moved out above.
+        main.querySelectorAll(':scope > .qp-row').forEach(function (row) {
+            if (!row.querySelector('[data-qp-block]')) row.remove();
+        });
+    }
+    _qpSyncHidden(main);
+}
+
+// A cell is hidden when its block is, and a row when all its cells are, so a
+// hidden block leaves neither a gap in its row nor an empty row's spacing.
+function _qpSyncHidden(main) {
+    main.querySelectorAll(':scope > .qp-row').forEach(function (row) {
+        let any = false;
+        row.querySelectorAll(':scope > .qp-cell').forEach(function (cell) {
+            const b = cell.querySelector(':scope > [data-qp-block]');
+            const vis = !!b && _qpVisible(b);
+            cell.hidden = !vis;
+            if (vis) any = true;
+        });
+        row.hidden = !any;
+        row.classList.toggle('qp-solo', row.querySelectorAll(':scope > .qp-cell:not([hidden])').length === 1);
+    });
+}
+
+function _qpLayout(main) {
+    _qpDiscover(main);
+    const keys = _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell'); }).map(_qpKey);
+    const board = typeof _tvIsBoardRole === 'function' && _tvIsBoardRole();
+    const saved = board ? null : _qpSaved();
+    return saved ? _qpResolve(saved, keys, main) : _qpDefaults(keys);
+}
+
+function _qpApplyLayout() {
+    const main = _qpMain();
+    if (!main) return;
+    _qpBuild(main, _qpLayout(main));
+    main.classList.toggle('qp-custom', !!_qpSaved());
+    // Feature overrides re-run applyRoleBasedUI in the background; that must not
+    // throw someone out of Customize halfway through. A hop that rebuilt <main>
+    // took the handles with it, though, so only stay in edit mode if they exist.
+    if (_qpEditing && main.querySelector('.qp-ctl')) _qpRenderControls(main);
+    else _qpSetEditing(main, false);
+}
+
+// Run a rebuild without moving the page. A rebuild pulls every block out of the
+// document and puts it back, and for that instant the page is a few hundred
+// pixels tall — the browser clamps the scroll to fit, so a width change made at
+// the bottom of the page threw you back to the top (Ethan, 2026-10-21).
+function _qpKeepScroll(fn) {
+    const se = document.scrollingElement || document.documentElement;
+    const y = se.scrollTop;
+    fn();
+    se.scrollTop = y;
+}
+
+function _qpOriginalKeys(main) {
+    return _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell'); }).map(_qpKey);
+}
+
+// Commit a new arrangement: rebuild, save (or forget, if it IS the default),
+// and redraw the handles for where everything now sits.
+function _qpCommit(main, rows) {
+    rows = rows.filter(function (r) { return r.items.length; });
+    _qpKeepScroll(function () {
+        _qpBuild(main, rows);
+        const isDefault = _qpSig(rows) === _qpSig(_qpDefaults(_qpOriginalKeys(main)));
+        _qpSave(isDefault ? null : rows);
+        main.classList.toggle('qp-custom', !isDefault);
+        _qpRenderControls(main);
+    });
+}
+
+function _qpIsShown(main, key) {
+    const b = main.querySelector('[data-qp-block="' + key + '"]');
+    return !!b && _qpVisible(b);
+}
+function _qpShownCount(main, row, except) {
+    return row.items.filter(function (k) { return k !== except && _qpIsShown(main, k); }).length;
+}
+// Take a card out of its row; the rest of that row re-shares its width.
+function _qpTakeOut(rows, key) {
+    rows.forEach(function (r) {
+        const i = r.items.indexOf(key);
+        if (i === -1) return;
+        r.items.splice(i, 1);
+        r.w = null;
+    });
+}
+function _qpReplace(rows, from, to) {
+    rows.forEach(function (r) { const i = r.items.indexOf(from); if (i !== -1) r.items[i] = to; });
+}
+// Put `key` into the layout at a drop target: beside a card (row + the card it
+// goes before, or null for the row's end) or as a row of its own before row
+// `before` (null: at the bottom). Rows are found by object, not index, because
+// taking the card out first can empty and remove its old row.
+function _qpPlace(rows, key, target, rowObj, beforeRow) {
+    if (target.zone === 'gap') {
+        const kept = rows.filter(function (r) { return r.items.length; });
+        let at = beforeRow ? kept.indexOf(beforeRow) : -1;
+        if (beforeRow && at === -1) {
+            const all = rows.indexOf(beforeRow);
+            at = kept.findIndex(function (r) { return rows.indexOf(r) > all; });
+        }
+        const fresh = { items: [key], w: null };
+        if (at === -1) kept.push(fresh); else kept.splice(at, 0, fresh);
+        return kept;
+    }
+    const at = target.beforeKey ? rowObj.items.indexOf(target.beforeKey) : -1;
+    if (at === -1) rowObj.items.push(key); else rowObj.items.splice(at, 0, key);
+    rowObj.w = null;
+    return rows;
+}
+
+// Is there room beside the cards in this row? A card leaving it makes room.
+function _qpRoomIn(main, row, leavingKey) {
+    return _qpShownCount(main, row, leavingKey) < QP_MAX_PER_ROW;
+}
+
+// Every drop goes through here. `t` is what _qpTargetAt worked out.
+function _qpDropAt(main, drag, t) {
+    const rows = _qpCurrentRows(main);
+    const rowObj = t.row != null ? rows[t.row] : null;
+    const beforeRow = t.before != null ? rows[t.before] : null;
+    const done = function (next) { _qpCommit(main, next || rows); };
+
+    if (drag.key) {
+        const key = drag.key;
+        if (t.zone === 'combine') {
+            const src = _qpParse(key), dst = _qpParse(t.key);
+            const all = _qpCardPieces(main, rows, t.key).concat(_qpCardPieces(main, rows, key));
+            if (!src.shell) {
+                // The original goes INTO a shell: keep the original — it is the
+                // card that always exists — where the shell stood, and retire
+                // the shell; its pieces come home to the original by themselves.
+                _qpTakeOut(rows, key);
+                _qpReplace(rows, t.key, key);
+            } else if (!dst.shell) {
+                _qpTakeOut(rows, key);
+            } else {
+                _qpTakeOut(rows, key);
+                _qpReplace(rows, t.key, _qpShellKey(dst.fam, all));
+            }
+            return done();
+        }
+        if (t.beforeKey === key) return _qpRenderControls(main);
+        if (rowObj && rowObj.items.indexOf(key) === -1 && !_qpRoomIn(main, rowObj, key)) return _qpRenderControls(main);
+        _qpTakeOut(rows, key);
+        return done(_qpPlace(rows, key, t, rowObj, beforeRow));
+    }
+
+    // A piece dragged out of a card.
+    const fam = drag.fam, piece = drag.piece, from = drag.from;
+    const fromPieces = _qpCardPieces(main, rows, from).filter(function (p) { return p !== piece; });
+    const fromShell = _qpParse(from).shell;
+    // What the card it left becomes (an original needs nothing: it holds "the rest").
+    const shrink = function () {
+        if (!fromShell) return;
+        if (fromPieces.length) _qpReplace(rows, from, _qpShellKey(fam, fromPieces));
+        else _qpTakeOut(rows, from);
+    };
+    if (t.zone === 'combine') {
+        const dst = _qpParse(t.key);
+        if (t.key === from) return _qpRenderControls(main);
+        if (dst.shell) _qpReplace(rows, t.key, _qpShellKey(fam, dst.pieces.concat([piece])));
+        // Into the original: just leave the shell it was in, and it is home.
+        shrink();
+        return done();
+    }
+    if (rowObj && !_qpRoomIn(main, rowObj, null)) return _qpRenderControls(main);
+    const fresh = _qpShellKey(fam, [piece]);
+    if (t.beforeKey === from && fromShell && !fromPieces.length) return _qpRenderControls(main);
+    shrink();
+    // The card it left may have been renamed; the target's "before" card too.
+    if (t.beforeKey === from && fromShell) t = Object.assign({}, t, { beforeKey: _qpShellKey(fam, fromPieces) });
+    return done(_qpPlace(rows, fresh, t, rowObj, beforeRow));
+}
+
+// Moving is drag-only. There were ← → ↑ ↓ buttons on every handle as well, and
+// Ethan took them off (2026-10-21): eight buttons per card made the handles
+// busy, and the drag targets already say where a card can go.
+function qpSplit(key, n) {
+    const main = _qpMain();
+    if (!main) return;
+    const rows = _qpCurrentRows(main);
+    const row = rows.find(function (r) { return r.items.indexOf(key) !== -1; });
+    const split = QP_SPLITS[n];
+    if (!row || !split) return;
+    // Weights apply to the two SHOWN blocks; a hidden one in the row keeps 1.
+    const shown = row.items.filter(function (k) { return _qpIsShown(main, k); });
+    if (shown.length !== 2) return;
+    row.w = row.items.map(function (k) { const i = shown.indexOf(k); return i === -1 ? 1 : split.w[i]; });
+    _qpCommit(main, rows);
+}
+
+// ---- edit-mode chrome ----------------------------------------------------
+// A little picture of the row: two boxes at the split's widths, the wider one
+// filled. It does the explaining; the words under it say which card grows.
+function _qpSplitPic(w, wide) {
+    const total = 30, gap = 2;
+    const a = Math.round((total - gap) * w[0] / (w[0] + w[1]));
+    const b = total - gap - a;
+    function box(x, width, on) {
+        return '<rect x="' + x + '" y="1" width="' + width + '" height="14" rx="2.5"' + (on ? ' class="on"' : '') + '/>';
+    }
+    return '<svg viewBox="0 0 30 16" aria-hidden="true">' + box(0, a, wide === 0) + box(a + gap, b, wide === 1) + '</svg>';
+}
+
+// For each row of exactly two cards, a strip above it: "Card widths in this row"
+// and three choices, each a picture plus the card it widens by name.
+function _qpRowBar(row, cells) {
+    const keys = cells.map(function (c) { return _qpKey(c.querySelector(':scope > [data-qp-block]')); });
+    const labels = cells.map(function (c) {
+        const b = c.querySelector(':scope > [data-qp-block]');
+        return b.getAttribute('data-qp-label') || _qpKey(b);
+    });
+    // The row's weighting, read off the two shown cells' flex-grow.
+    const g = cells.map(function (c) { return Number(c.style.flexGrow) || 1; });
+    const bar = document.createElement('div');
+    bar.className = 'qp-rowbar';
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', 'Card widths: ' + labels.join(' and '));
+    bar.innerHTML = '<span class="qp-rowbar-lab">Card widths</span>' + QP_SPLITS.map(function (s, n) {
+        const on = g[0] === s.w[0] && g[1] === s.w[1];
+        const words = s.wide === -1 ? 'Same width' : escapeHtml(labels[s.wide]) + ' wider';
+        return '<button type="button" class="qp-size' + (on ? ' on' : '') + '" aria-pressed="' + on + '"'
+            + ' onclick="qpSplit(\'' + keys[0] + '\', ' + n + ')">' + _qpSplitPic(s.w, s.wide) + '<span>' + words + '</span></button>';
+    }).join('');
+    return bar;
+}
+
+function _qpRenderControls(main) {
+    main.querySelectorAll('.qp-ctl, .qp-slot, .qp-rowbar, .qp-ov').forEach(function (c) { c.remove(); });
+    main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
+    const rowsNow = _qpCurrentRows(main);
+    const rows = Array.from(main.querySelectorAll(':scope > .qp-row:not([hidden])'));
+    rows.forEach(function (row) {
+        const cells = Array.from(row.querySelectorAll(':scope > .qp-cell:not([hidden])'));
+        if (cells.length === 2) main.insertBefore(_qpRowBar(row, cells), row);
+        cells.forEach(function (cell) {
+            const b = cell.querySelector(':scope > [data-qp-block]');
+            const key = _qpKey(b);
+            const label = b.getAttribute('data-qp-label') || key;
+            const fam = b.getAttribute('data-qp-family');
+            const tag = fam && b.hasAttribute('data-qp-partial')
+                ? '<span class="qp-fam">' + escapeHtml(QP_FAMILIES[fam].label) + '</span>' : '';
+            const ctl = document.createElement('div');
+            ctl.className = 'qp-ctl';
+            ctl.setAttribute('data-qp-for', key);
+            ctl.draggable = true;
+            ctl.title = 'Drag to Move ' + label;
+            ctl.innerHTML =
+                '<span class="qp-grip" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>'
+                + '<span class="qp-ctl-label">' + tag + escapeHtml(label) + '</span>'
+                + '<span class="qp-ctl-hint" aria-hidden="true">Drag to Move</span>';
+            cell.insertBefore(ctl, b);
+            // A card with two or more pieces showing lets each one be dragged out
+            // by its tab (Command Center) or its row (Action Items).
+            if (fam) {
+                const shown = _qpShownPieces(main, rowsNow, key);
+                b.querySelectorAll('[data-qp-piece-main]').forEach(function (m) {
+                    const can = shown.length > 1 && shown.indexOf(m.getAttribute('data-qp-piece').split('/')[1]) !== -1;
+                    m.draggable = can;
+                    m.classList.toggle('qp-piece-drag', can);
+                    if (can) m.title = 'Drag out to give it its own card';
+                    else m.removeAttribute('title');
+                });
+            }
+        });
+    });
+    const reset = document.getElementById('qpResetBtn');
+    if (reset) reset.hidden = !main.classList.contains('qp-custom');
+}
+function _qpClearPieceDrag(main) {
+    main.querySelectorAll('.qp-piece-drag').forEach(function (m) {
+        m.draggable = false;
+        m.classList.remove('qp-piece-drag');
+        m.removeAttribute('title');
+    });
+}
+
+// The + between rows (and after the last), shown only while something is being
+// dragged: drop on one and the card gets a row of its own there. A plus rather
+// than the words "Its own row" (Ethan, 2026-10-21: "like other sites have").
+function _qpRenderSlots(main) {
+    const rows = Array.from(main.querySelectorAll(':scope > .qp-row'));
+    function rowSlot(beforeIdx) {
+        const s = document.createElement('div');
+        s.className = 'qp-slot qp-slot-row';
+        s.setAttribute('aria-label', 'New row here');
+        if (beforeIdx != null) s.setAttribute('data-qp-before', String(beforeIdx));
+        s.innerHTML = '<span class="qp-plus" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>';
+        return s;
+    }
+    rows.filter(function (r) { return !r.hidden; }).forEach(function (row) {
+        const bar = row.previousElementSibling && row.previousElementSibling.classList.contains('qp-rowbar') ? row.previousElementSibling : row;
+        main.insertBefore(rowSlot(rows.indexOf(row)), bar);
+    });
+    main.insertBefore(rowSlot(null), _qpAnchor(main));
+}
+function _qpClearSlots(main) {
+    main.querySelectorAll('.qp-slot, .qp-ov').forEach(function (s) { s.remove(); });
+    main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
+    main.classList.remove('qp-dragging-any');
+}
+
+// What letting go at this point would do, or null for nothing. Over a card:
+// its outer quarters place beside it, its middle combines — but only with a
+// card from the same group, and never a piece with the card it came from.
+function _qpTargetAt(main, el, x) {
+    const slot = el && el.closest && el.closest('.qp-slot');
+    if (slot && main.contains(slot)) {
+        const b = slot.getAttribute('data-qp-before');
+        return { zone: 'gap', el: slot, before: b == null ? null : Number(b) };
+    }
+    const cell = el && el.closest && el.closest('.qp-cell');
+    if (!cell || !main.contains(cell) || !_qpDrag) return null;
+    const row = cell.parentElement;
+    const rows = Array.from(main.querySelectorAll(':scope > .qp-row'));
+    const b = cell.querySelector(':scope > [data-qp-block]');
+    if (!b) return null;
+    const key = _qpKey(b);
+    if (_qpDrag.key && key === _qpDrag.key) return null;
+    const r = b.getBoundingClientRect();
+    const f = (x - r.left) / r.width;
+    const fam = b.getAttribute('data-qp-family');
+    const sameGroup = !!fam && fam === (_qpDrag.key ? (_qpParse(_qpDrag.key) || {}).fam : _qpDrag.fam);
+    const fromHere = !_qpDrag.key && _qpDrag.from === key;
+    let zone = f < 0.25 ? 'left' : f > 0.75 ? 'right' : 'combine';
+    if (zone === 'combine' && (!sameGroup || fromHere)) zone = f < 0.5 ? 'left' : 'right';
+    const shown = Array.from(row.querySelectorAll(':scope > .qp-cell:not([hidden])'));
+    let beforeKey = key;
+    if (zone === 'right') {
+        const after = shown[shown.indexOf(cell) + 1];
+        const ab = after && after.querySelector(':scope > [data-qp-block]');
+        beforeKey = ab ? _qpKey(ab) : null;
+    }
+    const rowObj = _qpCurrentRows(main)[rows.indexOf(row)];
+    const full = zone !== 'combine' && rowObj && !_qpRoomIn(main, rowObj, _qpDrag.key || null);
+    return { zone: zone, el: b, cell: cell, key: key, row: rows.indexOf(row), beforeKey: beforeKey, full: full, fromHere: fromHere };
+}
+
+// The hint over the card under the pointer: "Drop to combine" with what it makes,
+// or an edge saying what letting go there does.
+function _qpShowHint(main, t) {
+    const old = main.querySelector('.qp-ov');
+    const sig = t && t.cell ? t.key + '|' + t.zone + '|' + (t.full ? 1 : 0) : '';
+    if (old && old.getAttribute('data-sig') === sig) return;
+    if (old) old.remove();
+    main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
+    if (!t) return;
+    t.el.classList.add('qp-drop');
+    if (!t.cell) return;
+    const ov = document.createElement('div');
+    ov.setAttribute('data-sig', sig);
+    const b = t.el;
+    ov.style.top = b.offsetTop + 'px';
+    ov.style.height = b.offsetHeight + 'px';
+    if (t.zone === 'combine') {
+        const rows = _qpCurrentRows(main);
+        const fam = b.getAttribute('data-qp-family');
+        const adding = _qpDrag.key ? _qpCardPieces(main, rows, _qpDrag.key) : [_qpDrag.piece];
+        const names = _qpCardPieces(main, rows, t.key).concat(adding)
+            .filter(function (p, i, a) { return a.indexOf(p) === i && _qpPieceShown(main, fam, p); });
+        const all = _qpFamPieces(main, fam).filter(function (p) { return _qpPieceShown(main, fam, p); });
+        const label = names.length === all.length ? QP_FAMILIES[fam].label
+            : names.map(function (p) { return QP_FAMILIES[fam].pieces.find(function (x) { return x.key === p; }).label; }).join(' + ');
+        ov.className = 'qp-ov qp-ov-combine';
+        ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
+            + '<span class="qp-ov-big">Drop to combine</span><span class="qp-ov-small">Makes one card: ' + escapeHtml(label) + '</span>';
+    } else {
+        ov.className = 'qp-ov qp-ov-edge ' + (t.zone === 'left' ? 'l' : 'r') + (t.full ? ' full' : '');
+        const words = t.full ? 'Row is full · 3 max' : t.fromHere ? 'Take out · place here' : 'Place beside';
+        ov.innerHTML = '<span>' + words + '</span>';
+    }
+    t.cell.appendChild(ov);
+}
+
+// Wired once per <main> by delegation, because handles and slots are rebuilt
+// after every move. Only handles and piece grips are draggable: making whole
+// cards draggable would turn every click-and-drag inside one — selecting text in
+// the feed, scrolling a table — into a move.
+function _qpWireDrag(main) {
+    if (main._qpWired) return;
+    main._qpWired = true;
+    main.addEventListener('dragstart', function (e) {
+        if (!_qpEditing) return;
+        const ctl = e.target.closest && e.target.closest('.qp-ctl');
+        const piece = !ctl && e.target.closest && e.target.closest('.qp-piece-drag');
+        if (!ctl && !piece) return;
+        if (ctl) _qpDrag = { key: ctl.getAttribute('data-qp-for') };
+        else {
+            const id = piece.getAttribute('data-qp-piece').split('/');
+            const card = piece.closest('[data-qp-block]');
+            _qpDrag = { fam: id[0], piece: id[1], from: _qpKey(card) };
+        }
+        try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', JSON.stringify(_qpDrag)); } catch (_) {}
+        (ctl || piece).classList.add('qp-dragging');
+        // Next frame, BOTH of these: changing the layout inside dragstart makes
+        // Chrome cancel the drag before it begins. The class hides the Card
+        // widths strips, which shifts everything below them — set here, in the
+        // handler, it silently killed every real drag (simulated events in a
+        // test do not notice, which is how it shipped to the pane).
+        requestAnimationFrame(function () {
+            if (!_qpDrag) return;
+            main.classList.add('qp-dragging-any');
+            _qpRenderSlots(main);
+        });
+    });
+    main.addEventListener('dragover', function (e) {
+        if (!_qpEditing || !_qpDrag) return;
+        const t = _qpTargetAt(main, e.target, e.clientX);
+        _qpShowHint(main, t);
+        if (!t || t.full) return;
+        e.preventDefault();
+    });
+    main.addEventListener('drop', function (e) {
+        if (!_qpEditing || !_qpDrag) return;
+        const t = _qpTargetAt(main, e.target, e.clientX);
+        const drag = _qpDrag;
+        _qpDrag = null;
+        _qpClearSlots(main);
+        if (!t || t.full) { _qpRenderControls(main); return; }
+        e.preventDefault();
+        _qpDropAt(main, drag, t);
+    });
+    main.addEventListener('dragend', function () {
+        if (_qpDrag) { _qpDrag = null; _qpClearSlots(main); }
+        main.querySelectorAll('.qp-dragging').forEach(function (c) { c.classList.remove('qp-dragging'); });
+    });
+}
+
+function _qpSetEditing(main, on) {
+    _qpEditing = !!on;
+    main.classList.toggle('qp-editing', _qpEditing);
+    if (_qpEditing) {
+        _qpWireDrag(main);
+        _qpRenderControls(main);
+    } else {
+        main.querySelectorAll('.qp-ctl, .qp-rowbar').forEach(function (c) { c.remove(); });
+        _qpClearSlots(main);
+        _qpClearPieceDrag(main);
+    }
+    const bar = document.getElementById('qpBar');
+    if (bar) bar.classList.toggle('is-editing', _qpEditing);
+    const btn = document.getElementById('qpEditBtn');
+    if (btn) {
+        // "Save", though every change is already saved as it is made: it is the
+        // word people expect on the button that ends an edit (Ethan, 2026-10-21).
+        btn.textContent = _qpEditing ? 'Save' : 'Customize';
+        btn.setAttribute('aria-pressed', String(_qpEditing));
+    }
+    const reset = document.getElementById('qpResetBtn');
+    if (reset) reset.hidden = !(_qpEditing && main.classList.contains('qp-custom'));
+}
+
+function qpToggleEdit() {
+    const main = _qpMain();
+    if (main) _qpSetEditing(main, !_qpEditing);
+}
+
+function qpReset() {
+    const main = _qpMain();
+    if (!main) return;
+    _qpSave(null);
+    _qpKeepScroll(function () { _qpBuild(main, _qpDefaults(_qpOriginalKeys(main))); });
+    main.classList.remove('qp-custom');
+    if (_qpEditing) _qpRenderControls(main);
+}
+
+
 /* =========================================================
    SPEEKS ACTION MENU  (Priority-Hero briefing deck)
    Renders the QuickPortal action deck: announcements + store
@@ -49862,7 +50856,9 @@ function _samSyncRailFill() {
     // The class goes on .sam-rail, not the card: the rail carries
     // align-self:start, so it has to rejoin the grid's stretch before anything
     // inside it has height to fill.
-    const rail = document.querySelector('.speeks-action-menu .sam-rail');
+    // The deck's OWN rail: action items split into a card of their own
+    // (QUICKPORTAL LAYOUT) bring a second .sam-rail, and it can come first.
+    const rail = document.querySelector('[data-qp-block="actions"] .sam-rail') || document.querySelector('.speeks-action-menu .sam-rail');
     if (!rail) return;
     let n = 0;
     rail.querySelectorAll('.sam-mini').forEach(function (el) {
@@ -50947,11 +51943,19 @@ function samInit() {
     if (!visible) return;
     // Roles with none of the action items (CEO / MOCD) would get an empty rail
     // card — drop the rail and let the feed run full width instead.
-    const rail = menu.querySelector('.sam-rail');
+    // The rail is its own block now (QUICKPORTAL LAYOUT), not inside this
+    // section, so "drop it" means hiding that block: the feed is then alone in
+    // its row and the row gives it the full width. Inline !important because
+    // applyRoleBasedUI writes this block's display the same way, just before
+    // calling here, and would otherwise put it straight back.
+    // The deck's OWN rail: action items split into a card of their own
+    // (QUICKPORTAL LAYOUT) bring a second .sam-rail, and it can come first.
+    const rail = document.querySelector('[data-qp-block="actions"] .sam-rail') || document.querySelector('.speeks-action-menu .sam-rail');
     if (rail) {
         const anyItem = Array.from(rail.querySelectorAll('.sam-mini'))
             .some(b => window.getComputedStyle(b).display !== 'none');
-        menu.classList.toggle('sam-norail', !anyItem);
+        const railBlock = rail.closest('[data-qp-block]');
+        if (railBlock && !anyItem) railBlock.style.setProperty('display', 'none', 'important');
     }
     // Open the settle window BEFORE the first paint, so everything arriving
     // during the load is collapsed into one.
