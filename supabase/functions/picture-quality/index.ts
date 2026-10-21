@@ -1595,6 +1595,18 @@ function modelAnswers(g: any) {
 // he commented on (the hard cases), weakest sheet first: the sheets with the
 // fewest of his own confirmations, ties to the busier sheet. A sheet drops
 // out at CONFIRM_TARGET of his own.
+// REOPENED FOR A RE-CHECK (Ethan, 2026-10-21). Listings he confirmed before a
+// rule was settled, put back in his queue until he saves them again after the
+// date given: Extra = another view of the item the guide doesn't ask for,
+// Extra Accessories = something that came WITH it (a laptop's charger). These
+// two item lots ticked both, or only Extra, on every photo. A re-save overwrites
+// (pq_shot_labels is keyed on product + photo), and they prefill from HIS saved
+// labels, not the grade, so he only fixes what the rule changed.
+const REDO: Record<string, string> = {
+  "8161660960870": "2026-10-21T00:00:00Z",    // OVL LOT OF 36x SKYLANDERS FIGURES & POWER PORTALS
+  "15873101529254": "2026-10-21T00:00:00Z",   // WSP Tilta Advanced Ring Grip + Easyrig Mini Bundle
+};
+
 async function confirmView(scope: Scope, want: string, skip: Set<string>, more = false) {
   if (!confirmer(scope)) return { error: "forbidden", detail: "Confirm Shots is for the DM and CEO" };
   const graded: any[] = await allRows(`picture_quality_reviews?report=not.is.null&sheet_slug=not.is.null`
@@ -1605,11 +1617,19 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
     + `,batch:report->>batch,sample:report->>sample,redecided:report->>redecided`
     + `&order=reviewed_at.desc,product_id`);
   // sb() throws on a missing table; before 0148 is applied, say so plainly.
-  const doneRows = await allRows(`pq_shot_labels?select=product_id,sheet_slug&order=id`).catch(() => null);
+  const doneRows = await allRows(`pq_shot_labels?select=product_id,sheet_slug,confirmed_at&order=id`).catch(() => null);
   if (!Array.isArray(doneRows)) return { error: "no_table", detail: "pq_shot_labels is not in the database yet (migration 0148)" };
-  const done = new Set(doneRows.map((r: any) => r.product_id));
+  const lastSaved = new Map<string, string>();
+  for (const r of doneRows) {
+    const at = new Date(r.confirmed_at).toISOString();
+    if (at > (lastSaved.get(r.product_id) || "")) lastSaved.set(r.product_id, at);
+  }
+  const reopened = (pid: string) => { const since = REDO[String(pid).split("/").pop() || ""];
+                                      return !!since && (lastSaved.get(pid) || "") < since; };
+  const done = new Set(doneRows.map((r: any) => r.product_id).filter((pid: string) => !reopened(pid)));
   const confirmedBySheet = new Map<string, Set<string>>();
   for (const r of doneRows) {
+    if (!done.has(r.product_id)) continue;   // reopened: not confirmed until saved again
     if (!confirmedBySheet.has(r.sheet_slug)) confirmedBySheet.set(r.sheet_slug, new Set());
     confirmedBySheet.get(r.sheet_slug)!.add(r.product_id);
   }
@@ -1668,14 +1688,23 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
         if (listings.length >= 6) break;
         const l = live.get(g.product_id);
         if (!l || l.photos.length !== g.photos.length) { misaligned.push(g.product_id); continue; }
+        // A reopened listing (REDO) starts from his own saved answers, by photo address.
+        const mine = reopened(g.product_id) ? new Map<string, any>((await rows(`pq_shot_labels?product_id=eq.${encodeURIComponent(g.product_id)}`
+          + `&select=photo_src,photo_n,shots,flags,repeat_of,listing,confirmed_at&limit=100`)).map((r: any) => [r.photo_src, r])) : null;
+        const mineOf = (p: { src: string }) => mine?.get(p.src.split("?")[0]) || null;
+        const anyMine: any = mine ? [...mine.values()][0] : null;
         listings.push({ store: g.store_code, productId: g.product_id, sku: g.sku || l.sku, title: l.title || g.title,
           sheet: g.sheet_slug, model: g.model, stamp: g.stamp, reviewedAt: g.reviewed_at,
           // PREFILL (2026-10-16). youSaid: his comments. accepted: he approved a
           // Quick Fix built on these labels. modelSays: the grade's answer on
           // every flag and fact. Each photo's `framing` is his own grade.
           youSaid: ETHAN_SAID[num(g.product_id)] || [],
-          accepted: g.status === "applied" ? String(g.decided_note || "approved") : null,
-          modelSays: modelAnswers(g),
+          accepted: anyMine ? `your own labels from ${String(anyMine.confirmed_at).slice(0, 10)}, reopened to re-check`
+                  : g.status === "applied" ? String(g.decided_note || "approved") : null,
+          modelSays: mine ? { photos: l.photos.map((p, k) => ({ n: k + 1, flags: (mineOf(p)?.flags || []).filter((x: string) => CONFIRM_FLAGS.includes(x)),
+                                                                repeatOf: mineOf(p)?.repeat_of ?? null })),
+                              facts: anyMine?.listing || {} }
+                          : modelAnswers(g),
           // What the listing SAYS, for the listing-level questions: the
           // cosmetic sentences about this unit (PayMore's template wording
           // left out, the way decide() reads them), the functional notes,
@@ -1688,7 +1717,7 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
           functional: String(l.functional || "").slice(0, 400), included: String(l.included || "").slice(0, 300),
           condition: String(l.condition || "").slice(0, 120),
           photos: l.photos.map((p, k) => ({ n: k + 1, src: p.src.split("?")[0], img: p.url, w: p.width, h: p.height,
-            said: (g.photos.find((x: any) => x.n === k + 1)?.shots || []).map(String),
+            said: (mineOf(p)?.shots || g.photos.find((x: any) => x.n === k + 1)?.shots || []).map(String),
             framing: (() => { const x = framed.get(g.product_id)?.get(p.src.split("?")[0]);
                               return x ? { label: x.label, problems: x.problems || [] } : null; })() })) });
       }
