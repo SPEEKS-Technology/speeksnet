@@ -49008,6 +49008,53 @@ let _dbEdits = {};           // id -> his edited text, kept across repaints
 let _dbBusy = {};            // id -> true while its decision is in flight
 let _dbStarted = false;
 let _dbPaintedSig = '';
+let _dbNotice = '';          // last failure/refusal, shown at the top of the modal
+let _dbAskDone = null;       // resolver of the open in-modal confirm, or null
+
+// No native confirm()/alert() in this tool (2026-10-21). Ethan runs SPEEKSNET in
+// the Claude desktop app's browser pane, where confirm() returns false at once
+// without ever showing a dialog and alert() shows nothing. Every Approve and Skip
+// gated on confirm(), so all of them read as "Cancel" and returned silently; the
+// edge-function logs for Oct 21 have the GETs and the ?action=draft POSTs but
+// not one decision POST. The same would happen in any browser where "prevent
+// this page from creating additional dialogs" was ticked once.
+//
+// The question is asked inside the modal instead. It is appended to the modal,
+// NOT to #dailyBriefBody: the poll and the realtime ping rewrite that body's
+// innerHTML, which would delete the question while he was reading it.
+function _dbAsk(title, text, okLabel, danger) {
+    const m = document.getElementById('dailyBriefModal');
+    if (!m) return Promise.resolve(false);
+    _dbAskClose(false);
+    const el = document.createElement('div');
+    el.className = 'dbr-ask';
+    el.id = 'dbAsk';
+    el.innerHTML = `<div class="dbr-ask-card" role="dialog" aria-modal="true" aria-labelledby="dbAskTitle">
+        <div class="dbr-ask-title" id="dbAskTitle">${_samEsc(title)}</div>
+        <div class="dbr-ask-text">${_samEsc(text)}</div>
+        <div class="dbr-actions">
+            <button class="dbr-btn ghost" onclick="_dbAskClose(false)">Cancel</button>
+            <button class="dbr-btn ${danger ? 'ghost' : 'go'}" id="dbAskOk" onclick="_dbAskClose(true)">${_samEsc(okLabel)}</button>
+        </div>
+    </div>`;
+    m.appendChild(el);
+    const ok = document.getElementById('dbAskOk');
+    if (ok) ok.focus();
+    return new Promise(res => { _dbAskDone = res; });
+}
+function _dbAskClose(answer) {
+    const el = document.getElementById('dbAsk');
+    if (el) el.remove();
+    const done = _dbAskDone;
+    _dbAskDone = null;
+    if (done) done(!!answer);
+}
+// The alert() replacement: a line at the top of the modal that stays until the
+// next decision, rather than a dialog this browser never shows or a floating toast.
+function _dbSay(msg) {
+    _dbNotice = String(msg || '');
+    _dbRenderReview(true);
+}
 
 // DM by default -- the voice is modelled on Ethan's own 150 messages and
 // approving publishes under the APPROVER's name, so handing this to someone else
@@ -49248,6 +49295,9 @@ function _dbRepaintOpen() { if (_dbModalOpen()) _dbRenderReview(); }
 
 async function openDailyBriefReview() {
     if (!_dbCanReview()) return;
+    // A question left open when the modal was last closed is not a yes.
+    _dbAskClose(false);
+    _dbNotice = '';
     toggleModal('dailyBriefModal');
     if (!_dbModalOpen()) return;              // it was open; toggleModal closed it
     const body = document.getElementById('dailyBriefBody');
@@ -49302,6 +49352,7 @@ function _dbRenderReview(force) {
     } else if (_dbRun.note) {
         banner = `<div class="dbr-banner grey">${_samEsc(_dbRun.note)}</div>`;
     }
+    if (_dbNotice) banner = `<div class="dbr-banner red" role="alert">${_samEsc(_dbNotice)}</div>` + banner;
 
     // --- header ---
     const head = `<div class="dbr-head">
@@ -49425,30 +49476,44 @@ function _dbOnEdit(id, el) {
 }
 
 // opts.silent: no confirm and no refetch -- used by Approve All, which confirms
-// once for the whole set and refetches at the end.
+// once for the whole set and refetches at the end. A silent failure's reason is
+// pushed onto opts.errors for the caller to report in one line.
 async function _dbDecide(id, status, opts) {
     const silent = !!(opts && opts.silent);
-    if (_dbBusy[id]) return false;
-    const d = _dbDrafts.find(x => String(x.id) === String(id));
-    if (!d || d.status !== 'pending') return false;
-    // Past noon the draft is retired whether or not the sweep has stamped it yet,
-    // so an already-open modal cannot be used to send one late.
-    if (_dbPastWindow()) {
-        if (!silent) alert('These are morning messages. After noon they are retired unsent.\n\n'
-            + 'Use Send Store Comment if you still want to write to a store today.');
-        _dbRenderReview(true);
-        return false;
-    }
+    // Shared by every refusal below: the morning window, then the draft itself.
+    // Run again after the question, because the answer is async now -- a poll, a
+    // second tab or the noon line can all move while he is reading it.
+    const stillOpen = () => {
+        if (_dbBusy[id]) return null;
+        const d = _dbDrafts.find(x => String(x.id) === String(id));
+        if (!d || d.status !== 'pending') return null;
+        // Past noon the draft is retired whether or not the sweep has stamped it
+        // yet, so an already-open modal cannot be used to send one late.
+        if (_dbPastWindow()) {
+            if (!silent) _dbSay('These are morning messages. After noon they are retired unsent. '
+                + 'Use Send Store Comment if you still want to write to a store today.');
+            else _dbRenderReview(true);
+            return null;
+        }
+        return d;
+    };
+    let d = stillOpen();
+    if (!d) return false;
+    if (!silent) _dbNotice = '';
 
     const text = ((_dbEdits[id] != null ? _dbEdits[id] : d.message) || '').trim();
     if (status === 'approved' && !text) {
-        if (!silent) alert('There is no message to send. Write one or skip it.');
+        if (!silent) _dbSay('There is no message to send. Write one or skip it.');
         return false;
     }
-    if (!silent && status === 'approved'
-        && !confirm(`Send this to ${d.store} now?\n\n"${text}"`)) return false;
-    if (!silent && status === 'skipped'
-        && !confirm(`Skip ${d.store} today? Nothing will be sent, and the draft will not come back.`)) return false;
+    if (!silent) {
+        const yes = status === 'approved'
+            ? await _dbAsk(`Send this to ${d.store} now?`, `"${text}"`, 'Send')
+            : await _dbAsk(`Skip ${d.store} today?`, 'Nothing will be sent, and the draft will not come back.', 'Skip', true);
+        if (!yes) return false;
+        d = stillOpen();
+        if (!d) return false;
+    }
 
     _dbBusy[id] = true;
     if (!silent) _dbRenderReview();
@@ -49471,8 +49536,9 @@ async function _dbDecide(id, status, opts) {
         delete _dbEdits[id];
         ok = true;
     } catch (e) {
-        alert(`Could not ${status === 'approved' ? 'send' : 'skip'} the ${d.store} message: `
-            + ((e && e.message) || 'unknown error'));
+        const why = (e && e.message) || 'unknown error';
+        if (silent) { if (opts && Array.isArray(opts.errors)) opts.errors.push(`${d.store}: ${why}`); }
+        else _dbNotice = `Could not ${status === 'approved' ? 'send' : 'skip'} the ${d.store} message: ${why}`;
     }
     _dbBusy[id] = false;
     if (!silent) {
@@ -49494,17 +49560,20 @@ async function _dbApproveAll() {
         const t = ((_dbEdits[String(d.id)] != null ? _dbEdits[String(d.id)] : d.message) || '').trim();
         return `${d.store}:  ${t || '(empty — will be skipped)'}`;
     }).join('\n\n');
-    if (!confirm(`Send all ${pending.length} of these now?\n\n${lines}`)) return;
+    _dbNotice = '';
+    if (!(await _dbAsk(`Send all ${pending.length} of these now?`, lines, `Send All ${pending.length}`))) return;
 
     let sent = 0, failed = 0;
+    const errors = [];
     for (const d of pending) {
-        const ok = await _dbDecide(String(d.id), 'approved', { silent: true });
+        const ok = await _dbDecide(String(d.id), 'approved', { silent: true, errors });
         if (ok) sent++; else failed++;
         _dbRenderReview(true);
     }
     await checkDailyBriefDrafts();
+    if (failed) _dbNotice = `${sent} sent, ${failed} could not be sent. The ones that failed are still waiting.`
+        + (errors.length ? ' ' + errors.join(' · ') : '');
     _dbRenderReview(true);
-    if (failed) alert(`${sent} sent, ${failed} could not be sent. The ones that failed are still waiting.`);
 }
 
 // The mirror of Approve All, for a morning where nothing is worth saying. It
@@ -49520,18 +49589,21 @@ async function _dbSkipAll() {
     // worth confirming is WHICH stores go quiet and that the drafts do not come
     // back — and the messages themselves are still on screen behind the dialog.
     const names = pending.map(d => d.store).join(', ');
-    if (!confirm(`Skip all ${pending.length} today?\n\n${names}\n\n`
-        + 'Nothing will be sent, and these drafts will not come back.')) return;
+    _dbNotice = '';
+    if (!(await _dbAsk(`Skip all ${pending.length} today?`,
+        `${names}\n\nNothing will be sent, and these drafts will not come back.`, `Skip All ${pending.length}`, true))) return;
 
     let done = 0, failed = 0;
+    const errors = [];
     for (const d of pending) {
-        const ok = await _dbDecide(String(d.id), 'skipped', { silent: true });
+        const ok = await _dbDecide(String(d.id), 'skipped', { silent: true, errors });
         if (ok) done++; else failed++;
         _dbRenderReview(true);
     }
     await checkDailyBriefDrafts();
+    if (failed) _dbNotice = `${done} skipped, ${failed} could not be skipped. The ones that failed are still waiting.`
+        + (errors.length ? ' ' + errors.join(' · ') : '');
     _dbRenderReview(true);
-    if (failed) alert(`${done} skipped, ${failed} could not be skipped. The ones that failed are still waiting.`);
 }
 
 function _dbHasText(d) { return !!String((d && d.message) || '').trim(); }
@@ -49552,7 +49624,9 @@ async function _dbDraft(id, opts) {
     if (_dbPastWindow()) { _dbRenderReview(true); return false; }
     // Typed his own already? Drafting would put the model's text in its place.
     const typed = (_dbEdits[String(id)] || '').trim();
-    if (typed && (silent || !confirm(`Replace what you typed for ${d.store} with a drafted message?`))) return false;
+    if (typed && (silent || !(await _dbAsk(`Replace what you typed for ${d.store}?`,
+        'The drafted message will take its place.', 'Replace', true)))) return false;
+    if (_dbBusy[id] || d.status !== 'pending' || _dbHasText(d) || _dbPastWindow()) return false;
 
     _dbBusy[id] = 'draft';
     _dbRenderReview();
@@ -49572,7 +49646,7 @@ async function _dbDraft(id, opts) {
         delete _dbEdits[String(id)];
         ok = true;
     } catch (e) {
-        if (!silent) alert(`Could not draft the ${d.store} message: ` + ((e && e.message) || 'unknown error'));
+        if (!silent) _dbNotice = `Could not draft the ${d.store} message: ` + ((e && e.message) || 'unknown error');
     }
     _dbBusy[id] = false;
     _dbRenderReview(true);
@@ -49590,8 +49664,8 @@ async function _dbDraftAll() {
     let failed = 0;
     for (const d of todo) { if (!(await _dbDraft(String(d.id), { silent: true }))) failed++; }
     await checkDailyBriefDrafts();
+    if (failed) _dbNotice = `${todo.length - failed} drafted, ${failed} could not be. Try those again from their own card.`;
     _dbRenderReview(true);
-    if (failed) alert(`${todo.length - failed} drafted, ${failed} could not be. Try those again from their own card.`);
 }
 
 function startDailyBriefReminder() {
