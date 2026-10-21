@@ -25267,6 +25267,19 @@ select.dd-native {
 .speeks-action-menu.qp-part .sam-board { grid-template-columns: minmax(0, 1fr); flex: 1 1 auto; }
 .speeks-action-menu.qp-part .sam-board > .sam-card { height: auto; min-height: 300px; }
 .speeks-action-menu.qp-part .sam-feed { contain: size; }
+/* Every card in a row ends at the same line (Ethan, 2026-10-21), the Action
+   Items card included. Outside the layout its rail stretches only with a full
+   set of four, because sharing the slack among fewer rows distends them — so
+   here the CARD stretches and the rows keep their own height; the slack sits
+   below the last row. A full set still shares it through .sam-rail-fill. */
+.speeks-action-menu.qp-part .sam-rail { align-self: stretch; }
+/* A split-out card's shell is built in speeks.js and never passes through
+   applyRoleBasedUI, which is what writes display:flex inline onto the original
+   blocks — so without this the shell was a plain block and the card inside sat
+   at its own height in a taller row. An inline display (the role gate on the
+   originals) still wins over this. */
+.qp-cell > .speeks-action-menu.qp-part { display: flex; flex-direction: column; }
+.speeks-action-menu.qp-part .sam-rail > .sam-card { flex: 1 1 auto; min-height: min-content; }
 
 /* Quick Links is a wrapping chip bar. In a row taller than it (beside the feed,
    say) a wrapping flex line stretches to share the height, which turned each chip
@@ -25278,7 +25291,9 @@ select.dd-native {
 .ew-perf-lb .ew-standings { border-left: none; }
 
 /* --- Customize bar --- */
-.qp-bar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 10px; margin: -8px 0 14px; }
+/* First thing in <main> now, above High Priority — no negative top margin to
+   tuck it under the banner any more. */
+.qp-bar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 14px; }
 /* Just the two buttons in edit mode — no sentence of instructions (Ethan,
    2026-10-21): the handles and drop bars say what to do. */
 .qp-btn {
@@ -25290,20 +25305,27 @@ select.dd-native {
 .qp-bar.is-editing .qp-btn-main { background: #1f9d57; border-color: #1f9d57; color: #fff; }
 .qp-bar.is-editing .qp-btn-main:hover { background: #178048; }
 
-/* --- edit mode: a handle over each card --- */
-.main-content.qp-editing .qp-cell > [data-qp-block] { outline: 2px dashed #b8c2ce; outline-offset: 4px; border-radius: 14px; }
-.main-content.qp-editing .qp-cell > [data-qp-block].qp-drop { outline: 2px solid #1f9d57; }
-.qp-ctl {
-    flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin: 0 0 10px; padding: 6px 8px 6px 10px;
-    background: #fff; border: 1px solid #e3e8ee; border-radius: 10px; cursor: grab; user-select: none;
-    box-shadow: 0 1px 2px rgba(16,24,40,.06);
-}
-.qp-ctl:active { cursor: grabbing; }
-.qp-ctl.qp-dragging { opacity: .5; }
-.qp-grip { display: inline-flex; width: 18px; height: 18px; }
-.qp-grip svg { width: 18px; height: 18px; fill: #9aa6b5; }
-.qp-ctl-label { flex: 1 1 auto; min-width: 0; font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #3c4654; }
-.qp-ctl-hint { font-size: 11.5px; font-weight: 600; color: #8a94a3; white-space: nowrap; }
+/* --- edit mode: THE WHOLE CARD IS THE HANDLE (Ethan, 2026-10-21) ---
+   History, so nobody brings the bars back by accident: edit mode first put a
+   "Drag to Move" bar above every card, and dragging added a + strip between
+   every row and took the card-width strips away — the page slid under the
+   mouse as a drag began and the drop landed a row lower than aimed. A
+   hover-only bar laid over the card fixed the slide but covered the card's
+   first row. Now there is no bar: every card shows a dashed outline the whole
+   time, you grab the card anywhere, and nothing inside it can be used until
+   you press Save (pointer off here; clicks also stopped in speeks.js,
+   _qpBlockClicks). Nothing is added to or taken from the flow while dragging. */
+.main-content.qp-editing .qp-cell > [data-qp-block] { outline: 2px dashed #b8c2ce; outline-offset: 4px; border-radius: 14px; cursor: grab; user-select: none; }
+.main-content.qp-editing .qp-cell > [data-qp-block]:hover { outline-color: #8a94a3; }
+.main-content.qp-editing .qp-cell > [data-qp-block]:active { cursor: grabbing; }
+.main-content.qp-editing .qp-cell > [data-qp-block] * { pointer-events: none; }
+/* A Command Center tab or an Action Items row can still be dragged out on its
+   own, so it keeps the pointer (to start that drag — never to click). */
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-piece-drag { pointer-events: auto; }
+/* Solid green only for combine — an edge drop draws its own line instead. */
+.main-content.qp-editing .qp-cell:has(> .qp-ov-combine) > [data-qp-block].qp-drop { outline: 2px solid #1f9d57; }
+/* The card being carried fades where it stands. */
+.main-content.qp-editing .qp-cell > [data-qp-block].qp-dragging { opacity: .4; }
 
 /* Card widths, above a two-card row. Each choice is a picture of the row (the
    wider box filled) over the name of the card it widens — no fractions. */
@@ -25320,18 +25342,20 @@ select.dd-native {
 .qp-size.on { border-color: #1f9d57; background: #e8f7ee; color: #14532d; box-shadow: inset 0 0 0 1px #1f9d57; }
 .qp-size.on svg rect { stroke: #178048; }
 .qp-size.on svg rect.on { fill: #1f9d57; }
-/* While dragging, the drop bars take the gaps; the width strips would only crowd them. */
-.main-content.qp-dragging-any .qp-rowbar { display: none; }
+/* While dragging the width strips fade out but KEEP their space — taking them
+   out of the flow (display:none, as before) moved every row below them. */
+.main-content.qp-dragging-any .qp-rowbar { visibility: hidden; }
 
 /* --- drop targets, only while dragging --- */
-/* The + between rows: a card dropped on it gets a row of its own there. A round
-   plus on a dashed line, like the "add here" target other dashboards use. */
-.qp-slot-row { position: relative; height: 34px; margin: -8px 0 14px; display: flex; align-items: center; justify-content: center; }
-.qp-slot-row::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dashed #c9d3dd; }
-.qp-plus { position: relative; width: 30px; height: 30px; border-radius: 99px; background: #fff; border: 2px solid #c9d3dd; color: #8a94a3; display: grid; place-items: center; pointer-events: none; transition: .12s; }
-.qp-plus svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
-.qp-slot-row.qp-drop::before { border-top-color: #1f9d57; }
-.qp-slot-row.qp-drop .qp-plus { background: #1f9d57; border-color: #1f9d57; color: #fff; transform: scale(1.15); }
+/* The gap between rows: a card dropped there gets a row of its own. The slot
+   lies IN the 22px gap a row already leaves below itself (height 22, margin-top
+   -22), so adding the slots moves nothing. Invisible until the pointer is in
+   it; then a green line across the page marks the spot. The + it carries from
+   the first design stays in the markup, hidden. */
+.qp-slot-row { position: relative; height: 22px; margin: -22px 0 0; }
+.qp-slot-row::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: transparent; }
+.qp-slot-row.qp-drop::before { background: #1f9d57; }
+.qp-plus { display: none; }
 
 /* The hint over the card under the pointer. Laid over the card itself (the
    cell is the positioning box; top/height are set to the card's, below its
@@ -25343,17 +25367,18 @@ select.dd-native {
 .qp-ov-ico svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
 .qp-ov-big { font-size: 17px; font-weight: 800; color: #14532d; }
 .qp-ov-small { font-size: 12.5px; font-weight: 600; color: #178048; max-width: 340px; }
-.qp-ov-edge { width: 120px; display: flex; align-items: center; justify-content: center; }
-.qp-ov-edge.l { left: 0; right: auto; background: linear-gradient(90deg, rgba(31,157,87,.18), rgba(31,157,87,0)); border-left: 4px solid #1f9d57; border-radius: 14px 0 0 14px; }
-.qp-ov-edge.r { right: 0; left: auto; background: linear-gradient(270deg, rgba(31,157,87,.18), rgba(31,157,87,0)); border-right: 4px solid #1f9d57; border-radius: 0 14px 14px 0; }
-.qp-ov-edge span { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #14532d; background: #fff; border: 1px solid #bfe5cf; border-radius: 6px; padding: 4px 7px; white-space: nowrap; }
-.qp-ov-edge.full.l { border-left-color: #9aa6b5; background: linear-gradient(90deg, rgba(154,166,181,.18), rgba(154,166,181,0)); }
-.qp-ov-edge.full.r { border-right-color: #9aa6b5; background: linear-gradient(270deg, rgba(154,166,181,.18), rgba(154,166,181,0)); }
+/* "Place beside": a green line in the gap on that side of the card (option B),
+   with its words in a small tag at the top — not a tinted band over the card. */
+.qp-ov-edge { width: 4px; border-radius: 2px; background: #1f9d57; }
+.qp-ov-edge.l { left: -12px; right: auto; }
+.qp-ov-edge.r { right: -12px; left: auto; }
+.qp-ov-edge span { position: absolute; top: 10px; font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #14532d; background: #fff; border: 1px solid #bfe5cf; border-radius: 6px; padding: 4px 7px; white-space: nowrap; box-shadow: 0 2px 6px rgba(16,24,40,.10); }
+.qp-ov-edge.l span { left: 10px; }
+.qp-ov-edge.r span { right: 10px; }
+.qp-ov-edge.full { background: #9aa6b5; }
 .qp-ov-edge.full span { color: #647082; border-color: #d5dce4; }
 
-/* CARD PIECES — "Command Center" tag on a handle whose card holds only some of
-   its group, and the grab cursor on a tab or action row that can be dragged out. */
-.qp-fam { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .06em; color: #178048; background: #e8f7ee; border-radius: 5px; padding: 2px 6px; margin-right: 7px; vertical-align: 1px; }
+/* CARD PIECES — the grab cursor on a tab or action row that can be dragged out. */
 .main-content.qp-editing .qp-piece-drag { cursor: grab; }
 .main-content.qp-editing .qp-piece-drag:active { cursor: grabbing; }
 .qp-piece-drag.qp-dragging { opacity: .45; }

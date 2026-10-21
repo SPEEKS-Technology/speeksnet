@@ -685,6 +685,19 @@
 
 <main class="main-content">
 
+  <!-- ===== CUSTOMIZE BAR — arrange the QuickPortal (QUICKPORTAL LAYOUT in speeks.js) =====
+       Every element with data-qp-block is a block that can be moved; data-qp-label
+       is the name its handle shows. This bar and the High Priority bar below are
+       deliberately NOT blocks, so they stay on top whatever the layout. It sits
+       ABOVE High Priority (Ethan, 2026-10-21: under the banner it looked odd), so
+       the page opens with the controls and the banner leads into the cards.
+       Managers only for now (qp-customize in FEATURE_CATALOG) — widen it from
+       Feature Access. -->
+  <div class="qp-bar dynamic-module-flex role-manager" id="qpBar" data-feature="qp-customize" data-mobile="hide" data-tablet="show">
+    <button type="button" class="qp-btn" id="qpResetBtn" hidden onclick="qpReset()">Reset to Default</button>
+    <button type="button" class="qp-btn qp-btn-main" id="qpEditBtn" aria-pressed="false" onclick="qpToggleEdit()">Customize</button>
+  </div>
+
   <!-- ===== SPEEKS ACTION MENU (Priority-Hero briefing deck) ===== -->
   <!-- Managers + ASMs. Replaces the info-ticker + nav bell. Cards trigger the
        existing modals/panels; the unified feed (announcements + store notes +
@@ -715,16 +728,6 @@
       <button type="button" class="sam-hero-read" id="samHeroRead" hidden><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>
     </div>
   </section>
-
-  <!-- ===== CUSTOMIZE BAR — arrange the QuickPortal (QUICKPORTAL LAYOUT in speeks.js) =====
-       Every element with data-qp-block is a block that can be moved; data-qp-label
-       is the name its handle shows. This bar and the High Priority bar above are
-       deliberately NOT blocks, so they stay on top whatever the layout. Managers
-       only for now (qp-customize in FEATURE_CATALOG) — widen it from Feature Access. -->
-  <div class="qp-bar dynamic-module-flex role-manager" id="qpBar" data-feature="qp-customize" data-mobile="hide" data-tablet="show">
-    <button type="button" class="qp-btn" id="qpResetBtn" hidden onclick="qpReset()">Reset to Default</button>
-    <button type="button" class="qp-btn qp-btn-main" id="qpEditBtn" aria-pressed="false" onclick="qpToggleEdit()">Customize</button>
-  </div>
 
   <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="feed" data-qp-label="Your Feed">
     <div class="sam-board">

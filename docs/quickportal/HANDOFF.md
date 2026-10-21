@@ -34,16 +34,24 @@ https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8
 **Customize mode** on QuickPortal, managers only (`qp-customize` in
 `FEATURE_CATALOG`, `speeks.js` ~44057 — widen it from Feature Access):
 
-- Top of page: High Priority bar (pinned, never moves), then a bar with
-  **Customize** → in edit mode **Reset to Default** + **Save**. No instruction
-  text (Ethan removed it).
+- Top of page: a bar with **Customize** → in edit mode **Reset to Default** +
+  **Save**, then the High Priority bar (pinned, never moves). Customize sits
+  ABOVE the banner (Ethan: under it looked odd). No instruction text.
+- **Edit mode = dashed outline on every card, the whole card is the handle**
+  (no drag bars — tried twice, dropped; see styles.css "THE WHOLE CARD IS THE
+  HANDLE"). Nothing inside a card can be clicked in edit mode (pointer off in
+  CSS + capture-phase `_qpBlockClicks`); piece grips stay draggable only.
+- **Every card in a row is the same height** — the Action Items card stretches
+  its frame, its rows keep their own height.
+- **Nothing moves when a drag starts**: drop slots live inside the 22px row
+  gaps and show a green line; the width strips go `visibility: hidden`, not
+  `display: none`. "Place beside" is a green line in the gap beside a card.
 - Blocks (`data-qp-block` in `index.html`): `feed`, `actions`, `links`,
   `command`, `district` (DM/CEO), `chart`, `leaderboard`. The old feed deck and
   Performance card were each split into two blocks.
-- **Rows of 1–3 cards.** Drag a card's handle ("Drag to Move"): near another
-  card's left/right edge → "Place beside"; onto a **+** between rows → its own
-  row; a full row says "Row is full · 3 max". No arrow buttons (removed on
-  request).
+- **Rows of 1–3 cards.** Drag a card: near another card's left/right edge →
+  "Place beside"; into the gap between rows → its own row; a full row says
+  "Row is full · 3 max". No arrow buttons (removed on request).
 - **Card widths** strip above any two-card row: "Same width / X wider / Y
   wider" with little pictures (fractions were rejected as unclear).
 - **Card pieces:** the Command Center (Live Sales, eBay, Scorecard & Audit — one
@@ -87,7 +95,7 @@ https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8
    the test login keeps a localhost-only copy (`speeksTestRestore`) and restores
    itself. Sign Out clears it.
 4. `powershell -File scripts/browser-check.ps1 b2b-check.js` — last run 292
-   passed, 0 failed.
+   passed, 0 failed (2026-10-21, after whole-card drag).
 5. Ethan's own test layout lives in the pane's localStorage
    (`speeksQpLayout_test manager ovl`) — back it up before testing, put it back after.
 
@@ -102,6 +110,16 @@ https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8
   Command Center cards need `max-width: none !important`.
 - The feed card uses `contain: size` on `.sam-feed` so a long feed doesn't
   stretch its row.
+- **Anything added to or removed from the flow when a drag starts moves the
+  page under the mouse** and the drop lands somewhere else. Keep drop targets
+  inside existing space.
+- A drag near the window edge auto-scrolls the page: take a fresh screenshot
+  before the next `left_click_drag`, or you aim at stale positions and it looks
+  like the drag failed.
+- A split-out shell never passes through `applyRoleBasedUI`, so it doesn't get
+  the inline `display:flex` the originals get — give shells layout in CSS.
+- The mockup artifact link below 404s from this account (2026-10-21); designs
+  were shown inline in chat instead.
 
 ## Not done / next steps
 

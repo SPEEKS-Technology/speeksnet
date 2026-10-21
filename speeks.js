@@ -50070,7 +50070,7 @@ function _qpApplyLayout() {
     // Feature overrides re-run applyRoleBasedUI in the background; that must not
     // throw someone out of Customize halfway through. A hop that rebuilt <main>
     // took the handles with it, though, so only stay in edit mode if they exist.
-    if (_qpEditing && main.querySelector('.qp-ctl')) _qpRenderControls(main);
+    if (_qpEditing && main.querySelector('[data-qp-block][data-qp-grab]')) _qpRenderControls(main);
     else _qpSetEditing(main, false);
 }
 
@@ -50261,7 +50261,7 @@ function _qpRowBar(row, cells) {
 }
 
 function _qpRenderControls(main) {
-    main.querySelectorAll('.qp-ctl, .qp-slot, .qp-rowbar, .qp-ov').forEach(function (c) { c.remove(); });
+    main.querySelectorAll('.qp-slot, .qp-rowbar, .qp-ov').forEach(function (c) { c.remove(); });
     main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
     const rowsNow = _qpCurrentRows(main);
     const rows = Array.from(main.querySelectorAll(':scope > .qp-row:not([hidden])'));
@@ -50271,20 +50271,16 @@ function _qpRenderControls(main) {
         cells.forEach(function (cell) {
             const b = cell.querySelector(':scope > [data-qp-block]');
             const key = _qpKey(b);
-            const label = b.getAttribute('data-qp-label') || key;
             const fam = b.getAttribute('data-qp-family');
-            const tag = fam && b.hasAttribute('data-qp-partial')
-                ? '<span class="qp-fam">' + escapeHtml(QP_FAMILIES[fam].label) + '</span>' : '';
-            const ctl = document.createElement('div');
-            ctl.className = 'qp-ctl';
-            ctl.setAttribute('data-qp-for', key);
-            ctl.draggable = true;
-            ctl.title = 'Drag to Move ' + label;
-            ctl.innerHTML =
-                '<span class="qp-grip" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>'
-                + '<span class="qp-ctl-label">' + tag + escapeHtml(label) + '</span>'
-                + '<span class="qp-ctl-hint" aria-hidden="true">Drag to Move</span>';
-            cell.insertBefore(ctl, b);
+            // The whole card is the handle (Ethan, 2026-10-21) — no bar over it.
+            // That is safe only because nothing inside a card can be used in
+            // edit mode (_qpBlockClicks); otherwise every click-and-drag in the
+            // feed or a table would turn into a move. data-qp-grab marks the
+            // cards set up this way, so _qpApplyLayout can tell whether a
+            // background rebuild took edit mode's wiring with it.
+            b.draggable = true;
+            b.setAttribute('data-qp-grab', '');
+            b.title = 'Drag to move ' + (b.getAttribute('data-qp-label') || key);
             // A card with two or more pieces showing lets each one be dragged out
             // by its tab (Command Center) or its row (Action Items).
             if (fam) {
@@ -50407,26 +50403,42 @@ function _qpShowHint(main, t) {
     t.cell.appendChild(ov);
 }
 
-// Wired once per <main> by delegation, because handles and slots are rebuilt
-// after every move. Only handles and piece grips are draggable: making whole
-// cards draggable would turn every click-and-drag inside one — selecting text in
-// the feed, scrolling a table — into a move.
+// Edit mode is for arranging only: nothing inside a card can be clicked (Ethan,
+// 2026-10-21). Capture phase on <main>, so the click never reaches the inline
+// onclick of a tab, a checklist row or a feed item. styles.css also turns the
+// pointer off inside cards, which stops selects, scrolling lists and hovers;
+// this catches what that misses — the piece grips, which keep the pointer so
+// they can still be dragged out.
+function _qpBlockClicks(e) {
+    if (!_qpEditing) return;
+    const b = e.target.closest && e.target.closest('.qp-cell > [data-qp-block]');
+    if (!b) return;
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+// Wired once per <main> by delegation, because cards and slots are rebuilt
+// after every move. Whole cards are draggable in edit mode, and a piece grip
+// (a Command Center tab, an Action Items row) inside one is its own drag.
 function _qpWireDrag(main) {
     if (main._qpWired) return;
     main._qpWired = true;
+    main.addEventListener('click', _qpBlockClicks, true);
     main.addEventListener('dragstart', function (e) {
         if (!_qpEditing) return;
-        const ctl = e.target.closest && e.target.closest('.qp-ctl');
-        const piece = !ctl && e.target.closest && e.target.closest('.qp-piece-drag');
-        if (!ctl && !piece) return;
-        if (ctl) _qpDrag = { key: ctl.getAttribute('data-qp-for') };
+        // The piece first: it sits inside a draggable card, and the drag that
+        // starts is the innermost draggable one.
+        const piece = e.target.closest && e.target.closest('.qp-piece-drag');
+        const card = !piece && e.target.closest && e.target.closest('.qp-cell > [data-qp-block][data-qp-grab]');
+        if (!card && !piece) return;
+        if (card) _qpDrag = { key: _qpKey(card) };
         else {
             const id = piece.getAttribute('data-qp-piece').split('/');
-            const card = piece.closest('[data-qp-block]');
-            _qpDrag = { fam: id[0], piece: id[1], from: _qpKey(card) };
+            const from = piece.closest('[data-qp-block]');
+            _qpDrag = { fam: id[0], piece: id[1], from: _qpKey(from) };
         }
         try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', JSON.stringify(_qpDrag)); } catch (_) {}
-        (ctl || piece).classList.add('qp-dragging');
+        (card || piece).classList.add('qp-dragging');
         // Next frame, BOTH of these: changing the layout inside dragstart makes
         // Chrome cancel the drag before it begins. The class hides the Card
         // widths strips, which shifts everything below them — set here, in the
@@ -50468,7 +50480,12 @@ function _qpSetEditing(main, on) {
         _qpWireDrag(main);
         _qpRenderControls(main);
     } else {
-        main.querySelectorAll('.qp-ctl, .qp-rowbar').forEach(function (c) { c.remove(); });
+        main.querySelectorAll('.qp-rowbar').forEach(function (c) { c.remove(); });
+        main.querySelectorAll('[data-qp-block][data-qp-grab]').forEach(function (b) {
+            b.draggable = false;
+            b.removeAttribute('data-qp-grab');
+            b.removeAttribute('title');
+        });
         _qpClearSlots(main);
         _qpClearPieceDrag(main);
     }
