@@ -1764,7 +1764,10 @@ async function saveShots(scope: Scope, body: any) {
     photo_src: String(p.src || "").split("?")[0], photo_n: Number(p.n) || 0,
     shots: clean(p.shots, 4), model_shots: clean(p.said, 6),
     flags: clean(p.flags, CONFIRM_FLAGS.length).filter(f => CONFIRM_FLAGS.includes(f)),
-    repeat_of: Number.isInteger(p.repeatOf) && p.repeatOf >= 1 && p.repeatOf < (Number(p.n) || 0) ? p.repeatOf : null,
+    // Any OTHER photo of the listing, not only an earlier one: Ethan marks the
+    // worse copy, and that can come first (2026-10-21, photo 6 = a worse photo 7).
+    repeat_of: Number.isInteger(p.repeatOf) && p.repeatOf !== (Number(p.n) || 0)
+      && photos.some((q: any) => Number(q.n) === p.repeatOf) ? p.repeatOf : null,
     // A flag left blank on a photo that was answered means NO (0149).
     flags_checked: body.checked === true,
     listing: facts,

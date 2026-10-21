@@ -58967,14 +58967,16 @@ function pqConfirmFlag(k, i) {
 }
 window.pqConfirmFlag = pqConfirmFlag;
 
-// This photo repeats an earlier one (the model's `repeats`; it drives Approve
-// Deletion). Only an EARLIER photo can be named, the way the model reports it.
+// This photo repeats another one and is the copy that should go (the model's
+// `repeats`; it drives Approve Deletion). The model only ever names an EARLIER
+// photo, but Ethan can name ANY other one (2026-10-21: "photo 6 is a worse
+// version of photo 7"), because the worse copy isn't always the later one.
 function pqConfirmRepeat(v, i) {
     const l = _pqcListing();
     const p = l && l.photos[i == null ? _pqc.pi : i];
     if (!p || _pqc.busy) return;
     const n = Number(v);
-    p.repeatOf = Number.isInteger(n) && n >= 1 && n < p.n ? n : null;
+    p.repeatOf = Number.isInteger(n) && n !== p.n && l.photos.some(q => q.n === n) ? n : null;
     _pqcRender();
 }
 window.pqConfirmRepeat = pqConfirmRepeat;
@@ -59212,9 +59214,9 @@ function _pqcGridHtml(l) {
               ${opts(p.shots[1], '— no second shot —')}</select>`
             : `<select class="pqc-add" onchange="pqConfirmSetShot(${i}, 1, this.value)" ${busy}>${opts('', '+ Second Shot')}</select>`}
           <div class="pqc-fchips">${chips}${addFlag}</div>
-          ${p.n > 1 ? `<select class="pqc-add${p.repeatOf ? ' pqc-add-on' : ''}" onchange="pqConfirmRepeat(this.value, ${i})" ${busy}>
+          ${l.photos.length > 1 ? `<select class="pqc-add${p.repeatOf ? ' pqc-add-on' : ''}" onchange="pqConfirmRepeat(this.value, ${i})" ${busy}>
               <option value="">Not a repeat</option>
-              ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Same shot as photo ${q.n}</option>`).join('')}
+              ${l.photos.filter(q => q.n !== p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Same shot as photo ${q.n}</option>`).join('')}
             </select>` : ''}
         </div>`;
     }).join('');
@@ -59347,10 +59349,10 @@ function _pqcHtml() {
             `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' + (p.flagFrom && p.flagFrom[k] === 'model' ? ' pqc-flag-model' : p.flagFrom && p.flagFrom[k] === 'earlier' ? ' pqc-flag-earlier' : '') : ''}"
               title="${p.flags.has(k) ? (p.flagFrom && p.flagFrom[k] === 'model' ? "The model’s guess — click to remove" : p.flagFrom && p.flagFrom[k] === 'earlier' ? 'Your earlier grade — click to remove' : 'Click to remove') : 'Click to add'}"
               onclick="pqConfirmFlag('${k}')" ${c.busy ? 'disabled' : ''}>${label}</button>`).join('')}</div>`).join('')}
-        ${p.n > 1 ? `<div class="pqc-flags"><span class="pqc-flaggroup">Repeat</span>
+        ${l.photos.length > 1 ? `<div class="pqc-flags"><span class="pqc-flaggroup">Repeat</span>
           <label class="pqc-repeat">Same shot as <select onchange="pqConfirmRepeat(this.value)" ${c.busy ? 'disabled' : ''}>
             <option value="">— not a repeat —</option>
-            ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Photo ${q.n}</option>`).join('')}
+            ${l.photos.filter(q => q.n !== p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Photo ${q.n}</option>`).join('')}
           </select></label></div>` : ''}
       </div>
       ${_pqcListingPanel(l)}
