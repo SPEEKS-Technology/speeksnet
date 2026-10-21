@@ -163,6 +163,33 @@ const DUP_ORDERS_QUERY = `query($q: String!, $after: String) {
   }
 }`;
 
+// ONE RETRY, AND ONLY FOR SHOPIFY NOT ANSWERING. On 2026-10-21 BAL returned a
+// single HTTP 409 and the scan mailed "Cannot check BAL for double-counted
+// sales"; the same query answered 200 minutes later, and the next run cleared
+// it. One blip should not reach the inbox, so a non-2xx status or a dropped
+// connection gets a second try after a short pause before anything throws.
+//
+// A 200 carrying a GraphQL `errors` array is NOT retried: that is a broken
+// query or a missing scope, which fails the same way twice, and the callers
+// still throw on it. A second failure throws exactly as before, so a store that
+// stays unreachable still raises the alert — this buys one try, not silence.
+const SHOPIFY_RETRY_MS = 3000;
+async function shopifyPost(shop: string, token: string, payload: unknown) {
+  const send = () => fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    body: JSON.stringify(payload),
+  });
+  try {
+    const res = await send();
+    if (res.ok) return res;
+  } catch (_) { /* a dropped connection gets the same second try */ }
+  await new Promise((r) => setTimeout(r, SHOPIFY_RETRY_MS));
+  const res = await send();
+  if (!res.ok) throw new Error(`Shopify HTTP ${res.status}`);
+  return res;
+}
+
 async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) {
   const orders: Array<{ id: string; name: string; cancelled: boolean; refunded: boolean; ebayId: string | null }> = [];
   let after: string | null = null;
@@ -170,15 +197,10 @@ async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) 
   let truncated = false;
 
   do {
-    const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-      body: JSON.stringify({
-        query: DUP_ORDERS_QUERY,
-        variables: { q: `tag:eBay created_at:>=${sinceDay}`, after },
-      }),
+    const res = await shopifyPost(shop, token, {
+      query: DUP_ORDERS_QUERY,
+      variables: { q: `tag:eBay created_at:>=${sinceDay}`, after },
     });
-    if (!res.ok) throw new Error(`Shopify HTTP ${res.status}`);
     const body = await res.json();
     // A GraphQL error arrives as a 200 with an errors array, which is exactly how
     // a broken query would otherwise read as "this store has no duplicates".
@@ -238,18 +260,13 @@ function mapDupOrder(n: any) {
 // read — hence one extra call, and only when there are suspects at all.
 async function shopifyOrderStates(shop: string, token: string, ids: string[]) {
   const gids = ids.map((i) => `"gid://shopify/Order/${i}"`).join(", ");
-  const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-    body: JSON.stringify({
-      query: `{ nodes(ids: [${gids}]) { ... on Order {
-        id cancelledAt
-        totalPriceSet { shopMoney { amount } }
-        totalRefundedSet { shopMoney { amount } }
-      } } }`,
-    }),
+  const res = await shopifyPost(shop, token, {
+    query: `{ nodes(ids: [${gids}]) { ... on Order {
+      id cancelledAt
+      totalPriceSet { shopMoney { amount } }
+      totalRefundedSet { shopMoney { amount } }
+    } } }`,
   });
-  if (!res.ok) throw new Error(`Shopify HTTP ${res.status}`);
   const body = await res.json();
   if (body.errors) throw new Error(JSON.stringify(body.errors).slice(0, 200));
   const live: Record<string, boolean> = {};
