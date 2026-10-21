@@ -6,10 +6,9 @@ Picking this up in a new session? Read this first, then `CLAUDE.md`.
 
 - **Folder:** `C:\Users\User\Documents\GitHub\speeksnet-nov3` — a git worktree.
 - **Branch:** `Main-November-Update-3---Ethan`, cut from `origin/pre-release` at `b8dbb73`.
-- **⚠️ NOTHING IS COMMITTED.** Every change below is uncommitted in this folder
-  (`index.html`, `speeks.js`, `styles.css`, `scripts/serve-local.py`, new
-  `scripts/test-login.html`, untracked `.claude/launch.json`). Commit before
-  anything that could lose the working tree.
+- **Committed locally, NOT pushed** (`563fc68`, 2026-10-21). Only
+  `.claude/launch.json` is left untracked, on purpose (local config). Push the
+  branch before working on it from another machine or the cloud.
 - **Don't touch `C:\Users\User\Documents\GitHub\speeksnet`.** That folder is a
   separate session's: `Main-November-Update-2---Ethan`, Picture Quality work,
   with an uncommitted local-only un-park in `speeks.js` and untracked
@@ -30,7 +29,7 @@ Design mockups (private Claude artifact, two artboards — the DM dashboard
 vision and the split/combine interaction):
 https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8
 
-## What's built (all uncommitted)
+## What's built
 
 **Customize mode** on QuickPortal, managers only (`qp-customize` in
 `FEATURE_CATALOG`, `speeks.js` ~44057 — widen it from Feature Access):
@@ -106,7 +105,7 @@ https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8
 
 ## Not done / next steps
 
-- **Commit** (nothing is), then bump the cache-buster (`?v=`) in all five HTML
+- **Push** the branch (committed, not pushed), and when it ships bump the cache-buster (`?v=`) in all five HTML
   pages when it ships (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
 - **Save layouts to the database** so they follow a person across devices
   (new table + edge function; check `list_migrations` before numbering — the
