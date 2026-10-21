@@ -6,9 +6,9 @@ Picking this up in a new session? Read this first, then `CLAUDE.md`.
 
 - **Folder:** `C:\Users\User\Documents\GitHub\speeksnet-nov3` — a git worktree.
 - **Branch:** `Main-November-Update-3---Ethan`, cut from `origin/pre-release` at `b8dbb73`.
-- **Committed locally, NOT pushed** (`563fc68`, 2026-10-21). Only
-  `.claude/launch.json` is left untracked, on purpose (local config). Push the
-  branch before working on it from another machine or the cloud.
+- **Committed and pushed** to origin (`563fc68` + `b7ff25f`, 2026-10-21). Only
+  `.claude/launch.json` is left untracked, on purpose (local config). Pull
+  before working on it from another machine or the cloud.
 - **Don't touch `C:\Users\User\Documents\GitHub\speeksnet`.** That folder is a
   separate session's: `Main-November-Update-2---Ethan`, Picture Quality work,
   with an uncommitted local-only un-park in `speeks.js` and untracked
@@ -105,7 +105,7 @@ https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8
 
 ## Not done / next steps
 
-- **Push** the branch (committed, not pushed), and when it ships bump the cache-buster (`?v=`) in all five HTML
+- When it ships, bump the cache-buster (`?v=`) in all five HTML
   pages when it ships (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
 - **Save layouts to the database** so they follow a person across devices
   (new table + edge function; check `list_migrations` before numbering — the
