@@ -1,6 +1,64 @@
 # Handoff: Picture Quality local model (as of 2026-10-21)
 
+## ⚡⚡ Newest (2026-10-21 evening) — round 4 is BUILT, waiting on Ethan's go
+
+- **Labelling DONE:** 113 of the 114 (112 graded + Skylanders + Tilta), all flags checked.
+  The one skipped is a Wii yoga game (`8596398702765`) the title sort put on Windows
+  laptops. `pq_shot_labels`: 436 listings / 3,303 photos.
+- **Data rebuilt** (gold.sql → export.mjs → build_data.py): train 2,566 photos / 334
+  listings, test 717 / 95, reviewed 159. All 73 old test listings stayed in test, none
+  moved to train. Round 3's jsonl kept in `data\round3-jsonl\`.
+- **Round 3 re-scored on the NEW test set** (`runs\rescore-round3-newtest`): **65%**
+  shots exact, first 71%; closeup P93 R77; reflection P85 R50. Windows laptops **61%**
+  on 114 photos (the old 26% was 2 listings), misc 47, receivers 52, GPUs 47, action cams
+  56, item lots 18. **This 65% is the bar for round 4**, not the 66% on the old set.
+- **Round 4 code:** `build_data.contact_sheet` draws one 448px numbered grid of ALL the
+  listing's photos per example (this one outlined yellow) into `data\contact\`;
+  `common.messages` adds it as a second image and `common.question` says what it is,
+  plus Ethan's Extra / Extra Accessories / Box rule. `PQ_PROMPT=3` gives round 3's prompt
+  exactly (for re-scoring old adapters on rebuilt data).
+- **Fit-check OK:** peak 11.1 GB of 16, **28.2 s a step**, 321 steps an epoch →
+  3 epochs ≈ 7.5 h + ~35 min scoring ≈ **8 h**. Chose 3 epochs (same as rounds 2–3).
+  `keep-awake.ps1` cap raised 7 → 10 h. `runs\tonight.log` already renamed to
+  `tonight-round3.log`. `runs\baseline` is from the OLD test set and run-tonight
+  skips it — fine, the round-3 re-score is the comparison.
+- **Round 4's gain is confounded:** it has +46% more training photos AND the contact
+  sheet. If it helps a lot and we want to know which, train round 3's prompt on the new
+  data (`PQ_PROMPT=3`) another night.
+
 ## ⚡ Latest (2026-10-21) — read this first; it supersedes "Next step" below
+
+- **Labelling status (checked 10-21 afternoon): NOT STARTED.** 0 of the 112 graded
+  listings had rows in `pq_shot_labels`. Skylanders (`8161660960870`, 38 photos) and Tilta
+  (`15873101529254`, 10 photos) still had only their 10-17 labels. The table stood at 325
+  listings / 2,276 photos, with the last save 10-17 22:34 UTC. Re-check before step 3: join
+  `pick.json`'s ids against `split_part(product_id,'/',-1)`.
+- **Un-park is APPLIED in the working copy** (`speeks.js` catalog line un-commented; the
+  stash is gone — it was applied at 11:35). `git diff speeks.js` should show ONLY that
+  one line. The untracked `scripts/pq-gold/gold*.json` came back at the same time (old
+  data, rebuilt by the re-export).
+- **Repeat can now name ANY other photo** (`12e81be`, Ethan 10-21: "photo 6 is a worse
+  version of photo 7"). `repeat_of` marks the copy that should GO, which isn't always
+  the later one. Both pickers plus `saveShots` changed. The model's `repeats` and rules.ts
+  are unchanged (earlier-only). picture-quality deployed, live == repo byte for byte.
+  Cache-buster `20261021a`. Committed WITHOUT the un-park line (staged with
+  `git apply --cached -R` of that one hunk) — do the same for any speeks.js commit while
+  he labels.
+- **NO SPENDING without Ethan's yes (10-21, after the $28.76 batch):** before ANY paid
+  call, say what it is, how many listings, and the cost at ~$0.25–0.30 a listing; a yes
+  covers that one run only. Guards checked 10-21: `PQ_NIGHTLY_PAUSED=1` (the secret's digest
+  is sha256("1")); no picture-quality batch since 10-16 08:30 UTC; 0 pq_batches in flight.
+  **Check Again** in the PQ store queue spends ~$0.26 in ONE click with no confirm —
+  Ethan chose to leave it that way.
+- **Closeup is a fact, not a problem** (Ethan asked): = the model's `whole_item: false`.
+  It exempts the photo from cut_off, lets it cover a serial/closeup shot, keeps it from
+  being a repeat of its face, and leaves it out of the setup grouping.
+- **Deploy/compare without the MCP:** `npx supabase functions download picture-quality
+  --project-ref ejzaqmyxxrkmxvzbjeuo --workdir <scratch dir> --use-api`, then `cmp` with
+  `\r` stripped against the repo (or `git show HEAD:` before a deploy). Deploy:
+  `npx supabase functions deploy picture-quality --no-verify-jwt --project-ref ejzaqmyxxrkmxvzbjeuo --use-api`.
+  DB reads: `npx supabase db query --linked --project-ref ejzaqmyxxrkmxvzbjeuo --output-format json "<sql>"`.
+  `ai_usage_log` columns are `at, tool, cost_usd, …` (not created_at).
 
 - **Round 3 RAN** (run `C:\Users\User\pq-train\runs\run-20261020-2306`, finished 02:38).
   Shots exactly right **58% → 66%**, main shot 64% → 72%. Closeup P92 R70, reflection P81 R57.
@@ -25,15 +83,17 @@
   35 Windows laptops, 20 misc, 17 receivers, 14 action cameras, 10 GPUs, 9 item lots,
   7 Android phones → `C:\Users\User\pq-train\label-batch-20261021\pick.json`
   (`{sheet: [{store, id, title, photos}]}`; `classify.py` built it from `live.json`).
-  **NOT RUN YET** — the auto-mode classifier blocked it as a real-money action; Ethan
-  must approve it in the new session (or run it himself). How: the function's live ids
-  path, `GET .../functions/v1/picture-quality?secret=<SECRET const in index.ts>&store=XXX&ids=<≤12 ids>&save=1`
-  with the anon key (`_SUPABASE_ANON_KEY` in speeks.js) as Bearer + apikey. 12 ids per
-  call (MAX_IDS), grouped by store; the body is streamed with leading spaces, so trim then
-  JSON.parse and check `.error`. Record finished ids so a re-run never pays twice. Do
-  ONE call first as a cost check. Cost: batch API ≈ $0.06/listing, the live path ≈ 2x
-  (batchSweep can't target ids — it only takes recently created listings).
-  Graded listings then appear pre-filled in More For Training.
+  **DONE 2026-10-21: all 112 graded and saved, 0 errors, $28.76 total** (Opus 5.5,
+  medium; the function's own count, also logged in `ai_usage_log`). That's ~$0.26 a
+  listing, not the ~$0.12 estimated: 15–16-photo Windows laptops that come back
+  "reorder" cost ~$0.38 each (~71k input tokens). After the one-call cost check ($3.34
+  for 12), Ethan approved going past the ~$15. **Budget ~$0.25–0.30 a listing** for any
+  future batch on the live path (batchSweep, ≈ half price, can't target ids).
+  Records in `C:\Users\User\pq-train\label-batch-20261021\`: `grade.mjs` (the live ids
+  path, `?secret=…&store=XXX&ids=<≤12>&save=1` with the anon key, 12 ids a call grouped
+  by store; `--calls N` limits it), `done.json` (every graded id with its verdict and
+  cost; a re-run skips them), `responses\` (each call's full answer), `grade-rest.log`.
+  The graded listings now wait pre-filled in More For Training.
 - **Skylanders + Tilta item lots reopened** for an Extra/Extra Accessories re-check:
   `REDO` const in picture-quality index.ts; they prefill from Ethan's own saved labels
   and drop out once re-saved. **picture-quality is deployed at `0fd7e4c`** (live == repo).
@@ -44,7 +104,7 @@
   is done labelling, before any commit that touches speeks.js.
 - **The clueless-closet helper is off** since round 3; it comes back at next sign-in, or
   `pythonw.exe helper.py run` in `C:\Users\User\Projects\clueless-closet\render` (.venv).
-- **Plan from here:** (1) Ethan approves the 112-listing grade; (2) he labels them in More
+- **Plan from here:** (1) ~~grade the 112 listings~~ done 10-21; (2) he labels them in More
   For Training plus the 2 reopened lots; (3) re-export gold (`gold.sql` → `export.mjs`) and
   `build_data.py` — new listings may land in TEST, so re-score round 3's adapter on the new
   test set for a fair comparison; (4) build **round 4: thumbnails of the listing's other

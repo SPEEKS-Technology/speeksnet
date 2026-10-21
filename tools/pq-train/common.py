@@ -14,6 +14,12 @@ RUNS = os.path.join(ROOT, "runs")
 # 640x640 ≈ 520 image tokens: enough to tell a cartridge's front from its back,
 # small enough that a 7B model trains in 16 GB.
 MIN_PIXELS, MAX_PIXELS = 128 * 28 * 28, 640 * 640
+# The round-4 contact sheet (build_data.contact_sheet) is 448x448 ≈ 256 tokens.
+CONTACT_PIXELS = 448 * 448
+# Which round's prompt. 4 adds the contact sheet and the Extra rule; PQ_PROMPT=3
+# reproduces round 3's prompt exactly, so its adapter can be re-scored fairly
+# on a rebuilt test set.
+PROMPT = int(os.environ.get("PQ_PROMPT", "4"))
 
 SYSTEM = ("You label one photo from a used-electronics resale listing against the store's "
           "Picture Guide sheet for that kind of item. Answer with JSON only.")
@@ -27,11 +33,25 @@ def question(ex):
     # roughly in the sheet's order, so position is a strong, free hint.
     where = (f"This is photo {ex['pos']} of {ex['of']} in the listing. Stores usually shoot in the sheet's order, "
              "and rarely shoot the same view twice.\n") if ex.get("pos") and ex.get("of") else ""
+    # Round 4 (2026-10-21): the second image is the whole listing, numbered, with
+    # this photo outlined, so "the other corner" and "the side not shot yet" can be
+    # seen instead of guessed from position.
+    grid = ("The second image shows every photo in the listing, numbered in order; this photo is "
+            f"number {ex['pos']}, outlined in yellow. Use the others to tell which view this one is.\n"
+            ) if PROMPT >= 4 and ex.get("contact") else ""
+    # Ethan's rule (2026-10-21), from re-checking the Skylanders and Tilta lots.
+    # Only sheets that list "Extra Accessories" get its half: his labels never use it
+    # elsewhere, so naming it on, say, new-in-box would invite an answer off the sheet.
+    acc = (" \"Extra Accessories\" is a photo of something that came WITH the item (a laptop's charger)."
+           if "Extra Accessories" in ex["shots_on_sheet"] else "")
+    extra = ("Also allowed: \"Extra\" is another view of the item itself that the sheet doesn't ask for "
+             "(the bottom of a gaming PC)." + acc + " \"Box\" is the packaging only.\n"
+             if PROMPT >= 4 else
+             "Also allowed: \"Extra\" (anything that is not one of the sheet's shots) and \"Box\" (the packaging only).\n")
     return (f"Listing: {ex['title']}\n"
             f"Sheet: {ex['sheet']}\n"
             f"Shots on this sheet, in the sheet's order: {shots}\n"
-            + where +
-            "Also allowed: \"Extra\" (anything that is not one of the sheet's shots) and \"Box\" (the packaging only).\n"
+            + where + grid + extra +
             "Which shot is this photo? One photo can be two shots (a front view with the lens open is both).\n"
             "closeup: true for a tight detail shot that does not show the whole item.\n"
             "reflection: true when a reflection on the item is something a buyer would notice.\n"
@@ -44,9 +64,12 @@ def answer(ex):
 
 
 def messages(ex, with_answer):
+    content = [{"type": "image", "image": ex["image"], "min_pixels": MIN_PIXELS, "max_pixels": MAX_PIXELS}]
+    if PROMPT >= 4 and ex.get("contact"):
+        content.append({"type": "image", "image": ex["contact"], "min_pixels": MIN_PIXELS, "max_pixels": CONTACT_PIXELS})
+    content.append({"type": "text", "text": question(ex)})
     m = [{"role": "system", "content": [{"type": "text", "text": SYSTEM}]},
-         {"role": "user", "content": [{"type": "image", "image": ex["image"], "min_pixels": MIN_PIXELS, "max_pixels": MAX_PIXELS},
-                                      {"type": "text", "text": question(ex)}]}]
+         {"role": "user", "content": content}]
     if with_answer:
         m.append({"role": "assistant", "content": [{"type": "text", "text": answer(ex)}]})
     return m
