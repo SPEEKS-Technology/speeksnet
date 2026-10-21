@@ -354,19 +354,25 @@ sub, so it could not be muted even in principle. Corp-facing kinds carry
 `audienceFeature: "cap-b2b-corp"`, so a manager lent the corp hat is told too.
 `excludeUser` keeps each one out of the inbox of whoever caused it.
 
-`submit_pricing` **also** still emails, via `notifyQuoteReady` → `b2b-outreach`
-`sendQuoteReady`, addressed to the `b2b_quote_ready` recipient list with a
-fallback to the single CRM `notify_email`. Both channels on purpose: the email is
-what Paul originally asked for, and the queue row is the half that survives a
-mail relay failing silently.
+**Since 0151 (2026-10-21) "a quote is ready to send" reaches Paul through his
+own notification settings only:** the `b2b_quote_ready` kind above, under B2B →
+"B2B Deals Waiting On Me". 0151 gave him a `user_notify_prefs` row with email on
+(`paul.kushnir@pikinvestments.com`, instant, every B2B switch on, other
+categories off). `submit_pricing` still calls `notifyQuoteReady` → `b2b-outreach`
+`sendQuoteReady`, but that separate email is switched off
+(`b2b_crm_settings.quote_ready_enabled = false`) so he does not get two. The
+`b2b_quote_ready` list was taken out of the Email Recipients tool for the same
+reason. Removing the call from b2b-deals and the action from b2b-outreach is a
+function deploy, not done yet.
 
-⚠️ **The email path was configured correctly the whole time** Paul was reporting
-it broken — `b2b_crm_settings.notify_email` is his address with both toggles on,
-the shared secret matches, the call is awaited, and both functions were deployed
-with the code. So whatever failed was downstream in the relay (`GMAIL_RELAY_URL`,
-else Resend) and left no trace. There is deliberately no `b2b_quote_ready` row in
-`email_recipients`: an empty list is what makes `quoteReadyTo` fall back to the
-CRM address, and creating the list would remove that safety net.
+**The CEO mini CRM is retired (0151).** Its button, modal and every `crm*`
+function are gone from the site, and both `b2b-outreach-daily-*` cron jobs are
+unscheduled. Nothing was dropped: `b2b_crm_settings` still holds the
+certified-wipe fee b2b-deals prices with (`wipe_fee`, $8.00, now not editable on
+the site), and `b2b_clients.outreach_*` and `b2b_outreach_log` keep their
+history. The CRM actions in `b2b-outreach` (`set_crm_settings`, `set_schedule`,
+`mark_reviewed`, `log_touch`, the sweep) are dead code until a deploy removes
+them. `send_feedback` lives there too and stays.
 
 The generic system: `notify_queue` (`0033_email_notifications.sql:80-121`),
 categories `notify/index.ts:68-71`, prefs/subs `:162-252`, bell UI
@@ -418,6 +424,7 @@ straight from pre-release would switch Aging emails back on until his branch mer
 Why Paul got no "ready for review" mail (2026-09-18): he has no `user_notify_prefs`
 row (email alerts never switched on), and the quote-ready email's fallback address
 is `b2b_crm_settings.notify_email`, a different mailbox from the one he writes from.
+Both fixed by 0151 (see above).
 
 ## Pickup: custody form and itemized pickup (0150)
 
@@ -564,5 +571,3 @@ who edited an item's `value`/`offer`.
 - **SPEEKS Capture tool** distribution + version history `:16225`, edge fn
   `b2b-capture-tool`, `0066_b2b_capture_releases.sql`. Source in
   `tools/b2b-capture/` — its README is the source of truth.
-- **CRM settings** (CEO only) `:17663-17880` — recipient config, load `:17686`,
-  settings HTML `:17836-17845`, save `:17861-17877`; registration `:33686-33688`.

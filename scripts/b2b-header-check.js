@@ -31,7 +31,7 @@ function _srcOf(fn) {
 // The menu moved to the listing rows; these now guard the header staying as it
 // was, since it has just been churned and put back.
 t('trial: the header keeps its own buttons, ungrouped', function () {
-    var ids = ['b2bDelReqBtn', 'crmGearBtn', 'b2bCaptureDlBtn', 'b2bFeedbackBtn', 'b2bNewBtn'];
+    var ids = ['b2bDelReqBtn', 'b2bCaptureDlBtn', 'b2bFeedbackBtn', 'b2bNewBtn'];
     var missing = ids.filter(function (id) { return !document.getElementById(id); });
     if (missing.length) return 'missing from the header: ' + missing.join(', ');
     return !document.getElementById('b2bActionsMenu')
@@ -41,10 +41,8 @@ t('trial: the header buttons kept their gates through the churn', function () {
     // These were moved into a menu and moved back out. The role classes and the
     // feature key are what actually gate them, and a copy-paste that drops one
     // is invisible until the wrong person sees the wrong button.
-    var gear = document.getElementById('crmGearBtn');
     var cap = document.getElementById('b2bCaptureDlBtn');
     var del = document.getElementById('b2bDelReqBtn');
-    if (!gear.classList.contains('role-ceo')) return 'the gear lost its CEO gate';
     if (cap.getAttribute('data-feature') !== 'b2b-capture-download') return 'Capture lost its feature key';
     if (!cap.classList.contains('role-none')) return 'Capture lost role-none, so everyone can see it';
     if (!del.classList.contains('dynamic-module-flex')) return 'Delete Requests left the role sweep';
@@ -138,4 +136,17 @@ t('ws an unported stage gets its old header and footer back', function () {
     if (document.getElementById('b2bDealSub').textContent !== 'old sub') return 'the subtitle was dropped';
     if (document.getElementById('b2bDealMoreBtn').style.display !== 'none') return 'the ... menu stayed';
     return document.getElementById('b2bDealDeleteBtn').style.display !== 'none' || 'the trashcan did not come back';
+});
+
+// The CEO mini CRM was retired on 2026-10-21 (0151): its button, its modal and
+// every crm* function went together. A merge that brings one back without the
+// rest is a button that opens nothing -- the Overview tab's failure again.
+t('the retired CEO CRM is not in the page or the code', function () {
+    if (document.getElementById('crmGearBtn')) return 'the CRM Settings button is back';
+    if (document.getElementById('crmModal')) return 'the CRM modal is back';
+    var left = ['crmOpen', 'crmRender', 'crmSaveSettings', 'crmRefreshBadge', '_b2bCanCrm', 'b2bLogTouch', 'b2bDraftOutreach']
+        .filter(function (k) { return typeof window[k] !== 'undefined'; });
+    if (left.length) return 'still defined: ' + left.join(', ');
+    // The badge class outlived it on purpose: Delete Requests wears it.
+    return document.querySelector('#b2bDelReqBtn .crm-badge') ? true : 'Delete Requests lost its count badge';
 });

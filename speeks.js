@@ -20297,9 +20297,6 @@ function _b2bPrevalStore() {
     return mine.length === 1 ? mine[0] : null;
 }
 
-// CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
-function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
-
 // Employees / trainees help PRICE items but never escalate: no submit, no quote,
 // no listing/complete, no accept. Pricing-edit only.
 function _b2bIsEmployee(){ return ['employee', 'training'].includes(_b2bRole()); }
@@ -20908,7 +20905,6 @@ async function b2bRefresh() {
         _b2bClients = clients;
         _b2bPrevals = prevals;
         b2bRender();
-        if (typeof crmRefreshBadge === 'function') crmRefreshBadge();
     } catch (_) { /* keep what's on screen */ }
 }
 
@@ -22356,95 +22352,6 @@ function b2bToggleClient(id) {
     row.insertAdjacentHTML('afterend', _b2bClientDrawer(id));
 }
 
-// --- outreach (the mini CRM) ----------------------------------------------
-// A client can carry a cadence: every N months from a date you set. The daily
-// b2b-outreach sweep emails leadership when one comes due.
-//
-// The reminder goes to US, not to the client. The client-facing note is a mailto
-// from here, so it leaves the sender's own mailbox and the reply comes back to
-// them -- same reasoning as the quote. Auto-sending to a real business from the
-// reports address would put our outreach in a place nobody reads the answer.
-
-// Today in the store's timezone, as YYYY-MM-DD, so "due" means the same thing
-// here as it does in the edge function.
-function _b2bToday() {
-    return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-}
-
-function _b2bDueIn(dateStr) {
-    if (!dateStr) return null;
-    const a = Date.parse(_b2bToday() + 'T00:00:00Z');
-    const b = Date.parse(dateStr + 'T00:00:00Z');
-    if (Number.isNaN(b)) return null;
-    return Math.round((b - a) / 86400000);   // negative = overdue
-}
-
-function _b2bDueLabel(dateStr) {
-    const d = _b2bDueIn(dateStr);
-    if (d === null) return { text: 'Not scheduled', tone: 'neu' };
-    if (d < 0)  return { text: `${-d} day${d === -1 ? '' : 's'} overdue`, tone: 'crit' };
-    if (d === 0) return { text: 'Due today', tone: 'warn' };
-    if (d <= 14) return { text: `Due in ${d} day${d === 1 ? '' : 's'}`, tone: 'warn' };
-    return { text: `Due ${_b2bDate(dateStr)}`, tone: 'ok' };
-}
-
-// Records that we actually reached out, which is what moves the schedule on.
-async function b2bLogTouch(id, btn) {
-    const c = _b2bClients.find(x => x.id === id);
-    if (!c) return;
-    const detail = prompt(`Log a check-in with ${c.company}.\n\n`
-        + 'Anything worth remembering? (optional — leave blank and it just records the date)', '');
-    if (detail === null) return;
-    try {
-        await _b2bBusy(btn, 'Saving…', async () => {
-            const res = await fetch(B2B_OUTREACH_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'log_touch', client_id: id, detail, user: _b2bUser() }),
-            });
-            const out = await res.json().catch(() => ({}));
-            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
-        });
-        await b2bRefresh();
-    } catch (e) {
-        alert(`Couldn't log that check-in: ${e.message}`);
-    }
-}
-
-// Opens a draft in the sender's own mailbox. Plain text, because a mailto body
-// is plain text by RFC 6068 -- no markup survives the trip.
-function b2bDraftOutreach(id) {
-    const c = _b2bClients.find(x => x.id === id);
-    if (!c) return;
-    if (!c.contact_email) return alert(`${c.company} has no email address on file.`);
-
-    const me   = _b2bUser();
-    const who  = (c.contact || '').trim().split(/\s+/)[0];
-    const last = c.last_deal_at ? _b2bLongDate(String(c.last_deal_at).slice(0, 10)) : '';
-    const body = [
-        who ? `Hi ${who},` : 'Hello,',
-        '',
-        last
-            ? `I hope things are going well. We last worked together on a pickup in ${last}, and I wanted to check in and see whether you have any equipment coming out of service.`
-            : 'I hope things are going well. I wanted to check in and see whether you have any equipment coming out of service.',
-        '',
-        'If you do, we can look at it and get you a quote — no obligation either way. Happy to come to you for the pickup, same as before.',
-        '',
-        'Just let me know and I will get it scheduled.',
-        '',
-        'Best regards,',
-        me,
-        'SPEEKS Technology',
-    ].join('\n');
-    const subject = `Checking In From SPEEKS Technology`;
-
-    if (!confirm(`This opens a draft to ${c.contact_email} in your own email app.\n\n`
-        + 'Read it over and edit it before sending — it is a starting point, not a template to fire off.\n\n'
-        + `After you send it, use "Mark Reached Out" so the schedule moves on.`)) return;
-
-    window.location.href = `mailto:${encodeURIComponent(c.contact_email)}`
-        + `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
 
 // A client's history. The headline figures come from the server (the view rolls
 // them up over every deal on record); the deal list underneath can only show
@@ -22620,46 +22527,6 @@ function _b2bClientDrawer(id) {
         </tr>`;
 }
 
-// ============================================================================
-// CRM SETTINGS (CEO only) — the notification half of the mini CRM.
-// Three tabs: per-client cadence (Client List), a queue of unconfigured clients
-// (New Clients + badge), and the single email address all reach-out reminders
-// are sent to (Notifications). Cadence + email persist through b2b-outreach.
-// ============================================================================
-let _crmTab      = 'clients';
-let _crmSearch   = '';
-let _crmSettings = { notify_email: '', enabled: true,
-                     quote_ready_enabled: true, wipe_fee: 8 };
-const CRM_UNITS  = ['day', 'week', 'month'];
-
-function _crmNewClients() { return _b2bClients.filter(c => !c.outreach_reviewed_at); }
-
-// Badge on the gear button + the New Clients tab. Safe anywhere: no-ops when the
-// elements aren't present (e.g. other pages).
-function crmRefreshBadge() {
-    const n = _crmNewClients().length;
-    ['crmGearBadge', 'crmTabBadge'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
-    });
-}
-
-async function crmLoadSettings() {
-    try {
-        const res = await fetch(`${B2B_OUTREACH_URL}?settings=1&v=${Date.now()}`);
-        const j = await res.json();
-        if (j && j.settings) _crmSettings = {
-            notify_email: j.settings.notify_email || '',
-            enabled: j.settings.enabled !== false,
-            quote_ready_enabled: j.settings.quote_ready_enabled !== false,
-            wipe_fee: Number(j.settings.wipe_fee ?? 8),
-        };
-    } catch (_) { /* keep what we have */ }
-}
-
-
-
-
 // ---------------------------------------------------------------------------
 // B2B FEEDBACK -- straight to Nick, no category
 // ---------------------------------------------------------------------------
@@ -22750,191 +22617,6 @@ async function b2bFeedbackSend(btn) {
     }
 }
 
-async function crmOpen() {
-    if (!_b2bCanCrm()) return;
-    const modal = document.getElementById('crmModal');
-    if (!modal) return;
-    _crmTab = 'clients'; _crmSearch = '';
-    document.getElementById('crmBody').innerHTML = '<div class="status-message">Loading…</div>';
-    closeAllModals();
-    modal.classList.add('show');
-    lockAndBlurScreen();
-    await crmLoadSettings();
-    if (!_b2bClients.length) { try { _b2bClients = await _b2bGet('clients=1'); } catch (_) {} }
-    crmSyncTabs();
-    crmRender();
-}
-
-function crmSyncTabs() {
-    document.querySelectorAll('#crmTabs .crm-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === _crmTab));
-    const n = _crmNewClients().length;
-    const tb = document.getElementById('crmTabBadge');
-    if (tb) { tb.textContent = n; tb.style.display = n > 0 ? '' : 'none'; }
-}
-
-function crmTab(t) { _crmTab = t; crmSyncTabs(); crmRender(); }
-
-function crmRender() {
-    const body = document.getElementById('crmBody');
-    if (!body) return;
-    if (_crmTab === 'settings') body.innerHTML = _crmSettingsHtml();
-    else if (_crmTab === 'new') body.innerHTML = _crmNewHtml();
-    else body.innerHTML = _crmClientsHtml();
-}
-
-function _crmFilter(list) {
-    const q = _crmSearch.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(c => (c.company || '').toLowerCase().includes(q)
-        || (c.acronym || '').toLowerCase().includes(q)
-        || (c.contact || '').toLowerCase().includes(q));
-}
-
-function _crmClientsHtml() {
-    const list = _crmFilter(_b2bClients.slice().sort((a, b) => String(a.company).localeCompare(String(b.company))));
-    const rows = list.length ? list.map(_crmClientRow).join('') : '<div class="b2b-doc-empty">No clients match.</div>';
-    return `
-        <p class="crm-help">Set how often each client should get a check-in reminder and the day it starts from. Reminders email the address on the Notifications tab — nothing shows in the app.</p>
-        <input class="form-input-lg crm-search" placeholder="Search clients…" value="${escapeHtml(_crmSearch)}" oninput="_crmSearch=this.value;_crmRenderList()">
-        <div class="crm-clist" id="crmClist">${rows}</div>`;
-}
-// Re-render just the list on search so the search box keeps focus.
-function _crmRenderList() {
-    const el = document.getElementById('crmClist');
-    if (!el) return;
-    const list = _crmFilter(_b2bClients.slice().sort((a, b) => String(a.company).localeCompare(String(b.company))));
-    el.innerHTML = list.length ? list.map(_crmClientRow).join('') : '<div class="b2b-doc-empty">No clients match.</div>';
-}
-
-function _crmNewHtml() {
-    const list = _crmNewClients().sort((a, b) => String(a.company).localeCompare(String(b.company)));
-    if (!list.length) return `<div class="crm-clear"><div class="crm-clear-em">✓</div><h4>All caught up</h4>
-        <p>Every client has been set up. New clients you add show up here to configure their reminders.</p></div>`;
-    return `<p class="crm-help">New clients that haven't been set up yet. Give them a reminder cadence, or mark that they don't need one — either clears them from this list.</p>
-        <div class="crm-clist">${list.map(_crmClientRow).join('')}</div>`;
-}
-
-function _crmClientRow(c) {
-    const on = !!c.outreach_active;
-    const every = c.outreach_every || 1;
-    const unit = c.outreach_unit || 'week';
-    const due = on ? _b2bDueLabel(c.outreach_next_due) : null;
-    const newTag = !c.outreach_reviewed_at ? '<span class="crm-newtag">NEW</span>' : '';
-    return `
-    <div class="crm-crow" id="crmRow-${c.id}">
-        <div class="crm-crow-top">
-            <span class="crm-co"><b>${escapeHtml(c.company)}</b> <span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span>${newTag}</span>
-            <span class="crm-when">${on && due
-                ? `<span class="b2b-age b2b-age-${due.tone === 'crit' ? 'crit' : due.tone === 'warn' ? 'warn' : 'ok'}">${escapeHtml(due.text)}</span>`
-                : '<span class="crm-off">No reminders</span>'}</span>
-        </div>
-        <label class="crm-toggle"><input type="checkbox" id="crmOn-${c.id}" ${on ? 'checked' : ''} onchange="_crmToggle('${c.id}',this.checked)"> Remind me to check in on this client</label>
-        <div class="crm-fields" id="crmFields-${c.id}" ${on ? '' : 'style="display:none;"'}>
-            <span class="crm-inline">Every
-                <input type="number" min="1" max="365" id="crmEvery-${c.id}" value="${every}" class="crm-num">
-                <select id="crmUnit-${c.id}" class="crm-sel">${CRM_UNITS.map(u => `<option value="${u}" ${unit === u ? 'selected' : ''}>${u}s</option>`).join('')}</select>
-                starting <input type="date" id="crmStart-${c.id}" value="${escapeHtml(c.outreach_start || _b2bToday())}" class="crm-date">
-            </span>
-            <input id="crmNote-${c.id}" class="form-input-lg crm-note" placeholder="What to bring up (goes in the reminder email)" value="${escapeHtml(c.outreach_note || '')}">
-        </div>
-        <div class="crm-crow-acts">
-            <button class="b2b-btn b2b-btn-primary b2b-mini" onclick="crmSaveSchedule('${c.id}',this)">Save</button>
-            ${!c.outreach_reviewed_at ? `<button class="b2b-mini" onclick="crmMarkReviewed('${c.id}',this)">No reminders needed</button>` : ''}
-            ${on && c.contact_email ? `<button class="b2b-mini" onclick="b2bDraftOutreach('${c.id}')">Draft Email</button>` : ''}
-            ${on ? `<button class="b2b-mini" onclick="b2bLogTouch('${c.id}',this)">Mark Reached Out</button>` : ''}
-        </div>
-    </div>`;
-}
-function _crmToggle(id, on) { const f = document.getElementById('crmFields-' + id); if (f) f.style.display = on ? '' : 'none'; }
-
-async function crmSaveSchedule(id, btn) {
-    const on    = document.getElementById('crmOn-' + id)?.checked || false;
-    const every = document.getElementById('crmEvery-' + id)?.value || '';
-    const unit  = document.getElementById('crmUnit-' + id)?.value || 'month';
-    const start = document.getElementById('crmStart-' + id)?.value || '';
-    const note  = document.getElementById('crmNote-' + id)?.value || '';
-    if (on && !start) return alert('Pick the date the schedule should start from.');
-    if (on && (!every || Number(every) < 1)) return alert('Set how often the reminder should repeat.');
-    try {
-        await _b2bBusy(btn, 'Saving…', async () => {
-            const res = await fetch(B2B_OUTREACH_URL, {
-                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'set_schedule', client_id: id, active: on, start, every, unit, note }),
-            });
-            const out = await res.json().catch(() => ({}));
-            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
-        });
-        await b2bRefresh();
-        crmSyncTabs(); crmRender();
-    } catch (e) { alert(`Couldn't save the schedule: ${e.message}`); }
-}
-
-async function crmMarkReviewed(id, btn) {
-    try {
-        await _b2bBusy(btn, 'Saving…', async () => {
-            const res = await fetch(B2B_OUTREACH_URL, {
-                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'mark_reviewed', client_id: id }),
-            });
-            const out = await res.json().catch(() => ({}));
-            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
-        });
-        await b2bRefresh();
-        crmSyncTabs(); crmRender();
-    } catch (e) { alert(`Couldn't update that client: ${e.message}`); }
-}
-
-function _crmSettingsHtml() {
-    const s = _crmSettings;
-    return `
-    <p class="crm-help">Where every B2B notification is sent. Reach-out reminders and quote approvals both go to this one address — nothing appears inside the website.</p>
-    <div class="crm-settings">
-        <label class="form-label-caps">Notification email</label>
-        <input id="crmEmail" class="form-input-lg" type="email" value="${escapeHtml(s.notify_email || '')}" placeholder="ceo@speekstechnology.com">
-        <label class="crm-toggle" style="margin-top:16px;"><input type="checkbox" id="crmEnabled" ${s.enabled ? 'checked' : ''}> Send reach-out reminders</label>
-        <label class="crm-toggle"><input type="checkbox" id="crmQuoteReady" ${s.quote_ready_enabled !== false ? 'checked' : ''}> Email me when a quote is priced and ready to send</label>
-
-        <div class="crm-sec">Pricing</div>
-        <label class="form-label-caps">Certified data wipe, per device</label>
-        <div class="crm-fee">
-            <span class="crm-fee-$">$</span>
-            <input id="crmWipeFee" class="form-input-lg" type="number" min="0" step="0.01"
-                value="${Number(s.wipe_fee ?? 8).toFixed(2)}">
-        </div>
-        <p class="crm-help">Taken off what we pay the client, never billed to them. Changing this
-            only affects lines flagged from now on — a quote already priced keeps the figure it was quoted at.</p>
-
-        <div class="crm-settings-acts">
-            <button class="b2b-btn b2b-btn-primary" onclick="crmSaveSettings(this)">Save Settings</button>
-            <span class="crm-msg" id="crmSetMsg"></span>
-        </div>
-    </div>`;
-}
-
-async function crmSaveSettings(btn) {
-    const notify_email = document.getElementById('crmEmail')?.value.trim() || '';
-    const enabled      = document.getElementById('crmEnabled')?.checked !== false;
-    const quote_ready_enabled = document.getElementById('crmQuoteReady')?.checked !== false;
-    const wipe_fee     = parseFloat(document.getElementById('crmWipeFee')?.value) || 0;
-    if (wipe_fee < 0) return alert("A wipe charge can't be negative — it comes off what we pay, not what they pay.");
-    try {
-        await _b2bBusy(btn, 'Saving…', async () => {
-            const res = await fetch(B2B_OUTREACH_URL, {
-                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'set_crm_settings', notify_email, enabled,
-                    quote_ready_enabled, wipe_fee, user: _b2bUser() }),
-            });
-            const out = await res.json().catch(() => ({}));
-            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
-        });
-        _crmSettings = { notify_email, enabled, quote_ready_enabled, wipe_fee };
-        // The pricing screen reads the fee off the board payload, so refresh it
-        // rather than leaving a stale figure on the next line someone flags.
-        if (_b2bMeta) _b2bMeta.wipe_fee = wipe_fee;
-        const m = document.getElementById('crmSetMsg');
-        if (m) { m.textContent = 'Saved.'; setTimeout(() => { const e = document.getElementById('crmSetMsg'); if (e) e.textContent = ''; }, 2500); }
-    } catch (e) { alert(`Couldn't save settings: ${e.message}`); }
-}
 
 function b2bEditClient(id) { _b2bEditingClient = id; b2bRender(); }
 
@@ -43577,9 +43259,10 @@ const EMAIL_LIST_GROUPS = [
               desc: 'The nightly PayMore Day End Report failing to reach the Buy tab.' },
             { key: 'summary_weekly_alert', label: 'Weekly Summary Import',
               desc: 'The Monday Summary tab update failing or coming up short. Its revenue and cost come off the Net Profit tab from October 2026.' },
-            { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
-              desc: 'A pickup has been priced and a quote is waiting on approval. '
-                  + 'Leave this empty and it falls back to the single address in CRM Settings.' },
+            // 'b2b_quote_ready' went with the CEO mini CRM (0151, 2026-10-21):
+            // its email is switched off, and "a quote is ready to send" now
+            // reaches the approvers through their own notification settings
+            // (B2B > Deals Waiting On Me). A list here would mail nobody.
             // Refund mismatch: a per-store list because the fix belongs to that
             // store's manager, plus the leadership digest. The digest's key says
             // "escalation" -- a fossil of the first design (see 0089); the label

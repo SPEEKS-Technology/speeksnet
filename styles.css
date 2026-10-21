@@ -16378,16 +16378,10 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 
 /* ============================================================
-   B2B CRM SETTINGS (CEO only) — gear button, modal, 3 tabs
+   COUNT BADGE (was the CEO CRM's gear badge; the CRM went 2026-10-21, 0151).
+   Kept for the Delete Requests button, which wears the same red count.
    ============================================================ */
 .crm-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: #dc2626; color: #fff; font-size: 10px; font-weight: 900; line-height: 1; }
-
-#crmModal .modal-header { display: flex; align-items: center; justify-content: space-between; }
-.crm-tabs { display: flex; gap: 4px; padding: 10px 18px 0; border-bottom: 1px solid #e5e8ec; background: #fff; }
-.crm-tab { position: relative; border: none; background: transparent; font-family: inherit; font-size: 13px; font-weight: 800; color: #6b7280; padding: 9px 14px; border-radius: 8px 8px 0 0; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; }
-.crm-tab:hover { color: #1a1c1e; }
-.crm-tab.active { color: #178048; border-bottom-color: #1f9d57; }
-.crm-tab .crm-badge { background: #dc2626; }
 
 /* --- B2B delete requests -------------------------------------------------- */
 /* The red-dot badge on the Delete Requests head button + the deal footer's
@@ -16475,48 +16469,6 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     font-family: 'Consolas', 'SFMono-Regular', Menlo, monospace;
 }
 .b2b-serialpop-acts { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-
-.crm-help { font-size: 13px; color: #64707c; font-weight: 500; line-height: 1.5; margin: 2px 0 14px; }
-.crm-search { margin-bottom: 14px; }
-.crm-clist { display: flex; flex-direction: column; gap: 10px; }
-
-.crm-crow { background: #fff; border: 1px solid #e6ebe7; border-radius: 12px; padding: 13px 15px; }
-.crm-crow-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
-.crm-co { font-size: 14px; color: #1a1c1e; display: inline-flex; align-items: center; gap: 8px; }
-.crm-newtag { background: #fef3c7; color: #92400e; font-size: 9px; font-weight: 900; letter-spacing: .5px; padding: 2px 6px; border-radius: 999px; }
-.crm-when { font-size: 12px; font-weight: 800; white-space: nowrap; }
-.crm-off { color: #9aa6ad; font-weight: 700; }
-.crm-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: #1a1c1e; cursor: pointer; user-select: none; }
-.crm-toggle input { width: 15px; height: 15px; accent-color: #1f9d57; cursor: pointer; }
-.crm-fields { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 9px; }
-.crm-inline { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 13px; color: #475569; font-weight: 600; }
-.crm-num { width: 64px; }
-.crm-num, .crm-sel, .crm-date { border: 1px solid #d1d5db; border-radius: 7px; padding: 6px 8px; font-size: 13px; font-family: inherit; outline: none; background: #fff; }
-.crm-num:focus, .crm-sel:focus, .crm-date:focus, .crm-note:focus { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
-.crm-note { margin-top: 2px; }
-.crm-crow-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
-
-.crm-settings { max-width: 460px; }
-/* Divides notification settings from pricing ones -- they are both CEO-owned but
-   they are not the same kind of decision. */
-.crm-sec {
-    margin: 22px 0 12px; padding-top: 16px; border-top: 1px solid #eef2f6;
-    font-size: 10px; font-weight: 800; letter-spacing: .09em;
-    text-transform: uppercase; color: #9aa6ad;
-}
-.crm-fee { position: relative; max-width: 160px; }
-.crm-fee-$ {
-    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-    font-size: 14px; font-weight: 700; color: #9aa6ad; pointer-events: none;
-}
-.crm-fee input { padding-left: 26px; font-variant-numeric: tabular-nums; }
-.crm-settings-acts { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
-.crm-msg { font-size: 12.5px; font-weight: 700; color: #178048; }
-
-.crm-clear { text-align: center; padding: 40px 20px; color: #64707c; }
-.crm-clear-em { font-size: 34px; color: #1f9d57; }
-.crm-clear h4 { margin: 10px 0 4px; font-size: 16px; font-weight: 800; color: #1a1c1e; }
-.crm-clear p { margin: 0; font-size: 13px; }
 
 /* deal-modal header actions (SKU-label print + close) */
 .tool-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
