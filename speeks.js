@@ -28048,7 +28048,14 @@ function _b2bStagePricing(deal) {
             ${_b2bSendbackNote(deal)}
             ${_b2bPrevalOriginNote(deal)}
             ${_b2bPickupDescHtml(deal)}
-            ${_b2bBenchTray(deal)}
+            ${''/* The bench session tray (_b2bBenchTray) stood here. Its UI was
+                 taken off the pricing sheet on 2026-10-21 with the SPEEKS
+                 Capture download button (Nick: the "start session for the speeks
+                 capture tool on the pricing tool ... just the button and UI
+                 itself for now"). Everything behind it -- the b2b-intake
+                 function, _b2bIntake*, the realtime refresh -- is left in place
+                 and inert: _b2bIntakeLoad returns early with no #b2bBenchTray on
+                 the page. Put this call back to restore it. */}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
@@ -28056,11 +28063,9 @@ function _b2bStagePricing(deal) {
             ${_b2bSection('Quote for the client', `<div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>`,
                 { open: _b2bCustOpen, ontoggle: 'b2bToggleCust(this)' })}`,
         side: _b2bMoveHistorySec(deal),
-        // Totals as always, plus the first read of the intake tray. It runs here
-        // rather than from _b2bBenchTray because the markup has to be in the DOM
-        // before there is anything to repaint into, and a render function has no
-        // business firing a fetch. A no-op when the feature is off.
-        after: (...a) => { _b2bPaintTotals(...a); _b2bIntakeLoad(deal.id); },
+        // Totals as always. The first read of the bench intake tray used to run
+        // here too (_b2bIntakeLoad(deal.id)); it went with the tray, see above.
+        after: (...a) => { _b2bPaintTotals(...a); },
     });
 }
 

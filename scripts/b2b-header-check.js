@@ -31,7 +31,7 @@ function _srcOf(fn) {
 // The menu moved to the listing rows; these now guard the header staying as it
 // was, since it has just been churned and put back.
 t('trial: the header keeps its own buttons, ungrouped', function () {
-    var ids = ['b2bDelReqBtn', 'b2bCaptureDlBtn', 'b2bFeedbackBtn', 'b2bNewBtn'];
+    var ids = ['b2bDelReqBtn', 'b2bFeedbackBtn', 'b2bNewBtn'];
     var missing = ids.filter(function (id) { return !document.getElementById(id); });
     if (missing.length) return 'missing from the header: ' + missing.join(', ');
     return !document.getElementById('b2bActionsMenu')
@@ -41,10 +41,7 @@ t('trial: the header buttons kept their gates through the churn', function () {
     // These were moved into a menu and moved back out. The role classes and the
     // feature key are what actually gate them, and a copy-paste that drops one
     // is invisible until the wrong person sees the wrong button.
-    var cap = document.getElementById('b2bCaptureDlBtn');
     var del = document.getElementById('b2bDelReqBtn');
-    if (cap.getAttribute('data-feature') !== 'b2b-capture-download') return 'Capture lost its feature key';
-    if (!cap.classList.contains('role-none')) return 'Capture lost role-none, so everyone can see it';
     if (!del.classList.contains('dynamic-module-flex')) return 'Delete Requests left the role sweep';
     // Feedback is deliberately ungated: no role- classes at all means everyone.
     var fb = document.getElementById('b2bFeedbackBtn');
@@ -149,4 +146,14 @@ t('the retired CEO CRM is not in the page or the code', function () {
     if (left.length) return 'still defined: ' + left.join(', ');
     // The badge class outlived it on purpose: Delete Requests wears it.
     return document.querySelector('#b2bDelReqBtn .crm-badge') ? true : 'Delete Requests lost its count badge';
+});
+
+// SPEEKS Capture's download button and the bench session tray on the pricing
+// sheet came off on 2026-10-21 -- the UI only. The tool panel and everything
+// behind the tray stay, so this guards the two surfaces and nothing deeper.
+t('the SPEEKS Capture download button and the pricing bench tray are gone', function () {
+    if (document.getElementById('b2bCaptureDlBtn')) return 'the SPEEKS Capture button is back in the header';
+    var src = _srcOf(_b2bStagePricing);
+    if (src.indexOf('_b2bBenchTray(') > -1) return 'the pricing sheet renders the bench tray again';
+    return src.indexOf('_b2bIntakeLoad(') === -1 || 'the pricing sheet still fetches the tray';
 });
