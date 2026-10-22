@@ -49,6 +49,12 @@ CONTACT_PX = 448
 WIDTH = 640
 TEST_SHARE = 0.25
 REVIEWED_MAX = 600   # enough to measure on; each costs inference time
+# Labels KNOWN to be wrong that can't be fixed in Confirm Shots (2026-10-22):
+# broken by the pre-10-14 reorder bug (see REDO in picture-quality index.ts)
+# and sold before Ethan could re-check them, so the queue can't show them.
+KNOWN_BAD = {
+    "15228962308198",   # OVL Dell WD19S Docking Station (labels shifted; sold)
+}
 
 
 def side(product_id: str) -> str:
@@ -144,6 +150,8 @@ def main():
     jobs, rows, listings = [], {"train": [], "test": [], "reviewed": []}, {}
     for l in gold["listings"]:
         if not l.get("sheet") or not l.get("guide"):
+            continue
+        if l["product_id"].split("/")[-1] in KNOWN_BAD:
             continue
         for p in l["photos"]:
             tier = p.get("shots_tier")
