@@ -1602,9 +1602,114 @@ function modelAnswers(g: any) {
 // two item lots ticked both, or only Extra, on every photo. A re-save overwrites
 // (pq_shot_labels is keyed on product + photo), and they prefill from HIS saved
 // labels, not the grade, so he only fixes what the rule changed.
+//
+// REOPENED 2026-10-22: LABELS THE LOCAL MODEL DOUBTS. Two kinds, all saved
+// with the prefill untouched (Ethan's pick: "whatever is the recommended amount").
+//  - BROKEN BY AN OLD REORDER (LOCAL_PREFILL below). Before d3b3b8f (10-14),
+//    Approve Order moved the photos in Shopify and the stamp, but left the
+//    saved report in the OLD numbering, so the stamp still matched and Confirm
+//    Shots laid each old label on whatever photo now sits at that number (OVL
+//    ThinkPad L14: the charger photo said "CPU / RAM / Settings"). Only the 5
+//    rows approved before 2026-10-14 19:19 UTC have it; 4 are labelled. Their
+//    labels read 21–54% out of the sheet's order; every later reorder reads 0–5%.
+//  - THE LOCAL MODEL (round 4) MISSES HALF OR MORE of the photos. Some will be
+//    the model's mistake; the re-check says which.
 const REDO: Record<string, string> = {
   "8161660960870": "2026-10-21T00:00:00Z",    // OVL LOT OF 36x SKYLANDERS FIGURES & POWER PORTALS
   "15873101529254": "2026-10-21T00:00:00Z",   // WSP Tilta Advanced Ring Grip + Easyrig Mini Bundle
+  // Broken by an old reorder:
+  "15414474965094": "2026-10-22T00:00:00Z",   // OVL Lenovo ThinkPad L14 Gen 1
+  "15228962308198": "2026-10-22T00:00:00Z",   // OVL Dell WD19S Docking Station
+  "9610171875430": "2026-10-22T00:00:00Z",    // OVL AsRock J3355B-ITX Motherboard
+  "15859437764774": "2026-10-22T00:00:00Z",   // WSP Canon EF-S 18-135mm Lens
+  // The local model misses half or more:
+  "7642271907942": "2026-10-22T00:00:00Z",    // OVL Cat 6 Patch Cords (bag of 8)
+  "15859446775974": "2026-10-22T00:00:00Z",   // WSP SanDisk Switch 512GB microSD
+  "15211493621933": "2026-10-22T00:00:00Z",   // LEE Wii Extreme Sports Kit
+  "15423912935526": "2026-10-22T00:00:00Z",   // OVL SK Hynix PC601 512GB SSD
+  "7965382639718": "2026-10-22T00:00:00Z",    // OVL Lot of 8 Micron 16GB DDR3
+  "15211689574573": "2026-10-22T00:00:00Z",   // LEE DJI Power 1000
+  "15228993536102": "2026-10-22T00:00:00Z",   // OVL Dell 2K Webcam WB3023T
+  "15418389266534": "2026-10-22T00:00:00Z",   // OVL Valve Steam Machine
+  "8166421790822": "2026-10-22T00:00:00Z",    // OVL Lot of 13 Dell WD15 Docks
+  "15415726440550": "2026-10-22T00:00:00Z",   // OVL Toshiba 1TB 3.5" HDD
+  "15216747249837": "2026-10-22T00:00:00Z",   // LEE PS5 Slim Disc 825GB
+  "15423933972582": "2026-10-22T00:00:00Z",   // OVL Crucial 16GB DDR5
+  "15423942131814": "2026-10-22T00:00:00Z",   // OVL Micron 16GB DDR4
+  "15415678042214": "2026-10-22T00:00:00Z",   // OVL Crucial Ballistix 2x8GB DDR4
+  "15211305926829": "2026-10-22T00:00:00Z",   // LEE Beats Studio Pro
+  "15859435896998": "2026-10-22T00:00:00Z",   // WSP Panasonic 12-60mm Lens
+  "10398346150179": "2026-10-22T00:00:00Z",   // BAL Asus RTX 4070 12GB
+  "15399874658406": "2026-10-22T00:00:00Z",   // OVL Sony SEL18200 Lens
+  "8168794882150": "2026-10-22T00:00:00Z",    // OVL Ray-Ban Meta Wayfarer Gen 2
+  "15211550769325": "2026-10-22T00:00:00Z",   // LEE Nintendo Switch Dock HAC-007
+  "15420737945920": "2026-10-22T00:00:00Z",   // MPL Xbox Series S Robot White
+};
+
+// For the listings broken by the old reorder, HIS saved labels (and flags, and
+// repeats) are the shifted ones, so they prefill from the LOCAL model's answers
+// instead: round 4 (tools/pq-train, run-20261021-2247), his-labels-only, never
+// Claude. Keyed by the photo's file name, so a photo retaken since gets no
+// prefill rather than the wrong one. Only shots, closeup and reflection: the
+// model answers nothing else, so every other flag starts blank.
+const LOCAL_PREFILL: Record<string, Record<string, { shots: string[]; closeup: boolean; reflection: boolean }>> = {
+  "15414474965094": {   // OVL Lenovo ThinkPad L14 Gen 1
+    "1791574129649su688rp.jpg": { shots: ["Home/Lock Screen"], closeup: false, reflection: false },
+    "1791574348200yf4jqjk.jpg": { shots: ["Everything Included"], closeup: false, reflection: false },
+    "17915740641406b92b90.jpg": { shots: ["Settings About Page"], closeup: true, reflection: false },
+    "1791574052907btygzm8.jpg": { shots: ["Settings About Page"], closeup: true, reflection: false },
+    "17915740707260hgvv1c.jpg": { shots: ["Storage Information"], closeup: true, reflection: false },
+    "1791574156217ad6l2cs.jpg": { shots: ["Screen Off"], closeup: false, reflection: false },
+    "1791574135594c1ggiq6.jpg": { shots: ["Keyboard"], closeup: true, reflection: false },
+    "1791574218857vm52wdc.jpg": { shots: ["Front Corner of Laptop"], closeup: false, reflection: false },
+    "1791574230267lk5570d.jpg": { shots: ["Front Corner of Laptop"], closeup: false, reflection: false },
+    "1791574238955p37csfl.jpg": { shots: ["Back Corner of Laptop"], closeup: false, reflection: false },
+    "1791574250421gzahz80.jpg": { shots: ["Opposite Back Corner of Laptop"], closeup: false, reflection: false },
+    "17915741672469mfsdzf.jpg": { shots: ["Top of Laptop"], closeup: false, reflection: false },
+    "17915741773720ii1zox.jpg": { shots: ["Bottom of Laptop"], closeup: false, reflection: false },
+    "1791574181208inl0q21.jpg": { shots: ["Extra"], closeup: true, reflection: false },
+    "1791574358978lg307j7.jpg": { shots: ["Extra Accessories"], closeup: true, reflection: false },
+  },
+  "15228962308198": {   // OVL Dell WD19S Docking Station
+    "1790693871424bmsj0c5.jpg": { shots: ["Front of Device"], closeup: false, reflection: false },
+    "1790694023610281n1dp.jpg": { shots: ["Side of Device"], closeup: false, reflection: false },
+    "1790694071430il93c9u.jpg": { shots: ["Back of Device"], closeup: false, reflection: false },
+    "1790693905872p4slkgz.jpg": { shots: ["Front of Device"], closeup: false, reflection: false },
+    "1790693891903k8bczyh.jpg": { shots: ["Opposite Side of Device"], closeup: false, reflection: false },
+    "17906939444895zpxvhc.jpg": { shots: ["Opposite Side of Device"], closeup: false, reflection: false },
+    "1790693925818h2aownj.jpg": { shots: ["Back of Device"], closeup: false, reflection: false },
+    "1790693958758ommqenz.jpg": { shots: ["Extra Accessories"], closeup: false, reflection: false },
+    "1790693968920plucu1w.jpg": { shots: ["Extra Accessories"], closeup: false, reflection: false },
+    "1790693975510mmaqntb.jpg": { shots: ["Extra Accessories"], closeup: false, reflection: false },
+    "1790693982622rod3x0w.jpg": { shots: ["Extra Accessories"], closeup: false, reflection: false },
+    "1790693993722yax3l3w.jpg": { shots: ["Extra Accessories"], closeup: false, reflection: false },
+  },
+  "9610171875430": {    // OVL AsRock J3355B-ITX Motherboard
+    "1790371619051k2fsrny.jpg": { shots: ["Top of Board"], closeup: false, reflection: false },
+    "1790371837114zx13e82.jpg": { shots: ["Everything Included"], closeup: false, reflection: false },
+    "1790371639244whefey0.jpg": { shots: ["Front Side of Board"], closeup: false, reflection: false },
+    "1790371650110l7et5ru.jpg": { shots: ["Back Side of Board"], closeup: false, reflection: false },
+    "1790371659370kdveky2.jpg": { shots: ["Side of Board", "Closeup of I/O Panel"], closeup: false, reflection: false },
+    "1790371670677r46d6jy.jpg": { shots: ["Side of Board"], closeup: false, reflection: false },
+    "1790371682095aunwlpg.jpg": { shots: ["Closeup of RAM Sockets"], closeup: true, reflection: false },
+    "1790371702841qsvgkmy.jpg": { shots: ["Bottom of Board"], closeup: false, reflection: false },
+    "1790371686719axy1fmy.jpg": { shots: ["Extra"], closeup: true, reflection: false },
+    "1790371691425xnov0az.jpg": { shots: ["Extra"], closeup: true, reflection: false },
+    "1790371775612g6uumrk.jpg": { shots: ["Extra"], closeup: false, reflection: false },
+    "1790371785153c26g60q.jpg": { shots: ["Extra"], closeup: false, reflection: false },
+    "1790371792725yz0dm3r.jpg": { shots: ["Extra"], closeup: false, reflection: false },
+    "1790371845473xehhxp0.jpg": { shots: ["Box"], closeup: false, reflection: false },
+  },
+  "15859437764774": {   // WSP Canon EF-S 18-135mm Lens
+    "1791576039131m64s0f2.jpg": { shots: ["Front of Lens"], closeup: false, reflection: false },
+    "1791576114530cncjj8x.jpg": { shots: ["Everything Included"], closeup: false, reflection: false },
+    "1791576056484g4qqshq.jpg": { shots: ["Side of Lens"], closeup: false, reflection: false },
+    "1791576071052sa81atu.jpg": { shots: ["Opposite Side of Lens"], closeup: false, reflection: false },
+    "17915760836281geiykp.jpg": { shots: ["Opposite Side of Lens"], closeup: false, reflection: false },
+    "17915760895065uk7neq.jpg": { shots: ["Bottom of Lens"], closeup: false, reflection: false },
+    "1791576102298ejrtorl.jpg": { shots: ["Bottom of Lens"], closeup: false, reflection: false },
+    "1791576134904we52wcx.jpg": { shots: ["Extra"], closeup: false, reflection: false },
+  },
 };
 
 async function confirmView(scope: Scope, want: string, skip: Set<string>, more = false) {
@@ -1691,7 +1796,16 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
         // A reopened listing (REDO) starts from his own saved answers, by photo address.
         const mine = reopened(g.product_id) ? new Map<string, any>((await rows(`pq_shot_labels?product_id=eq.${encodeURIComponent(g.product_id)}`
           + `&select=photo_src,photo_n,shots,flags,repeat_of,listing,confirmed_at&limit=100`)).map((r: any) => [r.photo_src, r])) : null;
-        const mineOf = (p: { src: string }) => mine?.get(p.src.split("?")[0]) || null;
+        const local = LOCAL_PREFILL[num(g.product_id)] || null;
+        const localOf = (p: { src: string }) => local?.[p.src.split("?")[0].split("/").pop() || ""] || null;
+        // A listing broken by the old reorder: his shifted labels give way to the
+        // local model's (shots, closeup, reflection; nothing else prefilled).
+        const mineOf = (p: { src: string }) => {
+          if (!local) return mine?.get(p.src.split("?")[0]) || null;
+          const a = localOf(p);
+          return a ? { shots: a.shots, flags: [...(a.closeup ? ["closeup"] : []), ...(a.reflection ? ["reflection"] : [])], repeat_of: null }
+                   : { shots: [], flags: [], repeat_of: null };
+        };
         const anyMine: any = mine ? [...mine.values()][0] : null;
         listings.push({ store: g.store_code, productId: g.product_id, sku: g.sku || l.sku, title: l.title || g.title,
           sheet: g.sheet_slug, model: g.model, stamp: g.stamp, reviewedAt: g.reviewed_at,
@@ -1699,7 +1813,8 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
           // Quick Fix built on these labels. modelSays: the grade's answer on
           // every flag and fact. Each photo's `framing` is his own grade.
           youSaid: ETHAN_SAID[num(g.product_id)] || [],
-          accepted: anyMine ? `your own labels from ${String(anyMine.confirmed_at).slice(0, 10)}, reopened to re-check`
+          accepted: local ? "your labels here were shifted by an old reorder: these are the local model's answers, check every photo"
+                  : anyMine ? `your own labels from ${String(anyMine.confirmed_at).slice(0, 10)}, reopened to re-check`
                   : g.status === "applied" ? String(g.decided_note || "approved") : null,
           modelSays: mine ? { photos: l.photos.map((p, k) => ({ n: k + 1, flags: (mineOf(p)?.flags || []).filter((x: string) => CONFIRM_FLAGS.includes(x)),
                                                                 repeatOf: mineOf(p)?.repeat_of ?? null })),
