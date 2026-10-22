@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "speeksnet",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["scripts/serve-local.py"],
+      "port": 8080
+    }
+  ]
+}
