@@ -43615,6 +43615,10 @@ const EMAIL_LIST_GROUPS = [
                   + 'buy or sell, or a monthly one once the Monthly Breakdown is in. Copied on every store\'s email.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `record_watch_${s}`, label: `Company Records — ${s}`,
               desc: `The ${s} manager and ASM: the same email, whenever it is about ${s}.` })),
+            { key: 'unrestocked_returns', label: 'Returned But Not Back In Stock',
+              desc: '7:35am, every morning anything is open: whole items refunded or cancelled '
+                  + '(in store, online or eBay) that never went back into inventory. '
+                  + 'Left empty, it goes to the Claims & Disputes — District Manager list.' },
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
