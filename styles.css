@@ -2611,17 +2611,9 @@ select.bs-hidden-select:focus {
     .page-header { flex-direction: column; align-items: flex-start; gap: 15px; }
 }
 
-/* Nav compact: triggered by JS class when tabs collide with right actions */
-.top-nav.nav-compact .nav-link span { display: none; }
-.top-nav.nav-compact .nav-link { padding: 0 12px; font-size: 22px; justify-content: center; gap: 0; }
-.top-nav.nav-compact .nav-link i {
-    font-style: normal;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    text-align: center;
-}
+/* Nav compact (every tab to icons at once when the tabs collided with the right
+   actions) was retired 2026-10-22 — nothing sets .nav-compact any more. Tabs
+   now fold one at a time; see .nav-icon under "NAV FIT". */
 
 /* NOTE (2026-08-14): the nav/modal/table rules that used to live at the top of
    this block were retired by the mobile layer at the end of this file. This
@@ -3471,7 +3463,12 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
     flex-grow: 1;
     margin-left: 0;
     padding: 120px 50px 50px 50px;
-    transition: padding 0.3s ease;
+    /* No padding transition (was 0.3s, removed 2026-10-22). The SPA router swaps
+       .main-content in place, so the B2B page's edge-to-edge padding (see "B2B
+       PAGE") played as the whole page sliding up and stretching out on every hop
+       in, and back on every hop out. Worse, _wsFitPanels measured the panel's top
+       100ms into that slide and sized the panel from it, leaving a strip of empty
+       window under it. A page's gutter is not something that should move. */
 }
 
 .main-content.expanded, .sidebar-toggle {
@@ -10231,24 +10228,46 @@ body.sam-active .hotbar-btn:hover {
 .top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .96; }
 .top-nav .nav-link.active svg { opacity: 1; color: #3ddc84; }   /* active icon lights up green */
 
-/* All five page links the same width (user, 2026-09-07).
-   A grid of equal auto columns sizes every track to the WIDEST label rather
-   than to a number typed in here, so the row stays even when a page is renamed
-   — "Processes & Policies" sets the width today, something else can set it
-   tomorrow, and nobody has to remember this rule exists.
-   It costs width: five columns at the widest label is wider than five columns
-   at their own labels, so checkNavCompact() drops to icons-only at a wider
-   viewport than it used to. That is handled, not ignored — measureNaturalWidth()
-   reads the bar at width:max-content, which resolves these fr tracks the same
-   way, so the threshold moves with the change instead of going stale.
-   The mobile bottom tab bar re-declares display:flex further down this file and
-   wins on source order, so this shapes the desktop bar only. */
-.top-nav .nav-bar {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
-}
+/* The equal-width page links (user, 2026-09-07: every tab sized to the widest
+   label by a grid of 1fr columns) were retired 2026-10-22. On a wide screen it
+   read as stretched — "B2B" alone in a box sized for "Processes & Policies",
+   with more gap than tab across the row (user, on a screenshot of it). Each tab
+   is now only as wide as its own name, which is also what lets the names last
+   to a narrower window before NAV FIT has to give anything up. */
 .top-nav .nav-link { justify-content: center; }
+
+/* NAV FIT (2026-10-22). The bar keeps the page names for as long as it can,
+   giving up the least useful thing first. _navFit() in speeks.js measures and
+   takes the first of these that fits:
+
+     (none)          the logo, the SPEEKSNET wordmark, and every tab's name
+     .nav-fit-logo   the wordmark goes; the logo mark alone says whose site it is
+     + .nav-fit-tight  still no wordmark, and the tabs close up: less padding
+                     round each name and less gap between tabs (~84px over six)
+     .nav-icon       last resort, on single tabs: from the right, one at a
+                     time, a tab drops to its icon until the row fits, and
+                     hovering it names it in a tooltip. Never the page you are
+                     on — that one always keeps its name.
+
+   Each step is taken only when the tabs would otherwise run into the
+   right-hand chips (user: "only collapse the labels when they are about to
+   overlap the right side"), not at some width picked in advance.
+
+   Before this, the names were the FIRST thing to go, all six together:
+   .nav-compact cut in while the wordmark still sat there, ~110px of text repeating the logo beside it.
+   Zooming the browser is the common way to get there — 150% on a 1920 screen
+   is a 1280px page — so the people zooming because small text is hard to read
+   were the ones handed a row of unlabelled pictures.
+
+   Tried and dropped the same day, so nobody has to try them again: names that
+   slid out on hover, then a name tag that followed the pointer (a name you have
+   to hover to read is not a name you can see); and a second row of tabs under
+   the logo (the user did not want the header growing a row). */
+.top-nav.nav-fit-logo .brand-wordmark { display: none; }
+.top-nav.nav-fit-tight .nav-bar { gap: 2px; }
+.top-nav.nav-fit-tight .nav-link { padding: 0 9px; gap: 6px; }
+.top-nav .nav-link.nav-icon { gap: 0; }
+.top-nav .nav-link.nav-icon span { display: none; }
 
 /* --- utility chip buttons (idea / messages / hotkeys / calendar / bell) --- */
 .top-nav .user-profile-nav { gap: 10px; border-right-color: rgba(255,255,255,.08); padding-right: 16px; }
@@ -25467,7 +25486,14 @@ select.dd-native {
 .b2b-wrap { display: flex; flex-direction: column; min-width: 0; }
 .b2b-wrap > .ws-pane > .b2b-panel.card {
     border-radius: 0; box-shadow: none; border: 0; margin: 0 !important;
+    /* .card animates `all`, which here meant the panel's height: it painted at
+       the 250px fallback below and then grew into place once _wsFitPanels ran. */
+    transition: none;
 }
+/* The panel always starts right under the nav on this page, so that is the
+   fallback, and the first frame is already the right height. The phone layer
+   restates this with its own top and tab bar. */
+.b2b-wrap .ws-panel { height: calc(100dvh - var(--ws-top, 64px)) !important; }
 .b2b-wrap > .ws-pane > .b2b-panel > .cb-head { padding-left: 24px; padding-right: 24px; }
 .b2b-wrap > .ws-pane > .b2b-panel > .cb-scroll { padding-left: 24px; padding-right: 24px; }
 

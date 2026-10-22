@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.10.0';
+const APP_VERSION = '3.10.1';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -371,56 +371,127 @@ function _trackPageVisit() {
     } catch (_) { /* never break a page load */ }
 }
 
-// --- 2. NAV COMPACT MODE ---
-(function () {
-    let naturalNavWidth = 0;
+// --- 2. NAV FIT ---
+// The bar keeps the page names as long as it can: first the SPEEKSNET wordmark
+// goes (.nav-fit-logo), then the tabs close up (.nav-fit-tight), and only if the
+// names still don't fit do tabs drop to icons, one at a time (.nav-icon). styles.css, "NAV FIT", has the why. This replaced NAV
+// COMPACT MODE, which went straight to icons with the wordmark still showing.
+//
+// Measured live, every time, rather than once: the role sweep hides links after
+// the first paint, the greeting and the two bubbles change the right side's
+// width, and webfonts land late. Each step is applied and measured inside one
+// synchronous call, so only the winner is ever painted.
+//
+// The phone layer (same query as styles.css) owns the bar below that split — it
+// is the labelled bottom tab bar there — so this stands aside.
+const _NAV_PHONE_MQ = window.matchMedia('(max-width: 900px), (max-width: 1366px) and (pointer: coarse)');
+let _navFitQueued = false;
+let _navFitObserver = null;   // watches the bar's links; see DOMContentLoaded below
 
-    function measureNaturalWidth() {
-        const navBar = document.querySelector('.top-nav .nav-bar');
-        if (!navBar) return 0;
-        // Force nav-bar to its natural size so we can read the true content width
-        navBar.style.flexShrink = '0';
-        navBar.style.width = 'max-content';
-        const w = navBar.getBoundingClientRect().width;
-        navBar.style.flexShrink = '';
-        navBar.style.width = '';
-        return w;
+function _navBarNaturalWidth(navBar) {
+    // Force nav-bar to its natural size so we can read the true content width
+    navBar.style.flexShrink = '0';
+    navBar.style.width = 'max-content';
+    const w = navBar.getBoundingClientRect().width;
+    navBar.style.flexShrink = '';
+    navBar.style.width = '';
+    return w;
+}
+
+function _navFit() {
+    _navFitQueued = false;
+    const topNav = document.querySelector('.top-nav');
+    const navBar = topNav && topNav.querySelector('.nav-bar');
+    const navLeft = topNav && topNav.querySelector('.nav-left');
+    const navRight = topNav && topNav.querySelector('.nav-right');
+    if (!navBar || !navLeft || !navRight) return;
+
+    const links = Array.from(navBar.querySelectorAll('.nav-link'));
+    topNav.classList.remove('nav-fit-logo', 'nav-fit-tight');
+    links.forEach(a => a.classList.remove('nav-icon'));
+    if (_NAV_PHONE_MQ.matches || navLeft.getBoundingClientRect().width === 0) {   // phone, or still behind auth
+        if (_navFitObserver) _navFitObserver.takeRecords();
+        return;
     }
 
-    function checkNavCompact() {
-        const topNav = document.querySelector('.top-nav');
-        const navLeft = document.querySelector('.nav-left');
-        const navRight = document.querySelector('.nav-right');
-        if (!topNav || !navLeft || !navRight) return;
-        if (navLeft.getBoundingClientRect().width === 0) return; // nav still hidden
-
-        // Capture natural width once, after the nav is actually visible
-        if (!naturalNavWidth) naturalNavWidth = measureNaturalWidth();
-        if (!naturalNavWidth) return;
-
-        // slot = total space between nav-left's right edge and nav-right's left edge.
-        // Both are flex-shrink:0 so this value only depends on viewport width — no feedback loop.
-        const slot = navRight.getBoundingClientRect().left - navLeft.getBoundingClientRect().right;
-        topNav.classList.toggle('nav-compact', slot < naturalNavWidth + 70);
+    // slot = the space between the logo and the right-hand chips, re-read after
+    // each step because dropping the wordmark is what widens it. The bar itself
+    // can't move it: the logo and the chips are both flex-shrink:0. The bar is
+    // re-read too, because closing up the tabs is what narrows it.
+    // 44 = the header's own 22px gap either side of the bar, and nothing more:
+    // names fold only when the last tab would otherwise cut into the gap before
+    // the chips (user: "only collapse the labels when they are about to overlap
+    // the right side"). This was 70, and the extra 26px sent a store account to
+    // icons at 1120px with room to spare.
+    const namesFit = () =>
+        navRight.getBoundingClientRect().left - navLeft.getBoundingClientRect().right >= _navBarNaturalWidth(navBar) + 44;
+    if (!namesFit()) {
+        topNav.classList.add('nav-fit-logo');
+        if (!namesFit()) {
+            topNav.classList.add('nav-fit-tight');
+            // Last resort: names fold ONE TAB AT A TIME, from the right, until the
+            // row fits — never the page you are on (user: "ALWAYS have the current
+            // tab with the full name on it"). Folding them all at once left a
+            // 300px hole at widths where one or two names were the whole problem.
+            const foldable = links.filter(a => a.offsetWidth && !a.classList.contains('active')).reverse();
+            for (const a of foldable) {
+                if (namesFit()) break;
+                a.classList.add('nav-icon');
+            }
+        }
     }
+    // The class and style writes above are this function's own, not news: drop
+    // them so the bar's observer doesn't queue another fit every frame.
+    if (_navFitObserver) _navFitObserver.takeRecords();
+}
 
-    document.addEventListener('DOMContentLoaded', function () {
-        const topNav = document.querySelector('.top-nav');
-        if (!topNav) return;
+// Batched to the next frame: a resize, a role sweep and a greeting can all land
+// together, and one measurement answers all of them.
+function _navFitSoon() {
+    if (_navFitQueued) return;
+    _navFitQueued = true;
+    requestAnimationFrame(_navFit);
+}
 
-        new ResizeObserver(checkNavCompact).observe(topNav);
+document.addEventListener('DOMContentLoaded', function () {
+    const topNav = document.querySelector('.top-nav');
+    if (!topNav) return;
+    const navBar = topNav.querySelector('.nav-bar');
 
-        // The nav is hidden behind auth; measure as soon as is-authenticated is applied to body
-        new MutationObserver(function () {
-            if (document.body.classList.contains('is-authenticated')) checkNavCompact();
-        }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    // Zooming the browser fires resize, which is the case this exists for.
+    window.addEventListener('resize', _navFitSoon);
+    if (_NAV_PHONE_MQ.addEventListener) _NAV_PHONE_MQ.addEventListener('change', _navFitSoon);
 
-        checkNavCompact(); // no-op if not yet auth'd, harmless
+    // The nav is hidden behind auth; measure as soon as is-authenticated is applied to body
+    new MutationObserver(function () {
+        if (document.body.classList.contains('is-authenticated')) _navFitSoon();
+    }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
-        // Pre-fetch ticker data during login screen so it's ready the moment the user logs in.
-        loadTickerItems();
-    });
-})();
+    // The right side changes width as its content arrives (greeting, store
+    // switch, Tools, the two bubbles), and the header itself changes width with
+    // the window — watched directly as well as through 'resize', which not every
+    // viewport change fires (device emulation doesn't). _navFit never changes
+    // either one's size — only the logo side and the tabs — and the observer only
+    // queues, never fits, so a fit can never feed back into its own trigger.
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(_navFitSoon);
+        ro.observe(topNav);
+        ro.observe(topNav.querySelector('.nav-right'));
+    }
+    // The role sweep and Feature Access show and hide links by writing their
+    // style, and the SPA router moves .active, which changes which name must
+    // stay. _navFit's own writes are discarded with takeRecords() as it ends.
+    if (navBar) {
+        _navFitObserver = new MutationObserver(_navFitSoon);
+        _navFitObserver.observe(navBar, { attributes: true, subtree: true, attributeFilter: ['style', 'class'] });
+    }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(_navFitSoon);
+
+    _navFitSoon(); // no-op if not yet auth'd, harmless
+
+    // Pre-fetch ticker data during login screen so it's ready the moment the user logs in.
+    loadTickerItems();
+});
 
 // --- 3. GLOBAL HELPERS & UTILITIES ---
 function parseNum(val) {
@@ -33449,12 +33520,12 @@ document.addEventListener('mouseover', function(e) {
         return;
     }
 
-    // Collapsed nav: when the nav shrinks to icons (.nav-compact hides the label),
-    // hovering a page link shows its name in the same anchored/caret tooltip as the
-    // right-side icons. Only fires while collapsed — the label speaks for itself
-    // when it's visible.
-    const navLink = e.target.closest('.nav-link');
-    if (navLink && navLink.closest('.top-nav.nav-compact')) {
+    // Collapsed tab: when NAV FIT folds a page link to its icon (.nav-icon hides
+    // the label), hovering it shows its name in the same anchored/caret tooltip as
+    // the right-side icons. Only fires on a folded tab — the label speaks for
+    // itself when it's visible.
+    const navLink = e.target.closest('.nav-link.nav-icon');
+    if (navLink && navLink.closest('.top-nav')) {
         const lbl = navLink.querySelector('span');
         const txt = lbl ? lbl.textContent.trim() : '';
         if (txt) {
