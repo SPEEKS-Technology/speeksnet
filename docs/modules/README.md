@@ -74,7 +74,7 @@ The subject of the current feedback backlog. Summary index only here.
 | 16441 | Live bench intake (off unless `b2b-live-intake` is on) |
 | 16771 | Live collaborative pricing (the realtime sync) |
 | 16973 | Render controller · 17056 Needs You · 17123 Pipeline · 17200 Completed · 17331 Clients · 17923 **Overview (DM/CEO)** |
-| 17414 | Outreach (the mini CRM) · 17508 stat tiles · 17663 CRM settings (CEO only) |
+| 17508 | Stat tiles. (The outreach mini CRM and its CEO settings were removed 2026-10-21, 0151.) |
 | 18269 | Pre-evaluations · 18326 view · 18390 editor · 18573 conversion |
 | 18675 | Approval evidence · 18785 attaching |
 | 19100 | Stage 1 pickup sign-off · 19199 stage 2 pricing location |

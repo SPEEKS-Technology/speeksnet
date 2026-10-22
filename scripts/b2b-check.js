@@ -774,10 +774,14 @@ t('polish: no pencil on the pickup screen or an undated deal', function () {
         return normal.indexOf('b2bEditPickupDate') > -1 || 'pencil missing where it belongs';
     } finally { sessionStorage.setItem('speeksUserRole', role); }
 });
-t('polish: one name for the send-by-hand action', function () {
+// Sent By Hand itself went on 2026-09-10 (see '3.9.0 sent-by-hand is gone').
+// This used to also count "Sent By Hand" twice in the two screens' source --
+// which by then only matched the comments explaining its removal, so it broke
+// the moment those comments were reworded. What is left worth guarding is that
+// the older duplicate label does not come back.
+t('polish: the retired "I Sent It Myself" label stays gone', function () {
     var src = _b2bStageReview.toString() + _b2bStageQuote.toString();
-    if (src.indexOf('I Sent It Myself') > -1) return 'two labels for one action';
-    return (src.match(/Sent By Hand/g) || []).length >= 2 || 'not offered on both screens';
+    return src.indexOf('I Sent It Myself') === -1 || 'two labels for one action';
 });
 
 // --- v3.8.1: approvals open to all corp, and Copy is a complete send --------
@@ -2097,7 +2101,8 @@ t('3.9.0 both item fetches are scoped, not just one', function () {
 t('3.9.0 splitting is an explicit choice, not a hidden mode', function () {
     var src = _srcOf(_b2bStageListingLocation);
     if (src.indexOf('b2bSplitToggle') === -1) return 'no way to choose';
-    return src.indexOf('All to one store') > -1 || 'the one-store option is not offered';
+    // "All to one store" became the workspace switch's "One store" (2026-10).
+    return src.indexOf("'One store'") > -1 || 'the one-store option is not offered';
 });
 t('3.9.0 every line has to be placed before a split can be sent', function () {
     var keep = _b2bModalItems;
@@ -3007,29 +3012,34 @@ t('oct 4.1 the sent quote says how long the client has had it, what was offered 
     _b2bModalItems = [{ id: 'q1', quantity: 3, offer: 100, value: 250, disposition: 'purchase' }];
     try {
         var sentDay = _b2bAddDays(_b2bCentralDay(new Date()), -9);
-        var h = _b2bQuoteStatus({ quote_sent_at: sentDay + 'T18:00:00Z', quote_send_count: 2, priced_by: 'Jon Rodriguez' });
+        // The facts moved into the workspace panel's status line (2026-10), and
+        // Copy Quote into the panel's buttons.
+        var h = _b2bQuoteFactsHtml({ quote_sent_at: sentDay + 'T18:00:00Z', quote_send_count: 2, priced_by: 'Jon Rodriguez' });
         if (h.indexOf('9 days') === -1) return 'no days-with-client: ' + h;
         if (h.indexOf('$300.00') === -1) return 'no offer total';
         if (h.indexOf('Priced by Jon Rodriguez') === -1) return 'no pricer';
         if (h.indexOf('Sent 2×') === -1) return 'no send count';
         if (h.indexOf('urgent') === -1) return 'a week+ with the client is not flagged';
-        return h.indexOf('b2bCopyQuote()') > -1 || 'the send control went missing';
+        return _srcOf(_b2bStageQuote).indexOf('b2bCopyQuote()') > -1 || 'the send control went missing';
     } finally { _b2bModalItems = keep; }
 });
-t('oct 4.1 full-width lines carry the line number; approval\'s split does not', function () {
+// Since the 2026-10 workspace port both quote screens use the shared table's
+// offer mode, so the line number is on both -- the approval split that left it
+// off is gone.
+t('oct 4.1 every quote line carries its line number, on approval and the sent quote alike', function () {
     var keep = _b2bModalItems;
     _b2bModalItems = [{ id: 'q2', sku: 'X-0003', line_no: 3, make: 'Dell', model: 'Latitude', quantity: 1, offer: 1, value: 2, disposition: 'purchase' }];
     try {
-        var full = _b2bReviewLines(true), split = _b2bReviewLines();
-        if (full.indexOf('b2b-rvw-line') === -1 || full.indexOf('>Line<') === -1) return 'full view has no line column';
-        return split.indexOf('b2b-rvw-line') === -1 || 'the approval split grew a line column';
+        var h = _b2bReviewLines();
+        if (h.indexOf('>Line<') === -1) return 'no line column';
+        return h.indexOf('>' + _b2bLineNo(_b2bModalItems[0]) + '<') > -1 || 'the line number is not on the row';
     } finally { _b2bModalItems = keep; }
 });
-t('oct 4.1 the sent quote no longer uses the side-by-side split', function () {
+t('oct 4.1 neither quote screen uses the side-by-side split', function () {
+    if (typeof _b2bReviewSplit !== 'undefined') return 'the split renderer is still here';
     var src = _srcOf(_b2bStageQuote);
     var sent = src.slice(0, src.indexOf('_b2bGridMode'));
-    if (sent.indexOf('_b2bReviewSplit(') > -1) return 'still renders the split';
-    return (sent.indexOf('_b2bQuoteStatus(') > -1 && sent.indexOf('b2b-qdoc-fold') > -1) || 'status or folded client copy missing';
+    return (sent.indexOf('_b2bQuoteFactsHtml(') > -1 && sent.indexOf('Quote as the client sees it') > -1) || 'status or folded client copy missing';
 });
 
 // --- October 2026 batch: pickup custody form, itemized pickup, phone -------
@@ -3116,6 +3126,261 @@ t('oct 6.1 the B2B module is reachable on a phone for people who have it', funct
     if (!_PHONE_SECTION_TABS.has('widget-ops-b2b')) return 'B2B is not a phone section tab';
     return _srcOf(_applySectionNavVisibility).indexOf("'data-phone'") > -1 || 'the nav pass ignores data-phone';
 });
-t('oct 6 the pickup footer has a message line, so scans never alert()', function () {
-    return _srcOf(_b2bStagePickup).indexOf('id="b2bDealMsg"') > -1 || 'no b2bDealMsg on the pickup screen';
+t('oct 6 the pickup screen has a message line, so scans never alert()', function () {
+    // Since the 2026-10 workspace port the line comes from the side panel
+    // (_b2bNextHtml), which every workspace screen gets.
+    if (_srcOf(_b2bStagePickup).indexOf('ws: true') === -1) return 'pickup is not on the workspace';
+    return _b2bNextHtml({ id: 'p', stage: 'pickup' }, {}).indexOf('id="b2bDealMsg"') > -1 || 'no b2bDealMsg in the panel';
+});
+
+// ---------------------------------------------------------------------------
+// THE DEAL WORKSPACE (2026-10 consistency overhaul)
+// ---------------------------------------------------------------------------
+// The shared parts every stage is moving onto. These guard the parts; each
+// stage's port adds its own checks as it lands.
+var _wsDeal = {
+    id: 'ws1', ref: 'DL-0412', stage: 'completed', pricing_store: 'OVL', listing_store: 'OVL', listing_stores: ['OVL'],
+    client: { company: 'Harbor Point Dental', contact: 'Dana Ruiz', contact_email: 'dana@example.com' },
+    pickup_date: '2026-10-09', signed_by: 'Dana Ruiz', accepted_at: '2026-10-16T15:00:00Z',
+    stage_changed_at: '2026-10-24T15:00:00Z', intake_kind: 'pickup',
+};
+var _wsItems = [
+    { id: 'w1', line_no: 1, make: 'Dell', model: 'Latitude 5420', condition: 'Good', quantity: 12, value: 210, offer: 120, disposition: 'purchase', sku: 'B2B-1', listed_qty: 12, recycled_qty: 0 },
+    { id: 'w2', line_no: 2, make: 'Apple', model: 'iPhone 12', condition: 'Broken', quantity: 4, value: 90, offer: 35, disposition: 'purchase', sku: 'B2B-2', listed_qty: 3, recycled_qty: 1, staff_notes: 'two cracked' },
+];
+function _wsAs(role, store, fn) {
+    var r = sessionStorage.getItem('speeksUserRole'), s = sessionStorage.getItem('speeksUserStore');
+    sessionStorage.setItem('speeksUserRole', role); sessionStorage.setItem('speeksUserStore', store);
+    try { return fn(); } finally { sessionStorage.setItem('speeksUserRole', r); sessionStorage.setItem('speeksUserStore', s); }
+}
+
+t('ws the facts are built once, and both renderings use the builder', function () {
+    if (_srcOf(_b2bSummary).indexOf('_b2bFactRows') === -1) return 'the summary strip builds its own rows';
+    if (_srcOf(_b2bFactsHtml).indexOf('_b2bFactRows') === -1) return 'the side panel builds its own rows';
+    // The payment check used to read the summary; the rows live in the builder now.
+    return _srcOf(_b2bFactRows).indexOf('paid_at') === -1 || 'the facts print a payment again';
+});
+t('ws contact details stay corp-only in the side panel', function () {
+    var corp = _wsAs('mocd', 'CORP', function () { return _b2bFactsHtml(_wsDeal); });
+    var store = _wsAs('manager', 'OVL', function () { return _b2bFactsHtml(_wsDeal); });
+    if (corp.indexOf('dana@example.com') === -1) return 'corp lost the email';
+    return store.indexOf('dana@example.com') === -1 || 'a store can see the client email';
+});
+t('ws the client name is the title, not repeated in the facts', function () {
+    var h = _b2bFactsHtml(_wsDeal);
+    return (h.indexOf('>Client<') === -1 && h.indexOf('>Reference<') === -1) || 'Client/Reference repeated in the panel';
+});
+t('ws the rail marks the stage it is at, and everything before it done', function () {
+    var h = _b2bRailHtml('quote');
+    var steps = h.match(/b2b-ws-step ([a-z]*)/g).map(function (s) { return s.replace('b2b-ws-step ', ''); });
+    if (steps.length !== 8) return 'expected 8 steps, got ' + steps.length;
+    var want = ['done', 'done', 'done', 'done', 'now', '', '', ''];
+    return steps.join(',') === want.join(',') || 'got ' + steps.join(',');
+});
+t('ws a declined deal is on no step of the rail', function () {
+    var h = _b2bRailHtml('declined');
+    return (h.indexOf(' now') === -1 && h.indexOf(' done') === -1) || 'declined lit a step';
+});
+t('ws waiting-on names the owner of every live stage', function () {
+    var d = function (o) { return Object.assign({}, _wsDeal, o); };
+    var got = [
+        _b2bWaitingOn(d({ stage: 'pickup', pricing_store: 'LEE' })),
+        _b2bWaitingOn(d({ stage: 'pickup', pricing_store: 'CORP' })),
+        _b2bWaitingOn(d({ stage: 'pricing', pricing_store: 'WSP' })),
+        _b2bWaitingOn(d({ stage: 'review' })),
+        _b2bWaitingOn(d({ stage: 'quote' })),
+        _b2bWaitingOn(d({ stage: 'listing', listing_store: null, listing_stores: ['LEE', 'MPL'] })),
+        _b2bWaitingOn(d({ stage: 'completed' })),
+    ];
+    var want = ['LEE', 'Corp', 'WSP', 'approval', 'the client', 'LEE & MPL', null];
+    return JSON.stringify(got) === JSON.stringify(want) || 'got ' + JSON.stringify(got);
+});
+t('ws the numbers are the deal totals, Net with its cost lines on the tooltip', function () {
+    var keep = _b2bModalItems;
+    _b2bModalItems = _wsItems;
+    try {
+        var h = _b2bNumsInner(), t = _b2bItemTotals();
+        if (h.indexOf(_b2bMoney(t.offer)) === -1) return 'offer missing';
+        if (h.indexOf(_b2bMoney(t.value)) === -1) return 'resale missing';
+        if (h.indexOf(_b2bMoney(t.value - t.outlay)) === -1) return 'net missing';
+        return /title="Resale − offer − [^"]*selling fees/.test(h) || 'Net has no breakdown';
+    } finally { _b2bModalItems = keep; }
+});
+t('ws the numbers block repaints with the totals pass', function () {
+    return _srcOf(_b2bPaintTotals).indexOf('b2bWsNums') > -1 || '_b2bPaintTotals ignores the workspace numbers';
+});
+t('ws the read table: one row per line, the total, and internal notes marked', function () {
+    var keep = _b2bModalItems;
+    _b2bModalItems = _wsItems;
+    try {
+        var h = _b2bLineTable(_wsItems, 'read');
+        var rows = (h.match(/class="b2b-lt-r[ "][^"]*" data-rvw/g) || []).length;
+        if (rows !== 2) return 'expected 2 rows, got ' + rows;
+        if (h.indexOf(_b2bMoney(_b2bItemTotals().offer, 2)) === -1) return 'no total';
+        return h.indexOf('Internal: two cracked') > -1 || 'the internal note is not marked as internal';
+    } finally { _b2bModalItems = keep; }
+});
+t('ws an empty deal says so rather than drawing an empty table', function () {
+    return _b2bLineTable([], 'read').indexOf('No line items yet') > -1 || 'no empty state';
+});
+t('ws one section style, and move history still loads lazily inside it', function () {
+    var h = _b2bMoveHistorySec(_wsDeal);
+    if (h.indexOf('b2b-ws-sec') === -1) return 'not the shared section';
+    if (h.indexOf('b2b-xlog-body') === -1) return 'b2bLoadMoveHistory has nowhere to write';
+    return _b2bMoveHistorySec(Object.assign({}, _wsDeal, { stage: 'pickup' })) === '' || 'history shown before anything can move';
+});
+t('ws the next-step card has a message line, so _b2bSay never falls back to alert()', function () {
+    return _b2bNextHtml(_wsDeal, {}).indexOf('id="b2bDealMsg"') > -1 || 'no b2bDealMsg in the panel';
+});
+t('ws the read-only view is on the workspace, with no Close button', function () {
+    var src = _srcOf(_b2bStageView);
+    if (src.indexOf('ws: true') === -1) return 'still the old layout';
+    if (src.indexOf('kpi-cancel-btn') > -1) return 'a Close button came back — the header x closes';
+    return src.indexOf('_b2bItemTableHtml') === -1 || 'still on the old table';
+});
+
+// --- every stage on the workspace ------------------------------------------
+t('ws every deal screen and the evaluation are on the workspace', function () {
+    var screens = { pickup: _b2bStagePickup, assign: _b2bStageAssign, pricing: _b2bStagePricing,
+        review: _b2bStageReview, quote: _b2bStageQuote, listloc: _b2bStageListingLocation,
+        listing: _b2bStageListing, view: _b2bStageView, preval: _b2bStagePreval };
+    var old = Object.keys(screens).filter(function (k) { return _srcOf(screens[k]).indexOf('ws: true') === -1; });
+    return !old.length || 'still on the old layout: ' + old.join(', ');
+});
+t('ws no screen brings back a Close or Cancel button -- the header x closes', function () {
+    var src = [_b2bStagePickup, _b2bStageAssign, _b2bStagePricing, _b2bStageReview, _b2bStageQuote,
+               _b2bStageListingLocation, _b2bStageListing, _b2bStageView, _b2bStagePreval].map(_srcOf).join('\n');
+    return src.indexOf('kpi-cancel-btn') === -1 || 'a footer Close/Cancel came back';
+});
+t('ws the buttons other code toggles keep their ids', function () {
+    // _b2bSplitRepaint / b2bPickLocation flip b2bAsGo, the ack box flips
+    // b2bPuGo, the totals pass flips b2bPrSubmit, the listing repaint flips
+    // b2bListDone. Lose an id and the button never wakes up.
+    var want = { b2bAsGo: [_b2bStageAssign, _b2bStageListingLocation], b2bPuGo: [_b2bStagePickup],
+                 b2bPrSubmit: [_b2bStagePricing], b2bListDone: [_b2bStageListing] };
+    var miss = [];
+    Object.keys(want).forEach(function (id) {
+        want[id].forEach(function (f) { if (_srcOf(f).indexOf("'" + id + "'") === -1) miss.push(id + ' in ' + f.name); });
+    });
+    return !miss.length || 'missing: ' + miss.join(', ');
+});
+t('ws Decline Deal follows one rule everywhere: corp, before listing', function () {
+    var d = function (s) { return { id: 'x', stage: s }; };
+    var corp = _wsAs('mocd', 'CORP', function () {
+        return ['pickup', 'pricing', 'review', 'quote', 'listing_location', 'listing', 'completed']
+            .map(function (s) { return _b2bDeclineMenu(d(s)).length; }).join('');
+    });
+    if (corp !== '1111100') return 'corp gets decline at: ' + corp;
+    var store = _wsAs('manager', 'OVL', function () { return _b2bDeclineMenu(d('pricing')).length; });
+    return store === 0 || 'a store can decline a deal';
+});
+t('ws the pickup acknowledgement sits right above the button it unlocks', function () {
+    var h = _b2bNextHtml(_wsDeal, { before: '<label id="ack"></label>', primary: { id: 'go', label: 'Go', onclick: '' } });
+    var a = h.indexOf('id="ack"'), b = h.indexOf('id="go"');
+    return (a > -1 && b > a) || 'the ack is not before the primary';
+});
+t('ws the why line is always there to be filled, and empty when there is nothing to say', function () {
+    var h = _b2bNextHtml(_wsDeal, {});
+    return /id="b2bWsWhy"><\/div>/.test(h) || 'no empty why slot';
+});
+t('ws an evaluation gets the workspace without the deal rail', function () {
+    var src = _srcOf(_b2bStagePreval);
+    if (src.indexOf('rail: false') === -1) return 'the evaluation has the deal rail';
+    return _b2bNextHtml(null, { primary: { label: 'Send To Client', onclick: '' } }).indexOf('Waiting on') === -1
+        || 'an evaluation claims to be waiting on someone';
+});
+t('ws evaluation actions: the forward move is the primary', function () {
+    _wsAs('mocd', 'CORP', function () {});
+    var r = _wsAs('mocd', 'CORP', function () {
+        return [_b2bPrevalNext({ id: 'v', status: 'draft' }, true).primary.label,
+                _b2bPrevalNext({ id: 'v', status: 'sent' }, true).primary.label,
+                _b2bPrevalNext({ id: 'v', status: 'accepted' }, true).primary.label];
+    });
+    return r.join('|') === 'Send To Client|They Accepted|Turn Into A Deal' || 'got ' + r.join('|');
+});
+t('ws the sheet stages fold their panel on a narrow screen, and the choice sticks', function () {
+    var keep = _b2bWsWide;
+    try {
+        _b2bWsWide = null;
+        if (_b2bWsFolded({ sheet: false })) return 'a non-sheet stage folded';
+        var auto = _b2bWsFolded({ sheet: true });
+        if (auto !== (window.innerWidth < 1600)) return 'the default does not follow the width';
+        _b2bWsWide = false;
+        return _b2bWsFolded({ sheet: true }) === false || 'the user\'s choice did not hold';
+    } finally { _b2bWsWide = keep; }
+});
+t('ws listing says how many units are left beside the Complete button', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = _wsItems;   // 12/12 done, and 3 listed + 1 recycled of 4
+        var none = _wsAs('mocd', 'CORP', _b2bListLeftText);
+        _b2bModalItems = [Object.assign({}, _wsItems[0], { listed_qty: 9 })];
+        var some = _wsAs('mocd', 'CORP', _b2bListLeftText);
+        if (none !== '') return 'claims units left on a finished deal: ' + none;
+        return some === '3 units left to list' || 'got: ' + some;
+    } finally { _b2bModalItems = keep; }
+});
+
+// --- Listing is worth what is left to list (2026-10-22) ---------------------
+t('to-list: summed from each store part, so a store reads only its own', function () {
+    var d = { listing_parts: [{ store: 'OVL', remaining_value: 400 }, { store: 'LEE', remaining_value: 250 }],
+              total_value: 9999, total_units: 10, outstanding_units: 10 };
+    return _b2bToListValue(d) === 650 || 'got ' + _b2bToListValue(d);
+});
+t('to-list: a row from before 0152 estimates pro rata, never above the deal value', function () {
+    var d = { listing_parts: [{ store: 'OVL' }], total_value: 1000, total_units: 10, outstanding_units: 4 };
+    if (_b2bToListValue(d) !== 400) return 'got ' + _b2bToListValue(d);
+    return _b2bToListValue({ total_value: 1000, total_units: 0 }) === 0 || 'an empty deal is worth something';
+});
+t('to-list: the Listing tile and cards show it; other stages keep the offer', function () {
+    var keepR = sessionStorage.getItem('speeksUserRole');
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try {
+        var deals = [
+            { id: 'tl1', ref: 'TL-001', stage: 'listing', pricing_store: 'OVL', listing_store: 'OVL', listing_stores: ['OVL'],
+              client: { company: 'Kessler' }, total_offer: 500, net_offer: 500, stage_changed_at: '2026-10-20T15:00:00Z',
+              listing_parts: [{ store: 'OVL', remaining_value: 3410 }] },
+            { id: 'tl2', ref: 'TL-002', stage: 'quote', pricing_store: 'OVL', client: { company: 'Prairie' },
+              total_offer: 640, net_offer: 640, stage_changed_at: '2026-10-20T15:00:00Z' },
+        ];
+        var h = _b2bRenderPipeline(deals);
+        var tile = h.slice(h.indexOf('b2b-flow-teal'));
+        if (tile.indexOf('$3,410') === -1 || tile.slice(0, tile.indexOf('</button>')).indexOf('to list') === -1) return 'the Listing tile does not show $3,410 to list';
+        if (h.indexOf('$3,410 <i class="b2b-card-tolist">to list</i>') === -1) return 'the Listing card does not show what is left to list';
+        return h.indexOf('$640') > -1 || 'the quote stage lost its offer';
+    } finally { sessionStorage.setItem('speeksUserRole', keepR); }
+});
+
+// --- pre-release review fixes (2026-10-22) ----------------------------------
+t('review: b2b.html is gated on B2B access itself, not only on its nav link', function () {
+    var src = _srcOf(initB2bPage);
+    if (src.indexOf("_featureEffectiveVisible('widget-ops-b2b'") === -1) return 'the page loads for anyone who reaches the URL';
+    return src.indexOf("location.replace('index.html')") > -1 || 'a refused user is not sent home';
+});
+t('review: the pipeline card carries the one-click finish the Needs You cards had', function () {
+    var keepR = sessionStorage.getItem('speeksUserRole');
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try {
+        var h = _b2bRenderPipeline([{ id: 'qa1', ref: 'QA-001', stage: 'quote', pricing_store: 'OVL', client: { company: 'Quick' },
+            total_offer: 100, net_offer: 100, stage_changed_at: '2026-10-20T15:00:00Z', quote_sent_at: '2026-10-19T15:00:00Z' }]);
+        return h.indexOf('b2bQuickAccept(') > -1 || 'no Mark Accepted on a sent quote card';
+    } finally { sessionStorage.setItem('speeksUserRole', keepR); }
+});
+t('review: a top-bar tool opens over the deal page instead of closing it', function () {
+    var src = _srcOf(toggleModal);
+    if (src.indexOf('_keepDealPageOnce = true') === -1) return 'toggleModal does not ask for the deal page to be kept';
+    var c = _srcOf(closeAllModals);
+    if (c.indexOf('keepDealPage && modal === dealPage') === -1) return 'closeAllModals does not honour it';
+    return c.indexOf('_b2bCapturePickupDraft(') > -1 || 'a real close does not keep the pickup typing as a draft';
+});
+t('review: the numbers block is always on the page, hidden until there is a line', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [];
+        var h = _b2bNumsHtml();
+        return (h.indexOf('id="b2bWsNums"') > -1 && h.indexOf('hidden') > -1) || 'an empty deal has nowhere to paint its figures';
+    } finally { _b2bModalItems = keep; }
+});
+t('review: closing a deal drops a half-built listing split', function () {
+    return _srcOf(b2bCloseDeal).indexOf('_b2bSplitMode = false') > -1 || 'split mode carries over to the next deal';
 });
