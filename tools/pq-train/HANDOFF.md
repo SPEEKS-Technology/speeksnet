@@ -1,6 +1,19 @@
 # Handoff: Picture Quality local model (as of 2026-10-21)
 
-## ⚡⚡ Newest (2026-10-21 evening) — round 4 is BUILT, waiting on Ethan's go
+## ⚡⚡⚡ ROUND 4 RESULT (2026-10-22, `runs\run-20261021-2247`) — 65% → 76%
+
+Started 10-21 22:47 with Ethan's go; 963 steps at ~26 s, training done 05:51, scored
+by 06:22; the laptop then shut itself down (`C:\Users\User\pq-train\finish-and-shutdown.ps1`,
+only when scores.txt exists). TEST 717 photos (same set as the 65% re-score):
+**shots exact 65% → 76%, first 71% → 79%**; closeup P90 R81 (was P93 R77); reflection
+P82 R53 (was P85 R50). By sheet (round 3 → 4): Windows laptops 61→65, misc 47→62,
+receivers 52→82, GPUs 47→71, action cams 56→78, item lots 18→41, MacBooks 66→81,
+gaming laptops 71→79, headphones 74→87, Android phones 70→80, lenses 67→75,
+handheld consoles 70→100, RAM 55→91; console flat 75; motherboards 57 flat. Reviewed
+yardstick 92%. Still the weakest: item lots 41, misc 62, Windows laptops 65.
+Gain is confounded (more labels AND the contact sheet). Go-live bar is ~90–95%.
+
+## ⚡⚡ Round 4 setup (2026-10-21 evening)
 
 - **Labelling DONE:** 113 of the 114 (112 graded + Skylanders + Tilta), all flags checked.
   The one skipped is a Wii yoga game (`8596398702765`) the title sort put on Windows
