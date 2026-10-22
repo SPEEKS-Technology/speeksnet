@@ -7552,14 +7552,21 @@ async function loadWorkspaceKpis() {
 }
 
 function switchWorkspaceTab(name) {
+    // Aging Inventory is PAUSED (see FEATURE_CATALOG) — a stale #aging link or
+    // bookmark lands on the brief instead of opening the hidden pane.
+    if (name === 'aging' && typeof _agEnabled === 'function' && !_agEnabled()) name = 'brief';
     document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
     document.getElementById('ws-tab-' + name)?.classList.add('active');
+    // Claims & Disputes has two buttons (store / DM) over one pane; which one is
+    // lit is decided with the view, in _claimsShowInPage.
     document.getElementById('ws-pane-' + name)?.classList.add('active');
     _wsFitPanels();                        // see the .ws-panel rule
     try { history.replaceState(null, '', 'workspace.html#' + name); } catch (e) {}
 
-    if (name === 'brief') {
+    if (name === 'claims') {
+        _claimsShowInPage();
+    } else if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
         // MSM only: a store-specific KPI feed card routes the pane to that store
@@ -7616,17 +7623,23 @@ function initWorkspace() {
     const hash = (window.location.hash || '').replace('#', '');
     // 'mreplies' is deliberately NOT accepted — Margin Replies is parked, so a
     // #mreplies deep link falls through to the brief. Add it back with the tab.
-    let initial = ['brief', 'kpis', 'vreplies', 'aging'].includes(hash) ? hash : 'brief';
+    // No (or an unknown) hash → the FIRST tab this person can see, not a fixed
+    // one (Ethan, 2026-10-06: "default the user to the first tab always"). That is
+    // Claims & Disputes for managers and the DM, Monthly Breakdown for an ASM —
+    // and whatever leads the strip if the order changes again.
+    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims'].includes(hash) ? hash : '';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
     // fall back to the first visible tab.
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
-    if (!tabVisible('ws-tab-' + initial)) {
+    // 'claims' is either of its two buttons (see workspace.html).
+    const shown = name => tabVisible('ws-tab-' + name) || (name === 'claims' && tabVisible('ws-tab-claimsdm'));
+    if (!shown(initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ws-tab-"]'))
             .find(b => b.style.display !== 'none' && !b.hidden);
-        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '');
+        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '').replace(/^claimsdm$/, 'claims');
     }
-    switchWorkspaceTab(initial);
+    switchWorkspaceTab(initial || 'brief'); // nothing visible (a phone): the old default
     applyKpiReminder();
 }
 
@@ -9653,6 +9666,10 @@ function _pgRenderAdmin(body) {
       </div>`);
 }
 
+// No Crucial tick on the row or in the form (Ethan, 2026-10-11). It was briefly
+// in both, but every required photo turned out to be one he would tick; Picture
+// Quality treats the guide's FIRST photo as the crucial one instead
+// (picture-quality/rules.ts). pg_shots.crucial (0142) stays in the table, unread.
 function _pgAdminRowHtml(s, i, n) {
     if (_pgAdmin.editing === s.id) return _pgAdminEditHtml(s);
     return `
@@ -9669,6 +9686,7 @@ function _pgAdminRowHtml(s, i, n) {
             : 'Always taken'}${s.img ? '' : ' &middot; No photo yet'}</small>
         </div>
         <div class="pg-etools">
+
           <label class="pg-ephoto" title="${s.img ? 'Replace the photo' : 'Add a photo'}">
             <input type="file" accept="image/png,image/jpeg,image/webp" onchange="pgUploadShotPhoto(${s.id}, this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/></svg>
@@ -13263,9 +13281,22 @@ function _lvView(m) {
 // needs to be moved to NP, I meant it"). Every margin a store sees is the NET
 // margin — NP over net sales for the span on screen — and gross profit is not
 // shown as a figure of its own anywhere on the board.
+//
+// ONE EXCEPTION (Ethan 2026-10-06): the district table carries a Gross margin
+// column in front of Net margin. It is a rate, not a GP figure — revenue less
+// cost over revenue — and it is what shows WHERE a net margin went: a store with
+// a healthy gross margin and a weak net one is losing it to fees and shipping,
+// not to what it paid for the stock. Still no GP dollars anywhere.
 function _lvNetMargin(v) {
     const n = Number(v && v.npDay), s = Number(v && v.netToday);
     return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+// Worked from net sales and cost for the span on screen rather than read from
+// marginToday, so the roll-up rows (summed on the page) and the stores agree by
+// construction on every tab.
+function _lvGrossMargin(v) {
+    const s = Number(v && v.netToday), c = Number(v && v.cogsToday);
+    return (s > 0 && isFinite(c)) ? (s - c) / s * 100 : null;
 }
 function _lvNetMarginMtd(v) {
     const n = Number(v && v.npMtd), s = Number(v && v.mtdNet);
@@ -13416,6 +13447,42 @@ function _lvPace(pctOfGoal, elapsedPct) {
     return Math.round(p / e * 100);
 }
 
+// "% TO GOAL" ON THE TODAY TAB IS THROUGH YESTERDAY (Ethan 2026-10-06).
+// Live pace counts today's half-finished day — on an NP month, an ESTIMATE of
+// it — so it swung all day and read as behind every morning. The Today tab now
+// shows the pace at yesterday's close: exactly the figure the Yesterday tab
+// shows, read off the same view, so the two tabs can never disagree about it.
+// The header carries a "Through Yesterday" tag so nobody takes it for live.
+//
+// Worked by running _lvView in 'prev' mode rather than reaching into m.prev /
+// m.np.prev by hand: the overlay already knows which of the two applies.
+// Null on the 1st, when yesterday belongs to last month (the same rule that
+// blanks pace on the Yesterday tab).
+function _lvPaceThru() { return _lvIsToday(); }
+function _lvAsPrev(fn) {
+    const keep = _lvMode;
+    _lvMode = 'prev';
+    try { return fn(); } finally { _lvMode = keep; }
+}
+function _lvPaceThruStore(m, d) {
+    if (!(d && d.prev && d.prev.inMonth) || !m || m.error) return null;
+    const v = _lvAsPrev(() => _lvView(m));
+    return v && v.paceIndex !== undefined ? v.paceIndex : null;
+}
+// A roll-up's pace is derived from its pctOfGoal, the way the table and the card
+// deck derive it on every tab. The district payload carries its own `prev`; the
+// MSM's "Both" is a sum built on the page, so it is re-summed from the same
+// healthy stores at yesterday's close.
+function _lvPaceThruRoll(rollup, stores, d) {
+    if (!(d && d.prev && d.prev.inMonth)) return null;
+    const pv = _lvAsPrev(() => (rollup && rollup.prev)
+        ? _lvView(rollup)
+        : _lvCombine((stores || []).filter(m => m && !m.error).map(_lvView)));
+    if (!pv || pv.pctOfGoal === null || pv.pctOfGoal === undefined) return null;
+    return _lvPace(pv.pctOfGoal, d.prev.elapsedPct);
+}
+const _LV_THRU_TAG = '<span class="lv-thru">Through Yesterday</span>';
+
 // --- "something just happened at MPL" ---------------------------------------
 // The payload is a snapshot, not an event stream, so a sale or a refund is derived
 // by diffing successive fetches. The cron writes only on a change and pings us, so
@@ -13443,6 +13510,22 @@ let _lvSnap = null;    // code -> { net, orders, returns, lastOrderAt }
 let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
 let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
 let _lvEvSeq = 0;
+// Every order this page has already put on the strip, by _lvOrderKey. Kept apart
+// from _lvEvents because a ticker chip leaves that list after 30 seconds, and the
+// second sighting of the same order can arrive later than that.
+const _lvAnnounced = new Set();
+
+// One order, one id — shared by the seed and the diff path.
+//
+// The payload reports a new sale in two halves that land on different fetches:
+// lastOrderAt comes off the Orders API and moves the moment the till rings,
+// ordersToday is ShopifyQL and catches up a poll or two later. Each half on its
+// own reads as "a sale just happened", so the same order (same amount, same time)
+// came up as two chips with two chimes. Keying on the order itself is what makes
+// the second half a no-op.
+function _lvOrderKey(code, at) {
+    return 'o' + code + String(at).replace(/\D/g, '');
+}
 
 // Which store codes belong to the person looking. Two callers, both asking the
 // same question: the chime (is this worth a NOISE) and the activity strip (is
@@ -13552,11 +13635,15 @@ function _lvTrackChanges(d) {
                     // Order's own amount first, net delta second. Falling back to
                     // "now" for the time as well means a chip can never come out as
                     // just a store name with nothing beside it.
-                    const hit = _lvRecentOrder(byCode[code], b.lastOrderAt);
-                    const amt = (hit && Number(hit.amount)) || (b.net - a.net);
-                    _lvPush({ kind: 'sale', code, amount: amt, items: _lvItems(hit),
-                              at: b.lastOrderAt || new Date().toISOString() });
-                    sold = true;
+                    const key = b.lastOrderAt ? _lvOrderKey(code, b.lastOrderAt) : '';
+                    if (!key || !_lvAnnounced.has(key)) {
+                        if (key) _lvAnnounced.add(key);
+                        const hit = _lvRecentOrder(byCode[code], b.lastOrderAt);
+                        const amt = (hit && Number(hit.amount)) || (b.net - a.net);
+                        _lvPush({ kind: 'sale', code, amount: amt, key, items: _lvItems(hit),
+                                  at: b.lastOrderAt || new Date().toISOString() });
+                        sold = true;
+                    }
                 }
             }
         });
@@ -13575,7 +13662,7 @@ function _lvTrackChanges(d) {
 
 // Newest first, so a fresh sale enters at the left and pushes the rest along.
 function _lvPush(e) {
-    e.id = 'e' + (++_lvEvSeq);
+    e.id = e.key || ('e' + (++_lvEvSeq));
     e.ts = Date.now();
     _lvEvents.unshift(e);
     if (_lvEvents.length > LV_ACTIVITY_MAX) _lvEvents.length = LV_ACTIVITY_MAX;
@@ -13732,10 +13819,12 @@ function _lvSeedEvents(d) {
         (m.recentOrders || []).forEach(o => {
             const ts = Date.parse(o.at);
             if (!isFinite(ts)) return;
-            // Keyed by store and order time so the id is stable across renders and
-            // cannot collide with the diff path's own "e1, e2, …" sequence.
+            // Keyed by store and order time so the id is stable across renders, and
+            // is the same id the diff path gives this order — see _lvOrderKey.
+            const id = _lvOrderKey(m.code, o.at);
+            _lvAnnounced.add(id);
             out.push({
-                id: 'o' + m.code + String(o.at).replace(/\D/g, ''),
+                id,
                 kind: 'sale', code: m.code, amount: Number(o.amount) || 0,
                 items: _lvItems(o), at: o.at, ts: ts,
             });
@@ -16475,10 +16564,18 @@ function _lvStoreRow(v, d, foot, rev) {
     if (v.error) {
         // colspan spans every column EXCEPT the store cell — keep it in step with
         // the header row or a broken store knocks the table out of alignment.
-        // (It was 7 against eight columns; adding Refunds makes it nine.)
+        // COUNTED from the same switches _lvTable's header reads, not typed: the
+        // typed 9 outlived the Cost column by months and spanned one column past
+        // the table on every tab (found 2026-10-06 adding Gross margin).
+        const ec = _lvCols();
+        const span = 5   // net, profit, refunds, margin, month
+            + (ec.cost ? 1 : 0) + (ec.orders ? 1 : 0) + (ec.tail ? 1 : 0)
+            + (_lvFeeCols() ? 2 : 0) + (_lvNpKind() ? 1 : 0)   // fees; gross margin
+            + 1                                                // % to goal
+            + (rev === null || rev === undefined ? 0 : 1);
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="' + ((rev === null || rev === undefined ? 9 : 10) + (_lvFeeCols() ? 2 : 0))
+            + '<td colspan="' + span
             + '" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
@@ -16525,6 +16622,9 @@ function _lvStoreRow(v, d, foot, rev) {
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
         + (_lvFeeCols() ? _lvFeeCell(v, 'npBEbay', d, foot) + _lvFeeCell(v, 'npBShip', d, foot) : '')
         + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
+        // Keyed off _lvNpKind(), like the header — not v.npKind, which a store
+        // with no NP block lacks, and a missing cell shifts the row one left.
+        + (_lvNpKind() ? '<td class="lv-boldnum">' + _lvPct(_lvGrossMargin(v)) + '</td>' : '')
         + '<td class="lv-boldnum">' + _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
@@ -16680,7 +16780,7 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         const band = has ? ' ' + _lvPaceCls(pct) : '';
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
             + head + '<span class="lvc-goal' + band + '">'
-            + '<span class="lvc-goal-k">% to Goal</span>'
+            + '<span class="lvc-goal-k">% to Goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</span>'
             // "No Goal" in place of the figure, not on a line of its own underneath:
             // the extra row was 32px that only some cards had, so the card grew and
             // shrank as the picker moved between stores.
@@ -16726,15 +16826,21 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         // has none, so it is derived here the same way _lvTable derives it for its
         // own total row — otherwise the District card would be the one card on the
         // phone with a blank percentage.
+        // On Today both are at yesterday's close, the same figure as the table's
+        // column (see _lvPaceThru).
         const rollView = _lvView(roll);
         deck.push({ key: '_roll', label: rollLabel,
             view: Object.assign({}, rollView, { code: rollLabel, name: '',
-                paceIndex: _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
+                paceIndex: _lvPaceThru() ? _lvPaceThruRoll(roll, list, d)
+                    : _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
             buy: rollBuy, isRoll: true });
     }
     list.forEach((m, i) => {
+        const v = _lvView(m);
         deck.push({ key: String((m && m.code) || ''), label: String((m && m.code) || ''),
-            view: _lvView(m), buy: buys[i], isRoll: false });
+            view: (_lvPaceThru() && m && !m.error)
+                ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v,
+            buy: buys[i], isRoll: false });
     });
 
     // A pick that is no longer in the deck — a role change, a store that dropped
@@ -16890,16 +16996,25 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + '<th>Refunds</th>'
         + (_lvFeeCols() ? '<th title="Finished days, off the Net Profit tab">eBay fees</th>'
             + '<th title="Finished days, off the Net Profit tab">Shipping</th>' : '')
-        + (cols.orders ? '<th>Orders</th>' : '') + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
+        + (cols.orders ? '<th>Orders</th>' : '')
+        // Gross margin sits in front of Net margin on an NP month (Ethan
+        // 2026-10-06) — see _lvGrossMargin. On a GP month the one Margin column
+        // already IS gross, so a second would repeat it.
+        + (_lvNpKind() ? '<th>Gross margin</th>' : '')
+        + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
         + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
-            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th><th>% to goal</th>'
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th>'
+        + '<th>% to goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
     // ranking gains. The pace column is what makes a bad store findable.
+    const thru = _lvPaceThru();
     stores.forEach(m => {
-        html += _lvStoreRow(_lvView(m), d, false, null);
+        const v = _lvView(m);
+        html += _lvStoreRow(thru && !m.error
+            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v, d, false, null);
     });
     html += '</tbody>';
     if (rollup) {
@@ -16909,7 +17024,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // Its own projection, summed from the stores above it by the one
             // function the Tracking tiles also use.
             fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
-            paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
+            paceIndex: thru ? _lvPaceThruRoll(rollup, stores, d) : _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
@@ -17534,6 +17649,17 @@ function _isWorkingRole(role) {
     const r = String(role || '').trim().toUpperCase();
     return !!r && r !== '-' && r !== GOALS_OFF;
 }
+
+// TRAINING (Ethan, 2026-10-06): somebody learning to list, expected to manage
+// HALF of what a Lister 1 would on the same day. It is half of that person's own
+// L1 goal rather than a number of its own — same shift, same Saturday factor,
+// same stretch factor — so it moves whenever the lister rate or the store's
+// factor moves, and it never needs tuning separately (see rateFor).
+//
+// A working role (they are in, and they count as staffed), but uncapped like Off:
+// a store can have more than one trainee on the same day. It is not an L role, so
+// it never satisfies "there is a lister today" (_lgCoverage, daily-brief).
+const GOALS_TRAINING = 'TR';
 // The role currently selected in one `.goals-edit-roles` group ('-' when none).
 function _activeRoleIn(group) {
     return _roleOf(group ? group.querySelector('.role-dot.active') : null);
@@ -17776,6 +17902,11 @@ function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     roles.forEach(r => {
         html += `<button type="button" class="role-dot ${cur === r ? 'active' : ''}" data-role="${r}" ${dis} onclick="selectRole(this, '${safeEmp}', '${r}')">${r}</button>`;
     });
+    // Training rides here rather than in goalsAvailableRoles for the same reason
+    // Off does: it is offered at every roster size, and the role ladder is not.
+    html += `<button type="button" class="role-dot ${cur === GOALS_TRAINING ? 'active' : ''}" data-role="${GOALS_TRAINING}" ${dis}`
+         + ` title="Training — half of what a Lister 1 would be expected to list today"`
+         + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_TRAINING}')">TR</button>`;
     html += `<button type="button" class="role-dot role-off ${cur === GOALS_OFF ? 'active' : ''}" data-role="${GOALS_OFF}" ${dis}`
          + ` title="Off today — no goal, and they stop holding up the daily reminder"`
          + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_OFF}')">Off</button>`;
@@ -18022,7 +18153,11 @@ const ListingGoalsEngine = {
         if (!_isWorkingRole(r)) return 0;
         if (r === 'B1') return this.cfg.rate_buyer_1;
         if (r === 'B2') return this.cfg.rate_buyer_2;
-        return isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        const lister = isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        // Half of what THIS person would score as L1 — so a new hire in training
+        // is half of their ramp rate, never more than they would get listing.
+        if (r === GOALS_TRAINING) return lister / 2;
+        return lister;
     },
 
     // Saturday is shorter and the busiest buy day, so it produces about half a
@@ -18405,7 +18540,7 @@ function buildGoalsEditForm() {
                 <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
                 <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
             </div>
-            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
+            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. TR is Training: half of what a Lister 1 would be expected to list. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
         `;
     }
     
@@ -19736,7 +19871,7 @@ async function fetchAndRenderEmployeeGoals() {
             }
         });
 
-        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'OFF': 'Off Today' };
+        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'TR': 'Training', 'OFF': 'Off Today' };
         const displayRole = roleTranslations[todayRole] || todayRole;
 
         const roleDescriptions = {
@@ -19744,6 +19879,7 @@ async function fetchAndRenderEmployeeGoals() {
             'B2': 'You\'re the second buyer in rotation. Hang back and jump in the moment a second customer arrives.',
             'L1': 'Dedicated listing only — no buying, no shipping, no exceptions. Your entire focus today is getting items listed and nothing else.',
             'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.',
+            'TR': 'You\'re in training today — your goal is half of what a Lister 1 would be expected to list. Focus on learning the process the right way; speed comes with practice.',
             'OFF': 'You\'re marked off today — no listing goal. Enjoy the day.'
         };
         const roleDesc = roleDescriptions[todayRole] || '';
@@ -32975,7 +33111,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -35226,7 +35362,8 @@ const SCORECARD_BUCKETS = [
 
 // ============================================================================
 // PayMore practice Audit — exact transcription of Audit Playbook v3 (165 pts,
-// 94 items, 8 sections). Binary scoring: checked = full points, else 0.
+// 94 items, 8 sections; wording per PayMore's 7/22/26 checklist revision, 0140).
+// Binary scoring: checked = full points, else 0.
 // Pass = 80%, target = 90%+. Shared shape with the scorecard edge fn, which
 // re-derives earned/possible from the same point values (server-authoritative).
 // ============================================================================
@@ -35235,8 +35372,8 @@ const AUDIT_PASS_PCT = 80;
 const AUDIT_DEFINITION = [
     { key: "exterior", title: "Exterior", items: [
         { id: "ex1", pts: 1, text: "Sidewalks and entryways free of litter, debris, and obstructions" },
-        { id: "ex2", pts: 1, text: "Exterior and road signage clean, lit (if applicable), free of damage or fading" },
-        { id: "ex3", pts: 1, text: "Building exterior clean, well-maintained (windows, paint, no handmade signs on doors). Window decals and signage appropriate. Door hours match website" },
+        { id: "ex2", pts: 1, text: "Exterior & road signage clean, lit (if applicable), no damage/fading; banners within brand standard, hung straight, not ripped/torn; hours sign not handwritten" },
+        { id: "ex3", pts: 1, text: "Building exterior clean & well-maintained (windows, paint, no handmade signs); approved window decals only; door hours match website" },
     ]},
     { key: "entry", title: "Entry & Sales Floor", items: [
         { id: "ef1", pts: 1, text: "Floors swept/mopped; entry mats clean" },
@@ -35244,13 +35381,13 @@ const AUDIT_DEFINITION = [
         { id: "ef3", pts: 1, text: "Video games displayed on shelves and organized" },
         { id: "ef4", pts: 1, text: "Store lighting fully functional throughout (no burned out bulbs, adequate brightness and clean)" },
         { id: "ef5", pts: 1, text: "Walls, vents, and high surfaces free of dust and cobwebs" },
-        { id: "ef6", pts: 2, text: "Ceiling tiles in place and in good shape; less than 10% of tiles with no water damage" },
+        { id: "ef6", pts: 2, text: "Ceiling tiles in place & good shape; <10% affected; no water damage" },
         { id: "ef7", pts: 1, text: "Window ledges and sills clean; free of merchandise or debris" },
         { id: "ef8", pts: 1, text: "No recycling items in customer view" },
         { id: "ef9", pts: 1, text: "All customers greeted within 10 seconds of entering the store" },
         { id: "ef10", pts: 2, text: "Team acknowledges entering customers even while helping others" },
         { id: "ef11", pts: 1, text: "Customers asked for Google review at end of transaction" },
-        { id: "ef12", pts: 1, text: "No QR codes or signage for Google review signage in transaction area" },
+        { id: "ef12", pts: 1, text: "No QR codes / Google review signage in transaction area" },
         { id: "ef13", pts: 1, text: "Music playing from RockBot system and volume is appropriate" },
         { id: "ef14", pts: 3, text: "Retail Browsing iPads on and locked to store website" },
     ]},
@@ -35276,7 +35413,7 @@ const AUDIT_DEFINITION = [
         { id: "rc5", pts: 1, text: "No team member food or drink in customer view" },
         { id: "rc6", pts: 1, text: "PayMore branded retail bags stocked" },
         { id: "rc7", pts: 2, text: "All computers do not have any personal accounts open" },
-        { id: "rc8", pts: 1, text: "PayMore branded signage at counter; Freedom to Trade In trifold nearby; promo materials in plexi frames (not taped)" },
+        { id: "rc8", pts: 1, text: "PayMore signage at counter; Freedom to Trade In trifold nearby; promos in plexi frames (not taped); posters in frames not wrinkled or faded" },
     ]},
     { key: "buy", title: "Buy Transaction Area", items: [
         { id: "bt1", pts: 3, text: "Counter neatly arranged; no unbranded signage; testing equipment out of view (cables, gaming controllers, flashlights, etc); printer under cabinet" },
@@ -35288,7 +35425,7 @@ const AUDIT_DEFINITION = [
         { id: "bt7", pts: 2, text: "PayMore Seller Book under the counter" },
         { id: "bt8", pts: 3, text: "Last 10 transactions: at least one signature on each page half on/off sticker" },
         { id: "bt9", pts: 7, text: "Green bin (<$100), Red bin (>$100), Blue bin (video games) — labeled (not handwritten), out of view; items bubble-wrapped with purchase order receipt" },
-        { id: "bt10", pts: 3, text: "Larger items in white boxes: purchase order attached, bubble-wrapped, on shelving or neatly stacked on back counter (must be in boxes)" },
+        { id: "bt10", pts: 3, text: "Larger items in white boxes: PO attached, bubble-wrapped, on shelving or neatly stacked (must be boxed)" },
         { id: "bt11", pts: 3, text: "All intake merchandise logged immediately; no untagged or unlogged items" },
         { id: "bt12", pts: 4, text: "Cash drawer locked; keys out of customer reach" },
     ]},
@@ -35302,18 +35439,18 @@ const AUDIT_DEFINITION = [
         { id: "bh7", pts: 1, text: "All items tagged with purchase order and visible" },
         { id: "bh8", pts: 1, text: "Location on purchase order receipt matches shelf location" },
         { id: "bh9", pts: 2, text: "Shelves are organized and neat; all large items in boxes" },
-        { id: "bh10", pts: 1, text: "Items in holding bins have the Shopify barcode" },
+        { id: "bh10", pts: 1, text: "Holding bins have Shopify barcode" },
         { id: "bh11", pts: 2, text: "Ready-to-purchase shelves labeled (1, 2, 3, etc.). Not handwritten" },
-        { id: "bh12", pts: 2, text: "Black bins present, labeled correctly (E1, E2, etc.); items bubble-wrapped, not handwritten" },
+        { id: "bh12", pts: 2, text: "Black bins present, labeled E1/E2 etc. (not handwritten); items bubble-wrapped" },
         { id: "bh13", pts: 1, text: "Boxes on ready-to-purchase shelves have Shopify barcode displayed" },
         { id: "bh14", pts: 3, text: "Ready-to-purchase shelves organized and neat; all large items in boxes; items tagged" },
         { id: "bh15", pts: 1, text: "Listing Station: barcode label printer present" },
-        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized" },
+        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized; cords not loose, proper cable management" },
         { id: "bh17", pts: 3, text: "Testing Area: device cleaning material, external monitor, charging cables neat" },
         { id: "bh18", pts: 1, text: "Testing Area: troubleshooting accessories present (controllers, Spec-Finder, flash drives)" },
         { id: "bh19", pts: 2, text: "Testing Area: clean and organized" },
-        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap/peanuts; unused boxes neatly stacked by size" },
-        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, shipping label printer, scale, box re-adjusting tool, scanner present" },
+        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap / anti-static biodegradable peanuts (NOT white/pink polystyrene); unused boxes stacked by size" },
+        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, label printer, scale, scanner all present (box re-adjusting tool optional)" },
         { id: "bh22", pts: 2, text: "Shipping Area: clean and organized" },
         { id: "bh23", pts: 4, text: "Photography Area: photo box or well-lit table with clean white butcher paper on a roll" },
         { id: "bh24", pts: 1, text: "Adequate lighting throughout all back-of-house areas" },
@@ -35326,12 +35463,12 @@ const AUDIT_DEFINITION = [
         { id: "pa3", pts: 1, text: "Optional PayMore branded hat worn forward, or backwards during a transaction" },
         { id: "pa4", pts: 1, text: "Closed-toed shoes worn" },
         { id: "pa5", pts: 1, text: "No headphones or earbuds (unless testing a device)" },
-        { id: "pa6", pts: 1, text: "Team members conducting themselves professionally" },
+        { id: "pa6", pts: 1, text: "Team conducting themselves professionally at all times" },
     ]},
     { key: "safety", title: "Safety & Security", items: [
         { id: "ss1", pts: 3, text: "Fire extinguishers tagged, charged, and hung 3.5–5 feet above the floor" },
         { id: "ss2", pts: 2, text: "First aid kit stocked according to OSHA requirements" },
-        { id: "ss3", pts: 2, text: "Back door locked from outside, openable from inside without keys or bolts; no obstructions" },
+        { id: "ss3", pts: 2, text: "Back door locked from outside, opens from inside without keys/tools; no obstructions" },
         { id: "ss4", pts: 4, text: "Safe is locked; cash/bank deposits not sitting out" },
         { id: "ss5", pts: 5, text: "Store fully open and purchasing during all posted business hours" },
         { id: "ss6", pts: 2, text: "Labor law / workplace compliance poster displayed on the wall" },
@@ -36772,10 +36909,68 @@ function _claimStores() {
 const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 const _claimsIsOversight = () =>
     _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
-// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases'
+// A WORKSPACE TAB SINCE 2026-10-06, not a popup (Ethan: "moving it from a popup to
+// an entire page"). Both popups' bodies now live in workspace.html's
+// #ws-pane-claims under their old ids, so everything below runs unchanged; what
+// changed is only how the tool is OPENED. Every caller (the red claim bubble,
+// the notification feed, Ctrl+K's sub-entries) still calls openClaimsTool(tab):
+// on the Workspace page that switches to the tab, anywhere else it carries the
+// tab across in sessionStorage and goes there.
+//
+// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases' | 'payments'
+let _claimsPendingTab = null;
+// 'store' | 'ov' when a tab button chose the view; null = by role (_claimsIsOversight).
+let _claimsView = null;
+const _claimsOnPage = () => !!document.getElementById('ws-pane-claims');
 function openClaimsTool(tab) {
-    if (_claimsIsOversight()) { openClaimsOversight(); switchOversightTab(tab === 'view' ? 'claims' : tab); }
-    else { openClaimsModal(); switchClaimsTab(tab); }
+    tab = tab || 'view';
+    if (!_claimsOnPage()) {
+        try { sessionStorage.setItem('speeksClaimsTab', tab); } catch (e) { /* lands on the list */ }
+        window.location.href = 'workspace.html#claims';
+        return;
+    }
+    _claimsPendingTab = tab;
+    _claimsView = null;
+    switchWorkspaceTab('claims');
+}
+
+// The two tab buttons. Each opens its own view, so someone holding both keys
+// (a manager lent the DM version) can reach both — as with the two popups.
+function openClaimsView(view) {
+    _claimsView = view === 'ov' ? 'ov' : 'store';
+    switchWorkspaceTab('claims');
+}
+
+// What opening a popup used to do, run each time the tab is shown — so coming
+// back to the tab re-reads, the way re-opening the popup did. Same order as
+// before: the tool's own start-up (a blank form, the list, the badge load),
+// then the requested sub-tab.
+function _claimsShowInPage() {
+    let tab = _claimsPendingTab;
+    _claimsPendingTab = null;
+    if (!tab) {
+        try { tab = sessionStorage.getItem('speeksClaimsTab'); sessionStorage.removeItem('speeksClaimsTab'); }
+        catch (e) { tab = null; }
+    }
+    tab = tab || 'view';
+    const ov = _claimsView ? _claimsView === 'ov' : _claimsIsOversight();
+    document.getElementById('ws-tab-claims')?.classList.toggle('active', !ov);
+    document.getElementById('ws-tab-claimsdm')?.classList.toggle('active', ov);
+    const storeEl = document.getElementById('claims-ws-store');
+    const ovEl = document.getElementById('claims-ws-ov');
+    if (storeEl) storeEl.style.display = ov ? 'none' : '';
+    if (ovEl) ovEl.style.display = ov ? '' : 'none';
+    const sub = document.getElementById('claims-ws-sub');
+    if (sub) sub.textContent = ov
+        ? 'Claims, refund mismatches and eBay cases across every store.'
+        : 'Claims, refund mismatches and eBay cases — anywhere our money is held or not lining up.';
+    if (ov) {
+        openClaimsOversight();
+        if (tab !== 'view' && tab !== 'claims') switchOversightTab(tab);
+    } else {
+        openClaimsModal();
+        if (tab !== 'view') switchClaimsTab(tab);
+    }
 }
 
 // A blank form. Called both when the tool opens and every time New Claim is
@@ -36796,8 +36991,10 @@ function startNewClaim() {
     switchClaimsTab('new');
 }
 
+// The store tool's start-up. Named for the popup it used to open; off the
+// Workspace page it routes there instead (see openClaimsTool).
 function openClaimsModal() {
-    toggleModal('claimsModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     _resetClaimForm();
     switchClaimsTab('view'); // the list first; New Claim is a button on it
     // In the background, so the Mismatches / eBay Cases badges show how many
@@ -36829,6 +37026,10 @@ function switchClaimsTab(tab) {
         const b = document.getElementById(id);
         if (b) b.style.display = tab === 'new' ? '' : 'none';
     });
+    // On the page the footer bar itself goes too: a popup's empty footer read as
+    // its bottom edge, a page's reads as a stray white strip.
+    const foot = document.getElementById('claimsFooter');
+    if (foot) foot.style.display = tab === 'new' ? '' : 'none';
     if (tab === 'view') fetchMyClaims();
     // openClaimsModal already started a load (for the tab badges); only fetch
     // again if that one has finished, and without re-asking eBay.
@@ -38275,6 +38476,9 @@ async function _holdAfterWrite(ctx) {
     _holdOpenForm[ctx] = null;
     await _holdFetch(ctx, _holdStores(ctx));
     renderHoldItems(ctx);
+    // A resolution may be what clears the 4pm feed card — don't make the person
+    // who just pressed it wait for the broadcast to come back round.
+    if (typeof checkClaimsDueAlerts === 'function') checkClaimsDueAlerts();
 }
 
 async function _holdSave(ctx, idx, status) {
@@ -38390,8 +38594,9 @@ function _claimReminderLock(store) {
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
 }
 
+// The oversight view's start-up — same story as openClaimsModal.
 function openClaimsOversight() {
-    toggleModal('claimsOversightModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     switchOversightTab('claims');
     fetchAllClaims();
     loadHoldItems('ov'); // badges for the Mismatches / eBay Cases tabs
@@ -39140,6 +39345,84 @@ async function checkAgingClaimsDM() {
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
+}
+
+// --- THE 4PM "DUE TODAY" ALERT, AS A FEED CARD -------------------------------
+// Ethan, 2026-10-08: "add a feed notification for the claims and disputes tool
+// only for that 4:00pm due today reminder ... they can't snooze it and it doesn't
+// go away until they mark the line item as resolved in the tool". The email is
+// unchanged; this is the same alert, kept on screen.
+//
+// Nothing here decides what is due. claims-disputes returns `dueAlerts`: the
+// items the 4pm mail (claims-disputes-email, manager_nudge) actually went out
+// about, minus the ones the tool now calls finished — resolved, settled,
+// answered on the site, or covered by a claim. See DUE_ALERT_DONE there for why
+// it is those four. So the card appears when the mail does (the email function
+// broadcasts as it logs) and stays, day after day, until each line is dealt
+// with. Not snoozeable (noSnooze), and Mark-all-read passes over it.
+//
+// STORE MANAGERS ONLY: whoever has the store tool, for their own store(s). Not
+// the DM (Ethan, 2026-10-08: "the DM does not need this for now as I use those
+// emails to reach out to them every day"), nor the CEO or MOCD.
+//
+// "Resolved" is either side: the site settling it / showing our reply, or the
+// manager marking it resolved — see DUE_ALERT_DONE in claims-disputes.
+let _claimsDuePollStarted = false;
+function _claimsDueBubbleEl() {
+    let b = document.getElementById('claimsDueAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'claimsDueAlertBubble';
+    // FEED ONLY — an invisible state-carrier, same as _plBubbleEl. It shipped
+    // 2026-10-08 dressed as a red floating toast and missing from the retired-
+    // bubble rule in styles.css, so it popped up on screen (Ethan, 2026-10-12:
+    // "we outlawed that style of popup a long time ago"). It must still go to
+    // display:flex when live — that is how _samGatherReminders sees it.
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="claimsDueAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _claimsDueScope() {
+    if (_claimsIsOversight()) return [];
+    if (!_jumpFeatureVisible('tool-claims-store')) return [];
+    return _claimStores();
+}
+async function checkClaimsDueAlerts() {
+    const stores = _claimsDueScope();
+    const hide = () => { const b = document.getElementById('claimsDueAlertBubble'); if (b) b.style.display = 'none'; };
+    if (!stores.length) { hide(); return; }
+    if (!_claimsDuePollStarted) { _claimsDuePollStarted = true; setInterval(checkClaimsDueAlerts, 30 * 60 * 1000); }
+    try {
+        const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success) return;           // a failed read leaves the card as it was
+        const items = j.dueAlerts || [];
+        if (!items.length) { hide(); return; }
+        const b = _claimsDueBubbleEl();
+        const t = document.getElementById('claimsDueAlertBubbleText');
+        if (!b || !t) return;
+        const today = j.today || '';
+        const multi = stores.length > 1;
+        const line = it => {
+            const what = _holdKindChip(it.type, it) || (it.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
+            const amt = Number(it.amount) > 0 ? ' $' + Number(it.amount).toFixed(2) : '';
+            const when = it.overdue ? 'overdue' : it.due === today ? 'due today' : it.due ? 'due tomorrow' : '';
+            return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
+        };
+        const overdue = items.some(it => it.overdue);
+        const summary = (items.length > 1 ? 'Resolve ' + items.length + ': ' : '') + items.map(line).join(' · ');
+        t.dataset.summary = summary;
+        t.dataset.overdue = overdue ? '1' : '';
+        // The tab the first (most urgent) item lives on.
+        const first = items[0].type;
+        t.dataset.tab = first === 'payment' ? 'payments' : first === 'mismatch' ? 'mismatch' : 'cases';
+        t.dataset.stores = [...new Set(items.map(it => it.store_code))].join(',');
+        t.textContent = summary;
+        b.style.display = 'flex';
+    } catch (_) { /* next poll or ping retries */ }
 }
 
 // Keep the claim alert stacked UNDER the green store-comment bubble whenever that
@@ -40916,7 +41199,8 @@ window.toggleAuditPanel = function(event) {
 // on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
 // OFF is the exception and must stay uncapped: any number of people can be off
 // on the same day, and a cap of 1 would lock the chip after the first one.
-const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity };
+// TR (Training) is uncapped for the same reason — two trainees can share a day.
+const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity, TR: Infinity };
 
 window.updateRoleLocks = function() {
     // Role capacity is per STORE. Normally the page shows one store's dots, so the
@@ -42114,6 +42398,21 @@ function copyBoxOrder(button) {
 
 const RECYCLE_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
+// Why an item is being recycled — required on every new request (Ethan,
+// 2026-10-12), on top of the free-text note, so the review tab can filter and
+// total by it. The key is what the DB stores (migration 0145 checks the same
+// four), the label is what people see — relabel freely, never re-key.
+// Rows filed before the field existed have no reason; the filter calls them
+// 'none' so they stay findable instead of vanishing under every option.
+const RECYCLE_REASONS = [
+    { key: 'poor_testing', label: 'Poor Testing' },
+    { key: 'damaged',      label: 'Damaged/Broken' },
+    { key: 'low_value',    label: 'Low Value' },
+    { key: 'other',        label: 'Other' },
+];
+const _recycleReasonLabel = k => (RECYCLE_REASONS.find(x => x.key === k) || {}).label || '';
+const _recycleReasonKey = r => (RECYCLE_REASONS.some(x => x.key === r.reason) ? r.reason : 'none');
+
 // Which store(s) this user can file/view recycle requests for.
 function _recycleStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
@@ -42213,6 +42512,7 @@ function toggleRecycleInventory() {
     });
     const qty = document.getElementById('recycleInvQty');
     if (qty) qty.value = '1';
+    _buildRecycleReasonPicker();
     switchRecycleTab('new');
 }
 
@@ -42250,9 +42550,22 @@ function _buildRecycleStorePicker() {
     else if (sel.options.length) sel.selectedIndex = 0;
 }
 
+// The reason dropdown on New Request. Built from RECYCLE_REASONS so the five
+// pages' markup only carries an empty <select>, and it opens on a placeholder
+// rather than the first reason — a preselected "Poor Testing" would get
+// submitted by everyone who didn't look, which defeats making it required.
+function _buildRecycleReasonPicker() {
+    const sel = document.getElementById('recycleInvReason');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Select a reason —</option>'
+        + RECYCLE_REASONS.map(x => `<option value="${x.key}">${x.label}</option>`).join('');
+    sel.value = '';
+}
+
 async function submitRecycleRequest() {
     const val = id => (document.getElementById(id) || {}).value;
     const store = (val('recycleInvStoreSelect') || '').toUpperCase();
+    const reason = val('recycleInvReason') || '';
     const sku = (val('recycleInvSku') || '').trim();
     const desc = (val('recycleInvDescription') || '').trim();
     const qty = Math.floor(Number(val('recycleInvQty')));
@@ -42265,6 +42578,7 @@ async function submitRecycleRequest() {
     if (costRaw === '' || costRaw == null || !Number.isFinite(Number(costRaw))) {
         alert('Please enter the item cost (per unit).'); return;
     }
+    if (!RECYCLE_REASONS.some(x => x.key === reason)) { alert('Please choose a reason for recycling.'); return; }
     if (!desc) { alert('Please describe the item and why it is being recycled.'); return; }
 
     const btn = document.getElementById('submitRecycleBtn');
@@ -42274,7 +42588,7 @@ async function submitRecycleRequest() {
         const res = await fetch(RECYCLE_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                action: 'submit_request', store, sku, description: desc, quantity: qty,
+                action: 'submit_request', store, sku, reason, description: desc, quantity: qty,
                 value: valueRaw === '' ? null : Number(valueRaw),
                 cost: Number(costRaw),
                 created_by: sessionStorage.getItem('speeksUserName') || null,
@@ -42291,6 +42605,10 @@ async function submitRecycleRequest() {
         });
         const qtyEl = document.getElementById('recycleInvQty');
         if (qtyEl) qtyEl.value = '1';
+        // Reason resets too: carrying the last one over is how a batch of five
+        // "Damaged/Broken" picks up a sixth item that was really Low Value.
+        const reasonEl = document.getElementById('recycleInvReason');
+        if (reasonEl) reasonEl.value = '';
         const skuEl = document.getElementById('recycleInvSku');
         if (skuEl) skuEl.focus();
         if (btn) {
@@ -42393,6 +42711,19 @@ function _buildRecycleViewFilters(stores) {
         // when it's actually there.
         if (pinned && [...mSel.options].some(o => o.value === pinned)) mSel.value = pinned;
     }
+    // Reason filter — shown to managers and DM/CEO alike, so both sides of the
+    // tool can see what a month's recycling was FOR. "No reason (older)" is only
+    // offered while some fetched row actually lacks one; once those age out of
+    // the 12-month window it disappears on its own.
+    const rSel = document.getElementById('recycle-reason-filter');
+    if (rSel) {
+        const cur = rSel.value;
+        const hasNone = _recycleMine.some(r => _recycleReasonKey(r) === 'none');
+        rSel.innerHTML = '<option value="">All reasons</option>'
+            + RECYCLE_REASONS.map(x => `<option value="${x.key}">${x.label}</option>`).join('')
+            + (hasNone ? '<option value="none">No reason (older)</option>' : '');
+        if ([...rSel.options].some(o => o.value === cur)) rSel.value = cur;
+    }
     const row = document.getElementById('recycle-view-filter-row');
     const sel = document.getElementById('recycle-view-filter');
     if (!row || !sel) return;
@@ -42425,7 +42756,7 @@ let _recycleQuery = '';
 // of reading the row.
 function _recycleMatches(r, q) {
     if (!q) return true;
-    const hay = [r.sku, r.description, r.created_by, r.store]
+    const hay = [r.sku, r.description, r.created_by, r.store, _recycleReasonLabel(r.reason)]
         .map(v => String(v == null ? '' : v).toLowerCase()).join(' \u0001 ');
     // Every word must appear somewhere, in any order: "iphone lee" finds the
     // LEE iPhone line without anybody having to guess the column order.
@@ -42460,6 +42791,13 @@ function renderMyRecycleTable() {
     const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
     let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
     if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    // Reason narrows the rows BEFORE any total is summed, so every footer line —
+    // the headline, Against/For, Ignored, Denied — is the total for that reason
+    // alone. It is a filter like the store one, not a search, so it also comes
+    // before monthCount: "3 of 12" under a reason means 3 of that reason's 12.
+    const filterReason = (document.getElementById('recycle-reason-filter') || {}).value || '';
+    const reasonName = filterReason === 'none' ? 'No reason' : _recycleReasonLabel(filterReason);
+    if (filterReason) rows = rows.filter(r => _recycleReasonKey(r) === filterReason);
     const q = _recycleQuery;
     // Counted BEFORE the search narrows anything, because "3 of 47" is the
     // number that tells somebody whether their search worked.
@@ -42474,6 +42812,7 @@ function renderMyRecycleTable() {
     const elsewhere = q && !rows.length
         ? _recycleMine.filter(r => _recycleMonthKey(r.created_at) !== month
                                    && (!filterStore || (r.store || '').toUpperCase() === filterStore)
+                                   && (!filterReason || _recycleReasonKey(r) === filterReason)
                                    && _recycleMatches(r, q))
         : [];
     // Keep the Store column whenever the user spans multiple stores — even with
@@ -42495,7 +42834,9 @@ function renderMyRecycleTable() {
         // another month and here is the button that takes you there.
         let emptyMsg;
         if (!q) {
-            emptyMsg = `No recycle requests for ${_recycleMonthLabel(month)}.`;
+            emptyMsg = filterReason
+                ? `No “${escapeHtml(reasonName)}” recycle requests for ${_recycleMonthLabel(month)}.`
+                : `No recycle requests for ${_recycleMonthLabel(month)}.`;
         } else if (elsewhere.length) {
             const months = [...new Set(elsewhere.map(r => _recycleMonthKey(r.created_at)))]
                 .sort().reverse();
@@ -42662,7 +43003,7 @@ function renderMyRecycleTable() {
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`, '', 'Date')}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`, '', 'Store') : ''}
             ${td(`${siteSkuSpan(r.sku || '', 'font-weight:700; color:var(--slate-charcoal);')}${siteCopyBtn(r.sku, 'SKU')}`, 'min-width:110px;', 'SKU')}
-            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
+            ${td(`${r.reason && _recycleReasonLabel(r.reason) ? `<span class="recycle-reason-chip">${escapeHtml(_recycleReasonLabel(r.reason))}</span> ` : ''}<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;', 'Qty')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;', 'Unit Cost')}
             ${td(struck
@@ -42697,8 +43038,8 @@ function renderMyRecycleTable() {
     const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
     html += `</tbody><tfoot><tr>
         ${footLabel(q
-            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”`
-            : `Total recycled cost · ${_recycleMonthLabel(month)}`)}
+            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”${filterReason ? ` · ${escapeHtml(reasonName)}` : ''}`
+            : `Total recycled cost · ${_recycleMonthLabel(month)}${filterReason ? ` · ${escapeHtml(reasonName)}` : ''}`)}
         <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
         <td colspan="2"></td>
     </tr>`;
@@ -43630,8 +43971,6 @@ const FEATURE_CATALOG = [
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multistore-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Claims & Disputes (Store)',     tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (Oversight)', tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
@@ -43746,6 +44085,13 @@ const FEATURE_CATALOG = [
     { key: 'cap-kpi-dm',               label: 'Store KPIs · All Stores (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Claims & Disputes — a Workspace tab since 2026-10-06 (was two SPEEKS Tools
+    // popups). The KEYS are unchanged on purpose: feature_overrides rows, the
+    // claims emails' audience in notify and the Ctrl+K sub-entries all name them.
+    // Two keys because the tool has two views: the store's own (managers) and
+    // every store (DM/CEO); each gates its own tab button in workspace.html.
+    { key: 'tool-claims-store',        label: 'Claims & Disputes — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (DM)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo'] },
     // Margin Replies — PARKED (2026-07-29), UNFINISHED. Deliberately absent from
     // the catalog, not merely defaulted off: a catalog entry would let someone
     // switch a half-built tool on from Feature Access. With no entry,
@@ -43754,8 +44100,16 @@ const FEATURE_CATALOG = [
     // bring it back:
     // { key: 'widget-margin-replies', label: 'Margin Replies (Tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     // { key: 'cap-bmargin-dm',        label: 'Margin Replies (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Aging Inventory — PAUSED (2026-10-06) while Ethan decides whether to keep
+    // it. Same parking as Margin Replies: with no catalog entry Ctrl+K, Feature
+    // Access and the nav dot resolve hidden, and _agEnabled() turns off the popups
+    // and login checks. ⚠️ The TAB is hidden by commenting its button out of
+    // workspace.html — applyRoleBasedUI never reads this catalog, so dropping
+    // the entry alone left the tab showing for every role. The emails are paused separately in notify
+    // (PAUSED_FEATURES). Data is untouched. Restore these two lines, and drop
+    // the key from PAUSED_FEATURES, to bring it back:
+    // { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
+    // { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-marginguide',   label: 'Margin Guide (Tab)',            tab: 'widgets', group: 'Operations', def: 'all' },
     // The editor behind the Margin Guide's "Edit" button. It can be PULLED BACK
     // here, but not handed out: mgCanEditLadder() checks MG_EDIT_ROLES (DM, CEO,
@@ -43804,7 +44158,14 @@ const FEATURE_CATALOG = [
     // Guide. DM and CEO only while it is new (Ethan, 2026-09-23); it widens to
     // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
     // picture-quality function, for the same reason ec-view-titles must match.
-    { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // ⏸ PARKED 2026-10-20 (v3.9.3). Ethan: it went live by accident with an
+    // earlier merge and is still being built — "make it as if it was never added
+    // to the live site", for everyone, him included. With the entry commented
+    // out _featureEffectiveVisible says no, so nothing fetches picture-quality
+    // and Listing Health draws No Photos the way it did before the grader (see
+    // _pqHtml, _lhHtml and the All Stores card). The function, the data and the
+    // nightly (paused anyway) are untouched. Restore by uncommenting this line.
+    // { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     // LENDS the corp hat to someone outside the corp roles. DM, CEO and MOCD have
     // corp powers by role whatever this says (_b2bIsCorp), which is why only the
     // DM column is on and switching CEO/MOCD off does nothing.
@@ -44045,7 +44406,7 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
-    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory', 'tool-claims-store', 'tool-claims-oversight'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'ec-upload', 'ec-view-categories', 'ec-view-photos',
@@ -44928,6 +45289,7 @@ const JUMP_PLACES = [
     { id: 'ws-brief',    label: 'Monthly Breakdown',  sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-monthly-breakdown', page: 'workspace.html',  hash: 'brief',     fn: 'switchWorkspaceTab' },
     { id: 'ws-kpis',     label: 'Store KPIs',         sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-weekly-kpis',       page: 'workspace.html',  hash: 'kpis',      fn: 'switchWorkspaceTab' },
     { id: 'ws-vrep',     label: 'Variance Replies',   sub: 'Workspace',  kind: 'tab', feature: 'widget-variance-replies',     page: 'workspace.html',  hash: 'vreplies',  fn: 'switchWorkspaceTab' },
+    { id: 'ws-claims',   label: 'Claims & Disputes',  sub: 'Workspace',  kind: 'tab', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'claim claims disputes insurance shopify usps ups damaged lost refund mismatch returns cases chargeback payments', page: 'workspace.html', hash: 'claims', fn: 'switchWorkspaceTab' },
     // Margin Replies is parked (see FEATURE_CATALOG) — restore with its catalog entry:
     // { id: 'ws-mrep',  label: 'Margin Replies',     sub: 'Workspace',  kind: 'tab', feature: 'widget-margin-replies',       page: 'workspace.html',  hash: 'mreplies',  fn: 'switchWorkspaceTab' },
     { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },
@@ -45613,13 +45975,14 @@ const _vrDayPast = (ms, addDays = 0) => {
 // checks never got told. Without the guard WSP's phantom deadline quietly
 // elapsed, which opened the DM note columns, painted seven read-only lines red
 // as "missed", and put an Edit button on a report the banner called clear.
+// An ENDED period is the same: the DM closed it, so nothing is late any more.
 function _vrIsPastDue(p) {
-    if (!p || p.all_clear || !p.manager_due_at) return false;
+    if (!p || p.all_clear || p.ended_at || !p.manager_due_at) return false;
     return _vrDayPast(new Date(p.manager_due_at).getTime());
 }
 // The seventh day itself — still on time, but the last day it will be.
 function _vrIsDueToday(p) {
-    if (!p || p.all_clear) return false;
+    if (!p || p.all_clear || p.ended_at) return false;
     const d = _vrDueDay(p);
     return !!d && _vrCtDay(Date.now()) === d;
 }
@@ -45631,6 +45994,8 @@ function _vrSubtitleText() {
     // The banner in the body already says what's going on; a "replies due"
     // date next to it would only contradict it.
     if (p.all_clear) return '';
+    // Ended: the banner says who closed it and when; no deadline to show.
+    if (p.ended_at) return 'Reply cycle ended';
     // Count the lines that were ASKED for, not every line stored. A targeted
     // upload also stores the rest of the store's report as read-only context,
     // and counting those made a 16-line ask read as "0/40 explained" — a
@@ -45744,14 +46109,19 @@ function renderVarianceReplies() {
     // Nothing was owed this period. The manager still gets the report to read —
     // that is the whole point of an all-clear upload rather than no upload.
     if (p.all_clear) html += _vrAllClearBannerHtml(p);
+    const ended = !!p.ended_at;
+    if (ended) html += _vrEndedBannerHtml(p);
     // A manager whose store is "in the clear" views the report read-only — no
     // reply obligation — so they can't edit notes (canGm off) but still see the
     // line items, team variance and download. A banner explains it.
     // The store-wide view of a targeted report is read-only for the same reason.
     // An all-clear period is read-only for the manager: the banner above already
     // says why, and there is nothing to answer.
-    const canGm = _vrIsManager() && !p.all_clear && !storeView;
+    // Ended is read-only for both sides. canDm stays true so the DM keeps the
+    // header actions (Reopen, Delete); dmCanEdit is what an ended period turns off.
+    const canGm = _vrIsManager() && !p.all_clear && !ended && !storeView;
     const canDm = _vrIsDM() && !storeView;
+    const dmCanEdit = canDm && !ended;
 
     // The reply cycle reveals columns as each side takes its turn:
     //   1. Managers fill GM Notes (extra-wide while it's the only note column);
@@ -45784,7 +46154,7 @@ function renderVarianceReplies() {
     const gmUnexplained = items.some(i => !i.gm_note);
     const replyPending = items.some(i => i.dm_note && i.dm_reply_requested && !i.mgr_reply);
     const mgrHasWork = !anyDmNote || gmUnexplained || replyPending;
-    const canEditNow = items.length > 0 && ((canGm && mgrHasWork) || (canDm && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
+    const canEditNow = items.length > 0 && ((canGm && mgrHasWork) || (dmCanEdit && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
     const editBtn = document.getElementById('vr-edit-btn');
     const saveBtn = document.getElementById('vr-save-btn');
     const cancelEditBtn = document.getElementById('vr-edit-cancel-btn');
@@ -45806,6 +46176,9 @@ function renderVarianceReplies() {
         </div>
         <div class="align-center gap-8" style="margin-right:14px;">
             ${dlBtn}
+            ${canDm && !p.all_clear && !_vrEditing ? (ended
+                ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrEndPeriod('${p.id}', false)" title="Open the reply cycle again — reminders resume where they left off">Reopen period</button>`
+                : `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrEndPeriod('${p.id}', true)" title="Close the reply cycle: no more reminders for you or the manager. The report stays.">End period</button>`) : ''}
             ${canDm ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrDeletePeriod('${p.id}')">Delete this upload</button>` : ''}
         </div>
     </div>`;
@@ -45844,7 +46217,7 @@ function renderVarianceReplies() {
             ${showDmCol ? td((() => {
                 // Same lock the other way: a DM note the manager already
                 // replied to can't be edited out from under the reply.
-                const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
+                const dmEditing = dmCanEdit && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
                 let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
                 // Only the note that WANTS something carries a chip (user,
                 // 2026-08-10). There used to be an "FYI — no reply needed" chip on
@@ -45882,6 +46255,9 @@ function _vrDmNotesOpen(p) {
     // A cleared period has no reply cycle to open, so the DM gets no note
     // columns and no Edit button on it — the green banner is the whole story.
     if (p && p.all_clear) return false;
+    // Ended: the columns open so whatever explanations DID come in can be read.
+    // Editing is switched off separately (canGm / dmCanEdit in the renderer).
+    if (p && p.ended_at) return true;
     return !p.manager_due_at || _vrIsPastDue(p);
 }
 
@@ -45990,6 +46366,33 @@ async function vrSaveEdits(btn) {
     renderVarianceReplies();
 }
 
+// End (or reopen) a period's reply cycle — DM only. The way out for a store
+// that never replied and won't be made to: every reminder about the period stops
+// on both sides, and the report stays. Reopening puts it back exactly as it was.
+async function vrEndPeriod(id, ended) {
+    if (ended && !confirm('End this period? No more reminders go to you or the manager, and the notes become read-only. You can reopen it later.')) return;
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'end_period', id, ended, by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const patch = { ended_at: json.ended_at || null, ended_by: json.ended_by || null };
+        if (_vrCurrent && _vrCurrent.period && _vrCurrent.period.id === id) Object.assign(_vrCurrent.period, patch);
+        const row = _vrPeriods.find(p => p.id === id);
+        if (row) Object.assign(row, patch);
+        _vrEditing = false;
+        renderVarianceReplies();
+        // Ending IS the thing the review card was nagging about — recompute now
+        // rather than at the next 30-minute poll.
+        if (typeof checkVarianceDmReminders === 'function') checkVarianceDmReminders();
+    } catch (e) {
+        alert('Could not ' + (ended ? 'end' : 'reopen') + ' the period: ' + e.message);
+    }
+}
+window.vrEndPeriod = vrEndPeriod;
+
 async function vrDeletePeriod(id) {
     if (!confirm('Delete this entire variance upload (all line items and replies)?')) return;
     try {
@@ -46066,6 +46469,20 @@ function _vrViewToggleHtml(p, allRows, storeView) {
                 ? 'Every line at ' + _VR_VARIANCE_CUTOFF + '% or worse — read only.'
                 : (names ? 'Replies requested from ' + escapeHtml(names) + '.' : '')
         }</span>
+    </div>`;
+}
+
+// Shown on an ENDED period (0146), to both sides. Says who ended it and when so
+// a manager opening an old report knows it was closed on purpose, not lost.
+function _vrEndedBannerHtml(p) {
+    const who = p.ended_by ? ' by ' + escapeHtml(p.ended_by) : '';
+    const when = p.ended_at
+        ? ' on ' + new Date(p.ended_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' })
+        : '';
+    return `<div style="display:flex; align-items:center; gap:9px; background:#f1f5f9; border:1.5px solid #cbd5e1;
+        border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:12.5px; font-weight:700; color:#475569;">
+        <span style="font-size:15px;">■</span>
+        <span>This period was ended${who}${when} — no more replies are needed.</span>
     </div>`;
 }
 
@@ -46519,7 +46936,10 @@ async function checkVarianceReminders() {
         // Cleared stores stay in the cache (they still get the "report is live"
         // announcement) — the dot + reply nags are gated on cleared separately.
         const cutoff = Date.now() - 45 * 86400000;
-        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        // An ENDED period (the DM closed its reply cycle, 0146) owes nothing and
+        // announces nothing, so it never enters the cache — dot, feed card and
+        // every row of _vrMaybePopup go quiet together.
+        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff && !p.ended_at);
         applyKpiReminder(); // re-evaluates the shared workspace nav dot + tab dot
         _vrMaybePopup();
     } catch (e) { /* next poll retries */ }
@@ -46562,9 +46982,12 @@ async function checkVarianceDmReminders() {
         if (!json || json.success === false) return;
         const now = Date.now();
         const cutoff = now - 45 * 86400000;
-        // Skip stores the DM has marked "in the clear" — no review nudges for them.
+        // Skip stores the DM has marked "in the clear" — no review nudges for them —
+        // and periods the DM has ENDED. Before End existed the only way out of the
+        // "ready for review" card was writing DM notes, so a store that never
+        // replied nagged forever (Ethan, 2026-10-12).
         const periods = (json.data || []).filter(p =>
-            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear);
+            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear && !p.ended_at);
         // State-based, like the manager side: persists until the DM acts, then
         // clears — no one-shot localStorage that vanished on navigation.
         // Track WHICH stores need the DM's eyes, so clicking the alert lands on one
@@ -47442,8 +47865,17 @@ function _agHasDmDelegation() {
     const name = sessionStorage.getItem('speeksUserName') || '';
     return _featureOverrideFor('cap-aging-dm', roleClass, name) === true;
 }
-function _agIsDM() { return _agRole() === 'district manager' || _agHasDmDelegation(); }
-function _agIsStoreUser() { return _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
+// PAUSED (2026-10-06) — see the FEATURE_CATALOG note. Hiding the tab isn't
+// enough: the login checks, the realtime re-checks and the purple bubble all
+// start from _agIsDM / _agIsStoreUser, so both answer false while it's parked.
+function _agEnabled() {
+    if (typeof _featureEffectiveVisible !== 'function') return false;
+    const roleClass = 'role-' + _agRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    return _featureEffectiveVisible('widget-aging-inventory', roleClass,
+        sessionStorage.getItem('speeksUserName') || '') === true;
+}
+function _agIsDM() { return _agEnabled() && (_agRole() === 'district manager' || _agHasDmDelegation()); }
+function _agIsStoreUser() { return _agEnabled() && _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
 
 // The store user's own store(s) — an MSM sees both, stacked in one list.
 function _agMyStores() {
@@ -47560,6 +47992,7 @@ function agCancelItemEdit() { _agEditItem = null; _agClearNeDrafts(); renderAgin
 async function loadAgingInventory() {
     const body = document.getElementById('ag-body');
     if (!body) return;
+    if (!_agEnabled()) { body.innerHTML = '<div class="status-message">Aging Inventory is paused.</div>'; return; }
     body.innerHTML = '<div class="status-message">Loading aging inventory…</div>';
     const stores = _agIsDM() ? ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'] : _agMyStores();
     if (!stores.length) {
@@ -48245,7 +48678,7 @@ function _agAckedSet(key) {
 }
 
 function _agDotNeeded() {
-    return _agMyItemsCache.some(_agAwaitingStore);
+    return _agEnabled() && _agMyItemsCache.some(_agAwaitingStore);
 }
 
 async function checkAgingInvReminders() {
@@ -49805,7 +50238,9 @@ function samMarkAllRead() {
     // about, which is exactly the failure the two separate controls avoid.
     const map = _samGetHidden();
     const until = Date.now() + 20 * 3600000;
-    _samGatherReminders().forEach(r => { map[r.key] = { sig: r.sig, until }; });
+    // Not the noSnooze cards: they have no Snooze of their own, so a bulk one
+    // must not supply it (see _samGatherReminders).
+    _samGatherReminders().forEach(r => { if (!r.noSnooze) map[r.key] = { sig: r.sig, until }; });
     _samSetHidden(map);
     if (typeof updateMainBadge === 'function') updateMainBadge();
     renderActionFeed();
@@ -50000,6 +50435,12 @@ function _samReminderCfg() {
     // checkAgingClaimsDM, so it is never set for a manager.
     const _clT = document.getElementById('claimAlertBubbleText');
     const _clDel = (_clT && _clT.dataset && _clT.dataset.del) || '';
+    // The 4pm due-today card: stamped by checkClaimsDueAlerts off the same items
+    // as its summary. The tab is one of a fixed four, never free text.
+    const _cdT = document.getElementById('claimsDueAlertBubbleText');
+    const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
+    const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
+        ? _cdT.dataset.tab : 'cases';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
@@ -50019,6 +50460,15 @@ function _samReminderCfg() {
           title: _clDel === 'only' ? 'Claim Delete Requests' : 'Claims & Disputes',
           urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
           action: "openClaimsTool('view')" },
+        // The 4pm "due today" mail, kept on screen (checkClaimsDueAlerts). No
+        // Snooze, and Mark-all-read skips it: it leaves when each line is
+        // resolved in the tool, and only then. Overdue once a deadline on it
+        // has passed — it stays after that too, until somebody records what
+        // happened.
+        { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
+          title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
+          urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true,
+          action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
         // data-replyonly: no line is actually awaiting a verdict, a manager just
@@ -50372,7 +50822,12 @@ function _samGatherReminders() {
         // a new sender — counts as new information and breaks through the snooze
         // rather than staying buried until tomorrow.
         const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
-        if (_samIsHidden(c.key, sig)) return;
+        // A noSnooze card has no Snooze button, but Mark-all-read used to snooze
+        // it anyway (it writes every card on screen into the same map), which
+        // hid the KPI and Listing Goals deadlines for 20 hours with one click.
+        // So the map is not consulted for them at all — including any entry
+        // written before this was fixed.
+        if (!c.noSnooze && _samIsHidden(c.key, sig)) return;
         // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
         // covered stores on data-stores), clicking it opens that store's tool even
         // while he's on the other store's dashboard — without switching dashboards.
@@ -50438,7 +50893,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
     bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
@@ -51808,7 +52263,7 @@ function renderDmListingModal() {
     }
 
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', OFF: 'Off' };
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', TR: 'Training', OFF: 'Off' };
     pane = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
         + '<div class="dmx-ps">Goal ' + sel.target + ' listings · ceiling ' + (sel.capacity || '–')
@@ -56101,7 +56556,14 @@ function _ecSyncChrome() {
         const bits = [];
         if (_lhPhotoErr) bits.push('Photo Check Failed');
         else if (pics) bits.push(`${pics} Missing A Photo`);
-        if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
+        // EVERY TOOL ON THE PAGE, not only Categories (Ethan, 2026-10-15: "LEE ·
+        // All Clear" sat over Title and Picture Quality rows — "This should have
+        // the total to submit include everything available not just one or two of
+        // the 3 tools"). The same counts as the tab chips, from _lhTabCounts, so
+        // the header and the chips can never disagree.
+        const total = _lhTabCounts().reduce((s, t) => s + t.n, 0);
+        if (total) bits.push(`${total} To Submit`);
+        else if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
         sub.textContent = _ecView === 'cats'
             ? `${_ecStore || ''} · ${bits.length ? bits.join(' · ') : 'All Clear'}`
             : _ecView === 'health' ? 'Every store, at a glance'
@@ -56673,7 +57135,9 @@ function _ecHealthCats(store) {
          + (hasTitles ? grp('Title Quality', [
                { k: 'Wrong Titles', n: titlesBad, bad: 'ec-bad' },
                { k: 'Titles To Review', n: titles }]) : '')
-         + (pqParts.length ? grp('Picture Quality', pqParts) : '')
+         // No grader (ec-view-picture-quality parked): No Photos goes back on the
+         // face of the card as the plain red row it was before the drawer.
+         + (pq ? grp('Picture Quality', pqParts) : hasPics ? row('No Photos', pics, 'ec-bad') : '')
          + (hasCats ? grp('Categories', [
                { k: 'In &ldquo;Other&rdquo;', n: other },
                { k: 'No Suggestion', n: none },
@@ -56807,6 +57271,23 @@ let _lhTab = null;   // 'titles' | 'photos' | 'cats' — null until somebody pic
 function lhSetTab(t) { _lhTab = t; ecRender(); }
 window.lhSetTab = lhSetTab;
 
+// The three tools' counts, for the tab chips AND the header line (_ecSyncChrome)
+// — one place, so they always agree. Only the tools this reader holds.
+function _lhTabCounts() {
+    const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
+    const catN = _rcData?.counts
+        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
+        : (_rcData?.queue || []).length;
+    return [
+        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
+          n: (_ltData?.queue || []).length, bad: !!_ltErr },
+        { v: 'photos', label: _lhMay('pictures') ? 'Picture Quality' : 'No Photos', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
+          // Passed rows ride in the same queue (for the Passed tab) but are not work.
+          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).filter(r => r.verdict !== 'pass').length, bad: noPhotos > 0 || !!_lhPhotoErr },
+        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
+    ].filter(t => t.on);
+}
+
 function _lhHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
@@ -56815,16 +57296,7 @@ function _lhHtml() {
     // ec-view-photos, only the DM holds Picture Quality for now, so a manager
     // sees this tab with the one sub-tab they have.
     const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
-    const catN = _rcData?.counts
-        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
-        : (_rcData?.queue || []).length;
-    const tabs = [
-        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
-          n: (_ltData?.queue || []).length, bad: !!_ltErr },
-        { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
-          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).length, bad: noPhotos > 0 || !!_lhPhotoErr },
-        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
-    ].filter(t => t.on);
+    const tabs = _lhTabCounts();
     // Reachable only by a race: the pill needs one of the switches, so losing
     // all of them between the click and the render means an override changed
     // underneath. Say that, rather than drawing an empty page that looks broken.
@@ -57025,13 +57497,68 @@ const _PQ_TIERS = [
     { v: 'nophotos', label: 'No Photos',        cls: 'lt-t-bad',  half: 'photos' },
     { v: 'retake',   label: 'Retake',           cls: 'lt-t-bad',  half: 'pictures' },
     { v: 'fix',      label: 'Fix These Photos', cls: 'lt-t-warn', half: 'pictures' },
-    { v: 'reorder',  label: 'Reorder',          cls: 'lt-t-ok',   half: 'pictures' },
+    // QUICK FIXES (Ethan, 2026-10-11 — first named One-Click Fixes, renamed the
+    // same day): the photos are fine, and the fix is a
+    // change the tool makes when a manager approves it — a new order, or deleting
+    // a duplicate. The verdict is still called 'reorder' in the table and the
+    // API; only the words on screen changed.
+    { v: 'reorder',  label: 'Quick Fixes',  cls: 'lt-t-ok',   half: 'pictures' },
+    // PASSED (Ethan, 2026-10-11: "Can I see all of the OVL ones on the tool even
+    // if they passed so I can confirm that I agree with the pass?"). The last 14
+    // days of passes, for agreeing with — not work, so it never counts toward the
+    // section's total and is never the tab the section lands on. `review` marks
+    // it. "Should Flag" on a row is the disagreement, with a note.
+    { v: 'pass',     label: 'Passed',       cls: 'lt-t-ok',   half: 'pictures', review: true },
 ];
+
+// ⚠️ ROWS STAY WHERE THEY WERE (Ethan, 2026-10-15, LEE: "when I delete or
+// reorder, the line will disappear and just move up or down the list, please
+// keep it static so the user can just go down the list without thinking if they
+// have fixed something or not"). The queue comes back newest-graded first and an
+// approval re-saves the row, so it jumped; a Quick Fix it closed vanished. Now
+// each tab keeps the order it was first shown in, for this store, until the page
+// is reloaded: a row approved here keeps its slot and says what was done. New
+// rows go at the end. A row with NOTHING LEFT goes away (Ethan, the same
+// evening, looking at the done cards: "When they are good now, shouldn't they
+// just go away?") — the rest keep their order, so nothing jumps.
+// RECHECK STAYS ON THE ROW, IN ITS SLOT (Ethan, 2026-10-16): "Checking…" on
+// the button while it runs, then "✓ Passed On Recheck" — or "Rechecked —
+// still needs:" over the new findings. No popup, and the row does not jump to
+// another tab. A pass shows the row as it WAS, its findings struck through.
+// Held in _pqPlaces.rechecked, so it is this page's only: "a passed on recheck
+// row should go away after a refresh".
+let _pqPlaces = { store: null, order: new Map(), done: new Map(), rechecked: new Map() };
+function _pqPlace(tier, all) {
+    if (_pqPlaces.store !== _ecStore) _pqPlaces = { store: _ecStore, order: new Map(), done: new Map(), rechecked: new Map() };
+    const live = new Map(all.map(r => [r.productId, r]));
+    const done = _pqPlaces.done, rc = _pqPlaces.rechecked;
+    const rcHere = id => rc.get(id)?.tier === tier;
+    const here = all.filter(r => r.verdict === tier && !(rc.has(r.productId) && !rcHere(r.productId))).map(r => r.productId);
+    const shown = id => here.includes(id) || (rcHere(id) && (live.has(id) || rc.get(id).verdict === 'pass'));
+    const was = (_pqPlaces.order.get(tier) || []).filter(id => shown(id) || done.get(id)?.tier === tier);
+    // A row acted on in ANOTHER tab that has moved here stays in its own tab.
+    const ids = [...was, ...here.filter(id => !was.includes(id) && !(done.has(id) && done.get(id).tier !== tier))];
+    _pqPlaces.order.set(tier, ids);
+    return ids.filter(shown).map(id => {
+        const c = rcHere(id) ? rc.get(id) : null;
+        return { r: c && c.verdict === 'pass' ? c.before : live.get(id), done: done.get(id)?.said || null, rc: c, gone: false };
+    });
+}
+function _pqMarkDone(pid, row, what) {
+    if (_pqPlaces.store !== _ecStore) return;
+    const d = _pqPlaces.done.get(pid);
+    _pqPlaces.done.set(pid, { tier: d ? d.tier : _pqTier, row, said: d ? [...d.said, what] : [what] });
+}
 
 function _pqHtml() {
     const head = (inner, badge) => _lhSec('Photos', 'Picture Quality', inner, badge);
     const store = _ecEsc(_ecStore || '');
     const mayPics = _lhMay('pictures');
+    // Without the grader this tab is No Photos and nothing else — drawn as its
+    // own section, the way it was before Picture Quality existed. That also keeps
+    // Confirm Shots (gated on role, not on the switch) off the screen while
+    // ec-view-picture-quality is parked.
+    if (!mayPics) return _lhMay('photos') ? _lhPhotosHtml() : '';
     // Only the tabs this reader holds. See _lhHtml: two switches, one section.
     const tiers = _PQ_TIERS.filter(t => _lhMay(t.half));
     if (!tiers.length) return '';
@@ -57041,7 +57568,7 @@ function _pqHtml() {
     // Land on the worst tab with anything in it — No Photos first, because a
     // listing a shopper sees as an empty square outranks every photo it does have.
     if (!_pqTier || !tiers.some(t => t.v === _pqTier) || (!_pqPicked && !count(_pqTier))) {
-        const first = tiers.find(t => count(t.v));
+        const first = tiers.find(t => !t.review && count(t.v));
         _pqTier = first ? first.v : tiers[0].v;
     }
     const tabs = tiers.length < 2 ? '' : `<div class="rc-modes lt-modes">${tiers.map(t => {
@@ -57051,6 +57578,7 @@ function _pqHtml() {
                 <span class="rc-chip-n ${n ? t.cls : ''}">${n}</span></button>`;
     }).join('')}</div>`;
 
+    const placed = _pqTier === 'nophotos' || !_pqData ? [] : _pqPlace(_pqTier, all);
     let inner;
     if (_pqTier === 'nophotos') {
         inner = _lhPhotosHtml(true);
@@ -57062,18 +57590,30 @@ function _pqHtml() {
           </div>`;
     } else if (!_pqData) {
         inner = '';
-    } else if (!count(_pqTier)) {
-        inner = `<div class="lh-clear">
+    } else if (!placed.length) {
+        inner = _pqTier === 'pass'
+          ? `<div class="lh-clear"><span>No Listings Passed At ${store} In The Last 14 Days</span></div>`
+          : `<div class="lh-clear">
             <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
             <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
           </div>`;
     } else {
-        const rows = all.filter(r => r.verdict === _pqTier);
-        inner = `<div class="lt-rows">${rows.map(_pqRow).join('')}</div>`;
+        inner = `<div class="lt-rows">${placed.map(x => _pqRow(x.r, x.done, x.rc)).join('')}</div>`;
     }
-    const total = tiers.reduce((s, t) => s + count(t.v), 0);
+    const total = tiers.filter(t => !t.review).reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
-    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
+    // Train The Checker is RETIRED from the screen (Ethan, 2026-10-14: "we don't
+    // need it anymore"). pqTrainOpen and the trainer stay in the file, and his
+    // 395 labels stay in pq_photo_labels — framing is to be revisited.
+    // Confirm Shots (2026-10-16) takes its place: the gold set's shot labels.
+    // ABOVE the tabs, not under the queue: at the bottom it sat 4,000px down on
+    // OVL Quick Fixes and Ethan could not find it (2026-10-16).
+    const train = _pqcMayUse() ? `<div class="pqt-entry pqt-entry-top">
+        <button type="button" class="pqt-btn" onclick="pqConfirmOpen()">Confirm Shots</button>
+        <button type="button" class="pqt-btn" onclick="pqConfirmOpen('', true)"
+          title="Listings you passed in your store reviews, weakest sheets first: confirming them makes them training material">More For Training</button>
+        <span>Say which shot each photo is — the answer key a cheaper model is tested and trained on.</span></div>` : '';
+    return head(train + tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
 
@@ -57109,7 +57649,7 @@ function _pqDismissedHtml(tier) {
             <div class="lt-dn-title">${_ecEsc(r.title || '')}</div>
             <div class="lt-dn-meta">
               <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
-              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : 'Photos Are Fine'}</span>
+              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : r.as === 'flag' ? 'Should Have Flagged' : 'Photos Are Fine'}</span>
               <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + _lhWhen(r.at) : ''}</span>
             </div>
             ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
@@ -57145,6 +57685,815 @@ window.pqReopen = pqReopen;
 // already say it, so the sentence was a second reading of the same thing.
 
 function pqSetTier(v) { _pqTier = v; _pqPicked = true; ecRender(); }
+
+// ============================================================================
+// TRAIN THE CHECKER — a person grades single photos (2026-10-08)
+// ============================================================================
+// Framing — centred, level, big enough — is the call the checker could not get
+// right: four approaches scored against Ethan's answer key, and each either
+// missed what he would flag or flagged what he passed. The key only said which
+// LISTINGS were off; this collects which PHOTOS are, one at a time, beside the
+// guide's example of the same shot, into pq_photo_labels (0141). A framing
+// rule is then scored against these labels offline, for free, before any paid
+// run. Ethan: "I like building a tool to train the system on this before we
+// start spending money."
+//
+// ⚠️ ONE KEYPRESS PER PHOTO. Hundreds of photos is only bearable if a fine one
+// costs a single key: 1 = Fine, 0 = Not The Item, 2–6 toggle a problem and
+// Enter saves them, ← goes back to change an answer, → skips. Re-answering a
+// photo overwrites it (one row per photo).
+// ⚠️ NOTHING HERE CALLS A MODEL. The photos come from listings already graded,
+// read live; saving writes one row. Free to use for as long as it takes.
+let _pqTrain = null;
+const _PQ_TRAIN_PROBS = [
+    ['off_center', 'Off-Centre', '2'], ['crooked', 'Crooked', '3'], ['too_small', 'Too Small', '4'],
+    ['blurry', 'Blurry', '5'], ['cut_off', 'Cut Off', '6'],
+    // Ethan, 2026-10-08: a scuffed table "looks gross and would totally be the
+    // reason that it might not sell" — costed 5/10/15 by price on the server.
+    ['dirty_backdrop', 'Dirty Table', '7'],
+    // …and anything in frame besides the item and the white backdrop (the Onyx's
+    // grey lightbox edge, the same day). Same price scale on the server.
+    ['clutter', 'Off Backdrop', '8'],
+    // Reflections in the item (3/6/9 by price). Not on a Screen Off shot, which
+    // is meant to show them — the server skips those.
+    ['reflection', 'Reflection', '9'],
+    // Not taken in the same spot as the listing's other photos (OVL iPhone SE 2,
+    // 2026-10-08). A letter, because the digits ran out; either case works.
+    ['different_spot', 'Different Spot', 'S'],
+];
+
+async function pqTrainOpen() {
+    _pqTrain = { store: _ecStore || '', queue: [], i: 0, picks: new Set(), busy: true, err: null, skipped: 0 };
+    document.addEventListener('keydown', _pqTrainKey);
+    _pqTrainRender();
+    await _pqTrainLoad();
+}
+window.pqTrainOpen = pqTrainOpen;
+
+async function _pqTrainLoad() {
+    const t = _pqTrain;
+    if (!t) return;
+    t.busy = true; _pqTrainRender();
+    try {
+        const d = await _pqFetch(`?view=train&store=${encodeURIComponent(t.store)}&skip=${t.skipped}`);
+        if (_pqTrain !== t) return;
+        Object.assign(t, { queue: d.queue || [], i: 0, total: d.total || 0, done: d.done || 0,
+                           left: d.left || 0, store: d.store || t.store, err: null });
+    } catch (e) { t.err = e.message || String(e); }
+    t.busy = false;
+    _pqTrainRender();
+}
+
+function pqTrainClose() {
+    document.removeEventListener('keydown', _pqTrainKey);
+    _pqTrain = null;
+    const el = document.getElementById('pqTrainOverlay');
+    if (el) el.remove();
+}
+window.pqTrainClose = pqTrainClose;
+
+function pqTrainToggle(k) {
+    const t = _pqTrain;
+    if (!t || t.busy || !t.queue[t.i]) return;
+    t.picks.has(k) ? t.picks.delete(k) : t.picks.add(k);
+    _pqTrainRender();
+}
+window.pqTrainToggle = pqTrainToggle;
+
+function pqTrainMove(step) {
+    const t = _pqTrain;
+    if (!t || t.busy) return;
+    // A photo passed over unanswered stays unlabelled on the server; counting
+    // it is what keeps the next lot from starting with it again.
+    if (step > 0 && t.queue[t.i] && !t.queue[t.i].saved) t.skipped++;
+    t.i = Math.max(0, Math.min(t.queue.length, t.i + step));
+    if (t.i >= t.queue.length && t.left > t.skipped) { _pqTrainLoad(); return; }
+    // Going back shows the answer already given, so it can be changed.
+    const p = t.queue[t.i];
+    t.picks = new Set(p && p.saved === 'problem' ? p.savedProblems || [] : []);
+    _pqTrainRender();
+}
+window.pqTrainMove = pqTrainMove;
+
+async function pqTrainLabel(label) {
+    const t = _pqTrain;
+    const p = t && t.queue[t.i];
+    if (!p || t.busy) return;
+    if (label === 'problem' && !t.picks.size) return;
+    t.busy = true; _pqTrainRender();
+    const r = await _pqPost({ action: 'label', store: t.store, productId: p.productId, src: p.src, n: p.n,
+                              sheet: p.sheet, shot: p.shot, label, problems: [...t.picks] });
+    if (_pqTrain !== t) return;
+    t.busy = false;
+    if (!r.ok) { t.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqTrainRender(); return; }
+    if (!p.saved) { t.done++; t.left--; }
+    p.saved = label; p.savedProblems = label === 'problem' ? [...t.picks] : [];
+    t.err = null; t.picks = new Set(); t.i++;
+    // The server hands out sixty at a time; past the end, fetch the next lot.
+    if (t.i >= t.queue.length && t.left > t.skipped) { await _pqTrainLoad(); return; }
+    _pqTrainRender();
+}
+window.pqTrainLabel = pqTrainLabel;
+
+function _pqTrainKey(e) {
+    if (!_pqTrain || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    const k = e.key;
+    const prob = _PQ_TRAIN_PROBS.find(x => x[2] === (k.length === 1 ? k.toUpperCase() : k));
+    if (k === 'Escape') pqTrainClose();
+    else if (k === '1') pqTrainLabel('fine');
+    else if (k === '0') pqTrainLabel('not_item');
+    else if (prob) pqTrainToggle(prob[0]);
+    else if (k === 'Enter') pqTrainLabel('problem');
+    else if (k === 'ArrowLeft') pqTrainMove(-1);
+    else if (k === 'ArrowRight') pqTrainMove(1);
+    else return;
+    e.preventDefault();
+}
+
+function _pqTrainHtml() {
+    const t = _pqTrain;
+    const head = `<div class="pqt-head">
+        <div><div class="pqt-eyebrow">Picture Quality · ${_ecEsc(t.store)}</div>
+             <div class="pqt-title">Train The Checker</div></div>
+        <div class="pqt-count">${t.done || 0} Graded · ${Math.max(0, t.left || 0)} To Go</div>
+        <button type="button" class="pqt-x" onclick="pqTrainClose()" aria-label="Close">×</button>
+      </div>`;
+    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading photos…</div>`;
+    const err = t.err ? `<div class="pqt-err">${_ecEsc(t.err)}</div>` : '';
+    const p = t.queue[t.i];
+    if (!p) {
+        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the next photos…'
+            : t.skipped ? `Done for now. The ${t.skipped} photo${t.skipped === 1 ? '' : 's'} you skipped will come back next time.`
+            : `All caught up — every photo from the graded listings at ${_ecEsc(t.store)} has an answer.`}</div>`;
+    }
+    const pick = t.picks;
+    const was = p.saved ? `<span class="pqt-was">Answered: ${_ecEsc(p.saved === 'problem'
+        ? (p.savedProblems || []).map(k => (_PQ_TRAIN_PROBS.find(x => x[0] === k) || [k, k])[1]).join(', ')
+        : p.saved === 'fine' ? 'Fine' : 'Not The Item')}</span>` : '';
+    return head + err + `
+      <div class="pqt-ask">Judge only how the photo is <b>taken</b>: centred, level, big enough, sharp, on a clean white backdrop with nothing else in frame and no reflections — the way the guide's example is.
+        Not every difference matters; would you reshoot it?</div>
+      <div class="pqt-pair">
+        <figure class="pqt-fig">
+          <div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt="Listing photo ${p.n}"></div>
+          <figcaption><b>Photo ${p.n} of ${p.of}</b>${p.w && p.h && p.w !== p.h ? ` · ${p.w}×${p.h}` : ''}<br>
+            ${_ecEsc(p.title || '')} <span class="lh-sku">${_ecEsc(p.sku || '')}</span></figcaption>
+        </figure>
+        <figure class="pqt-fig">
+          <div class="pqt-frame">${p.example ? `<img src="${_ecEsc(p.example)}" alt="Guide example">`
+            : `<span class="pqt-noex">${p.shot ? 'No example photo for this shot' : 'Not matched to a guide shot'}</span>`}</div>
+          <figcaption><b>Guide: ${_ecEsc(p.shot || (p.said && p.said.length ? p.said.join(', ') : '—'))}</b><br>
+            ${_ecEsc(p.sheetName || '')}</figcaption>
+        </figure>
+      </div>
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqTrainLabel('fine')" ${t.busy ? 'disabled' : ''}>Fine <kbd>1</kbd></button>
+        ${_PQ_TRAIN_PROBS.map(([k, label, key]) => `<button type="button" class="pqt-btn pqt-prob${pick.has(k) ? ' pqt-on' : ''}"
+            onclick="pqTrainToggle('${k}')" ${t.busy ? 'disabled' : ''}>${label} <kbd>${key}</kbd></button>`).join('')}
+        <button type="button" class="pqt-btn pqt-save" onclick="pqTrainLabel('problem')" ${t.busy || !pick.size ? 'disabled' : ''}>Save Problems <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqTrainLabel('not_item')" ${t.busy ? 'disabled' : ''}
+            title="A closeup of a detail, the box, a cable — framing does not apply">Not The Item <kbd>0</kbd></button>
+      </div>
+      <div class="pqt-nav">
+        <button type="button" class="pqt-link" onclick="pqTrainMove(-1)" ${t.i ? '' : 'disabled'}>← Back</button>
+        ${was}
+        <button type="button" class="pqt-link" onclick="pqTrainMove(1)">Skip →</button>
+      </div>`;
+}
+
+function _pqTrainRender() {
+    if (!_pqTrain) return;
+    let el = document.getElementById('pqTrainOverlay');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pqTrainOverlay';
+        el.className = 'pqt-overlay';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Train The Checker');
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pqt-box">${_pqTrainHtml()}</div>`;
+}
+
+// ============================================================================
+// CONFIRM SHOTS — Ethan says which shot each photo is (2026-10-16)
+// ============================================================================
+// The answer key for a local vision model. The gold set (scripts/pq-gold/)
+// found no human shot labels in the database: the trainer above judged framing
+// beside the model's shot and could not say the shot was wrong. Here a graded
+// listing's photos come up one at a time with the saved grade's label
+// prefilled. The label is kept or changed, and the whole listing is saved to
+// pq_shot_labels (0148) when its last photo is answered.
+//
+// ⚠️ ONE KEY PER PHOTO. Most labels are right, so Enter keeps the label and
+// moves on; a listing that is right throughout is Shift+Enter, once. A wrong
+// label is one key: 1–9, 0 for the sheet's first ten shots, A S D F G H J K L ;
+// for the next ten, X = Extra, B = Box. Shift with a shot key ADDS it (one photo
+// can be two shots: front AND lens open). ← goes back.
+// ⚠️ THE FLAGS ARE EVERYTHING ELSE THE RULES READ (0149; Ethan, 2026-10-16: "add
+// in anything else that you see our rules use if this is for the purpose of
+// training"). Each one is named after the model's own field: framing problems,
+// the issues rules.ts costs, closeup (= whole_item false) and "repeats photo
+// N". The flags start BLANK, not prefilled from the grade, because a prefilled
+// "no reflection" would train the eye to agree with the model. On a photo that
+// was answered, blank means NO (flags_checked). That is the only way a flag can
+// be scored, so it only works if every answered photo gets a glance for them.
+// Click only, so the common path is still one key. The listing-level facts (the
+// lead photo, a hidden serial, the main flaw shown…) sit in their own panel,
+// and only the questions that apply to the listing are asked.
+// ⚠️ DM / CEO ONLY — the server enforces it too. Nothing here calls a model.
+// The queue order (busiest sheet with the least gold first) is the server's.
+let _pqc = null;
+const _PQC_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'];
+// Grouped the way they're judged. Only mark an issue a buyer would notice:
+// rules.ts acts on MAJOR issues only.
+const _PQC_FLAGS = [
+    ['Framing', [['crooked', 'Crooked'], ['off_center', 'Off-Centre'], ['too_small', 'Too Small'], ['cut_off', 'Cut Off'],
+                 ['turned', 'Turned'], ['wrong_angle', 'Wrong Angle']]],
+    ['Photo', [['blurry', 'Blurry'], ['too_dark_or_glare', 'Dark / Glare'], ['reflection', 'Reflection']]],
+    ['Setting', [['clutter', 'Off Backdrop'], ['dirty_backdrop', 'Dirty Table'], ['loose_cord', 'Loose Cord'],
+                 ['not_on_stand', 'Not On Stand'], ['different_spot', 'Different Spot']]],
+    ['Shows', [['closeup', 'Closeup'], ['screen_on', 'Screen On'], ['label_legible', 'Serial Legible'],
+               ['personal_info', 'Personal Info'], ['stock_photo', 'Stock Photo'], ['fake_or_edited', 'Fake / Edited'],
+               ['wrong_item', 'Wrong Item']]],
+];
+const _PQC_BOX = ['new-in-box', 'new-open-box'];
+// A title that itself states the defect ("Broken …", "… For Parts") gives the
+// model a main flaw with source "title", so the question is asked for it too.
+const _PQC_TITLE_FLAW = /\b(broken|for parts|parts only|cracked|damaged|as[- ]is|not working|read desc)/i;
+const _PQC_MULTI = ['item-lots', 'speaker-pairs'];
+// Which listing-level questions apply. Asked only where the rule can fire, so a
+// plain used game is two toggles, not seven.
+// The cosmetic sentences as the person now reads them: the code's call on each,
+// turned over where the person said it was wrong (l.flip, by index).
+const _pqcNotes = l => (l.notes || []).map((n, i) => ({ ...n, real: l.flip && l.flip.has(i) ? !n.unit : n.unit }));
+function _pqcAsks(l) {
+    // Main Flaw Shown is asked when a sentence names a flaw on this unit, AS THE
+    // PERSON READS IT. Mark the only "flaw" sentence as standard wording and the
+    // question goes away; mark a dismissed one as a real flaw and it appears.
+    // ⚠️ NOT the functional notes. The grading prompt takes the main flaw only
+    // from a cosmetic line about THIS unit or from the title (source unit |
+    // title), and nearly every listing has functional notes ("powers on and off
+    // properly…"). Counting them asked the question on almost every listing with
+    // nothing to answer it about (Ethan, 2026-10-16). Functional notes matter to
+    // the rules only for LCD Flaws, and they are still shown for that.
+    const flaw = !!(_pqcNotes(l).some(n => n.real) || _PQC_TITLE_FLAW.test(l.title || ''));
+    return {
+        flaw,
+        isNew: /\b(new|sealed)\b/i.test(l.title || '') || /\b(new|sealed)\b/i.test(l.condition || ''),
+        multi: _PQC_MULTI.includes(l.pickedSheet)
+            || /\b(lot|pair|bundle|set of)\b|\b\d+\s*-?\s*(pack|pk)\b/i.test(l.title || ''),
+        box: _PQC_BOX.includes(l.pickedSheet),
+    };
+}
+const _pqcMayUse = () => ['district manager', 'ceo'].includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+
+// forTraining (2026-10-17): the "More For Training" queue. It reopens listings
+// he passed in a store review, weakest sheets first. They count as gold for
+// measuring, but they're Opus's answers, and he trains only on his own; see
+// confirmView's `more`.
+async function pqConfirmOpen(sheet, forTraining) {
+    if (!_pqcMayUse()) return;
+    _pqc = { sheet: sheet || '', data: null, li: 0, pi: 0, busy: true, err: null, skip: new Set(), saved: 0, started: Date.now(),
+             forTraining: !!forTraining,
+             // One photo at a time is the default again (Ethan, 2026-10-16, after
+             // trying the whole-listing view: "can you go back to the original
+             // form of me grading one picture at a time?"). The whole-listing
+             // view stays behind its button. The prefill stays in both.
+             grid: false, zoom: null };
+    document.addEventListener('keydown', _pqcKey);
+    _pqcRender();
+    await _pqcLoad();
+}
+window.pqConfirmOpen = pqConfirmOpen;
+
+async function _pqcLoad(sheet) {
+    const c = _pqc;
+    if (!c) return;
+    if (sheet !== undefined) c.sheet = sheet;
+    c.busy = true; c.err = null; _pqcRender();
+    try {
+        const d = await _pqFetch(`?view=confirm&sheet=${encodeURIComponent(c.sheet)}&skip=${encodeURIComponent([...c.skip].join(','))}${c.forTraining ? '&more=1' : ''}`);
+        if (_pqc !== c) return;
+        for (const id of d.misaligned || []) c.skip.add(id);
+        // Each photo starts from the grade's label; `seen` marks it answered.
+        for (const l of d.listings || []) {
+            l.pickedSheet = l.sheet;
+            l.facts = { lead_unclear: false, serial_hidden: false, new_claim_wrong: false, units_apart: false,
+                        flat_package: false, main_flaw_shown: null, needed: [] };
+            // Older queue payloads only had unitNotes; read those as the code's flaws.
+            if (!Array.isArray(l.notes)) l.notes = (l.unitNotes || []).map(text => ({ text, unit: true }));
+            l.flip = new Set();
+            _pqcPrefill(l);
+        }
+        c.data = d; c.sheet = d.sheet || ''; c.li = 0; c.pi = 0;
+    } catch (e) { c.err = e.message || String(e); }
+    c.busy = false;
+    _pqcRender();
+}
+
+function pqConfirmClose() {
+    document.removeEventListener('keydown', _pqcKey);
+    _pqc = null;
+    const el = document.getElementById('pqConfirmOverlay');
+    if (el) el.remove();
+}
+window.pqConfirmClose = pqConfirmClose;
+
+const _pqcListing = () => _pqc && _pqc.data && _pqc.data.listings[_pqc.li];
+// The shots offered for a listing: its sheet's, then Extra and Box, the two
+// labels the grading prompt uses for anything that is not a sheet shot.
+function _pqcChoices(l) {
+    const g = (_pqc.data.guide || {})[l.pickedSheet];
+    const shots = g ? g.shots.map(s => s.label) : [];
+    return [...new Set(shots)];
+}
+
+function pqConfirmPick(i, add) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    const p = l.photos[_pqc.pi];
+    const label = i === 'x' ? 'Extra' : i === 'b' ? 'Box' : _pqcChoices(l)[i];
+    if (!p || !label) return;
+    if (add) p.shots = p.shots.includes(label) ? p.shots.filter(s => s !== label) : [...p.shots, label];
+    else p.shots = [label];
+    if (!p.shots.length) p.shots = [label];
+    // Replacing a label answers the photo; adding one waits for Enter, because
+    // a second shot is usually followed by a third look.
+    if (add) { _pqcRender(); return; }
+    pqConfirmNext();
+}
+window.pqConfirmPick = pqConfirmPick;
+
+function pqConfirmFlag(k, i) {
+    const l = _pqcListing();
+    const p = l && l.photos[i == null ? _pqc.pi : i];
+    if (!p || _pqc.busy || !k) return;
+    if (p.flags.has(k)) { p.flags.delete(k); delete p.flagFrom[k]; }
+    else { p.flags.add(k); p.flagFrom[k] = 'you'; }
+    _pqcRender();
+}
+window.pqConfirmFlag = pqConfirmFlag;
+
+// This photo repeats an earlier one (the model's `repeats`; it drives Approve
+// Deletion). Only an EARLIER photo can be named, the way the model reports it.
+function pqConfirmRepeat(v, i) {
+    const l = _pqcListing();
+    const p = l && l.photos[i == null ? _pqc.pi : i];
+    if (!p || _pqc.busy) return;
+    const n = Number(v);
+    p.repeatOf = Number.isInteger(n) && n >= 1 && n < p.n ? n : null;
+    _pqcRender();
+}
+window.pqConfirmRepeat = pqConfirmRepeat;
+
+// A listing-level fact: a yes/no toggles; main_flaw_shown takes yes/partly/no;
+// `needed` toggles an If-Needed shot the listing calls for.
+function pqConfirmFact(k, v) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    if (k === 'main_flaw_shown') l.facts.main_flaw_shown = l.facts.main_flaw_shown === v ? null : v;
+    else if (k === 'flip') { const i = Number(v); l.flip.has(i) ? l.flip.delete(i) : l.flip.add(i); }
+    else if (k === 'needed') l.facts.needed = l.facts.needed.includes(v) ? l.facts.needed.filter(x => x !== v) : [...l.facts.needed, v];
+    else l.facts[k] = !l.facts[k];
+    _pqcRender();
+}
+window.pqConfirmFact = pqConfirmFact;
+
+function pqConfirmGo(i) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    _pqc.pi = Math.max(0, Math.min(l.photos.length - 1, i));
+    _pqcRender();
+}
+window.pqConfirmGo = pqConfirmGo;
+
+// Keep this photo's label and move on; past the last photo, save the listing.
+async function pqConfirmNext(all) {
+    const c = _pqc;
+    const l = _pqcListing();
+    if (!l || c.busy) return;
+    if (all) l.photos.forEach(p => { p.seen = true; });
+    else l.photos[c.pi].seen = true;
+    // The next unanswered photo after this one, else the first one left.
+    const after = l.photos.findIndex((p, i) => i > c.pi && !p.seen);
+    const open = after >= 0 ? after : l.photos.findIndex(p => !p.seen);
+    if (open >= 0) { c.pi = open; _pqcRender(); return; }
+    if (l.photos.some(p => !p.shots.length)) { c.err = 'Every photo needs a shot.'; _pqcRender(); return; }
+    const a = _pqcAsks(l);
+    // The one question with no safe blank: a missing answer to "was the flaw
+    // shown" is not a no.
+    if (a.flaw && !l.facts.main_flaw_shown) {
+        c.err = 'Answer "Main Flaw Shown" under This Listing, then save.'; _pqcRender(); return;
+    }
+    const facts = { ...l.facts,
+        // A question not asked is answered by the rule's own default.
+        new_claim_wrong: a.isNew && l.facts.new_claim_wrong, units_apart: a.multi && l.facts.units_apart,
+        flat_package: a.box && l.facts.flat_package, // Not asked = no unit line and no title flaw, which is the model's
+        // "not_applicable" by the prompt's own definition, so it is still a label.
+        main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : 'not_applicable',
+        // Every sentence with the code's call and the person's: unclicked = agreed.
+        sentences: _pqcNotes(l).map(n => ({ text: n.text, system: !!n.unit, real: !!n.real })),
+        prefill: _pqcProvenance(l) };
+    c.busy = true; _pqcRender();
+    const r = await _pqPost({ action: 'confirm-shots', store: l.store, productId: l.productId, sheet: l.pickedSheet,
+        modelSheet: l.sheet, model: l.model, stamp: l.stamp, checked: true, listing: facts,
+        photos: l.photos.map(p => ({ n: p.n, src: p.src, said: p.said, shots: p.shots, flags: [...p.flags], repeatOf: p.repeatOf })) });
+    if (_pqc !== c) return;
+    c.busy = false;
+    if (!r.ok) { c.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqcRender(); return; }
+    c.saved++; c.err = null;
+    const st = (c.data.sheets || []).find(s => s.slug === l.pickedSheet);
+    if (st) { st.confirmed++; st.need = Math.max(0, st.need - 1); }
+    const was = (c.data.sheets || []).find(s => s.slug === l.sheet);
+    if (was) was.left = Math.max(0, was.left - 1);
+    c.data.total = (c.data.total || 0) + 1;
+    c.li++; c.pi = 0;
+    if (c.li >= c.data.listings.length) { await _pqcLoad(); return; }
+    _pqcRender();
+}
+window.pqConfirmNext = pqConfirmNext;
+
+function pqConfirmSkip() {
+    const c = _pqc;
+    const l = _pqcListing();
+    if (!l || c.busy) return;
+    c.skip.add(l.productId);
+    c.li++; c.pi = 0;
+    if (c.li >= c.data.listings.length) { _pqcLoad(); return; }
+    _pqcRender();
+}
+window.pqConfirmSkip = pqConfirmSkip;
+
+function pqConfirmSheet(slug) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy || !_pqc.data.guide[slug]) return;
+    l.pickedSheet = slug;
+    _pqcRender();
+}
+window.pqConfirmSheet = pqConfirmSheet;
+
+function _pqcKey(e) {
+    const c = _pqc;
+    if (!c || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    if (c.grid) {
+        if (e.key === 'Escape') { if (c.zoom != null) pqConfirmZoom(null); else pqConfirmClose(); }
+        else if (e.key === 'Enter') pqConfirmNext(true);
+        else return;
+        e.preventDefault();
+        return;
+    }
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // Shift turns 1 into ! on most layouts; e.code still says which key it was.
+    const code = (e.code || '').replace(/^Digit/, '').replace(/^Key/, '').toLowerCase().replace('semicolon', ';');
+    const slot = _PQC_KEYS.indexOf(e.shiftKey ? code : k);
+    if (k === 'Escape') pqConfirmClose();
+    else if (k === 'Enter') pqConfirmNext(e.shiftKey);
+    else if (k === 'ArrowRight') pqConfirmNext(false);
+    else if (k === 'ArrowLeft' || k === 'Backspace') pqConfirmGo(c.pi - 1);
+    else if ((e.shiftKey ? code : k) === 'x') pqConfirmPick('x', e.shiftKey);
+    else if ((e.shiftKey ? code : k) === 'b') pqConfirmPick('b', e.shiftKey);
+    else if (slot >= 0) pqConfirmPick(slot, e.shiftKey);
+    else return;
+    e.preventDefault();
+}
+
+// ---------------------------------------------------------------------------
+// THE WHOLE LISTING AT ONCE, EVERYTHING PREFILLED (Ethan, 2026-10-16: "this is
+// a lot and kind of hard to judge one photo at a time … give me everything you
+// need from me"). Every photo is a card with its label and flags, the guide's
+// shots sit below with what's covered, and one Save (Enter) confirms the lot.
+// Answers start from the best source there is:
+//   green "you": his own earlier call (a Train The Checker grade on that photo;
+//                a shot label from a Quick Fix he approved)
+//   grey  "model": the saved grade's guess
+// and he only corrects. ⚠️ A prefilled guess nobody looks at hard turns into a
+// "yes", which drifts the answer key toward the model. So where every answer
+// STARTED is saved beside it (listing.prefill). The scorer can then leave
+// untouched model guesses out of the numbers it trusts.
+// His comments on the listing ("You said …") are shown, not applied: most were
+// about an older grade, and a deletion renumbers photos.
+const _PQC_FRAMING_KEYS = ['off_center', 'crooked', 'too_small', 'blurry', 'cut_off', 'dirty_backdrop', 'clutter', 'reflection', 'different_spot'];
+const _pqcFlagName = k => { for (const [, list] of _PQC_FLAGS) for (const [key, label] of list) if (key === k) return label; return k; };
+
+function _pqcPrefill(l) {
+    const ms = l.modelSays || { photos: [], facts: {} };
+    for (const p of l.photos) {
+        p.shots = [...p.said];
+        p.shotsFrom = l.accepted ? 'accepted' : 'model';
+        p.flags = new Set(); p.flagFrom = {}; p.seen = false;
+        // His own framing grade on this exact photo outranks the model on those
+        // nine kinds; "fine" means none of them.
+        if (p.framing) for (const k of (p.framing.label === 'problem' ? p.framing.problems : []))
+            if (_PQC_FRAMING_KEYS.includes(k)) { p.flags.add(k); p.flagFrom[k] = 'earlier'; }
+        const m = (ms.photos || []).find(x => x.n === p.n) || { flags: [], repeatOf: null };
+        for (const k of m.flags || []) {
+            if (p.framing && _PQC_FRAMING_KEYS.includes(k)) continue;
+            if (!p.flags.has(k)) { p.flags.add(k); p.flagFrom[k] = 'model'; }
+        }
+        p.repeatOf = m.repeatOf || null;
+        p.pre = { shots: [...p.shots], flags: { ...p.flagFrom }, repeatOf: p.repeatOf };
+    }
+    const mf = ms.facts || {};
+    l.facts = { lead_unclear: !!mf.lead_unclear, serial_hidden: !!mf.serial_hidden, new_claim_wrong: !!mf.new_claim_wrong,
+                units_apart: !!mf.units_apart, flat_package: !!mf.flat_package,
+                main_flaw_shown: ['yes', 'partly', 'no', 'not_applicable'].includes(mf.main_flaw_shown) ? mf.main_flaw_shown : null,
+                needed: [] };
+    l.preFacts = { ...l.facts };
+}
+
+// What started where, and what was changed: saved with the listing.
+function _pqcProvenance(l) {
+    return {
+        accepted: l.accepted || null,
+        photos: l.photos.map(p => {
+            const pre = p.pre || { shots: [], flags: {}, repeatOf: null };
+            const now = [...p.flags];
+            return { n: p.n, shots: p.shotsFrom || 'model', shotsChanged: p.shots.join('|') !== pre.shots.join('|'),
+                     flags: pre.flags,
+                     added: now.filter(k => !(k in pre.flags)), removed: Object.keys(pre.flags).filter(k => !p.flags.has(k)),
+                     repeatChanged: (p.repeatOf || null) !== (pre.repeatOf || null) };
+        }),
+        facts: { from: 'model', changed: Object.keys(l.preFacts || {}).filter(k => k !== 'needed' && (l.preFacts || {})[k] !== l.facts[k]) },
+    };
+}
+
+function pqConfirmMode(grid) {
+    if (!_pqc) return;
+    _pqc.grid = !!grid; _pqc.zoom = null;
+    _pqcRender();
+}
+window.pqConfirmMode = pqConfirmMode;
+
+function pqConfirmZoom(i) {
+    if (!_pqc) return;
+    _pqc.zoom = i == null ? null : Number(i);
+    _pqcRender();
+}
+window.pqConfirmZoom = pqConfirmZoom;
+
+// slot 0 replaces the photo's main label; slot 1 sets ('' clears) a second one.
+function pqConfirmSetShot(i, slot, label) {
+    const l = _pqcListing();
+    const p = l && l.photos[i];
+    if (!p || _pqc.busy) return;
+    if (slot === 0) { if (label) p.shots = [label, ...p.shots.slice(1).filter(x => x !== label)]; }
+    else p.shots = label ? [p.shots[0], label].filter(Boolean) : p.shots.slice(0, 1);
+    _pqcRender();
+}
+window.pqConfirmSetShot = pqConfirmSetShot;
+
+function _pqcGridHtml(l) {
+    const c = _pqc;
+    const busy = c.busy ? 'disabled' : '';
+    const choices = [..._pqcChoices(l), 'Extra', 'Box'];
+    const guide = (c.data.guide || {})[l.pickedSheet] || { name: l.pickedSheet, shots: [] };
+    const opts = (cur, blank) => (blank ? `<option value="">${blank}</option>` : '')
+        + [...new Set([...(cur && !choices.includes(cur) ? [cur] : []), ...choices])]
+            .map(x => `<option value="${_ecEsc(x)}"${x === cur ? ' selected' : ''}>${_ecEsc(x)}${choices.includes(x) ? '' : ' (not on sheet)'}</option>`).join('');
+    const allFlags = _PQC_FLAGS.flatMap(([g, list]) => list.map(([k, label]) => [g, k, label]));
+    const sheetOpts = Object.entries(c.data.guide).sort((a, b) => a[1].name.localeCompare(b[1].name))
+        .map(([slug, g]) => `<option value="${_ecEsc(slug)}"${slug === l.pickedSheet ? ' selected' : ''}>${_ecEsc(g.name)}</option>`).join('');
+
+    const said = [
+        ...(l.youSaid || []).map(x => `<div class="pqc-you"><b>You said</b> <span>${_ecEsc(String(x.at || '').slice(5))}</span> ${_ecEsc(x.said)}</div>`),
+        ...(l.accepted ? [`<div class="pqc-you"><b>You approved</b> ${_ecEsc(l.accepted)}: these shot labels were accepted then.</div>`] : []),
+    ].join('');
+
+    const cards = l.photos.map((p, i) => {
+        const chips = [...p.flags].map(k => `<button type="button" class="pqc-fchip pqc-from-${p.flagFrom[k] || 'you'}"
+            title="${p.flagFrom[k] === 'model' ? 'The model\'s guess' : p.flagFrom[k] === 'earlier' ? 'Your earlier grade' : 'Added now'} — click to remove"
+            onclick="pqConfirmFlag('${k}', ${i})" ${busy}>${_ecEsc(_pqcFlagName(k))} ×</button>`).join('');
+        const addFlag = `<select class="pqc-add" onchange="pqConfirmFlag(this.value, ${i})" ${busy}>
+            <option value="">+ Flag</option>
+            ${_PQC_FLAGS.map(([g, list]) => `<optgroup label="${g}">${list.filter(([k]) => !p.flags.has(k))
+                .map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</optgroup>`).join('')}
+          </select>`;
+        const changed = p.shots.join('|') !== (p.pre ? p.pre.shots.join('|') : '');
+        return `<div class="pqc-card${changed ? ' pqc-card-changed' : ''}">
+          <button type="button" class="pqc-card-img" onclick="pqConfirmZoom(${i})" title="Look closer">
+            <img src="${_ecEsc(p.img)}" alt="Photo ${p.n}" loading="lazy"><span class="pqc-thumb-n">${p.n}</span></button>
+          <select class="pqc-shot pqc-from-${changed ? 'you' : p.shotsFrom === 'accepted' ? 'earlier' : 'model'}"
+            onchange="pqConfirmSetShot(${i}, 0, this.value)" ${busy}>${opts(p.shots[0], p.shots[0] ? '' : '— pick a shot —')}</select>
+          ${p.shots[1] ? `<select class="pqc-shot pqc-shot2" onchange="pqConfirmSetShot(${i}, 1, this.value)" ${busy}>
+              ${opts(p.shots[1], '— no second shot —')}</select>`
+            : `<select class="pqc-add" onchange="pqConfirmSetShot(${i}, 1, this.value)" ${busy}>${opts('', '+ Second Shot')}</select>`}
+          <div class="pqc-fchips">${chips}${addFlag}</div>
+          ${p.n > 1 ? `<select class="pqc-add${p.repeatOf ? ' pqc-add-on' : ''}" onchange="pqConfirmRepeat(this.value, ${i})" ${busy}>
+              <option value="">Not a repeat</option>
+              ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Same shot as photo ${q.n}</option>`).join('')}
+            </select>` : ''}
+        </div>`;
+    }).join('');
+
+    // What the labels cover, against the sheet: a missing shot is visible at a glance.
+    const have = new Set(l.photos.flatMap(p => p.shots).map(x => x.toLowerCase()));
+    const always = [...new Map(guide.shots.filter(x => !x.cond).map(x => [x.label, x])).values()];
+    const strip = always.map(x => `<div class="pqc-gshot${have.has(x.label.toLowerCase()) ? '' : ' pqc-gshot-miss'}">
+        ${x.img ? `<img src="${_ecEsc(x.img)}" alt="" loading="lazy">` : '<span class="pqc-gshot-none"></span>'}
+        <span>${have.has(x.label.toLowerCase()) ? '✓' : '✗ Missing'} ${_ecEsc(x.label)}</span></div>`).join('');
+
+    let zoom = '';
+    if (c.zoom != null && l.photos[c.zoom]) {
+        const p = l.photos[c.zoom];
+        const ex = guide.shots.find(x => p.shots.includes(x.label) && x.img);
+        zoom = `<div class="pqc-zoom" onclick="pqConfirmZoom(null)" title="Click to close">
+          <div class="pqt-pair">
+            <figure class="pqt-fig"><div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt=""></div>
+              <figcaption><b>Photo ${p.n}</b> · ${_ecEsc(p.shots.join(' + ') || '—')}</figcaption></figure>
+            <figure class="pqt-fig"><div class="pqt-frame">${ex ? `<img src="${_ecEsc(ex.img)}" alt="">` : '<span class="pqt-noex">No example photo</span>'}</div>
+              <figcaption><b>Guide:</b> ${_ecEsc(ex ? ex.label : (p.shots[0] || '—'))}</figcaption></figure>
+          </div></div>`;
+    }
+
+    return `${zoom}
+      <div class="pqc-listing">
+        <div class="pqc-title">${_ecEsc(l.title || '')}</div>
+        <div class="pqc-meta"><span class="lh-sku">${_ecEsc(l.sku || '')}</span> · ${_ecEsc(l.store)} · listing ${c.li + 1} of ${c.data.listings.length}
+          <label class="pqc-sheet-pick">Sheet <select onchange="pqConfirmSheet(this.value)" ${busy}>${sheetOpts}</select></label>
+          ${l.pickedSheet !== l.sheet ? '<span class="pqc-warn">Changed From The Grade</span>' : ''}</div>
+      </div>
+      ${said ? `<div class="pqc-yous">${said}</div>` : ''}
+      <div class="pqc-legend"><span class="pqc-fchip pqc-from-earlier">Your earlier call</span>
+        <span class="pqc-fchip pqc-from-model">The model's guess</span><span class="pqc-fchip pqc-from-you">Changed now</span>
+        Fix what's wrong, then Save. Click a photo to see it beside the guide. Mark only what a buyer would notice.</div>
+      <div class="pqc-grid">${cards}</div>
+      <div class="pqc-guide"><div class="pqc-flaghead">${_ecEsc(guide.name)} <span>— the sheet's shots, against your labels</span></div>
+        <div class="pqc-gstrip">${strip}</div></div>
+      ${_pqcListingPanel(l)}
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${busy}>Save Listing <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmSkip()" ${busy}>Skip Listing</button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmMode(false)">One Photo At A Time</button>
+      </div>`;
+}
+
+function _pqcHtml() {
+    const c = _pqc;
+    const d = c.data;
+    const mins = Math.max(1, Math.round((Date.now() - c.started) / 60000));
+    const head = `<div class="pqt-head">
+        <div><div class="pqt-eyebrow">Picture Quality · Gold Set${c.forTraining ? ' · More For Training' : ''}</div>
+             <div class="pqt-title">Confirm Shots</div>
+             ${c.forTraining ? '<div class="pqc-trainnote">You passed these in a store review. Confirming them is what lets the model train on them, so fix anything Opus got wrong.</div>' : ''}</div>
+        <div class="pqt-count">${d ? `${d.total || 0} Listings Confirmed` : ''}${c.saved ? ` · ${c.saved} This Session (${mins} Min)` : ''}</div>
+        <button type="button" class="pqt-x" onclick="pqConfirmClose()" aria-label="Close">×</button>
+      </div>`;
+    const err = c.err ? `<div class="pqt-err">${_ecEsc(c.err)}</div>` : '';
+    if (!d) return head + err + `<div class="pqt-empty">${c.busy ? 'Loading listings…' : ''}</div>`;
+    // Progress per sheet, busiest-with-least-gold first, each a way in.
+    const target = d.target || 40;
+    const sheetBtn = s => `<button type="button" class="pqc-sheet${s.slug === c.sheet ? ' pqc-sheet-on' : ''}"
+        onclick="_pqcLoad('${_ecEsc(s.slug)}')" ${c.busy || !s.left ? 'disabled' : ''}
+        title="${s.graded} graded · ${s.confirmed} confirmed here · ${s.judged || 0} judged already (a review, a comment, an approved fix) · ${s.left} never seen">
+        <span class="pqc-sheet-name">${_ecEsc(s.name)}</span>
+        <span class="pqc-bar"><span style="width:${Math.min(100, Math.round(100 * (s.confirmed + (c.forTraining ? 0 : s.judged || 0)) / Math.min(target, s.graded || 1)))}%"></span></span>
+        <span class="pqc-sheet-n">${Math.min(s.confirmed + (c.forTraining ? 0 : s.judged || 0), Math.min(target, s.graded))}/${Math.min(target, s.graded)}</span></button>`;
+    // A FINISHED sheet gets a ✓ in its own row (Ethan, 2026-10-17: "it just
+    // isn't showing as checked off"). It used to sink into the collapsed "More
+    // Sheets" list, so a sheet he'd just finished seemed to vanish.
+    const count = s => s.confirmed + (c.forTraining ? 0 : s.judged || 0);
+    // Done also when nothing on the sheet is LEFT to confirm (Ethan, 2026-10-17:
+    // camcorders and New In Box sat at "1 left" with their buttons greyed out).
+    // The last one was a listing the queue won't offer: one he dismissed (Death
+    // Stranding 2, a game on the wrong sheet) or one whose photos changed since its
+    // grade (an approved deletion), which can't be confirmed against it.
+    const isDone = s => count(s) >= Math.min(target, s.graded) || (!c.busy && !s.left);
+    const doneSheets = (d.sheets || []).filter(isDone), active = (d.sheets || []).filter(s => !isDone(s));
+    const top = active.slice(0, 8), more = active.slice(8);
+    const sheets = `<div class="pqc-sheets">${top.map(sheetBtn).join('')}</div>`
+        + (more.length ? `<details class="pqc-more"><summary>${more.length} More Sheets</summary><div class="pqc-sheets">${more.map(sheetBtn).join('')}</div></details>` : '')
+        + (doneSheets.length ? `<div class="pqc-done"><span class="pqc-done-h">✓ Done (${doneSheets.length})</span>${doneSheets.map(s =>
+            `<span class="pqc-done-s" title="${s.confirmed} confirmed by you of ${s.graded} graded${count(s) < Math.min(target, s.graded) ? ' — the rest were dismissed, or their photos changed since the grade, so they can’t be confirmed' : ''}">✓ ${_ecEsc(s.name)} ${Math.min(count(s), Math.min(target, s.graded))}/${Math.min(target, s.graded)}${count(s) < Math.min(target, s.graded) ? ' (rest can’t be confirmed)' : ''}</span>`).join('')}</div>` : '');
+    const l = _pqcListing();
+    if (!l) {
+        return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
+            : c.forTraining ? 'Nothing left to confirm on this sheet. Pick another sheet above.'
+            : `Nothing left here that you haven't already judged. Pick another sheet above, or
+               <button type="button" class="pqt-btn" onclick="pqConfirmClose(); pqConfirmOpen('', true)">More For Training</button>`}</div>`;
+    }
+    if (c.grid) return head + err + sheets + _pqcGridHtml(l);
+    const p = l.photos[c.pi];
+    const choices = _pqcChoices(l);
+    const guide = d.guide[l.pickedSheet] || { name: l.pickedSheet, shots: [] };
+    const ex = guide.shots.find(s => p.shots.includes(s.label) && s.img);
+    const offSheet = p.shots.filter(s => !choices.includes(s) && s !== 'Extra' && s !== 'Box');
+    const sheetOpts = Object.entries(d.guide).sort((a, b) => a[1].name.localeCompare(b[1].name))
+        .map(([slug, g]) => `<option value="${_ecEsc(slug)}"${slug === l.pickedSheet ? ' selected' : ''}>${_ecEsc(g.name)}</option>`).join('');
+    const chip = (label, key, i) => `<button type="button" class="pqc-chip${p.shots.includes(label) ? ' pqc-chip-on' : ''}"
+        onclick="pqConfirmPick(${typeof i === 'number' ? i : `'${i}'`}, event.shiftKey)" ${c.busy ? 'disabled' : ''}>${_ecEsc(label)}${key ? ` <kbd>${_ecEsc(key.toUpperCase())}</kbd>` : ''}</button>`;
+    const thumbs = l.photos.map((q, i) => `<button type="button" class="pqc-thumb${i === c.pi ? ' pqc-thumb-on' : ''}${q.seen ? ' pqc-thumb-done' : ''}"
+        onclick="pqConfirmGo(${i})" title="${_ecEsc(q.shots.join(', '))}">
+        <img src="${_ecEsc(q.img)}" alt="" loading="lazy"><span class="pqc-thumb-n">${q.n}</span>
+        <span class="pqc-thumb-l">${_ecEsc(q.shots.join(' + ') || '—')}${q.shots.join('|') !== q.said.join('|') ? ' ✎' : ''}</span>
+        ${q.flags.size || q.repeatOf ? `<span class="pqc-thumb-f">${q.repeatOf ? `= ${q.repeatOf}` : ''}${q.flags.size ? `${q.repeatOf ? ' · ' : ''}${q.flags.size} flag${q.flags.size === 1 ? '' : 's'}` : ''}</span>` : ''}</button>`).join('');
+    return head + err + sheets + `
+      <div class="pqc-listing">
+        <div class="pqc-title">${_ecEsc(l.title || '')}</div>
+        <div class="pqc-meta"><span class="lh-sku">${_ecEsc(l.sku || '')}</span> · ${_ecEsc(l.store)} · listing ${c.li + 1} of ${d.listings.length}
+          <label class="pqc-sheet-pick">Sheet <select onchange="pqConfirmSheet(this.value)" ${c.busy ? 'disabled' : ''}>${sheetOpts}</select></label>
+          ${l.pickedSheet !== l.sheet ? '<span class="pqc-warn">Changed From The Grade</span>' : ''}</div>
+      </div>
+      <div class="pqt-pair">
+        <figure class="pqt-fig">
+          <div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt="Listing photo ${p.n}"></div>
+          <figcaption><b>Photo ${p.n} of ${l.photos.length}</b> · the grade said: ${_ecEsc(p.said.join(' + ') || 'nothing')}</figcaption>
+        </figure>
+        <figure class="pqt-fig">
+          <div class="pqt-frame">${ex ? `<img src="${_ecEsc(ex.img)}" alt="Guide example">`
+            : `<span class="pqt-noex">${p.shots.some(s => s === 'Extra' || s === 'Box') ? 'Not a sheet shot' : 'No example photo for this shot'}</span>`}</div>
+          <figcaption><b>Now: ${_ecEsc(p.shots.join(' + ') || '—')}</b>${offSheet.length ? ` <span class="pqc-warn">Not On This Sheet</span>` : ''}<br>${_ecEsc(guide.name)}</figcaption>
+        </figure>
+      </div>
+      <div class="pqc-chips">${choices.map((s, i) => chip(s, _PQC_KEYS[i], i)).join('')}${chip('Extra', 'x', 'x')}${chip('Box', 'b', 'b')}</div>
+      <div class="pqc-flagbox">
+        <div class="pqc-flaghead">This Photo <span>— mark only what a buyer would notice; blank means no</span></div>
+        ${_PQC_FLAGS.map(([group, list]) => `<div class="pqc-flags"><span class="pqc-flaggroup">${group}</span>${list.map(([k, label]) =>
+            // An "on" flag says where it came from, as in the whole-listing view:
+            // amber = his own, grey = the model's guess, green = his earlier grade.
+            `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' + (p.flagFrom && p.flagFrom[k] === 'model' ? ' pqc-flag-model' : p.flagFrom && p.flagFrom[k] === 'earlier' ? ' pqc-flag-earlier' : '') : ''}"
+              title="${p.flags.has(k) ? (p.flagFrom && p.flagFrom[k] === 'model' ? "The model’s guess — click to remove" : p.flagFrom && p.flagFrom[k] === 'earlier' ? 'Your earlier grade — click to remove' : 'Click to remove') : 'Click to add'}"
+              onclick="pqConfirmFlag('${k}')" ${c.busy ? 'disabled' : ''}>${label}</button>`).join('')}</div>`).join('')}
+        ${p.n > 1 ? `<div class="pqc-flags"><span class="pqc-flaggroup">Repeat</span>
+          <label class="pqc-repeat">Same shot as <select onchange="pqConfirmRepeat(this.value)" ${c.busy ? 'disabled' : ''}>
+            <option value="">— not a repeat —</option>
+            ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Photo ${q.n}</option>`).join('')}
+          </select></label></div>` : ''}
+      </div>
+      ${_pqcListingPanel(l)}
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(false)" ${c.busy ? 'disabled' : ''}>Keep <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${c.busy ? 'disabled' : ''}
+            title="Every photo not yet answered keeps the label it shows">All Right — Save Listing <kbd>Shift+Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmSkip()" ${c.busy ? 'disabled' : ''}>Skip Listing</button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqConfirmMode(true)">Whole Listing View</button>
+      </div>
+      <div class="pqt-ask">A shot key replaces the label and moves on; with Shift it adds a second shot. ← goes back.</div>
+      <div class="pqc-thumbs">${thumbs}</div>`;
+}
+
+// The listing-level facts rules.ts reads, asked once per listing. What the
+// listing SAYS is shown beside the questions that depend on it.
+function _pqcListingPanel(l) {
+    const a = _pqcAsks(l);
+    const f = l.facts;
+    const busy = _pqc.busy ? 'disabled' : '';
+    const tog = (k, label, title) => `<button type="button" class="pqc-flag${f[k] ? ' pqc-flag-on' : ''}" title="${_ecEsc(title)}"
+        onclick="pqConfirmFact('${k}')" ${busy}>${label}</button>`;
+    const guide = (_pqc.data.guide || {})[l.pickedSheet] || { shots: [] };
+    const ifNeeded = [...new Set(guide.shots.filter(s => s.cond).map(s => s.label))];
+    // Cosmetic sentences one per line, each with the code's call and a button to
+    // overrule it. Standard wording is shown faded, so a real flaw the code
+    // dismissed can still be caught (Ethan, 2026-10-16: the system can be wrong
+    // about a flaw).
+    const notes = _pqcNotes(l).map((n, i) => {
+        const flipped = l.flip.has(i);
+        return `<div class="pqc-note${n.real ? '' : ' pqc-note-std'}${flipped ? ' pqc-note-flip' : ''}">
+          <span class="pqc-note-t"><b>${n.real ? 'Flaw' : 'Standard'}:</b> ${_ecEsc(n.text)}</span>
+          <button type="button" class="pqc-note-b" onclick="pqConfirmFact('flip', ${i})" ${busy}
+            title="${flipped ? 'Undo: go back to what the system said' : n.unit ? 'This is PayMore\'s standard wording, not a flaw on this unit' : 'This names a real flaw on this unit'}">${flipped ? 'Undo' : n.unit ? 'Standard Wording' : 'Real Flaw'}</button></div>`;
+    }).join('');
+    const said = [
+        ...(String(l.functional || '').trim() ? [['Functional', l.functional]] : []),
+        ...(String(l.included || '').trim() ? [['Included', l.included]] : []),
+    ];
+    return `<div class="pqc-flagbox pqc-listbox">
+      <div class="pqc-flaghead">This Listing <span>— asked once; starts from the model's guess; blank means no</span></div>
+      ${notes ? `<div class="pqc-notes">${notes}</div>` : ''}
+      ${said.length ? `<div class="pqc-said">${said.map(([k, x]) => `<div><b>${k}:</b> ${_ecEsc(x)}</div>`).join('')}</div>` : ''}
+      <div class="pqc-flags">
+        ${tog('lead_unclear', 'Lead Photo Unclear', 'Photo 1 does not clearly show what the item is')}
+        ${tog('serial_hidden', 'Serial Hidden Behind A Cover', 'The serial is only under a battery cover or similar')}
+        ${a.isNew ? tog('new_claim_wrong', 'Says New, Looks Used', 'The listing says new/sealed and the photos show a used item') : ''}
+        ${a.multi ? tog('units_apart', 'Not Every Unit Shown Together', 'A lot/pair/pack where the whole-item shots do not show every unit') : ''}
+        ${a.box ? tog('flat_package', 'Flat Package', 'A blister pack or hanging card, not a box') : ''}
+      </div>
+      ${a.flaw ? `<div class="pqc-flags"><span class="pqc-flaggroup">Main Flaw Shown</span>
+        ${[['yes', 'Yes'], ['partly', 'Partly'], ['no', 'No'], ['not_applicable', 'No Real Flaw']].map(([v, label]) => `<button type="button" class="pqc-flag${f.main_flaw_shown === v ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFact('main_flaw_shown','${v}')" ${busy}
+          ${v === 'not_applicable' ? 'title="The notes name no flaw on this unit, whatever the system read"' : ''}>${label}</button>`).join('')}</div>` : ''}
+      ${ifNeeded.length ? `<div class="pqc-flags"><span class="pqc-flaggroup">Listing Calls For</span>
+        ${ifNeeded.map(s => `<button type="button" class="pqc-flag${f.needed.includes(s) ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFact('needed', this.dataset.s)" data-s="${_ecEsc(s)}" ${busy}>${_ecEsc(s)}</button>`).join('')}</div>` : ''}
+    </div>`;
+}
+
+function _pqcRender() {
+    if (!_pqc) return;
+    let el = document.getElementById('pqConfirmOverlay');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pqConfirmOverlay';
+        el.className = 'pqt-overlay';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Confirm Shots');
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pqt-box">${_pqcHtml()}</div>`;
+}
+
 window.pqSetTier = pqSetTier;
 
 // One strip of photos, in the order given, numbered by their CURRENT position so
@@ -57217,40 +58566,66 @@ function _pqDay(iso) {
     return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// The retake sentence for ONE listing, with the check's count of what is
-// missing kept ("3 of 5 required shots are missing") — the guide strip below
-// names which, so the names are not repeated here.
+// The retake line for ONE listing, with the check's count kept ("4 of 6
+// required shots missing") — the guide strip below names which.
 function _pqRetakeSaid(findings) {
     const f = (findings || []).find(x => x.code === 'retake');
-    const m = f && /(\d+ of \d+ required shots are missing)/.exec(f.text || '');
-    return `This listing is missing so much of the Picture Guide that a buyer cannot judge the item${
-        m ? ' — ' + _ecEsc(m[1]) : ''}. <strong>Retake it following the guide</strong>, then press Recheck.`;
+    const m = f && /(\d+ of \d+) required shots are missing/.exec(f.text || '');
+    return `<b>Retake Following The Guide</b>${m ? ' — ' + _ecEsc(m[1]) + ' required shots missing' : ''}`;
 }
 
-// ⚠️ ONE LINE PER PROBLEM, NOT PER PHOTO (Ethan, 2026-09-30, on a RAM listing
-// that read "Photo 2 … wrong angle / Photo 3 … wrong angle / Photo 4 … wrong
-// angle / Photo 2 is blurry / Photo 3 is blurry …": "any way to make this look
-// not as chaotic?"). The same three photos named twice, seven lines for two
-// problems. Grouped, it is "Taken From The Wrong Angle — Photos 2, 3, 4" and
-// "Blurry — Photos 2, 3, 4", which is also the order the store fixes them in.
-// The server's sentences are unchanged (the notes and the ask still quote
-// them); this only regroups them for reading.
-//   not square  → "Not Square (Should Be 1×1)" — the size it IS was noise; the
-//                 size it should be is what the store needs (Ethan, same day)
-//   framing     → one group per problem it names ("…standard: crooked, cut off")
-//   missing     → one line naming the shots
-//   anything else with a photo → its own words, with the photo stripped off
+// ⚠️ ONE SHORT LINE PER PROBLEM (Ethan, 2026-09-30: "any way to make this look
+// not as chaotic?"; and 2026-10-13: "Too many words and people won't read it
+// fully"). Every line is "<b>Label</b> — Photos 2, 3 · what to do", the photos
+// grouped per problem — never the server's full sentence. The server's
+// sentences are unchanged (Listing Health Notes and the ask still quote them).
+//   missing   → one line naming the shots; Everything Included adds what the
+//               listing says comes with it (Ethan, OVL GTX 1660)
+//   framing   → one group per problem it names ("…standard: crooked, cut off")
+//   repeat    → "Photo 4 (same as 1)" · Approve Deletion
+//   the rest  → a short label from _PQ_SHORT, else its own words, photo stripped
+const _PQ_SHORT = {
+    mixed_setups: ['Different Spot', 'retake so every photo is shot the same way — all on the stand, or all off it'],
+    reflection: ['Reflection', 'angle the item or the light'],
+    dirty_backdrop: ['Dirty Table', 'clean it, then retake'],
+    clutter: ['Something Else In The Frame', 'clear it out, then retake'],
+    loose_cords: ['Loose Cord', 'wrap it up'],
+    not_on_stand: ['Not On The Stand'],
+    turned: ['Turned The Wrong Way', 'turn it to match the guide'],
+    order: ['Out Of Order', 'use the guide\'s order when you retake'],
+    // Not a photo — the words (Ethan, 2026-10-15, LEE Payday 2).
+    new_claim: ['Listing Says Brand New', 'the photos show it used — correct the condition and description'],
+};
 function _pqFindingLines(findings) {
     const cap = s => String(s).replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase());
     const groups = new Map(), misses = [], loose = [];
-    const add = (label, n) => {
-        if (!groups.has(label)) groups.set(label, new Set());
-        groups.get(label).add(n);
+    const add = (label, n, hint) => {
+        if (!groups.has(label)) groups.set(label, { nums: new Set(), hint: hint || '' });
+        if (n) groups.get(label).nums.add(n);
     };
+    let included = '';
+    // WHAT THE LISTING SAYS THE FLAW IS, beside a missing Cosmetic / LCD Flaws
+    // shot (Ethan, 2026-10-15, LEE: "give a brief description of what cosmetic or
+    // functionality flaws we stated in the listing when flagging for this").
+    const flawSaid = [];
     for (const f of findings || []) {
         const text = String(f.text || '');
-        if (f.code === 'missing_shot') { misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, '')); continue; }
-        if (!f.photo) { loose.push(text); continue; }
+        if (f.code === 'missing_shot') {
+            misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, ''));
+            if (/^everything included/i.test(f.shot || '') && f.included) included = f.included;
+            if (f.said) flawSaid.push(`${f.shot}: “${f.said}”`);
+            continue;
+        }
+        if (f.code === 'repeat') {
+            // "Photo 4 is the same shot as photo 1; Photo 6 is the same shot as photo 2."
+            const pairs = [...text.matchAll(/Photo (\d+) is the same shot as photo (\d+)/g)].map(m => `${m[1]} (same as ${m[2]})`);
+            const many = pairs.length > 1;
+            loose.push(`<b>Repeat</b> — ${many ? 'Photos' : 'Photo'} ${_ecEsc(pairs.join(', '))} · Approve Deletion removes ${many ? 'them' : 'it'}`);
+            continue;
+        }
+        const short = _PQ_SHORT[f.code];
+        if (short) { (f.photos || [f.photo]).forEach(n => add(short[0], n, short[1])); continue; }
+        if (!f.photo) { loose.push(_ecEsc(text)); continue; }
         if (f.code === 'not_square') { add('Not Square (Should Be 1×1)', f.photo); continue; }
         if (f.code === 'framing') {
             const m = /standard:\s*(.+?)\.?$/.exec(text);
@@ -57262,37 +58637,66 @@ function _pqFindingLines(findings) {
         add(cap(said), f.photo);
     }
     const nums = s => { const a = [...s].sort((x, y) => x - y); return (a.length === 1 ? 'Photo ' : 'Photos ') + a.join(', '); };
+    const missLine = misses.length
+        ? `<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}${included ? ` (the listing says it comes with: ${_ecEsc(included)})` : ''}${
+            flawSaid.length ? `<span class="pq-said">The listing says — ${_ecEsc(flawSaid.join(' · '))}</span>` : ''}</li>`
+        : '';
     return [
-        ...(misses.length ? [`<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}</li>`] : []),
-        ...[...groups].map(([label, s]) => `<li><b>${_ecEsc(label)}</b> — ${nums(s)}</li>`),
-        ...loose.map(t => `<li>${_ecEsc(t)}</li>`),
+        missLine,
+        ...[...groups].map(([label, g]) =>
+            `<li><b>${_ecEsc(label)}</b>${g.nums.size ? ' — ' + nums(g.nums) : ''}${g.hint ? ' · ' + _ecEsc(g.hint) : ''}</li>`),
+        ...loose.map(t => `<li>${t}</li>`),
     ].join('');
 }
 
-function _pqRow(r) {
+function _pqRow(r, done, rc) {
     const id = String(r.productId || '');
     const numeric = _ecEsc(id.split('/').pop());
     const shop = _ecEsc(_pqData?.shop || '');
-    const busy = _pqBusy.has(id);
     const checking = _pqChecking.has(id);
+    // Passed on recheck: the row as it was, nothing left to press.
+    const passed = !!rc && rc.verdict === 'pass' && !checking;
+    const busy = _pqBusy.has(id) || passed;
+    const rcAt = rc ? `${_pqDay(rc.at.toISOString())}, ${rc.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
+    // While it runs, only the buttons say so — "Checking…" and Dismiss, both
+    // disabled. The greyed row and its "Reviewing…" line were tried and taken
+    // back the same day (Ethan, 2026-10-16: "I like your original design").
+    const rcLine = checking ? ''
+        : passed ? `<div class="pq-passed" role="status">✓ Passed On Recheck — ${_ecEsc(rcAt)}</div>`
+        : rc ? `<div class="pq-rechecked" role="status">Rechecked ${_ecEsc(rcAt)} — Still Needs:</div>` : '';
     const photos = r.photos || [];
-    const flagged = new Set((r.findings || []).map(f => f.photo).filter(Boolean));
+    // A listing-wide finding (a dirty table, a repeat) names its photos in `photos`.
+    const flagged = new Set((r.findings || []).flatMap(f => [f.photo, ...(f.photos || [])]).filter(Boolean));
     const now = photos.map((_, i) => i + 1);
     const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
+    // A suggested order on a FIX / RETAKE row too (Ethan, 2026-10-14: "things
+    // that are in fix these photos can still have quick fix deletion and re
+    // orders"): the same Now / Suggested / Guide strips, and Approve Order on
+    // its own line under Recheck. Approving it keeps the row open for the rest.
+    const hasOrder = r.verdict !== 'pass' && r.reorder && Array.isArray(r.reorder.suggested);
+    const extraOrder = hasOrder && !isReorder && !r.stale;
+    // A duplicate photo the tool can delete on approval — on any tab: a flagged
+    // listing with a repeat gets the button too, under its Recheck.
+    const del = !r.stale && r.deletion && Array.isArray(r.deletion.photos) && r.deletion.photos.length ? r.deletion : null;
+    const oneClick = r.verdict === 'reorder';
+    const delWhat = del ? `photo${del.photos.length > 1 ? 's' : ''} ${del.photos.join(', ')}` : '';
     const findings = (r.verdict === 'retake' ? `<li class="pq-retake-said">${_pqRetakeSaid(r.findings)}</li>` : '')
         + _pqFindingLines((r.findings || []).filter(f => r.verdict !== 'retake' || f.code !== 'retake'));
     // The row's own reason, now there is no tab sentence above it.
     const why = isReorder
         ? `<li>The photos are good but in the wrong order${(r.reorder.why || []).length
             ? ' — ' + _ecEsc(r.reorder.why.join('; ')) : ''}.</li>` : '';
-    const titleNotes = (r.titleNotes || []).length
+    // ⚠️ TITLE NOTES ARE OFF THE ROW (Ethan, 2026-10-14): once this is tied to
+    // the title tool, a photo fact sends the listing to the TITLE tool's own
+    // screen instead of sitting in a drawer here. Still saved (title_notes).
+    const titleNotes = false && (r.titleNotes || []).length
         ? `<details class="lt-comps pq-tnotes"><summary>${r.titleNotes.length} Title Note${r.titleNotes.length === 1 ? '' : 's'} From The Photos (Not Checked Yet)</summary>
              <ul>${r.titleNotes.map(t => `<li>${_ecEsc(t.issue || '')}${t.suggestion ? ' → ' + _ecEsc(t.suggestion) : ''}</li>`).join('')}</ul>
            </details>` : '';
 
     const missing = _pqMissing(r.findings);
-    const moved = isReorder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
-    const body = isReorder
+    const moved = hasOrder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
+    const body = hasOrder
         // ⚠️ ONE SCROLL FOR ALL THREE ROWS, ONE BOX SIZE (Ethan, 2026-09-30: "do
         // you have a better way to make this not feel so chaotic looking?"). The
         // three strips used to scroll separately, at two box sizes, so slot 3 of
@@ -57316,15 +58720,20 @@ function _pqRow(r) {
                ? `<br><span class="pq-lab-miss">${missing.size} Missing</span>` : ''}</span>${_pqGuideStrip(r.sheet, missing)}</div>
            </div>`;
 
-    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}">
+    // NEW: graded by the nightly random sample in the last 3 days — outlined all
+    // the way round so the reviewer can find the fresh ones (Ethan, 2026-10-15).
+    const isNew = !!r.sample && Date.now() - new Date(r.sample).getTime() < 3 * 86400000;
+    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}${isNew ? ' pq-row-new' : ''}${passed ? ' pq-row-passed' : ''}"${checking ? ' aria-busy="true"' : ''}>
       <div class="lt-main">
-        <div class="pq-title">${_ecEsc(r.title || 'Untitled Listing')}</div>
+        <div class="pq-title">${isNew ? '<span class="pq-new-tag" title="Graded by the nightly random sample">New</span>' : ''}${_ecEsc(r.title || 'Untitled Listing')}</div>
         <div class="pq-sheet">Checked ${_pqDay(r.reviewedAt)} Against: <b>${_ecEsc(r.sheetName || '—')}</b></div>
         ${r.stale ? `<div class="pq-stale">${r.staleWhy === 'recipe'
             ? 'The check has been improved since this listing was graded'
             : 'The photos or notes changed after this was checked'} —
             press Recheck before acting on it.</div>` : ''}
-        <ul class="lt-why">${findings}${why}</ul>
+        ${done ? `<div class="pq-done">✓ ${_ecEsc(done.join(' · '))}</div>` : ''}
+        ${rcLine}
+        <ul class="lt-why${passed ? ' pq-why-fixed' : ''}">${findings}${why}</ul>
         ${body}
         ${titleNotes}
       </div>
@@ -57339,20 +58748,55 @@ function _pqRow(r) {
           ${r.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(r.handle)}"
                target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
         </div>
+        <!-- WHO LISTED IT (Ethan, 2026-10-08: "so the managers can coach their
+             teams on pictures"). The title tool's pill, resolved server-side
+             from the product's live Shopify tags — see _ltListerPill for why it
+             is always there and never a raw tag. Its own line, not a third pill
+             beside the links: those are two columns the SKU and photo count
+             centre over. -->
+        <!-- The price beside who listed it (Ethan, 2026-10-11): it is what the
+             dirty-table and reflection points are scaled by, and how much a
+             reshoot is worth. -->
+        <!-- A tag that matches nobody in users shows AS the tag (Ethan, 10-14:
+             "Instead of unknown, just put the raw tag"), titled so it reads as
+             a Shopify tag, not a confirmed employee. -->
+        <div class="pq-lister">${r.listerRaw
+          ? `<span class="lt-lister" title="Shopify tag — no SPEEKSNET user matches it yet. Add them in Permissions to show their name.">${_ecEsc(r.lister)}</span>`
+          : _ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}${
+          r.price > 0 ? `<span class="pq-price">$${Number(r.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>` : ''}</div>
         <div class="lt-acts pq-acts">
-          ${isReorder && !r.stale
-            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve'}</button>
+          ${r.verdict === 'pass'
+            ? `<button class="lt-no" onclick="pqShouldFlag('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
+                  title="You would have flagged this. Say what was missed, and the note comes to Listing Health Notes.">Should Flag</button>`
+            : isReorder && !r.stale
+            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Order'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
                   title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+            : oneClick && del
+            ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Deletion'}</button>
+               <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
+                  title="Keep the photo. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
             : `<button class="lt-ok" onclick="pqRecheck('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
                   title="After the photos are retaken in Shopify, this grades them again now instead of waiting for the next sweep. About a minute.">${checking ? 'Checking…' : 'Recheck'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
                   title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Dismiss</button>`}
         </div>
-        <!-- What Recheck is FOR, on the row. Ethan asked what "Check Again"
+        <!-- A duplicate to delete beside a reorder, or on a flagged row: its own
+             line, so the row's main pair keeps its one job. -->
+        ${(del && r.verdict !== 'pass' && (isReorder || !oneClick)) || extraOrder ? `<div class="lt-acts pq-acts">
+            ${extraOrder ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Order</button>` : ''}
+            ${del && r.verdict !== 'pass' && (isReorder || !oneClick) ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Deletion</button>` : ''}</div>` : ''}
+        <!-- What each button DOES, on the row. Ethan asked what "Check Again"
              meant; a button that needs asking about needs a sentence. -->
-        ${isReorder && !r.stale ? `<span class="pq-hint">Approve saves this order to Shopify.</span>`
-          : `<span class="pq-hint">Retook the photos? Recheck grades them now.</span>`}
+        ${(r.verdict === 'pass'
+          // A pass can carry small notes — shown, nothing to approve (Ethan,
+          // 10-15: the SanDisk belongs in Passed, its note still on the card).
+          ? [(r.findings || []).length && 'Passed — the notes are small things to fix on the next retake.',
+             'Agree it passes? Nothing to do. Would you have flagged it? Should Flag, and say what was missed.']
+          : [hasOrder && !r.stale && 'Approve Order saves this order to Shopify.',
+           del && `Approve Deletion removes ${delWhat} from Shopify.`,
+           !(isReorder && !r.stale) && !(oneClick && del) && 'Retook the photos? Recheck grades them now.'])
+          .filter(Boolean).map(x => `<span class="pq-hint">${x}</span>`).join('')}
       </div>
     </div>`;
 }
@@ -57382,6 +58826,32 @@ async function pqDismiss(pid, isReorder) {
 }
 window.pqDismiss = pqDismiss;
 
+// The Passed tab's disagreement. The same note-required answer as a dismissal,
+// from the other side; the row moves to the tab's dismissed drawer, labelled
+// Should Have Flagged, and the note waits in Listing Health Notes.
+async function pqShouldFlag(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality', title: 'Should This Have Been Flagged?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>`,
+        note: { label: 'What Did The Check Miss?', required: true,
+                placeholder: 'e.g. photos 6 and 7 are crooked',
+                hint: 'Required — this note is how a missed rule gets fixed. Nothing on the listing changes.' },
+        go: 'Send It', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'should-flag', store: _ecStore, productId: pid, reason: said.note || '' });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('That Was Not Recorded', res.body?.detail || res.body?.error || 'Could not record that.');
+        ecRender();
+        return;
+    }
+    await _pqReload();
+}
+window.pqShouldFlag = pqShouldFlag;
+
 async function pqReorder(pid) {
     const row = (_pqData?.queue || []).find(r => r.productId === pid);
     if (!row || !row.reorder) return;
@@ -57400,21 +58870,53 @@ async function pqReorder(pid) {
         await _pqReload();
         return;
     }
+    _pqMarkDone(pid, row, 'Order Saved To Shopify');
     await _pqReload();
 }
 window.pqReorder = pqReorder;
 
-async function pqRecheck(pid) {
-    _pqBusy.add(pid); _pqChecking.add(pid); ecRender();
-    const res = await _pqPost({ action: 'recheck', store: _ecStore, productId: pid });
-    _pqBusy.delete(pid); _pqChecking.delete(pid);
+// APPROVE DELETION — a duplicate photo, removed from the Shopify listing by the
+// tool (Ethan, 2026-10-11: "say approve deletion. Don't imply that the user
+// should delete it themselves"). The server refuses if the photos changed since
+// the check, so the numbers here always point at the photos shown.
+async function pqDeletePhotos(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    const del = row && row.deletion;
+    if (!del || !Array.isArray(del.photos) || !del.photos.length) return;
+    const pairs = del.photos.map((n, i) => `Photo ${n} is the same shot as photo ${(del.of || [])[i]}.`).join(' ');
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality', title: 'Approve Deletion?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>
+               ${_pqStrip(row.photos || [], del.photos, new Set(del.photos))}
+               <p class="lt-ask-say">${_ecEsc(pairs)} ${del.photos.length > 1 ? 'They are' : 'It is'} removed from the Shopify listing — every other photo stays as it is.</p>`,
+        go: 'Approve Deletion', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'delete-photos', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid);
     if (!res.ok) {
+        await _pqSay('Nothing Was Deleted', res.body?.detail || res.body?.error || 'Shopify did not take the change.');
+    } else {
+        _pqMarkDone(pid, row, `${del.photos.length > 1 ? 'Photos' : 'Photo'} ${del.photos.join(', ')} Deleted`);
+    }
+    await _pqReload();
+}
+window.pqDeletePhotos = pqDeletePhotos;
+
+async function pqRecheck(pid) {
+    const before = (_pqData?.queue || []).find(r => r.productId === pid);
+    const tier = _pqTier, store = _ecStore;
+    _pqBusy.add(pid); _pqChecking.add(pid); ecRender();
+    const res = await _pqPost({ action: 'recheck', store, productId: pid });
+    _pqBusy.delete(pid); _pqChecking.delete(pid);
+    if (!res.ok || !res.body?.ok) {
         await _pqSay('Could Not Check It Again', res.body?.detail || res.body?.error || 'The check did not finish.');
         ecRender();
         return;
     }
-    if (res.body.verdict === 'pass') {
-        await _pqSay('These Photos Now Pass', 'The listing meets the guide and has left the list.', 'ok');
+    // The store may have been switched while it ran: _pqPlace starts over then.
+    if (before && _pqPlaces.store === store) {
+        _pqPlaces.rechecked.set(pid, { tier, before, verdict: res.body.verdict, at: new Date() });
     }
     await _pqReload();
 }
@@ -57982,9 +59484,12 @@ window.lhToolDone = lhToolDone;
 // the tag verbatim, because "JSmith" still tells you who a leaver was — the
 // server only sends tags that matched somebody, but a rename between the sweep
 // and the read would land here and a bare tag is better than nothing.
-function _ltLister(tag) {
+// `listers` is for a caller with its own map (Picture Quality); the title tool
+// passes nothing and reads _ltData's.
+function _ltLister(tag, listers) {
     if (!tag) return '';
-    return (_ltData && _ltData.listers && _ltData.listers[tag]) || tag;
+    const map = listers || (_ltData && _ltData.listers);
+    return (map && map[tag]) || tag;
 }
 
 // ⚠️ THE PILL IS ALWAYS THERE — a name, or "Unknown". Never nothing.
@@ -58003,8 +59508,8 @@ function _ltLister(tag) {
 // ⚠️ AND IT IS NEVER A GUESS. Unknown says the tool cannot tell you, which is
 // honest; a tag rendered raw would look like an accusation the tool cannot
 // stand behind.
-function _ltListerPill(r) {
-    const name = r && r.listerTag ? _ltLister(r.listerTag) : '';
+function _ltListerPill(r, listers) {
+    const name = r && r.listerTag ? _ltLister(r.listerTag, listers) : '';
     if (!name) {
         return `<span class="lt-lister lt-lister-unknown"
             title="No employee tag on this listing, or the tag belongs to somebody who has left. Shopify tags are where this comes from.">Unknown</span>`;

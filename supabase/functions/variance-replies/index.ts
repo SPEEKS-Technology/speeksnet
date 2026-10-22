@@ -344,6 +344,24 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, updated: ids.length, dm_reviewed_at: at });
       }
 
+      // ---- DM ends (or reopens) a period's reply cycle (migration 0146) ----
+      //      For a store that never replied and won't be made to: ending it
+      //      stops every reminder about it — the DM's review card, the manager's
+      //      dot and feed card, and notify's emails — without deleting the
+      //      report. ended=false reopens it exactly as it was.
+      if (action === "end_period") {
+        const id = String(body.id || "");
+        if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        const ended = body.ended !== false;
+        const patch = ended
+          ? { ended_at: new Date().toISOString(), ended_by: body.by ? String(body.by).trim() : null }
+          : { ended_at: null, ended_by: null };
+        const { error } = await supabase.from("variance_reply_periods").update(patch).eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("variance", null);
+        return jsonResponse({ success: true, ...patch });
+      }
+
       // ---- DM deletes an upload (mistake fix; items cascade) ----
       if (action === "delete_period") {
         const id = String(body.id || "");

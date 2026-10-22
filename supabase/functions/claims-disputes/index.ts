@@ -237,6 +237,29 @@ const AUTH_FALLBACK_DAYS = 7;
 // resolved; the grace is only on who gets told.
 const RESOLUTION_GRACE_DAYS = 2;
 
+// THE 4PM ALERT, IN THE FEED (Ethan, 2026-10-08: "add a feed notification for
+// the claims and disputes tool only for that 4:00pm due today reminder ... they
+// can't snooze it and it doesn't go away until they mark the line item as
+// resolved in the tool"). The feed does NOT work out what is due — it lists the
+// items claims-disputes-email actually sent a 4pm mail about (hold_email_log,
+// kind manager_nudge), so the card and the mail can never disagree about what
+// was said, and the card appears the moment the mail goes out.
+//
+// An item leaves the card when EITHER side says it is dealt with (Ethan,
+// 2026-10-08: "resolved can mean either the system recognizes that it's been
+// refunded, replied to, etc. or the user ... changes the status"):
+//   * the system — these four states. A dispute answered on the site has no
+//     Mark resolved button at all, and one the site settled has nothing to
+//     resolve.
+//   * the manager — a Mark resolved, INCLUDING one the site still disagrees
+//     with (resolution_disputed). The honesty rule (0113) is untouched: the
+//     tab keeps that item red and it still goes to the DM after
+//     RESOLUTION_GRACE_DAYS. Only this card, a nag to the manager who has
+//     already answered it, lets go.
+// A "Still open" check-in does NOT clear it: that is the tool's snooze, and
+// this card has none.
+const DUE_ALERT_DONE = ["resolved", "settled", "answered", "covered"];
+
 // CLAIMS KEEP THE RULE THEY ALREADY HAVE (Ethan, 2026-09-23: "I believe we have
 // timing set already for open claims, reminders, etc. I think we keep those?").
 // The Claims tab calls a claim aging when it is in_progress and its last
@@ -1366,7 +1389,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       .in("store_code", stores).or(`is_open.eq.true,closed_at.gte.${recent}`),
     // What the emails have already said (0114). Only which items, not when —
     // the one rule that reads it asks "ever?", not "how long ago".
-    sb.from("hold_email_log").select("item_type,item_key").in("store_code", stores),
+    sb.from("hold_email_log").select("item_type,item_key,kind,sent_on").in("store_code", stores),
     sb.from("dispute_sync").select("*").in("store_code", stores),
     // Payments (0119): open however old — an uncollected order does not stop
     // being money because it has been ignored — plus recently cleared ones.
@@ -1377,6 +1400,13 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   ]);
   for (const r of [mm, cs, rv, ev, sy, ln, cl, dp, el, ds, up, us]) if (r.error) throw new Error(r.error.message);
   const emailedKeys = new Set((el.data || []).map((r: any) => `${r.item_type}|${r.item_key}`));
+  // First day each item went out on a 4pm mail — see DUE_ALERT_DONE.
+  const nudgedOn: Record<string, string> = {};
+  for (const r of el.data || []) {
+    if (r.kind !== "manager_nudge") continue;
+    const k = `${r.item_type}|${r.item_key}`;
+    if (!nudgedOn[k] || r.sent_on < nudgedOn[k]) nudgedOn[k] = r.sent_on;
+  }
 
   const claimsById: Record<string, any> = Object.fromEntries((cl.data || []).map((c: any) => [c.id, c]));
   const caseByKey: Record<string, any> = Object.fromEntries((cs.data || []).map((c: any) => [c.case_key, c]));
@@ -1524,7 +1554,41 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     // chase an open claim without a second definition of "behind".
     .map((c: any) => ({ ...c, aging: claimAging(c) }));
 
+  // The feed card (DUE_ALERT_DONE). Built from the lists above, so an item is on
+  // it in exactly the state the tab shows it in. Small on purpose: the feed polls
+  // this, and the card only needs enough to name each item and say how late.
+  const dueAlerts: any[] = [];
+  const alertFrom = (type: string, rows: any[], keyOf: (x: any) => string) => {
+    for (const x of rows) {
+      const key = keyOf(x);
+      const on = nudgedOn[`${type}|${key}`];
+      if (!on || DUE_ALERT_DONE.includes(x.state) || x.review?.status === "resolved") continue;
+      const dueAt = type === "payment" ? (x.capturable ? x.auth_expires_at : null) : x.respond_by;
+      const due = dueAt ? chicagoDay(dueAt) : null;
+      dueAlerts.push({
+        type, key, store_code: x.store_code, state: x.state, state_note: x.state_note,
+        missed_window: x.missed_window, nudged_on: on, due,
+        // Past its deadline, or past the day it was mailed if it has none left
+        // (a card that already ran out).
+        overdue: !!x.missed_window || (due ? due < ctx.today : on < ctx.today),
+        amount: x.amount ?? null,
+        order: x.order_no || x.order_name || x.order_id || null,
+        title: x.item_title || x.reason || null,
+        // What the front end's _holdKindChip reads to name the item.
+        source: x.source, dispute_type: x.dispute_type, kind: x.kind, case_type: x.case_type,
+        financial_status: x.financial_status, capturable: x.capturable,
+      });
+    }
+  };
+  alertFrom("dispute", disputes, (x) => x.dispute_key);
+  alertFrom("ebay_case", cases, (x) => x.case_key);
+  alertFrom("payment", payments, (x) => x.order_key);
+  alertFrom("mismatch", mismatches, (x) => x.issue_key);
+  dueAlerts.sort((a, b) => (b.overdue ? 1 : 0) - (a.overdue ? 1 : 0)
+    || String(a.due || "9999").localeCompare(String(b.due || "9999")));
+
   return {
+    dueAlerts,
     rollout: ROLLOUT_STORES, stores, today: ctx.today, monthEnd: ctx.monthEnd,
     mismatches, cases, claims, disputes, payments, waiting,
     sync: sy.data || [], disputeSync: ds.data || [], paymentSync: us.data || [],
@@ -1596,7 +1660,12 @@ Deno.serve(async (req) => {
       if (!asked.length) return json({ success: false, error: "pass ?stores=OVL,LEE" }, 400);
       const preview = ops && url.searchParams.get("preview") === "1";
       const stores = preview ? asked : rolledOut(asked);
-      if (!stores.length) return json({ success: true, rollout: ROLLOUT_STORES, stores: [], mismatches: [], cases: [], claims: [], payments: [], waiting: {}, sync: [] });
+      if (!stores.length) return json({ success: true, rollout: ROLLOUT_STORES, stores: [], mismatches: [], cases: [], claims: [], payments: [], waiting: {}, sync: [], dueAlerts: [] });
+      // The feed card's poll: the same read, without the lists it never draws.
+      if (action === "alerts") {
+        const l = await list(sb, stores);
+        return json({ success: true, today: l.today, stores: l.stores, dueAlerts: l.dueAlerts });
+      }
       return json({ success: true, preview, ...(await list(sb, stores, { includeWaiting: preview })) });
     }
 
@@ -1661,6 +1730,7 @@ Deno.serve(async (req) => {
         const { error } = await sb.from("hold_reviews").delete().eq("item_type", type).eq("item_key", key);
         if (error) return json({ success: false, error: error.message }, 400);
         await logEvent(sb, type, key, store, "reopened", note, by);
+        await broadcastClaims(store);
         return json({ success: true, status: "reopened" });
       }
       const status = String(body.status || "");
@@ -1690,6 +1760,9 @@ Deno.serve(async (req) => {
       }, { onConflict: "item_type,item_key" });
       if (error) return json({ success: false, error: error.message }, 400);
       await logEvent(sb, type, key, store, status, note, by);
+      // The 4pm feed card clears on a resolution, on every open page — not only
+      // the one that pressed the button (DUE_ALERT_DONE).
+      await broadcastClaims(store);
       return json({ success: true, status });
     }
 
