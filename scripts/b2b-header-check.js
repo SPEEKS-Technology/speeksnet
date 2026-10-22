@@ -157,3 +157,16 @@ t('the SPEEKS Capture download button and the pricing bench tray are gone', func
     if (src.indexOf('_b2bBenchTray(') > -1) return 'the pricing sheet renders the bench tray again';
     return src.indexOf('_b2bIntakeLoad(') === -1 || 'the pricing sheet still fetches the tray';
 });
+
+// b2b.html was first copied from operations.html BEFORE Ethan's November update
+// merged, so its shared chrome went stale: the Recycle Inventory modal had no
+// reason dropdown (submits refused on every page, since the SPA router carries
+// a first-loaded page's modals along), and the old Claims modals shadowed the
+// Workspace Claims pane's element ids. Rebuilt from operations.html 2026-10-22.
+// Whenever the shared chrome changes, b2b.html has to change with it.
+t('b2b.html carries the current shared chrome, not a stale copy', function () {
+    if (!document.getElementById('recycleInvReason')) return 'the Recycle Inventory modal has no reason dropdown';
+    if (document.getElementById('claimsModal') || document.getElementById('claimsOversightModal'))
+        return 'the retired Claims modals are back -- they shadow the Workspace Claims pane';
+    return true;
+});

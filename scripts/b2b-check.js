@@ -3350,3 +3350,37 @@ t('to-list: the Listing tile and cards show it; other stages keep the offer', fu
         return h.indexOf('$640') > -1 || 'the quote stage lost its offer';
     } finally { sessionStorage.setItem('speeksUserRole', keepR); }
 });
+
+// --- pre-release review fixes (2026-10-22) ----------------------------------
+t('review: b2b.html is gated on B2B access itself, not only on its nav link', function () {
+    var src = _srcOf(initB2bPage);
+    if (src.indexOf("_featureEffectiveVisible('widget-ops-b2b'") === -1) return 'the page loads for anyone who reaches the URL';
+    return src.indexOf("location.replace('index.html')") > -1 || 'a refused user is not sent home';
+});
+t('review: the pipeline card carries the one-click finish the Needs You cards had', function () {
+    var keepR = sessionStorage.getItem('speeksUserRole');
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try {
+        var h = _b2bRenderPipeline([{ id: 'qa1', ref: 'QA-001', stage: 'quote', pricing_store: 'OVL', client: { company: 'Quick' },
+            total_offer: 100, net_offer: 100, stage_changed_at: '2026-10-20T15:00:00Z', quote_sent_at: '2026-10-19T15:00:00Z' }]);
+        return h.indexOf('b2bQuickAccept(') > -1 || 'no Mark Accepted on a sent quote card';
+    } finally { sessionStorage.setItem('speeksUserRole', keepR); }
+});
+t('review: a top-bar tool opens over the deal page instead of closing it', function () {
+    var src = _srcOf(toggleModal);
+    if (src.indexOf('_keepDealPageOnce = true') === -1) return 'toggleModal does not ask for the deal page to be kept';
+    var c = _srcOf(closeAllModals);
+    if (c.indexOf('keepDealPage && modal === dealPage') === -1) return 'closeAllModals does not honour it';
+    return c.indexOf('_b2bCapturePickupDraft(') > -1 || 'a real close does not keep the pickup typing as a draft';
+});
+t('review: the numbers block is always on the page, hidden until there is a line', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [];
+        var h = _b2bNumsHtml();
+        return (h.indexOf('id="b2bWsNums"') > -1 && h.indexOf('hidden') > -1) || 'an empty deal has nowhere to paint its figures';
+    } finally { _b2bModalItems = keep; }
+});
+t('review: closing a deal drops a half-built listing split', function () {
+    return _srcOf(b2bCloseDeal).indexOf('_b2bSplitMode = false') > -1 || 'split mode carries over to the next deal';
+});

@@ -25273,9 +25273,6 @@ select.dd-native {
 .b2b-ws-alt .b2b-btn { flex: 1 1 auto; height: var(--b2b-h-md); padding: 0 12px; font-size: 12px !important; }
 .b2b-ws-next .b2b-msg { margin: 0; }
 .b2b-ws-next .b2b-msg:empty { display: none; }
-/* A finished deal has nothing to say up here but its date; an empty card would
-   read as something failed to load. */
-.b2b-ws-next:not(:has(> :not(.b2b-msg))) { display: none; }
 
 .b2b-ws-k { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--b2b-faint); }
 .b2b-ws-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; padding: 0 2px; }
@@ -25331,7 +25328,6 @@ select.dd-native {
 .b2b-ws-side .b2b-proof-droptxt { margin-right: 0; align-items: center; }
 .b2b-ws-side .b2b-proof-pickbtn { width: 100%; }
 .b2b-ws-side .b2b-proof { flex-wrap: wrap; }
-.b2b-ws-main .b2b-qdoc { max-width: 860px; }
 .b2b-ws-ack { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.4; color: var(--b2b-ink); cursor: pointer; margin: 0; }
 .b2b-ws-ack input { margin-top: 2px; flex: 0 0 auto; width: 16px; height: 16px; accent-color: var(--sage-deep); }
 .b2b-ws-main .b2b-mf, .b2b-ws-main .b2b-signq, .b2b-ws-main .b2b-note { margin: 0; flex-shrink: 0; }
@@ -25381,7 +25377,6 @@ select.dd-native {
                padding: 2px 6px; border-radius: 5px; margin-right: 4px; background: #fcecec; color: #d1443b; vertical-align: 1px; }
 .b2b-lt-flag.nrv  { background: #fdf3e1; color: #b7791f; }
 .b2b-lt-flag.wipe { background: #e8f0fb; color: #2563a8; }
-.b2b-lt-cond { font-size: 12px; font-weight: 700; color: var(--b2b-muted); }
 .b2b-lt-offer .b2b-lt-r { grid-template-columns: 44px minmax(0, 1fr) 74px 44px 84px 96px 58px 70px 52px 96px; align-items: center; }
 .b2b-lt-offer > * { min-width: 820px; }
 .b2b-lt .muted { color: var(--b2b-muted); }
@@ -25429,6 +25424,14 @@ select.dd-native {
     .b2b-ws-side { order: -1; border-left: 0; border-bottom: 1px solid var(--b2b-line); }
     .b2b-ws-main { padding: 14px 16px 24px; }
     .b2b-ws-menu { right: 0; }
+    /* The header row (back, icon, client, chip, ..., x) is too much for a phone:
+       the chip was clipped behind the ... button. The stage icon goes -- the
+       chip and the rail already say which stage -- and the chip drops under
+       the client name whenever the row has no room for it. */
+    .b2b-ws-on .tool-head-ico { display: none; }
+    .b2b-ws-on .tool-head-main { flex-wrap: wrap; row-gap: 6px; min-width: 0; flex: 1 1 auto; }
+    .b2b-ws-on .tool-head-titles { flex: 1 1 140px; }
+    .b2b-ws-on .b2b-ws-chip { max-width: 100%; }
     /* Rows stack to line + item + total. No sideways scroll on a phone; the
        per-unit figures are one tap away in the deal itself. */
     .b2b-lt > * { min-width: 0; }
@@ -25582,3 +25585,59 @@ select.dd-native {
    the offer every other stage shows. */
 .b2b-flow-v i, .b2b-card-tolist { font-style: normal; font-weight: 600; color: var(--b2b-faint); }
 .b2b-flow-v { white-space: normal; text-align: right; }
+
+/* The one-click finish on a pipeline card (Mark Accepted / Complete), 2026-10. */
+.b2b-card .b2b-card-quick { width: 100%; height: var(--b2b-h-sm); padding: 0 10px; font-size: 12px !important; margin-top: 2px; }
+
+/* =========================================================================
+   B2B PAGE: REVIEW FIXES (2026-10-22, before the pre-release merge)
+   =========================================================================
+   Each of these was a real rule losing to an older, stronger one. */
+
+/* The edge-to-edge hub kept its card frame: .cb-panel sets border, radius and
+   shadow with !important (twice), which beat the plain declarations above. */
+.b2b-wrap > .ws-pane > .b2b-panel.card { border: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+
+/* On phones .manage-content{padding:14px !important} doubled the workspace's
+   own gutters (~30px a side) and kept the side band off the screen edges. */
+.b2b-deal-modal.b2b-ws-on > .manage-content { padding: 0 !important; }
+
+/* The ... menu sat 40px left of its button to clear an x the deal page hides. */
+.b2b-dealpage .b2b-ws-menu { right: 0; }
+
+/* The empty next-step card: the why line and the message line are always in
+   the markup, so the earlier :has() never matched. Hide the card when every
+   child it has is one of those two, empty. */
+.b2b-ws-next:not(:has(> :not(.b2b-msg:empty):not(.b2b-ws-why:empty))) { display: none; }
+
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    /* The hub ran under the fixed bottom tab bar: two scrollbars, and the
+       last rows hidden until the page itself scrolled. Same allowance the
+       deal page already makes. */
+    .b2b-wrap .ws-panel { height: calc(100dvh - var(--ws-top, 68px) - 78px - env(safe-area-inset-bottom, 0px)) !important; }
+}
+@media (max-width: 760px) {
+    /* Folded numbers band: five nowrap figures in a row overlapped and clipped
+       below ~560px. Back to the two-column grid. */
+    .b2b-ws.folded .b2b-ws-nums { display: grid; }
+}
+@media (max-width: 600px) {
+    /* A phone fits 2 x 170px columns, which squeezed the cards. One stage per
+       row, as the board's banner promises. */
+    .b2b-board { grid-template-columns: 1fr !important; }
+}
+/* The numbers block is always in the markup now, hidden until the deal has a
+   line; its own display:grid/flex would otherwise beat the hidden attribute. */
+.b2b-ws-nums[hidden] { display: none !important; }
+@media (max-width: 760px) {
+    /* On a phone the deal panel (and its message line) is at the top of the
+       page, so scan feedback ("already on the list", a failed save) appeared
+       off-screen while the user was working further down. While a message is
+       showing, float it just above the bottom tab bar. */
+    .b2b-ws-next .b2b-msg:not(:empty) {
+        position: fixed; left: 12px; right: 12px; z-index: 60;
+        bottom: calc(90px + env(safe-area-inset-bottom, 0px));
+        padding: 10px 12px; border-radius: 10px; background: #fff;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, .18);
+    }
+}

@@ -488,6 +488,8 @@ function lockAndBlurScreen() {
     if (overlay) overlay.classList.add('show');
 }
 
+// Set by toggleModal for the one closeAllModals() call it makes (see below).
+var _keepDealPageOnce = false;
 function closeAllModals() {
     // An audit in progress is easy to nuke by accident (Escape, overlay click,
     // the ✖) — ask first while unsaved entries exist.
@@ -520,8 +522,24 @@ function closeAllModals() {
         if (overlay) overlay.classList.remove('show');
     }
 
+    // THE B2B DEAL PAGE (2026-10) is a .modal-menu that is really a page: it
+    // sits in place of the hub, with no overlay, so the top bar stays live while
+    // it is open. Opening a top-bar tool (Quick Messages, the Calendar...) goes
+    // through toggleModal, which asks for the page to be KEPT -- the tool opens
+    // over the deal instead of throwing it away. Every other close (Escape, a
+    // B2B action finishing, the router) closes it as before, and keeps anything
+    // typed on a pickup as a draft first: those fields only save on Sign, and a
+    // close used to take them with it.
+    const dealPage = document.querySelector('#b2bDealModal.b2b-dealpage.show');
+    const keepDealPage = !!(dealPage && _keepDealPageOnce);
+    _keepDealPageOnce = false;
+    if (dealPage && !keepDealPage && typeof _b2bCapturePickupDraft === 'function' && typeof _b2bModalDeal !== 'undefined') {
+        try { if (_b2bModalDeal) _b2bCapturePickupDraft(_b2bModalDeal.id); } catch (_) {}
+    }
+
     const modals = document.querySelectorAll('.modal-menu');
     modals.forEach(modal => {
+        if (keepDealPage && modal === dealPage) return;
         modal.classList.remove('show');
     });
 
@@ -666,9 +684,12 @@ function _syncPanelScrollLock() {
 function toggleModal(modalId, badgeId = null) {
     const dropdown = document.getElementById(modalId);
     if (!dropdown) return;
-    
+
     const isOpen = dropdown.classList.contains('show');
-    closeAllModals(); 
+    // A tool opened from anywhere opens OVER an open B2B deal page rather than
+    // closing it -- see closeAllModals. One-shot, so only this call is affected.
+    if (modalId !== 'b2bDealModal') _keepDealPageOnce = true;
+    closeAllModals();
     
     if (!isOpen) {
         dropdown.classList.add('show');
@@ -4200,6 +4221,7 @@ async function checkPIN() {
             if (_tvIsBoardRole()) {
                 if (document.getElementById('ccWidget')) initBoardPage();
                 if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+                if (typeof initB2bPage === 'function') initB2bPage();   // gated: a board is sent home
                 return;
             }
 
@@ -10425,12 +10447,33 @@ async function pgRemoveShotPhoto(shotId) {
 }
 
 // The B2B page (b2b.html, 2026-10). Detected by DOM like every other page init,
-// and called from the same three places: first load, the PIN sign-in, and the
-// SPA router's hop. What Operations' B2B tab hook used to do, plus the usage
-// record that hook kept.
-function initB2bPage() {
+// and called from the same places: first load, the PIN sign-in, and the SPA
+// router's hop -- the store-board branches of all three included, so a board
+// login that lands here is gated rather than left on "Loading" forever. (No
+// usage beacon: visiting a page is not using it, see USAGE_TRACK -- the old
+// tab hook's 'ops:b2b' call never recorded anything either.)
+//
+// THE PAGE IS GATED, NOT JUST ITS NAV LINK. On Operations the B2B tab carried
+// its own data-feature, so someone without B2B never got a pane; as a page it
+// can be reached by URL, history, a bookmark or a forwarded operations.html#b2b.
+// The check uses the cached Feature Access overrides first; only a "no" waits
+// for a fresh read, so a person granted B2B a minute ago is not bounced off a
+// stale cache before the refresh lands.
+async function initB2bPage() {
     if (!document.querySelector('.b2b-wrap')) return;
-    trackUsage('open', 'ops:b2b', _usageLabel('ops:b2b'));
+    const allowed = () => typeof _featureEffectiveVisible === 'function'
+        && _featureEffectiveVisible('widget-ops-b2b', _b2bRoleClass(), _b2bUser()) === true;
+    if (!allowed()) {
+        try {
+            const json = await fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json());
+            if (json && json.success !== false) {
+                _featureOvRaw = json.data || [];
+                _featureOv = _buildFeatureOvMaps(_featureOvRaw);
+                try { localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv)); } catch (_) {}
+            }
+        } catch (_) { /* offline: the cached answer stands */ }
+        if (!allowed()) { window.location.replace('index.html'); return; }
+    }
     _wsFitPanels();
     b2bLoad();
     _startB2bSync();
@@ -20964,6 +21007,9 @@ function b2bCloseDeal() {
     // Asking for the full sheet lasts as long as the deal is open and no longer,
     // so the next quote to be approved starts on the calm screen again.
     _b2bReviewFull = false;
+    // Same for a half-built listing split: closing one deal mid-split used to
+    // open the next in split mode, still counting the last deal's stores.
+    if (typeof _b2bSplitMode !== 'undefined') { _b2bSplitMode = false; _b2bSplitPlan = {}; _b2bSplitBrush = null; }
     // Back to the default owner of the item editor, so the next screen to open
     // starts from a known state rather than whatever the last one left behind.
     _b2bItemMode = 'deal';
@@ -22080,8 +22126,10 @@ function _b2bRenderPipeline(scoped) {
     //     each with its count and value, an idle one quietly grey. The flow is
     //     always readable here, whatever the board shows.
     //   - the BOARD shows only stages that have deals, sharing the width, so
-    //     nothing on it is ever empty and nothing scrolls sideways. Too narrow
-    //     for that and the CSS stacks them (container query on .b2b-boardwrap).
+    //     nothing on it is ever empty and nothing scrolls sideways. The CSS
+    //     auto-fits the columns at 170px minimum, wrapping rather than
+    //     squeezing, and a phone gets one stage per row (see the "PIPELINE:
+    //     THE STAGE ROW" banner in styles.css).
     // Clicking a stage in the row narrows the board to it; clicking it again,
     // or "Show all", puts the rest back.
     const byStage = Object.fromEntries(B2B_BOARD.map(key => [key, deals.filter(d => d.stage === key)]));
@@ -22128,6 +22176,15 @@ function _b2bRenderPipeline(scoped) {
                     <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d</span>
                 </div>
                 ${act ? '<span class="b2b-card-pill">Needs you</span>' : ''}
+                ${/* The one-click finish the Needs You cards carried (Mark
+                     Accepted on a sent quote, Complete on a fully listed deal),
+                     back on the card since that tab went. Same helper, same
+                     gates, same confirm; stopPropagation keeps the click from
+                     also opening the deal. */ ''}${(() => {
+                    const quick = _b2bQuickAction(d);
+                    return quick ? `<button class="b2b-btn b2b-btn-quick b2b-card-quick"
+                        onclick="event.stopPropagation();${quick.call}">${escapeHtml(quick.label)}</button>` : '';
+                })()}
             </div>`;
         }).join('') : '<div class="b2b-col-empty">—</div>';
 
@@ -22152,7 +22209,7 @@ function _b2bRenderPipeline(scoped) {
     // row of empty columns.
     const filtered = _b2bMineOnly || (_b2bIsCorp() && _b2bStoreFilter !== 'ALL');
     const board = shown.length
-        ? `<div class="b2b-board" style="grid-template-columns:repeat(${shown.length}, minmax(0, 1fr))">${cols}</div>`
+        ? `<div class="b2b-board">${cols}</div>`
         : `<div class="b2b-empty"><div class="b2b-empty-t">${filtered ? 'Nothing matches' : 'No deals in flight'}</div>
               <div class="b2b-empty-s">${filtered ? 'Clear the filters above to see every deal.' : 'New deals show up here as soon as they are raised.'}</div></div>`;
     const focusNote = _b2bStageFocus
@@ -24190,7 +24247,9 @@ async function _b2bAttachMailFile(file, ownerId, ownerKind, source, zone) {
         await _b2bLoadProofs(ownerId);
         await b2bRefresh();
         if (ownerKind === 'preval') b2bOpenPreval(ownerId);
-        else { const d = _b2bDealById(ownerId); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
+        // Awaited: b2bOpenDeal is async (it fetches the lines), so the message
+        // below has to wait for the new screen or it lands on the old one.
+        else { const d = _b2bDealById(ownerId); if (d) await b2bOpenDeal(_b2bClickKind(d), d.id); }
         _b2bSay(rebuilt
             ? `${subject} is on the record — the message text only, because Outlook would not `
               + 'release the file itself. Drop the saved email over it if you want the original.'
@@ -24554,8 +24613,12 @@ function _b2bNumsInner() {
          + cell('Gross', _b2bMoney(gross), `${pct(gross)}%`)
          + cell('Net', _b2bMoney(net), `${pct(net)}%`, 'net', parts.length ? `Resale − offer − ${parts.join(', ')}` : '');
 }
+// Always in the markup, hidden while there are no lines: a deal that reaches
+// pricing without an itemized manifest (and every new evaluation) opens empty,
+// and _b2bPaintTotals -- which only fills what exists -- has to have somewhere
+// to show the figures the moment the first line is added.
 function _b2bNumsHtml() {
-    return _b2bModalItems.length ? `<div class="b2b-ws-nums" id="b2bWsNums">${_b2bNumsInner()}</div>` : '';
+    return `<div class="b2b-ws-nums" id="b2bWsNums" ${_b2bModalItems.length ? '' : 'hidden'}>${_b2bNumsInner()}</div>`;
 }
 
 // The one section style: a folded block with a title and an optional count.
@@ -26984,7 +27047,7 @@ function _b2bPaintTotals() {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     // The workspace numbers block (2026-10 overhaul) -- same figures, its own markup.
     const ws = document.getElementById('b2bWsNums');
-    if (ws) ws.innerHTML = _b2bNumsInner();
+    if (ws) { ws.innerHTML = _b2bNumsInner(); ws.hidden = !_b2bModalItems.length; }
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
     // "Our offer" is the gross offer we make the client; the data-wipe discount
     // is shown as its own line and added back into the net below, rather than
@@ -29094,6 +29157,12 @@ async function b2bCopyQuote() {
     // so selecting it by hand is the way through, and pressing Copy Quote again
     // is what records the send once the clipboard behaves.
     if (!copied) {
+        // On Out For Quote the client's copy is folded away; open it and bring it
+        // into view so "below" points at something.
+        const doc = document.getElementById('b2bQuoteDoc');
+        const fold = doc && doc.closest('details');
+        if (fold) fold.open = true;
+        doc?.scrollIntoView({ block: 'start', behavior: 'smooth' });
         return _b2bSay('Your browser blocked the clipboard. Select the quote below and copy it '
             + 'by hand, then press Copy Quote again to record the send.', true);
     }
@@ -29172,7 +29241,9 @@ async function b2bAcceptQuote(id, btn) {
         // that screen (reopening rebuilds the modal, so the message goes after it).
         const did = (_b2bModalDeal || {}).id;
         _b2bReviewFull = true;
-        if (did) b2bOpenDeal('quote', did);
+        // Awaited, so the message is said on the full sheet, not on the screen
+        // the reopen is about to replace.
+        if (did) await b2bOpenDeal('quote', did);
         return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
     const t = _b2bItemTotals();
@@ -30337,7 +30408,9 @@ function b2bDeclineDeal(id) {
             </div>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
-            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Back</button>
+            <!-- Back to the deal it was opened from (the ... menu, since 2026-10),
+                 not out to the hub. -->
+            <button class="kpi-cancel-btn" onclick="b2bOpenDeal(_b2bClickKind(_b2bDealById('${deal.id}')),'${deal.id}')">Back</button>
             <button class="b2b-btn b2b-btn-danger" style="margin-right:0;" onclick="b2bConfirmDecline('${deal.id}',this)">Mark Declined</button>`,
     });
 }
@@ -33225,6 +33298,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (_tvIsBoardRole()) {
             if (document.getElementById('ccWidget')) initBoardPage();
             initOperations();
+            initB2bPage();   // gated: a board that lands on b2b.html is sent home
             return;
         }
         initDashboardData();
@@ -33650,6 +33724,7 @@ document.addEventListener('click', async (e) => {
                     if (_tvIsBoardRole()) {
                         if (document.getElementById('ccWidget')) initBoardPage();
                         if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+                        if (typeof initB2bPage === 'function') initB2bPage();   // gated: a board is sent home
                         return;
                     }
                     if (typeof initDashboardData === 'function') initDashboardData();
@@ -45296,7 +45371,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
-    { id: 'page-b2b',    label: 'B2B Deals',             sub: 'Main navigation', kind: 'page', page: 'b2b.html',        keys: 'b2b business deals pickup quote listing' },
+    { id: 'page-b2b',    label: 'B2B Deals',             sub: 'Main navigation', kind: 'page', page: 'b2b.html',        keys: 'b2b business deals pickup quote listing wholesale bulk corporate' },
     { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles', 'ec-view-picture-quality'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
