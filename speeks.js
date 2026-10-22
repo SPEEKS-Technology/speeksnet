@@ -80,6 +80,9 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
 // flag is sessionStorage, so on speeksnet.com it could be set by hand, and a
 // guard that someone can switch on in production is one that can break it.
 //
+// Live sales need a real PIN, which a test user has not got; a test session
+// gets SAMPLE live data instead (_lvTestPayload, beside fetchLiveDashboard).
+//
 // READ_POSTS: calls that READ through a POST, by endpoint AND body action —
 // the same URL often takes a write too (district-watch: 'board' reads,
 // 'save_config' writes). Each was checked against the function's handler; add
@@ -12654,6 +12657,20 @@ async function fetchScorecardData() {
         // had changed.
         _ccFlagUpdate('scorecard', `${_au ? _au.pct + '@' + (_au.date || '') : 'na'}`
             + `|${_pa ? _pa.pct + '@' + (_pa.date || '') : 'na'}|${displayScore}`);
+
+        // QuickPortal headline (a card holding only this tab): the newest week's
+        // categories and its note, scored the same way as renderCategoryCard.
+        const _hlBucket = (storeData.buckets || []).filter(b => b.categories && b.categories.length)
+            .sort((a, b) => String(b.sectionDate || '').localeCompare(String(a.sectionDate || '')))[0];
+        const _hlCats = (_hlBucket ? _hlBucket.categories : (storeData.breakdown || [])).map(c => {
+            const v = parseFloat(c.score);
+            if (isNaN(v)) return { name: c.name, val: c.score, cls: 'neu' };
+            return { name: c.name, val: v * 2, cls: v * 2 >= 8 ? 'ok' : (v * 2 >= 6 ? 'warn' : 'crit') };
+        });
+        if (typeof _qpSetHeadline === 'function') _qpSetHeadline('score', {
+            audit: _au || null, paudit: _pa || null, score: displayScore, week: displayDate, store: targetStore,
+            cats: _hlCats, note: _hlBucket && _hlBucket.notes ? String(_hlBucket.notes).trim() : '',
+        });
     } catch (error) {
         console.error('Error fetching scorecard:', error);
         _shMktg.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Error syncing scorecard.</div>';
@@ -12830,6 +12847,25 @@ async function fetchAlertsData() {
         _ccSum('cc-sum-ebay', _ebSumVal, (_ebValCls || '').trim());
         _ccFlagUpdate('ebay', `${_crit}|${_warn}|${_clear}`);
 
+        // QuickPortal headline (a card holding only this tab): the same eight
+        // severities, plus the top-rated rates that are flagged, named.
+        const _hlGrp = s => [s.filter(x => x === 'very-high').length, s.filter(x => x === 'high').length];
+        // Names as the panel's cells have them; the performance ones carry the
+        // flagged categories (a comma list), the top-rated ones their rate.
+        const _hlChips = [['Defect Rate', 'defectRate'], ['Late Shipment', 'lateShipment'], ['Cases Closed', 'casesClosed'], ['Tracking', 'tracking']]
+            .map(([name, k], i) => ({ name, val: formatPercent(storeData[k]), sev: _sevs[4 + i] }))
+            .filter(c => c.sev !== 'clear')
+            .map(c => ({ name: c.name, val: c.val, cls: c.sev === 'very-high' ? 'crit' : 'warn' }));
+        const _hlPerf = [['Current High', 'currentHigh'], ['Current Very High', 'currentVeryHigh'], ['Projected High', 'projectedHigh'], ['Projected Very High', 'projectedVeryHigh']]
+            .map(([name, k], i) => ({ name, raw: storeData[k], sev: _sevs[i] }))
+            .filter(c => c.sev !== 'clear')
+            .map(c => ({ name: c.name, val: String(c.raw).split(',').map(s => s.trim()).filter(Boolean).join(' · '),
+                         cls: c.sev === 'very-high' ? 'crit' : 'warn' }));
+        if (typeof _qpSetHeadline === 'function') _qpSetHeadline('ebay', {
+            crit: _crit, warn: _warn, clear: _clear,
+            perf: _hlGrp(_sevs.slice(0, 4)), top: _hlGrp(_sevs.slice(4)), chips: _hlChips, perfChips: _hlPerf,
+        });
+
         // ---- eBay detail panel: two metric groups, contained stat cells ----
         _shEbay.innerHTML = `
         <div class="sh-ebay">
@@ -12895,7 +12931,11 @@ function _tabSwitch(cfg, tab) {
     // (since the "▴ Summary" control is cut too) nothing to press to get back.
     // A tab there is a selector, not a toggle, and the open one is simply inert.
     const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
-    const collapse = !compact && !!btn && btn.classList.contains('active');
+    // The Command Center has no summary to close to any more, at any width
+    // (Ethan, 2026-10-21: "get rid of the summary part … default into live
+    // dashboard"), so its tabs are selectors everywhere, as they always were on
+    // a phone. The district board keeps its toggle.
+    const collapse = cfg !== _CC_BOARD && !compact && !!btn && btn.classList.contains('active');
 
     cfg.tabs().forEach(t => {
         const on = !collapse && t === tab;
@@ -12916,9 +12956,10 @@ function _tabSwitch(cfg, tab) {
         // the band in place would show a blank stripe the height of the tallest one.
         widget.classList.toggle('cc-nostrip', !collapse && !mine(document.getElementById(p + '-strip-' + tab)));
     }
-    // Show the explicit "back to summary" control while a tab is open.
+    // Show the explicit "back to summary" control while a tab is open — never on
+    // the Command Center, which has no summary to go back to (see above).
     const coll = document.getElementById(p + '-collapse');
-    if (mine(coll)) coll.style.display = collapse ? 'none' : '';
+    if (mine(coll)) coll.style.display = (collapse || cfg === _CC_BOARD) ? 'none' : '';
     return collapse;
 }
 
@@ -12930,6 +12971,10 @@ function switchCommandTab(tab) {
     _ccHeaderFor(collapsed ? null : tab);
     // Opening a tab means the manager has now seen it → clear its "updated" cue.
     if (!collapsed) _clearCommandUpdot(tab);
+    // A combined QuickPortal card shows the open tab's headline, so a switch
+    // redraws it (QUICKPORTAL LAYOUT, _qpRenderHeadlines). Not while that
+    // function is the one opening the tab — it carries on and draws it itself.
+    if (typeof _qpRenderHeadlines === 'function' && !_qpHLBusy) _qpRenderHeadlines();
 }
 
 // Header extras that belong to ONE tab. Carried over from the old employee widget,
@@ -13084,8 +13129,11 @@ function _ccSyncCompactOpen() {
     // specific is one click away", and a screen on a wall has nobody to click it.
     // The old shop-floor page opened straight onto the live card; this is that
     // behaviour kept, now that the board is this card on the ordinary page.
-    if (!compact && !_tvIsBoardRole()) return;
+    // The Command Center opens on its first tab at EVERY width now — it has no
+    // summary view (Ethan, 2026-10-21) — so only the district board still waits
+    // for a compact screen or a wall board.
     _ccOpenDefaultTab();
+    if (!compact && !_tvIsBoardRole()) return;
     _dcOpenDefaultTab();
 }
 
@@ -13142,7 +13190,13 @@ function _openDefaultTab(cfg, open) {
     open(first);      // nothing is active, so this opens rather than toggles
     return true;
 }
-function _ccOpenDefaultTab() { _openDefaultTab(_CC_BOARD, switchCommandTab); }
+function _ccOpenDefaultTab() {
+    // Not while QuickPortal has left the card holding one tab on a desktop: that
+    // card shows its headline view, which is the SHUT state (QUICKPORTAL LAYOUT).
+    const w = document.getElementById(_CC_BOARD.widget);
+    if (w && w.closest('[data-qp-single]') && !_isMobileLayout()) return;
+    _openDefaultTab(_CC_BOARD, switchCommandTab);
+}
 function _dcOpenDefaultTab() { _openDefaultTab(_DC_BOARD, switchDistrictTab); }
 
 // THE CARD'S OWN NAME. "— · This Month / Store Command Center" is what the markup
@@ -14185,7 +14239,11 @@ let _lvFsClosing = false;
 
 function _lvFsEl() { return document.getElementById('lvFullscreen'); }
 
-function openLiveFullscreen() {
+// real === false: the same view filling the window but NOT the browser's own
+// full screen — QuickPortal's "Open Full Dashboard" on a one-tab Live card
+// (QUICKPORTAL LAYOUT, headline view), which shows the whole board without
+// expanding the card. The full-screen button passes nothing and gets both.
+function openLiveFullscreen(real) {
     if (_lvFsEl()) return;
     const el = document.createElement('div');
     el.id = 'lvFullscreen';
@@ -14209,10 +14267,12 @@ function openLiveFullscreen() {
     // called from a click, which is the gesture it requires. Best-effort: if it
     // is refused the overlay alone still covers the window, which is the whole
     // ask, so the rejection is swallowed rather than reported.
-    document.addEventListener('fullscreenchange', _lvFsWatch);
-    try {
-        if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
-    } catch (_) { /* not available; the overlay stands on its own */ }
+    if (real !== false) {
+        document.addEventListener('fullscreenchange', _lvFsWatch);
+        try {
+            if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+        } catch (_) { /* not available; the overlay stands on its own */ }
+    }
     renderLiveDashboard();
 }
 
@@ -17127,11 +17187,142 @@ function _lvFreshness(d) {
         : '<span class="lv-fresh closed">closed</span>';
 }
 
+// SAMPLE LIVE DATA for the localhost test login (TEST SESSION, top of file).
+// shopify-live answers only to a real PIN, and the test user deliberately has
+// none, so Live sat on "Syncing…" and nothing built on it could be looked at
+// (Ethan, 2026-10-21: "put fake data in live dashboard for the test site").
+// This builds the same SHAPE the function returns — five store rows, the NP
+// blocks, yesterday's close, recent orders, the district roll-up — from today's
+// real date and Central time, so the day fills up as the clock moves and the
+// month view has a month behind it. Every figure is made up. Never reached on a
+// real login: it needs _speeksTestSession, which is localhost-only, AND no PIN.
+function _lvTestPayload() {
+    const now = new Date(Math.floor(Date.now() / 60000) * 60000);   // to the minute: stable order ids
+    const p = {};
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit',
+        day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+        .formatToParts(now).forEach(x => { p[x.type] = x.value; });
+    const y = +p.year, mo = +p.month, d = +p.day, hh = +p.hour, mi = +p.minute;
+    const nowMin = hh * 60 + mi;
+    const daysTotal = new Date(y, mo, 0).getDate();
+    const OPEN = 10 * 60, CLOSE = 19 * 60;
+    const dayFrac = Math.max(0, Math.min(1, (nowMin - OPEN) / (CLOSE - OPEN)));
+    const elapsedPct = (d - 1 + dayFrac) / daysTotal * 100;
+    const prevElapsedPct = (d - 1) / daysTotal * 100;
+    const r2 = n => Math.round(n * 100) / 100;
+    const ymd = (dd) => y + '-' + String(mo).padStart(2, '0') + '-' + String(dd).padStart(2, '0');
+    const at = (clockMin) => new Date(now.getTime() - (nowMin - clockMin) * 60000).toISOString();
+    const ITEMS = [['PS5 Slim 1TB Disc Edition', 389], ['iPhone 13 128GB', 310], ['Nintendo Switch OLED', 245],
+        ['MacBook Air M1 8GB', 520], ['AirPods Pro 2nd Gen', 129], ['Xbox Series S 512GB', 199],
+        ['Galaxy S22 Ultra 256GB', 340], ['Canon EOS Rebel T7', 280], ['iPad 9th Gen 64GB', 189]];
+    // code, monthly revenue, how the month is going (1 = on goal), today's pace
+    const SHAPE = [['OVL', 72000, 1.06, 1.10], ['LEE', 61000, 1.01, 0.95], ['WSP', 52000, 0.93, 1.02],
+        ['MPL', 46000, 0.88, 0.85], ['BAL', 41000, 0.97, 1.05]];
+    const stores = SHAPE.map(([code, rev, run, today], si) => {
+        const goal = r2(rev * 0.2);                                  // NP goal
+        const dayRev = rev / daysTotal;
+        const netToday = r2(dayRev * today * dayFrac);
+        const prevNet = r2(dayRev * run);
+        const mtdNet = r2(dayRev * run * (d - 1) + netToday);
+        const cogsToday = r2(netToday * 0.6), mtdCogs = r2(mtdNet * 0.61);
+        const gpToday = r2(netToday - cogsToday), mtdGp = r2(mtdNet - mtdCogs);
+        const npOf = (gp, net) => r2(gp - net * 0.21);
+        const npToday = npOf(gpToday, netToday), npMtd = npOf(mtdGp, mtdNet);
+        const banked = r2(npMtd - npToday);
+        const pct = goal > 0 ? r2(npMtd / goal * 100) : null;
+        const prevMtdNet = r2(mtdNet - netToday), prevMtdGp = r2(mtdGp - gpToday);
+        const prevNp = npOf(prevMtdGp, prevMtdNet), prevPct = goal > 0 ? r2(prevNp / goal * 100) : null;
+        const ordersToday = Math.round(netToday / 165);
+        const orders = [];
+        for (let k = 0; k < 8; k++) {
+            const t = OPEN + 23 + si * 9 + k * 61;
+            if (t > nowMin || t > CLOSE) break;
+            const it = ITEMS[(si * 3 + k) % ITEMS.length];
+            orders.unshift({ at: at(t), amount: it[1], items: [{ title: it[0], qty: 1 }] });
+        }
+        return {
+            code, name: code, source: 'shopifyql',
+            netToday, cogsToday, gpToday, ordersToday, returnsToday: 0,
+            marginToday: netToday > 0 ? r2(gpToday / netToday * 100) : null,
+            aov: ordersToday > 0 ? r2(netToday / ordersToday) : null,
+            mtdNet, mtdCogs, mtdGp, mtdOrders: Math.round(mtdNet / 165), mtdReturns: r2(mtdNet * 0.025),
+            mtdMargin: mtdNet > 0 ? r2(mtdGp / mtdNet * 100) : null,
+            goal: r2(rev * 0.38), pctOfGoal: r2(mtdGp / (rev * 0.38) * 100),
+            paceIndex: elapsedPct > 0 ? Math.round(mtdGp / (rev * 0.38) * 100 / elapsedPct * 100) : null,
+            lastOrderAt: orders[0] ? orders[0].at : null, lastOrderAmount: orders[0] ? orders[0].amount : null,
+            recentOrders: orders.slice(0, 5), recentRefunds: [], cmp: null,
+            prev: d > 1 ? {
+                netToday: prevNet, cogsToday: r2(prevNet * 0.6), gpToday: r2(prevNet * 0.4),
+                ordersToday: Math.round(prevNet / 165), returnsToday: 0,
+                marginToday: 40, aov: 165, mtdNet: prevMtdNet, mtdCogs: r2(prevMtdNet - prevMtdGp), mtdGp: prevMtdGp,
+                mtdOrders: Math.round(prevMtdNet / 165), mtdReturns: r2(prevMtdNet * 0.025),
+                mtdMargin: prevMtdNet > 0 ? r2(prevMtdGp / prevMtdNet * 100) : null,
+                pctOfGoal: prevPct, paceIndex: prevPct !== null && prevElapsedPct > 0 ? Math.round(prevPct / prevElapsedPct * 100) : null,
+            } : null,
+            np: {
+                goal, today: npToday, mtd: npMtd, banked, bankedDays: d - 1, estimated: npToday, costRate: 0.21,
+                bankedSales: prevMtdNet, bankedEbay: r2(prevMtdNet * 0.04), bankedShip: r2(prevMtdNet * 0.02),
+                sellByDay: Array.from({ length: daysTotal }, (_, i) => i < d - 1 ? r2(dayRev * run) : 0),
+                pctOfGoal: pct, paceIndex: pct !== null && elapsedPct > 0 ? Math.round(pct / elapsedPct * 100) : null,
+                track: elapsedPct > 0 ? r2(npMtd / (elapsedPct / 100)) : null, lastMonth: r2(goal * 0.96),
+                prev: d > 1 ? { day: npOf(r2(prevNet * 0.4), prevNet), dayEstimated: false, mtd: prevNp, pctOfGoal: prevPct,
+                    paceIndex: prevPct !== null && prevElapsedPct > 0 ? Math.round(prevPct / prevElapsedPct * 100) : null,
+                    track: prevElapsedPct > 0 ? r2(prevNp / (prevElapsedPct / 100)) : null } : null,
+            },
+        };
+    });
+    const sum = f => r2(stores.reduce((a, m) => a + f(m), 0));
+    const dNet = sum(m => m.netToday), dCogs = sum(m => m.cogsToday), dOrders = stores.reduce((a, m) => a + m.ordersToday, 0);
+    const dMtdNet = sum(m => m.mtdNet), dMtdCogs = sum(m => m.mtdCogs), dGoal = sum(m => m.goal);
+    const npGoal = sum(m => m.np.goal), npMtd = sum(m => m.np.mtd), npPct = r2(npMtd / npGoal * 100);
+    const dPrev = d > 1 ? (() => {
+        const ps = stores.map(m => m.prev), s = f => r2(ps.reduce((a, x) => a + f(x), 0));
+        const net = s(x => x.netToday), mtd = s(x => x.mtdNet), gp = s(x => x.mtdGp);
+        return { netToday: net, cogsToday: s(x => x.cogsToday), gpToday: s(x => x.gpToday), ordersToday: s(x => x.ordersToday),
+            returnsToday: 0, marginToday: 40, aov: 165, mtdNet: mtd, mtdCogs: r2(mtd - gp), mtdGp: gp,
+            mtdOrders: s(x => x.mtdOrders), mtdReturns: s(x => x.mtdReturns), mtdMargin: mtd > 0 ? r2(gp / mtd * 100) : null,
+            pctOfGoal: r2(gp / dGoal * 100), paceIndex: prevElapsedPct > 0 ? Math.round(gp / dGoal * 100 / prevElapsedPct * 100) : null };
+    })() : null;
+    return {
+        ok: true,
+        asOfCentral: ymd(d) + ' ' + String(hh).padStart(2, '0') + ':' + String(mi).padStart(2, '0'),
+        syncedAt: now.toISOString(),
+        open: nowMin >= OPEN && nowMin < CLOSE,
+        month: { daysTotal, daysElapsed: d, elapsedPct: r2(elapsedPct) },
+        prev: d > 1 ? { date: ymd(d - 1), inMonth: true, daysElapsed: d - 1, elapsedPct: r2(prevElapsedPct) } : null,
+        cmpThrough: null,
+        goalKind: 'np',
+        district: {
+            netToday: dNet, cogsToday: dCogs, gpToday: r2(dNet - dCogs), ordersToday: dOrders, returnsToday: 0,
+            marginToday: dNet > 0 ? r2((dNet - dCogs) / dNet * 100) : null, aov: dOrders > 0 ? r2(dNet / dOrders) : null,
+            mtdNet: dMtdNet, mtdReturns: sum(m => m.mtdReturns), mtdGp: r2(dMtdNet - dMtdCogs),
+            mtdMargin: dMtdNet > 0 ? r2((dMtdNet - dMtdCogs) / dMtdNet * 100) : null,
+            goal: dGoal, pctOfGoal: r2((dMtdNet - dMtdCogs) / dGoal * 100), storesReporting: 5, storesTotal: 5,
+            prev: dPrev,
+            np: { goal: npGoal, today: sum(m => m.np.today), mtd: npMtd, banked: sum(m => m.np.banked), bankedDays: d - 1,
+                estimated: sum(m => m.np.estimated), pctOfGoal: npPct,
+                paceIndex: elapsedPct > 0 ? Math.round(npPct / elapsedPct * 100) : null,
+                track: elapsedPct > 0 ? r2(npMtd / (elapsedPct / 100)) : null, lastMonth: sum(m => m.np.lastMonth), prev: null },
+        },
+        stores,
+        scope: { role: sessionStorage.getItem('speeksUserRole') || 'Store Manager',
+                 store: sessionStorage.getItem('speeksUserStore') || 'OVL', district: true },
+    };
+}
+
 async function fetchLiveDashboard() {
     // Nothing to paint into on this page — every mount lives on the dashboard.
     if (!document.querySelector('.lv-detail, .lv-dist-detail')) return;
     const pin = sessionStorage.getItem('speeksUserPin');
-    if (!pin) return;
+    if (!pin) {
+        if (!window._speeksTestSession) return;
+        const t = _lvTestPayload();
+        _lvTrackChanges(t);
+        _lvData = t;
+        _lvErr = '';
+        renderLiveDashboard();
+        return;
+    }
     try {
         const r = await fetch(`${LIVE_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
         const d = await r.json();
@@ -17366,6 +17557,53 @@ function renderLiveDashboard() {
     // sheet carries reviews rather than showing an eighth cell reading "—" — the
     // row already wraps to two lines on a narrow screen at seven.
     _lvSumReviews('cc-sum-reviews', fc, mineView ? [mineView.code] : []);
+
+    // QuickPortal headline (a card holding only this tab): the same figures as
+    // the summary row above, pinned to TODAY for the same reason.
+    // Where the month lands is the forecast band's own arithmetic (_lvForecast),
+    // for this store only: tracking revenue / net profit / buying, each with its
+    // banked month beside it. Net profit is the NP tab's on an NP month, else GP
+    // less BD_NET_GP_RATE of sales, exactly as the band works it. Own store only:
+    // a district roll-up has no single "Recent Activity" or buying sheet to read.
+    let _hlProj = null, _hlRecent = [];
+    if (typeof _qpSetHeadline === 'function' && mineSum && fc) {
+        try {
+            const npOn = _lvNpKind() && fc.trackNp !== null;
+            const net = npOn ? fc.trackNp : ((fc.trackGp > 0 && fc.trackRev > 0) ? fc.trackGp - fc.trackRev * BD_NET_GP_RATE : null);
+            const netSo = npOn ? (mineView && mineView.npMtd != null ? Number(mineView.npMtd) : null)
+                : (Number(mineSum.mtdGp) || 0) - (Number(mineSum.mtdNet) || 0) * BD_NET_GP_RATE;
+            // Bought so far is the month's daily buys added up. Not _lvBuyFor: that
+            // reads the span of the board's current MODE, and this headline is
+            // pinned to Today — where the span is today alone, and today's buying
+            // is not keyed in until the evening, so it read "$0 so far".
+            const wk = _lvBuyArr('wkBuy', mineSum.code);
+            const buySo = wk ? wk.reduce((a, v) => a + (Number(v) || 0), 0) : null;
+            _hlProj = { rev: fc.trackRev, revSo: Number(mineSum.mtdNet) || 0, net: net, netSo: netSo,
+                        buy: fc.buyProj, buySo: buySo };
+        } catch (e) { _hlProj = null; }
+        _hlRecent = (mineSum.recentOrders || []).filter(o => o && isFinite(Date.parse(o.at)))
+            // The newest one: two did not fit the 350px card with the boxes above.
+            .sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 1)
+            .map(o => { const it = _lvItems(o); return { title: it.length ? it[0].title : 'Sale', more: it.length - 1, amount: Number(o.amount) || 0, at: o.at }; });
+    }
+    if (typeof _qpSetHeadline === 'function') _qpSetHeadline('live', {
+        label: (!mineSum && d.district) ? 'District Net Sales Today' : 'Net Sales Today',
+        today: _lvMoney(roll.netToday, false),
+        orders: roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders'),
+        mtd: _lvMoney(roll.mtdNet, false),
+        refunds: (roll.mtdReturns !== null && roll.mtdReturns !== undefined) ? _lvMoney(roll.mtdReturns, false) : '',
+        pct: fc && fc.pct !== null ? fc.pct : null,
+        goal: fc && fc.goal ? fc.goal : 0,
+        asOf: d.asOfCentral ? _lvClock(d.asOfCentral) : '',
+        proj: _hlProj, recent: _hlRecent,
+        // Yesterday and Month for the card's own switch, read off the row's
+        // closed-out day (m.prev) the way the board's Yesterday and Month tabs
+        // read it — the Month tab stops at yesterday's close, so this does too.
+        // Null on the 1st, when there is no finished day; the switch then
+        // offers Today only.
+        prev: _qpLivePrev(mineSum, d, 'day'),
+        month: _qpLivePrev(mineSum, d, 'month'),
+    });
 
     _lvAfterRender();
 }
@@ -33857,10 +34095,14 @@ function renderKpiChart(payload, metric) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            layout: { padding: { top: 55, right: 20, left: 10, bottom: 0 } },
+            // Top padding is the room the value labels need above the highest
+            // point. It was 55, and the legend's 20, when the chart had a fixed
+            // 380px; in a 350px QuickPortal card (ONE CARD HEIGHT in styles.css)
+            // those two took most of the canvas and left the lines a thin band.
+            layout: { padding: { top: 26, right: 20, left: 10, bottom: 0 } },
             animation: { duration: 400 },
             plugins: {
-                legend: { position: 'bottom', labels: { font: { size: 13, family:"'Inter',sans-serif", weight:'bold' }, usePointStyle: true, boxWidth: 8, padding: 20 } },
+                legend: { position: 'bottom', labels: { font: { size: 12, family:"'Inter',sans-serif", weight:'bold' }, usePointStyle: true, boxWidth: 8, padding: 12 } },
                 datalabels: { align:'top', anchor:'end', formatter: fmtVal, font:{ size:11, weight:'bold' }, color:'#666', offset:4 },
                 tooltip: { callbacks: { label: ctx => { const lbl = ctx.dataset.label.trim(); return lbl + ': ' + fmtVal(ctx.parsed.y); } } }
             },
@@ -49673,7 +49915,8 @@ const QP_LAYOUT_KEY = 'speeksQpLayout_';
 const QP_MAX_PER_ROW = 3;
 const QP_DEFAULT_ROWS = [
     { items: ['feed', 'actions'], w: [3, 2] },
-    { items: ['links'] },
+    // No 'links': Quick Links is pinned under High Priority, not a block
+    // (index.html, QUICK LINKS — pinned; Ethan, 2026-10-22).
     { items: ['command'] },
     { items: ['district'] },
     { items: ['chart', 'leaderboard'], w: [3, 1] },
@@ -49683,9 +49926,13 @@ const QP_DEFAULT_ROWS = [
 // gets wider ("Your Feed wider") under a little picture of the two widths —
 // the first cut showed "½ · ½ / ⅔ · ⅓ / ⅓ · ⅔", and Ethan's verdict was that
 // people won't just know what that is. `wide` is which shown card it widens.
+// In the order the row reads: left card wider, Same Width in the MIDDLE (it is
+// the 50/50 — Ethan, 2026-10-21), right card wider. The buttons pass their
+// index to qpSplit and the layout saves the widths themselves, so this order is
+// free to change.
 const QP_SPLITS = [
-    { w: [1, 1], wide: -1 },
     { w: [2, 1], wide: 0 },
+    { w: [1, 1], wide: -1 },
     { w: [1, 2], wide: 1 },
 ];
 // The blocks made of pieces. For the Command Center a piece is the ids of its
@@ -49698,7 +49945,7 @@ const QP_FAMILIES = {
     command: {
         label: 'Command Center', kind: 'cc',
         pieces: [
-            { key: 'live', label: 'Live Sales', ids: ['cc-tab-live', 'cc-sum-live', 'cc-sum-mtd', 'cc-sum-refunds', 'cc-sum-goal', 'cc-sum-reviews', 'cc-strip-live', 'cc-panel-live'] },
+            { key: 'live', label: 'Live Dashboard', ids: ['cc-tab-live', 'cc-sum-live', 'cc-sum-mtd', 'cc-sum-refunds', 'cc-sum-goal', 'cc-sum-reviews', 'cc-strip-live', 'cc-panel-live'] },
             { key: 'ebay', label: 'eBay', ids: ['cc-tab-ebay', 'cc-sum-ebay', 'cc-strip-ebay', 'cc-panel-ebay'] },
             { key: 'score', label: 'Scorecard & Audit', ids: ['cc-tab-scorecard', 'cc-sum-score', 'cc-sum-audit', 'cc-strip-scorecard', 'cc-panel-scorecard'] },
         ],
@@ -49852,6 +50099,8 @@ function _qpMakeShell(main, key) {
             '<div class="ew-head"><div class="ew-titles">'
             + '<span class="ew-eyebrow">' + escapeHtml(store && store !== 'ALL' ? store + ' · This Month' : 'This Month') + '</span>'
             + '<span class="ew-title qp-shell-title"></span></div></div>'
+            // No "▴ Summary": a Command Center card has no summary view to go
+            // back to (Ethan, 2026-10-21) — see _tabSwitch.
             + '<div class="cc-tabbar"><div class="ew-seg cc-seg"></div></div>'
             + '<div class="cc-summary"></div><div class="cc-strips"></div><div class="cc-body"></div>';
     } else {
@@ -49859,6 +50108,15 @@ function _qpMakeShell(main, key) {
         el.innerHTML = '<div class="sam-board"><div class="sam-rail"><div class="sam-card"></div></div></div>';
     }
     return el;
+}
+// "OVL " for a split-out card's title, as the original's #cc-store-name reads.
+// The loaders show OVL for ALL/CORP; before they have run, a store-less login
+// gets just "Command Center".
+function _qpStoreLabel() {
+    const named = document.getElementById('cc-store-name');
+    const s = named && named.textContent.trim() !== 'Store' ? named.textContent.trim()
+        : (sessionStorage.getItem('speeksUserStore') || '');
+    return s && s !== 'ALL' && s !== 'CORP' ? s + ' ' : '';
 }
 function _qpSlotOf(el) {
     const home = el._qpHome && el._qpHome.parentNode;
@@ -49924,10 +50182,28 @@ function _qpDistribute(main, rows) {
             const n = _qpCardName(main, rows, _qpKey(card));
             card.setAttribute('data-qp-label', n.name);
             card.toggleAttribute('data-qp-partial', !n.whole);
+            // A Command Center card holding ONE tab shows no tab button (Ethan,
+            // 2026-10-21): a lone "Scorecard" button only repeats the title. The
+            // card shows its headline view instead; styles.css hides the bar.
+            card.toggleAttribute('data-qp-single', QP_FAMILIES[fam].kind === 'cc'
+                && _qpShownPieces(main, rows, _qpKey(card)).length === 1);
+            // Every Command Center card is titled as one (Ethan, 2026-10-21):
+            // "OVL Command Center · eBay" while it holds one tab, plain "OVL
+            // Command Center" once two or more are combined — the tabs then say
+            // what is in it. The original card's title is its own markup, so it
+            // takes only the " · eBay" part (.qp-cc-piece in index.html).
             const t = card.querySelector('.qp-shell-title');
-            if (t) t.textContent = n.name;
+            if (QP_FAMILIES[fam].kind === 'cc') {
+                const shown = _qpShownPieces(main, rows, _qpKey(card));
+                const one = shown.length === 1 ? QP_FAMILIES[fam].pieces.find(function (p) { return p.key === shown[0]; }) : null;
+                const piece = one ? ' · ' + one.label : '';
+                if (t) t.textContent = _qpStoreLabel() + 'Command Center' + piece;
+                const suf = card.querySelector('.qp-cc-piece');
+                if (suf) suf.textContent = piece;
+            } else if (t) t.textContent = n.name;
         });
     });
+    _qpRenderHeadlines(rows);
 }
 
 // The saved rows, reconciled with the blocks this page actually has: a key that
@@ -50064,6 +50340,333 @@ function _qpLayout(main) {
     const board = typeof _tvIsBoardRole === 'function' && _tvIsBoardRole();
     const saved = board ? null : _qpSaved();
     return saved ? _qpResolve(saved, keys, main) : _qpDefaults(keys);
+}
+
+// The tab a Command Center card has open (openOnly), or the one it opens on: its
+// first in the board's own order (CC_TABS — Live Dashboard first), not in the
+// card's markup, where a split-out card holds its tabs in the order they came.
+// Visible tabs only: the original card also keeps the role-gated ones (Weekly
+// KPIs for employees), hidden but present.
+function _qpCardTab(w, openOnly) {
+    if (!w) return null;
+    const shown = function (b) { return !!b && w.contains(b) && getComputedStyle(b).display !== 'none'; };
+    const tab = CC_TABS.find(function (t) {
+        const b = document.getElementById('cc-tab-' + t);
+        return shown(b) && (!openOnly || b.classList.contains('active'));
+    });
+    return tab || null;
+}
+// Shut a card without _tabSwitch, which never closes a Command Center tab now:
+// used only when a card is left holding one tab, whose shut state is its
+// headline view.
+function _qpShutCard(w) {
+    w.querySelectorAll('.cc-seg .toggle-btn.active').forEach(function (b) { b.classList.remove('active'); });
+    w.querySelectorAll('.cc-strip.cc-active, .cc-panel.cc-active').forEach(function (el) { el.classList.remove('cc-active'); });
+    w.classList.remove('cc-expanded', 'cc-nostrip');
+    const action = w.querySelector('#sh-tab-action');
+    if (action) action.style.display = 'none';
+}
+// --- HEADLINE VIEW for one-tab Command Center cards (Ethan, 2026-10-21: "style 1") ---
+// A card holding just Live Sales, Scorecard or eBay shows one big figure, a bar,
+// and a few lines under it, in place of the summary row that was written for all
+// three tabs side by side. The figures are the ones the tab's own loader already
+// has: each loader drops a small object in _qpHL and calls _qpRenderHeadlines(),
+// so there is no second fetch and the headline can never disagree with the tab.
+// Desktop only, like the hidden tab button (styles.css, ONE-TAB CARDS).
+const _qpHL = {};
+function _qpHLLine(k, v) {
+    return '<div class="qp-hl-ln"><span>' + k + '</span><span>' + v + '</span></div>';
+}
+function _qpHLBar(pct, ticks, cls) {
+    const w = Math.max(0, Math.min(100, Number(pct) || 0));
+    return '<div class="qp-hl-bar ' + (cls || '') + '"><i style="width:' + w + '%"></i>'
+        + (ticks || []).map(function (t) { return '<b style="left:' + t + '%"></b>'; }).join('') + '</div>';
+}
+function _qpHLBand(pct) {
+    return pct >= AUDIT_TARGET_PCT ? 'good' : (pct >= AUDIT_PASS_PCT ? 'warn' : 'bad');
+}
+function _qpHLTrend(a) {
+    if (!a || a.prevPct == null) return '';
+    const d = Math.round((a.pct - a.prevPct) * 10) / 10;
+    return ' <span class="' + (d >= 0 ? 'good' : 'bad') + '">' + (d >= 0 ? '▲' : '▼') + ' ' + Math.abs(d) + '</span>';
+}
+// The Live card's Yesterday / Month figures for one store row (see the live
+// headline in renderLiveDashboard). Net profit is the NP tab's on an NP month,
+// else GP less BD_NET_GP_RATE of sales, as the board works it.
+function _qpLivePrev(m, d, span) {
+    const p = m && m.prev;
+    if (!p || !d || !d.prev) return null;
+    const np = m.np && m.np.prev;
+    const npOn = _lvNpKind() && !!np;
+    const day = span === 'day';
+    const net = Number(day ? p.netToday : p.mtdNet) || 0;
+    const gp = Number(day ? p.gpToday : p.mtdGp) || 0;
+    const profit = npOn ? Number(day ? np.day : np.mtd) : gp - net * BD_NET_GP_RATE;
+    return {
+        date: d.prev.date,
+        net: net, orders: Number(day ? p.ordersToday : p.mtdOrders) || 0,
+        refunds: Number(day ? p.returnsToday : p.mtdReturns) || 0,
+        gm: day ? p.marginToday : p.mtdMargin,
+        np: isFinite(profit) ? profit : null,
+        npEst: npOn && day && !!np.dayEstimated,
+        pct: npOn ? np.pctOfGoal : p.pctOfGoal,
+        // The closed-out day's place in the month (the figures stop there), not
+        // today's.
+        dayOf: d.prev.daysElapsed != null ? d.prev.daysElapsed : null, days: d.month ? d.month.daysTotal : null,
+    };
+}
+// "Tue, Oct 20" from "2026-10-20" — the day itself, not the browser's zone.
+function _qpDayLabel(iso) {
+    const t = Date.parse(String(iso) + 'T12:00:00Z');
+    return isFinite(t) ? new Date(t).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }) : '';
+}
+// Which span the Live card shows. Its own, not the board's _lvMode: switching
+// the card must not switch the full board, or the board the card.
+let _qpLiveMode = 'today';
+function qpLiveMode(mode) {
+    _qpLiveMode = mode;
+    _qpRenderHeadlines();
+}
+
+// "$63.2k" in the small projection boxes, where a full figure would not fit.
+function _qpHLK(n) {
+    n = Number(n);
+    if (!isFinite(n)) return '—';
+    const a = Math.abs(n), s = n < 0 ? '−$' : '$';
+    return a >= 10000 ? s + (a / 1000).toFixed(1) + 'k' : s + Math.round(a).toLocaleString('en-US');
+}
+// The Live card on Yesterday or Month: the closed-out figures, no projections
+// or orders (both belong to today). Month runs to yesterday's close, like the
+// board's Month tab, and still says where the month is heading. In a combined
+// card (h.compact) only Net Profit and Refunds, to stay inside 350px.
+function _qpLivePast(h, p, mode, sw, band) {
+    const label = mode === 'prev' ? 'Net Sales · ' + _qpDayLabel(p.date)
+        : 'Net Sales · Month to ' + _qpDayLabel(p.date).replace(/^\w+, /, '');
+    const pctBand = p.pct == null ? '' : (p.pct >= 100 ? 'good' : (p.pct >= 80 ? 'warn' : 'bad'));
+    const sub = mode === 'prev'
+        ? (p.pct == null ? '' : '<span class="' + pctBand + '">' + Math.round(p.pct) + '% of goal</span> through this day')
+        : (h.pct == null ? '' : '<span class="' + band + '">Tracking to ' + Math.round(h.pct) + '% of goal</span>')
+          + (p.dayOf && p.days ? ' · Day ' + p.dayOf + ' of ' + p.days : '');
+    const margin = p.np != null && p.net > 0 ? ' · ' + (p.np / p.net * 100).toFixed(1) + '%' : '';
+    return '<div class="qp-hl-top"><div class="qp-hl-k">' + escapeHtml(label) + '</div>' + sw + '</div>'
+        + '<div class="qp-hl-big">' + _lvMoney(p.net, false) + '<small>' + p.orders + (p.orders === 1 ? ' order' : ' orders') + '</small></div>'
+        + (sub ? '<div class="qp-hl-sub qp-hl-track">' + sub + '</div>' : '')
+        + '<div class="qp-hl-lines">'
+        + (p.np == null ? '' : _qpHLLine((p.npEst ? 'Estimated ' : '') + 'Net Profit', _lvMoney(p.np, false) + margin))
+        + (p.gm == null || h.compact ? '' : _qpHLLine('Gross Margin', Number(p.gm).toFixed(1) + '%'))
+        + _qpHLLine('Refunds', p.refunds ? _lvMoney(p.refunds, false) : 'None')
+        + (p.orders > 0 && !h.compact ? _qpHLLine('Average Order', _lvMoney(p.net / p.orders, false)) : '')
+        + '</div>';
+}
+function _qpHLBox(k, v, sub, cls) {
+    return '<div class="qp-hl-box"><div class="qp-hl-k">' + k + '</div><div class="qp-hl-bv ' + (cls || '') + '">' + v + '</div>'
+        + (sub ? '<div class="qp-hl-bs">' + sub + '</div>' : '') + '</div>';
+}
+const _QP_HL_BUILD = {
+    // The card shows the day, where the month lands, and the latest order, with
+    // its own Today / Yesterday / Month switch; the rest of Live — the store
+    // table, Recent Activity in full — will not fit in a card, so one link opens
+    // the full dashboard (Ethan, 2026-10-21). The card itself opens nothing.
+    live: function (h) {
+        const band = h.pct === null ? '' : (h.pct >= 100 ? 'good' : (h.pct >= 80 ? 'warn' : 'bad'));
+        // Today / Yesterday / Month (Ethan, 2026-10-21): the board's own switch,
+        // smaller, on the label line. Yesterday and Month only once a day has
+        // closed (not on the 1st).
+        const mode = (_qpLiveMode !== 'today' && !h.prev) ? 'today' : _qpLiveMode;
+        const sw = '<span class="qp-hl-switch" role="group" aria-label="Live Dashboard period">'
+            + [['today', 'Today'], ['prev', 'Yesterday'], ['month', 'Month']]
+                .filter(function (o) { return o[0] === 'today' || h.prev; })
+                .map(function (o) {
+                    return '<button type="button" class="' + (o[0] === mode ? 'on' : '') + '" aria-pressed="' + (o[0] === mode)
+                        + '" onclick="qpLiveMode(\'' + o[0] + '\')">' + o[1] + '</button>';
+                }).join('') + '</span>';
+        const foot = '<div class="qp-hl-footrow">'
+            + '<button type="button" class="qp-hl-link" onclick="openLiveFullscreen(false)">Open Full Dashboard →</button>'
+            + '<span class="qp-hl-tools">' + _bdBtn() + _lvSoundBtn() + '</span></div>';
+        if (mode !== 'today') return _qpLivePast(h, mode === 'prev' ? h.prev : h.month, mode, sw, band) + foot;
+        let html = '<div class="qp-hl-top"><div class="qp-hl-k">' + escapeHtml(h.label) + (h.asOf ? ' <span class="qp-hl-asof">· ' + escapeHtml(h.asOf) + '</span>' : '') + '</div>' + sw + '</div>'
+            + '<div class="qp-hl-big">' + h.today + '<small>' + h.orders + '</small></div>'
+            // No bar here, unlike the other two: the card has to hold the month-end
+            // boxes and an order inside 350px (ONE CARD HEIGHT), and the coloured
+            // line says what the bar would.
+            + (h.pct === null ? '' : '<div class="qp-hl-sub qp-hl-track"><span class="' + band + '">Tracking to ' + Math.round(h.pct) + '% of goal</span>'
+                + (h.goal ? ' · of ' + _qpHLK(h.goal) : '') + '</div>');
+        const p = h.proj;
+        if (p) {
+            html += '<div class="qp-hl-cap">Projected Month-End</div><div class="qp-hl-boxes">'
+                + _qpHLBox('Revenue', _qpHLK(p.rev), h.compact ? '' : _qpHLK(p.revSo) + ' so far')
+                + (p.net === null ? '' : _qpHLBox('Net Profit', _qpHLK(p.net), h.compact || p.netSo === null ? '' : _qpHLK(p.netSo) + ' so far'))
+                + (p.buy ? _qpHLBox('Buying', _qpHLK(p.buy), h.compact || p.buySo === null ? '' : _qpHLK(p.buySo) + ' so far') : '')
+                + '</div>';
+        } else {
+            html += '<div class="qp-hl-lines">' + _qpHLLine('Month to Date Revenue', h.mtd)
+                + (h.refunds ? _qpHLLine('Refunds · Month to Date', h.refunds) : '') + '</div>';
+        }
+        if (h.recent && h.recent.length && !h.compact) {
+            // .lv-ago with its own timestamp: _lvRefreshAgo keeps "4m ago" current.
+            // The time follows the sale on the same line (Ethan, 2026-10-22), not
+            // pinned to the far edge; only the title trims if the card is narrow.
+            // One order, so its label shares the line (the 16px a label line of
+            // its own took is what the footer's breathing room cost).
+            html += h.recent.map(function (o) {
+                return '<div class="qp-hl-ord qp-hl-ord1"><span class="qp-hl-cap qp-hl-capin">Recent Activity</span><span class="qp-hl-ot">' + escapeHtml(o.title)
+                    + (o.more > 0 ? ' <small>+' + o.more + ' more</small>' : '') + '</span>'
+                    + '<span class="qp-hl-oa">· ' + _qpHLK(o.amount) + ' ·</span>'
+                    + '<span class="lv-ago" data-at="' + escapeHtml(o.at) + '">' + _lvAgo(o.at) + '</span></div>';
+            }).join('');
+        }
+        // The board's own Daily Breakdown and sale-chime buttons, unchanged.
+        // "Open Full Dashboard" shows the whole board over the page, not inside
+        // the card (Ethan, 2026-10-21: the card must not expand), so a one-tab
+        // Live card never has a "▴ Summary" to get back from. No full-screen
+        // button: the full dashboard already fills the window (Ethan, same day).
+        return html + foot;
+    },
+    // Everything the Scorecard tab's panel showed, on the card (Ethan,
+    // 2026-10-21) — the card opens nothing. The audit's 165-point breakdown is
+    // the one thing too big for it, and keeps the panel's own button.
+    score: function (h) {
+        // The PayMore audit leads — it is the one the store is held to (the same
+        // call the summary row makes); the SPEEKS one leads only if PayMore has none.
+        const lead = h.paudit || h.audit;
+        const leadName = h.paudit ? 'PayMore Audit' : 'SPEEKS Audit';
+        const sc = h.score >= 8 ? 'good' : (h.score >= 6 ? 'warn' : 'bad');
+        const auSub = function (a) {
+            return [a.earned != null && a.possible ? a.earned + '/' + a.possible : '',
+                a.date ? escapeHtml(_dcShortDay(a.date)) : '', a.auditor ? escapeHtml(a.auditor) : '']
+                .filter(Boolean).join(' · ');
+        };
+        let html = '';
+        if (lead) {
+            html += '<div class="qp-hl-k">' + leadName + '</div>'
+                + '<div class="qp-hl-big ' + _qpHLBand(lead.pct) + '">' + lead.pct + '%<small>'
+                + [lead.date ? escapeHtml(_dcShortDay(lead.date)) : '', escapeHtml(_auStanding(lead.pct))].filter(Boolean).join(' · ') + '</small></div>'
+                + _qpHLBar(lead.pct, [AUDIT_PASS_PCT, AUDIT_TARGET_PCT], _qpHLBand(lead.pct))
+                + (h.compact ? '' : '<div class="qp-hl-sub">Pass ' + AUDIT_PASS_PCT + ' · Target ' + AUDIT_TARGET_PCT + '</div>');
+        } else {
+            html += '<div class="qp-hl-k">Audits</div><div class="qp-hl-big">No audit<small>yet</small></div>';
+        }
+        html += '<div class="qp-hl-boxes">';
+        if (h.paudit && h.audit) {
+            html += _qpHLBox('SPEEKS Audit', h.audit.pct + '%' + _qpHLTrend(h.audit), auSub(h.audit), _qpHLBand(h.audit.pct));
+        } else if (h.audit) {
+            html += _qpHLBox('PayMore Audit', 'No audit', 'PayMore has not audited yet');
+        }
+        html += _qpHLBox('SPEEKS Scorecard', h.score.toFixed(1) + ' / 10', escapeHtml(h.week || ''), sc) + '</div>';
+        // In a combined card only the categories that need attention (below 8):
+        // three chips wrap to two lines in a narrow card.
+        const cats = h.compact ? h.cats.filter(function (c) { return c.cls !== 'ok'; }) : h.cats;
+        if (cats.length) {
+            html += '<div class="qp-hl-chips">' + cats.map(function (c) {
+                return '<span class="sh-badge ' + c.cls + '">' + escapeHtml(c.name) + ' ' + escapeHtml(String(c.val)) + '</span>';
+            }).join('') + '</div>';
+        }
+        if (h.note && !h.compact) html += '<div class="qp-hl-note">“' + escapeHtml(h.note) + '”</div>';
+        if (h.audit && h.store) html += '<button type="button" class="qp-hl-link" onclick="openAuditBreakdown(\'' + escapeHtml(h.store) + '\')">SPEEKS Audit Breakdown →</button>';
+        return html;
+    },
+    ebay: function (h) {
+        // Counts METRICS (eight of them), not accounts — "2 At Risk" on the
+        // summary row means two metrics at eBay's limit.
+        const total = h.crit + h.warn + h.clear;
+        const big = h.crit ? '<span class="bad">' + h.crit + '</span><small>at eBay\'s limit</small>'
+            : (h.warn ? '<span class="warn">' + h.warn + '</span><small>near the limit</small>'
+                : '<span class="good">Healthy</span><small>all ' + total + ' clear</small>');
+        const seg = function (n, cls) { return n ? '<i class="' + cls + '" style="flex:' + n + '"></i>' : ''; };
+        // g = [at limit, nearing] for one group of four.
+        const flag = function (g, of) {
+            const n = g[0] + g[1];
+            return n ? '<span class="' + (g[0] ? 'bad' : 'warn') + '">' + n + ' of ' + of + ' flagged</span>' : '<span class="good">All clear</span>';
+        };
+        // Each group's line, then what in it is flagged, named — so the card says
+        // everything the tab's panel did and needs no panel (Ethan, 2026-10-21:
+        // the standalone eBay card does not open; see _qpRenderHeadlines).
+        const chips = function (list) {
+            return list.length ? '<div class="qp-hl-chips">' + list.map(function (c) {
+                return '<span class="sh-badge ' + c.cls + '">' + escapeHtml(c.name) + ' · ' + escapeHtml(c.val) + '</span>';
+            }).join('') + '</div>' : '';
+        };
+        return '<div class="qp-hl-k">Account Status</div>'
+            + '<div class="qp-hl-big">' + big + '</div>'
+            + '<div class="qp-hl-seg">' + seg(h.crit, 'bad') + seg(h.warn, 'warn') + seg(h.clear, 'good') + '</div>'
+            + (h.compact ? '' : '<div class="qp-hl-sub">' + h.crit + ' at limit · ' + h.warn + ' nearing · ' + h.clear + ' clear</div>')
+            + '<div class="qp-hl-lines">'
+            + _qpHLLine('Performance Metrics', flag(h.perf, 4)) + chips(h.perfChips || [])
+            // In a combined card only the red ones (at eBay's limit) — four chips
+            // wrap to three lines in a narrow card; the count beside them stays.
+            + _qpHLLine('Top-Rated Metrics', flag(h.top, 4)) + chips(h.compact ? h.chips.filter(function (c) { return c.cls === 'crit'; }) : h.chips)
+            + '</div>';
+    },
+};
+// rows: the layout being applied, when called mid-build (_qpDistribute runs
+// before the rows exist in the page); otherwise the page's own.
+let _qpHLBusy = false;
+function _qpRenderHeadlines(rows) {
+    const main = _qpMain();
+    if (!main || _qpHLBusy) return;
+    _qpHLBusy = true;
+    try { _qpRenderHeadlinesNow(main, rows || _qpCurrentRows(main)); } finally { _qpHLBusy = false; }
+}
+function _qpRenderHeadlinesNow(main, rows) {
+    main.querySelectorAll('[data-qp-family="command"]').forEach(function (card) {
+        const w = card.classList.contains('cc-widget') ? card : card.querySelector('.cc-widget');
+        if (!w) return;
+        let hl = w.querySelector(':scope > .qp-hl');
+        const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
+        const single = card.hasAttribute('data-qp-single');
+        // A phone keeps the full tab panels, as before: no headlines there.
+        if (compact) {
+            if (hl) hl.remove();
+            w.removeAttribute('data-qp-hl');
+            if (!w.classList.contains('cc-expanded')) {
+                const first = _qpCardTab(w, false);
+                if (first) switchCommandTab(first);
+            }
+            return;
+        }
+        let piece;
+        if (single) {
+            // One tab: the headline IS the shut card, so a card left open (it
+            // held more tabs a moment ago) is shut first.
+            if (w.classList.contains('cc-expanded')) _qpShutCard(w);
+            w.removeAttribute('data-qp-hl');
+            piece = _qpShownPieces(main, rows, _qpKey(card))[0];
+        } else {
+            // Two or more tabs: the card keeps its tab buttons, at their usual
+            // size, and shows the OPEN tab's headline in place of its summary,
+            // strips and panel (Ethan, 2026-10-21) — so a combined card is the
+            // same 350px as the cards beside it instead of the full board's
+            // height. It is never shut (no summary view), so it opens on its
+            // first tab: Live Dashboard wherever Live is in it. The full board
+            // is one click away through Live's "Open Full Dashboard".
+            if (!w.classList.contains('cc-expanded')) {
+                const first = _qpCardTab(w, false);
+                if (first) switchCommandTab(first);
+            }
+            w.setAttribute('data-qp-hl', '');
+            const tab = _qpCardTab(w, true);
+            piece = tab === 'scorecard' ? 'score' : tab;
+        }
+        if (!hl) {
+            hl = document.createElement('div');
+            hl.className = 'qp-hl';
+            const bar = w.querySelector(':scope > .cc-tabbar');
+            w.insertBefore(hl, bar ? bar.nextSibling : w.firstChild);
+        }
+        // In a combined card the tab bar takes ~55px of the 350, so the headline
+        // drops its least-needed lines (h.compact): Live its latest order and
+        // "so far" figures, Scorecard its note and the pass/target caption, eBay
+        // the "2 at limit · 3 nearing" line its coloured bar already shows.
+        const h = _qpHL[piece] && !single ? Object.assign({}, _qpHL[piece], { compact: true }) : _qpHL[piece];
+        // A headline opens nothing (Ethan, 2026-10-21): eBay and Scorecard show
+        // everything their panel did, and Live has its own "Open Full
+        // Dashboard" link and Daily Breakdown button.
+        hl.innerHTML = h && _QP_HL_BUILD[piece] ? _QP_HL_BUILD[piece](h) : '<div class="status-message">Syncing…</div>';
+    });
+}
+function _qpSetHeadline(piece, h) {
+    _qpHL[piece] = h;
+    try { _qpRenderHeadlines(); } catch (e) { console.error('QuickPortal headline:', e); }
 }
 
 function _qpApplyLayout() {
@@ -50255,9 +50858,9 @@ function _qpRowBar(row, cells) {
     bar.className = 'qp-rowbar';
     bar.setAttribute('role', 'group');
     bar.setAttribute('aria-label', 'Card widths: ' + labels.join(' and '));
-    bar.innerHTML = '<span class="qp-rowbar-lab">Card widths</span>' + QP_SPLITS.map(function (s, n) {
+    bar.innerHTML = '<span class="qp-rowbar-lab">Card Widths</span>' + QP_SPLITS.map(function (s, n) {
         const on = g[0] === s.w[0] && g[1] === s.w[1];
-        const words = s.wide === -1 ? 'Same width' : escapeHtml(labels[s.wide]) + ' wider';
+        const words = s.wide === -1 ? 'Same Width' : escapeHtml(labels[s.wide]) + ' Wider';
         return '<button type="button" class="qp-size' + (on ? ' on' : '') + '" aria-pressed="' + on + '"'
             + ' onclick="qpSplit(\'' + keys[0] + '\', ' + n + ')">' + _qpSplitPic(s.w, s.wide) + '<span>' + words + '</span></button>';
     }).join('');
@@ -50265,7 +50868,7 @@ function _qpRowBar(row, cells) {
 }
 
 function _qpRenderControls(main) {
-    main.querySelectorAll('.qp-slot, .qp-rowbar, .qp-ov').forEach(function (c) { c.remove(); });
+    main.querySelectorAll('.qp-slot, .qp-rowbar, .qp-ov, .qp-x').forEach(function (c) { c.remove(); });
     main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
     const rowsNow = _qpCurrentRows(main);
     const rows = Array.from(main.querySelectorAll(':scope > .qp-row:not([hidden])'));
@@ -50285,6 +50888,19 @@ function _qpRenderControls(main) {
             b.draggable = true;
             b.setAttribute('data-qp-grab', '');
             b.title = 'Drag to move ' + (b.getAttribute('data-qp-label') || key);
+            // A card taken apart gets an × that puts it back (qpPutBack). It sits
+            // beside the card in the cell, not inside it, so _qpBlockClicks —
+            // which swallows every click INSIDE a card — lets it through.
+            if (b.hasAttribute('data-qp-shell') && fam) {
+                const x = document.createElement('button');
+                x.type = 'button';
+                x.className = 'qp-x';
+                x.title = 'Put back into ' + QP_FAMILIES[fam].label;
+                x.setAttribute('aria-label', x.title);
+                x.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+                x.onclick = function () { qpPutBack(key); };
+                cell.appendChild(x);
+            }
             // A card with two or more pieces showing lets each one be dragged out
             // by its tab (Command Center) or its row (Action Items).
             if (fam) {
@@ -50472,9 +51088,51 @@ function _qpWireDrag(main) {
         _qpDropAt(main, drag, t);
     });
     main.addEventListener('dragend', function () {
+        _qpEdgeV = 0;
         if (_qpDrag) { _qpDrag = null; _qpClearSlots(main); }
         main.querySelectorAll('.qp-dragging').forEach(function (c) { c.classList.remove('qp-dragging'); });
     });
+    main.addEventListener('drop', function () { _qpEdgeV = 0; }, true);
+    // On the document, not <main>: the top edge is the fixed nav bar.
+    if (!window._qpEdgeWired) { window._qpEdgeWired = true; document.addEventListener('dragover', _qpEdgeScroll); }
+}
+
+// Scroll the page while a card is held near the top or bottom of the window
+// (Ethan, 2026-10-21), so a card can be carried past what fits on screen. The
+// browser's own drag-scroll only wakes within a few pixels of the edge, and at
+// the top that edge is under the fixed nav bar. Faster the closer to the edge.
+// dragover keeps firing while the mouse is held still, so holding the card
+// in the band keeps the page moving; one animation-frame loop does the moving.
+let _qpEdgeV = 0, _qpEdgeRaf = 0;
+const _QP_EDGE_BAND = 90, _QP_EDGE_MAX = 22;
+function _qpEdgeScroll(e) {
+    if (!_qpEditing || !_qpDrag) { _qpEdgeV = 0; return; }
+    const nav = document.querySelector('.top-nav, .nav-bar');
+    const top = (nav ? Math.max(0, nav.getBoundingClientRect().bottom) : 0) + _QP_EDGE_BAND;
+    const bottom = window.innerHeight - _QP_EDGE_BAND;
+    const speed = function (into) { return Math.ceil(Math.min(1, into / _QP_EDGE_BAND) * _QP_EDGE_MAX); };
+    _qpEdgeV = e.clientY < top ? -speed(top - e.clientY) : (e.clientY > bottom ? speed(e.clientY - bottom) : 0);
+    if (_qpEdgeV && !_qpEdgeRaf) {
+        const step = function () {
+            if (!_qpEdgeV || !_qpDrag) { _qpEdgeRaf = 0; return; }
+            window.scrollBy(0, _qpEdgeV);
+            _qpEdgeRaf = requestAnimationFrame(step);
+        };
+        _qpEdgeRaf = requestAnimationFrame(step);
+    }
+}
+
+// The × on a card that was taken apart: its pieces go back into their family's
+// original card, in their usual places — eBay returns as the Command Center's
+// second tab, Cleaning to Action Items. Dropping the shell's key is all it
+// takes: _qpDistribute sends the pieces of a shell nobody wants any more home.
+// Cards a person adds themselves (later) will use the same ×.
+function qpPutBack(key) {
+    const main = _qpMain();
+    if (!main || !_qpEditing) return;
+    const rows = _qpCurrentRows(main);
+    _qpTakeOut(rows, key);
+    _qpCommit(main, rows);
 }
 
 function _qpSetEditing(main, on) {
@@ -50484,7 +51142,7 @@ function _qpSetEditing(main, on) {
         _qpWireDrag(main);
         _qpRenderControls(main);
     } else {
-        main.querySelectorAll('.qp-rowbar').forEach(function (c) { c.remove(); });
+        main.querySelectorAll('.qp-rowbar, .qp-x').forEach(function (c) { c.remove(); });
         main.querySelectorAll('[data-qp-block][data-qp-grab]').forEach(function (b) {
             b.draggable = false;
             b.removeAttribute('data-qp-grab');

@@ -729,80 +729,12 @@
     </div>
   </section>
 
-  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="feed" data-qp-label="Your Feed">
-    <div class="sam-board">
-      <!-- LEFT: the feed — announcements + store notes + reminders/due dates -->
-      <div class="sam-card">
-        <div class="sam-card-h">
-          <span class="sam-ttl"><span class="sam-hico"><svg viewBox="0 0 24 24"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></svg></span>Your Feed <span class="sam-pip" id="samAnnPip" style="display:none">0</span></span>
-          <div class="sam-h-actions">
-            <button class="sam-viewall" onclick="toggleNotifs()">All announcements <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
-          </div>
-        </div>
-        <div class="sam-feed" id="samFeed"><div class="sam-empty">Syncing your feed...</div></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="actions" data-qp-label="Action Items">
-    <div class="sam-board">
-      <!-- RIGHT: action items -->
-      <div class="sam-rail">
-        <div class="sam-card">
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" data-feature="widget-checklist-panel" onclick="toggleChecklistPanel(event); loadChecklist();">
-            <span class="sam-mico blue"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
-            <span class="sam-m-body"><span class="sam-m-t">Manager Checklist</span><span class="sam-m-s" id="samClSub">Open your daily tasks</span><span class="sam-m-bar"><i id="samClFill" style="width:0%"></i></span></span>
-            <span class="sam-m-val" id="samClVal"></span>
-          </button>
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-mobile="hide" data-tablet="show" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();">
-            <span class="sam-mico violet"><svg viewBox="0 0 24 24"><path d="M3 21v-4a4 4 0 0 1 4-4h5M14 4l6 6M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
-            <span class="sam-m-body"><span class="sam-m-t">Cleaning Checklist</span><span class="sam-m-s" id="samAuditSub">Open today's cleaning list</span><span class="sam-m-bar"><i id="samAuditFill" style="width:0%"></i></span></span>
-            <span class="sam-m-val" id="samAuditVal"></span>
-          </button>
-          <!-- Order matters: the three side panels (Checklist, Cleaning, Goals &
-               Initiatives) sit together as 1-2-3, then Listing Goals — which opens
-               a modal, not a panel — comes last. -->
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
-            <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
-            <span class="sam-m-body"><span class="sam-m-t">Goals &amp; Initiatives</span><span class="sam-m-s">Team goals &amp; initiatives</span></span>
-            <span class="sam-m-chev"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></span>
-          </button>
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-assistant-manager role-training" data-feature="widget-listing-goals" onclick="openListingGoals()">
-            <span class="sam-mico sage"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg></span>
-            <span class="sam-m-body"><span class="sam-m-t">Listing Goals</span><span class="sam-m-s" id="samListSub">This week's listing target</span><span class="sam-m-bar"><i id="samListFill" style="width:0%"></i></span></span>
-            <span class="sam-m-val" id="samListVal"></span>
-          </button>
-
-          <!-- DM / CEO versions of the three rows above. Same anatomy, same
-               .sam-mico colours and the same order, so the rail reads identically
-               whichever role you are — the only difference is that a manager's row
-               opens a side panel for their own store and these open a district
-               popup covering all five. They sit after the manager rows rather than
-               interleaved because only one set is ever visible at a time, so the
-               rendered order comes out the same either way.
-               Roles mirror exactly what the dashboard panels these replace had:
-               Cleaning and Listing were DM+CEO, Monthly Goals was DM-only. -->
-          <button class="sam-mini dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-tablet="show" data-feature="widget-dm-audit" onclick="openDmCleaning()">
-            <span class="sam-mico violet"><svg viewBox="0 0 24 24"><path d="M3 21v-4a4 4 0 0 1 4-4h5M14 4l6 6M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
-            <span class="sam-m-body"><span class="sam-m-t">Cleaning Checklist</span><span class="sam-m-s" id="samDmAuditSub">All five stores today</span><span class="sam-m-bar"><i id="samDmAuditFill" style="width:0%"></i></span></span>
-            <span class="sam-m-val" id="samDmAuditVal"></span>
-          </button>
-          <button class="sam-mini dynamic-module-flex role-district-manager" data-mobile="hide" data-tablet="show" data-feature="widget-dm-goals" onclick="openDmMonthlyGoals()">
-            <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
-            <span class="sam-m-body"><span class="sam-m-t">Monthly Team Goals</span><span class="sam-m-s" id="samDmGoalsSub">Team goals &amp; initiatives</span></span>
-            <span class="sam-m-val" id="samDmGoalsVal"></span>
-          </button>
-          <button class="sam-mini dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="widget-dm-listing-goals" onclick="openDmListingGoals()">
-            <span class="sam-mico sage"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg></span>
-            <span class="sam-m-body"><span class="sam-m-t">Listing Goals</span><span class="sam-m-s" id="samDmListSub">All five stores this week</span><span class="sam-m-bar"><i id="samDmListFill" style="width:0%"></i></span></span>
-            <span class="sam-m-val" id="samDmListVal"></span>
-          </button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <div class="hotbars-stack" data-qp-block="links" data-qp-label="Quick Links">
+  <!-- ===== QUICK LINKS — pinned under High Priority (Ethan, 2026-10-22) =====
+       Was a QuickPortal block that could be moved like any card (data-qp-block
+       "links"); now it is not a block at all, so the layout never moves it and it
+       always sits here, under any open High Priority banner and above the rows.
+       A saved layout that still names "links" just drops the key (_qpResolve). -->
+  <div class="hotbars-stack qp-pinned">
 
     <div class="dynamic-module-flex role-ceo hotbar-wrapper">
         <div class="hotbar-container">
@@ -937,6 +869,80 @@
       </div>
   </div>
 
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="feed" data-qp-label="Your Feed">
+    <div class="sam-board">
+      <!-- LEFT: the feed — announcements + store notes + reminders/due dates -->
+      <div class="sam-card">
+        <div class="sam-card-h">
+          <span class="sam-ttl"><span class="sam-hico"><svg viewBox="0 0 24 24"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></svg></span>Your Feed <span class="sam-pip" id="samAnnPip" style="display:none">0</span></span>
+          <div class="sam-h-actions">
+            <button class="sam-viewall" onclick="toggleNotifs()">All announcements <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+        </div>
+        <div class="sam-feed" id="samFeed"><div class="sam-empty">Syncing your feed...</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="actions" data-qp-label="Action Items">
+    <div class="sam-board">
+      <!-- RIGHT: action items -->
+      <div class="sam-rail">
+        <div class="sam-card">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" data-feature="widget-checklist-panel" onclick="toggleChecklistPanel(event); loadChecklist();">
+            <span class="sam-mico blue"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+            <span class="sam-m-body"><span class="sam-m-t">Manager Checklist</span><span class="sam-m-s" id="samClSub">Open your daily tasks</span><span class="sam-m-bar"><i id="samClFill" style="width:0%"></i></span></span>
+            <span class="sam-m-val" id="samClVal"></span>
+          </button>
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-mobile="hide" data-tablet="show" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();">
+            <span class="sam-mico violet"><svg viewBox="0 0 24 24"><path d="M3 21v-4a4 4 0 0 1 4-4h5M14 4l6 6M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
+            <span class="sam-m-body"><span class="sam-m-t">Cleaning Checklist</span><span class="sam-m-s" id="samAuditSub">Open today's cleaning list</span><span class="sam-m-bar"><i id="samAuditFill" style="width:0%"></i></span></span>
+            <span class="sam-m-val" id="samAuditVal"></span>
+          </button>
+          <!-- Order matters: the three side panels (Checklist, Cleaning, Goals &
+               Initiatives) sit together as 1-2-3, then Listing Goals — which opens
+               a modal, not a panel — comes last. -->
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
+            <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
+            <span class="sam-m-body"><span class="sam-m-t">Goals &amp; Initiatives</span><span class="sam-m-s">Team goals &amp; initiatives</span></span>
+            <span class="sam-m-chev"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></span>
+          </button>
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-assistant-manager role-training" data-feature="widget-listing-goals" onclick="openListingGoals()">
+            <span class="sam-mico sage"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg></span>
+            <span class="sam-m-body"><span class="sam-m-t">Listing Goals</span><span class="sam-m-s" id="samListSub">This week's listing target</span><span class="sam-m-bar"><i id="samListFill" style="width:0%"></i></span></span>
+            <span class="sam-m-val" id="samListVal"></span>
+          </button>
+
+          <!-- DM / CEO versions of the three rows above. Same anatomy, same
+               .sam-mico colours and the same order, so the rail reads identically
+               whichever role you are — the only difference is that a manager's row
+               opens a side panel for their own store and these open a district
+               popup covering all five. They sit after the manager rows rather than
+               interleaved because only one set is ever visible at a time, so the
+               rendered order comes out the same either way.
+               Roles mirror exactly what the dashboard panels these replace had:
+               Cleaning and Listing were DM+CEO, Monthly Goals was DM-only. -->
+          <button class="sam-mini dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-tablet="show" data-feature="widget-dm-audit" onclick="openDmCleaning()">
+            <span class="sam-mico violet"><svg viewBox="0 0 24 24"><path d="M3 21v-4a4 4 0 0 1 4-4h5M14 4l6 6M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
+            <span class="sam-m-body"><span class="sam-m-t">Cleaning Checklist</span><span class="sam-m-s" id="samDmAuditSub">All five stores today</span><span class="sam-m-bar"><i id="samDmAuditFill" style="width:0%"></i></span></span>
+            <span class="sam-m-val" id="samDmAuditVal"></span>
+          </button>
+          <button class="sam-mini dynamic-module-flex role-district-manager" data-mobile="hide" data-tablet="show" data-feature="widget-dm-goals" onclick="openDmMonthlyGoals()">
+            <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
+            <span class="sam-m-body"><span class="sam-m-t">Monthly Team Goals</span><span class="sam-m-s" id="samDmGoalsSub">Team goals &amp; initiatives</span></span>
+            <span class="sam-m-val" id="samDmGoalsVal"></span>
+          </button>
+          <button class="sam-mini dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="widget-dm-listing-goals" onclick="openDmListingGoals()">
+            <span class="sam-mico sage"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg></span>
+            <span class="sam-m-body"><span class="sam-m-t">Listing Goals</span><span class="sam-m-s" id="samDmListSub">All five stores this week</span><span class="sam-m-bar"><i id="samDmListFill" style="width:0%"></i></span></span>
+            <span class="sam-m-val" id="samDmListVal"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
 
   <!-- The row the Command Center and Buying & Sales live in. It carries a feature
        key of its own because its CHILDREN do (cc-live, cc-ebay, cc-scorecard…):
@@ -961,7 +967,9 @@
         <div class="ew-head">
             <div class="ew-titles">
                 <span class="ew-eyebrow"><span id="cc-store-eyebrow">—</span> · This Month</span>
-                <span class="ew-title"><span id="cc-store-name">Store</span> Command Center <span id="cc-week" class="ew-date"></span></span>
+                <!-- .qp-cc-piece: " · Live Dashboard" when QuickPortal has left this
+                     card holding one tab (QUICKPORTAL LAYOUT, _qpDistribute). -->
+                <span class="ew-title"><span id="cc-store-name">Store</span> Command Center<span class="qp-cc-piece"></span> <span id="cc-week" class="ew-date"></span></span>
             </div>
             <span class="cc-head-r">
                 <!-- Tab-specific header bits, shown by switchCommandTab. The goal chip

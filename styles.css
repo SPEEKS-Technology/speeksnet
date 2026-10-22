@@ -25315,10 +25315,10 @@ select.dd-native {
 .qp-cell > .speeks-action-menu.qp-part { display: flex; flex-direction: column; }
 .speeks-action-menu.qp-part .sam-rail > .sam-card { flex: 1 1 auto; min-height: min-content; }
 
-/* Quick Links is a wrapping chip bar. In a row taller than it (beside the feed,
-   say) a wrapping flex line stretches to share the height, which turned each chip
-   into a tall empty tile. Pack the lines at the top instead. */
-.qp-cell > .hotbars-stack { align-content: flex-start; align-items: flex-start; }
+/* Quick Links is pinned under High Priority (index.html, QUICK LINKS — pinned),
+   not a block in the rows. Its old margin tucked it -6px up under the feed deck
+   it used to follow; under the banner it sits flush, with the rows' own gap below. */
+body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 
 /* Performance: the chart and the leaderboard are two cards now. */
 .ew-perf.qp-part .ew-perf-body { grid-template-columns: minmax(0, 1fr); }
@@ -25412,6 +25412,20 @@ select.dd-native {
 .qp-ov-edge.full { background: #9aa6b5; }
 .qp-ov-edge.full span { color: #647082; border-color: #d5dce4; }
 
+/* The × on a card taken apart (qpPutBack) — on the card's corner, over the
+   dashed outline, in the cell rather than the card so a click on it is not
+   swallowed with the card's own clicks. Edit mode only (made and removed by
+   _qpRenderControls / _qpSetEditing). */
+.qp-x {
+    position: absolute; top: -9px; right: -9px; z-index: 8; width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center; border-radius: 99px; cursor: pointer;
+    background: #fff; border: 1px solid #c9d3dd; color: #647082; box-shadow: 0 1px 3px rgba(16,24,40,.12);
+}
+.qp-x svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+/* Not red: putting a piece back loses nothing, so it shouldn't look like delete. */
+.qp-x:hover { background: #eef1f4; border-color: #9aa6b5; color: #1a1c1e; }
+.main-content.qp-dragging-any .qp-x { visibility: hidden; }
+
 /* CARD PIECES — the grab cursor on a tab or action row that can be dragged out. */
 .main-content.qp-editing .qp-piece-drag { cursor: grab; }
 .main-content.qp-editing .qp-piece-drag:active { cursor: grabbing; }
@@ -25421,6 +25435,137 @@ select.dd-native {
    max-width: calc(33.33% - 20px) with !important, so this has to as well, or a
    split card sat at a third of its own cell. */
 .qp-cell > .cc-widget.qp-shell { flex: 1 1 auto; min-width: 0; max-width: none !important; }
+/* The Command Center's title is store + "Command Center" + " · Live Dashboard"
+   (.qp-cc-piece) + the week, and .ew-title is a wrapping flex row — so in a
+   narrow card each of those became its own column and wrapped on its own
+   ("OVL / Command Center / · Live Dashboard / Week of…"). As plain text it
+   wraps like a sentence; the week keeps itself together. */
+#ccWidget .ew-title { display: block; }
+#ccWidget .ew-title .ew-date { margin-left: 7px; white-space: nowrap; }
+/* ...and on a one-tab card the week goes: its headline is about today, and in a
+   third-width card the week wrapped to a line of its own and took the card past
+   350px (ONE CARD HEIGHT). */
+[data-qp-single] #ccWidget .ew-title .ew-date { display: none; }
+/* ...and "Updated as of", which is the Scorecard data's date — beside a Live
+   headline it said nothing, and it pushed the title onto two lines. */
+[data-qp-single] #ccWidget .cc-updated { display: none; }
+
+/* ONE-TAB CARDS (data-qp-single, set in _qpDistribute) — no tab button (Ethan,
+   2026-10-21): "Scorecard" under the title "Scorecard & Audit" said nothing the
+   title didn't. The card has no tab bar and shows its headline view, which opens
+   nothing. A card with two or more tabs is never shut — it opens on its first
+   tab and has no summary row (_tabSwitch, _qpRenderHeadlines).
+   Desktop only — a phone keeps the tab button and opens the tab, as before. */
+/* The attribute sits on the block: a shell IS its .cc-widget, but the original
+   card's block is the .ew-dash wrapped round #ccWidget — hence the :is(). */
+@media (min-width: 901px) and (not (pointer: coarse)), (min-width: 1367px) {
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget) .cc-seg { display: none; }
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget):not(.cc-expanded) .cc-tabbar { display: none; }
+    /* The headline replaces the summary row on a one-tab card (_qpRenderHeadlines). */
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget):not(.cc-expanded) .cc-summary { display: none; }
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget):not(.cc-expanded) > .qp-hl { display: flex; }
+    /* A COMBINED card (data-qp-hl, _qpRenderHeadlines) keeps its tab bar and shows
+       the open tab's headline in place of the summary, the strips and the panel,
+       so it is the same 350px as everything beside it rather than the 530px an
+       open tab used to hold it at. The Scorecard tab's breakdown button moves into
+       its headline, so the tab bar's copy goes. */
+    .cc-widget[data-qp-hl] :is(.cc-summary, .cc-strips, .cc-body) { display: none !important; }
+    .cc-widget[data-qp-hl] > .qp-hl { display: flex; }
+    .cc-widget[data-qp-hl].cc-expanded { min-height: 0; }
+    /* Less padding round the tab bar — the buttons keep their size (Ethan). */
+    .cc-widget[data-qp-hl] > .cc-tabbar { padding-top: 7px; padding-bottom: 7px; }
+    .cc-widget[data-qp-hl] :is(#sh-tab-action, #cc-collapse) { display: none !important; }
+}
+
+/* ONE CARD HEIGHT (Ethan, 2026-10-21: "every widget the same height"). Every
+   card in a QuickPortal row is 350px, so every row is too — 350 being the
+   tallest standalone card's own height (Scorecard, with its chips and note).
+   A floor rather than a fixed height, so content that ever needs more still
+   gets it. Quick Links is a strip, not a card, and keeps its own height. The
+   Performance chart and the Leaderboard used to fix the bottom row at 530:
+   both are pinned at 380px with !important by the old dashboard rules
+   (#lb-wrapper, .chart-container), so inside a row they FILL their card
+   instead (below). An open Command Center tab is exempt — its panel needs the
+   room. Desktop only: phones stack every card at its own height. */
+@media (min-width: 901px) and (not (pointer: coarse)), (min-width: 1367px) {
+    .main-content .qp-cell > [data-qp-block]:not(.hotbars-stack) { min-height: 350px; }
+    .main-content .qp-cell > .ew-perf { display: flex; flex-direction: column; }
+    .main-content .qp-cell > .ew-perf > .ew-perf-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .main-content .qp-cell > .ew-perf :is(.ew-perf-chart, .ew-standings) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .main-content .qp-cell > .ew-perf .chart-container,
+    .main-content .qp-cell > .ew-perf #lb-wrapper { flex: 1 1 0; height: auto !important; min-height: 160px !important; }
+    .main-content .qp-cell > .ew-perf .chart-container { padding: 6px 14px 4px !important; }
+    .main-content .qp-cell > .ew-perf #lb-wrapper { overflow-y: auto; }
+}
+
+/* --- HEADLINE VIEW (one-tab Command Center card, "style 1") ---
+   One big figure, a bar, the lines under it. Hidden everywhere the media query
+   above does not switch it on — so a phone, a combined card or an open tab
+   never shows it. The card grows to its row (QUICKPORTAL LAYOUT, equal
+   heights); the headline takes the room and the foot sits at the bottom. */
+.qp-hl { display: none; flex-direction: column; flex: 1 1 auto; padding: 12px 20px 12px; border-top: 1px solid #eef1f4; }
+.qp-hl-lines .qp-hl-chips { margin: 0 0 8px; }
+/* Small figure boxes (Scorecard's second audit + scorecard; Live's month-end
+   projections), a caption over a group, the latest orders, and the one link a
+   card may carry. Tighter than the rest so the whole card fits 350px. */
+.qp-hl-boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.qp-hl-box { border: 1px solid #e3e8ee; border-radius: 10px; padding: 4px 10px; min-width: 0; }
+.qp-hl-box .qp-hl-k { font-size: 10px; }
+.qp-hl-bv { font-size: 15px; font-weight: 800; color: #1a1c1e; white-space: nowrap; }
+.qp-hl-bv .good, .qp-hl-bv .bad { font-size: 12px; }
+.qp-hl-bs { font-size: 11.5px; font-weight: 600; color: #8a94a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hl-track { margin-top: 4px; }
+.qp-hl-cap { margin-top: 8px; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+.qp-hl-asof { font-weight: 700; color: #8a94a3; text-transform: none; letter-spacing: 0; }
+.qp-hl-ord { display: flex; justify-content: flex-start; gap: 5px; padding: 3px 0; border-top: 1px solid #eef1f4; font-size: 12.5px; font-weight: 600; color: #1a1c1e; }
+.qp-hl-cap + .qp-hl-ord { border-top: none; }
+.qp-hl-ot { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hl-ot small { color: #8a94a3; font-weight: 600; }
+.qp-hl-oa { flex: none; }
+/* Live's one Recent Activity order: the label on the same line, ahead of it. */
+.qp-hl-ord1 { margin-top: 8px; border-top: none; align-items: baseline; }
+.qp-hl-ord1 .qp-hl-capin { margin: 0 4px 0 0; flex: none; }
+.qp-hl-ord .lv-ago { flex: none; color: #8a94a3; }
+.qp-hl-link { margin-top: auto; align-self: flex-start; padding: 4px 0 0; border: none; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #1f9d57; cursor: pointer; }
+.qp-hl-link:hover { text-decoration: underline; }
+/* Live: "Open Full Dashboard" on the left, the board's own Daily Breakdown and
+   full-screen buttons on the right (.bd-open / .lv-full keep their own look). */
+.qp-hl-footrow { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; }
+.qp-hl-footrow .qp-hl-link { margin-top: 0; padding: 0; }
+.qp-hl-tools { display: inline-flex; align-items: center; gap: 6px; }
+/* The Live card's Today / Yesterday / Month switch, on its label line, at the
+   size of the site's other switches (.ew-seg .toggle-btn — Performance's 4-Week /
+   Monthly; Ethan, 2026-10-22), in the site's green for the open one. */
+.qp-hl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.qp-hl-switch { display: inline-flex; flex: none; border: 1px solid #d5dce4; border-radius: 8px; overflow: hidden; background: #fff; }
+.qp-hl-switch button { font: inherit; font-size: 11.5px; font-weight: 750; line-height: 16px; padding: 4px 11px; border: none; background: none; color: #647082; cursor: pointer; }
+.qp-hl-switch button + button { border-left: 1px solid #e3e8ee; }
+.qp-hl-switch button:hover { background: #f1f4f7; }
+.qp-hl-switch button.on { background: #e8f7ee; color: #14532d; }
+.qp-hl .status-message { padding: 8px 0; }
+.qp-hl-k { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; }
+.qp-hl-big { font-size: 28px; font-weight: 800; line-height: 1.1; color: #1a1c1e; margin-top: 2px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.qp-hl-big small { font-size: 14px; font-weight: 600; color: #8a94a3; }
+.qp-hl-sub { font-size: 12.5px; font-weight: 600; color: #647082; }
+.qp-hl-bar { position: relative; height: 8px; border-radius: 99px; background: #eef1f4; margin: 7px 0 4px; }
+.qp-hl-bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: #1f9d57; }
+.qp-hl-bar.warn > i { background: var(--idea-gold); }
+.qp-hl-bar.bad > i { background: var(--red-alert); }
+.qp-hl-bar > b { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: #647082; }
+.qp-hl-seg { display: flex; gap: 3px; height: 8px; border-radius: 99px; overflow: hidden; margin: 7px 0 4px; }
+.qp-hl-seg > i { display: block; }
+.qp-hl-seg > i.good { background: #1f9d57; }
+.qp-hl-seg > i.warn { background: var(--idea-gold); }
+.qp-hl-seg > i.bad { background: var(--red-alert); }
+.qp-hl-lines { margin-top: 8px; }
+.qp-hl-ln { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid #eef1f4; font-size: 13px; font-weight: 600; color: #1a1c1e; }
+.qp-hl-ln > span:first-child { color: #647082; font-weight: 600; }
+.qp-hl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.qp-hl-note { margin-top: 6px; font-size: 12.5px; color: #3c4654; font-style: italic; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.qp-hl-foot { margin-top: auto; padding-top: 10px; font-size: 11.5px; font-weight: 600; color: #8a94a3; }
+.qp-hl .good { color: #1f9d57; }
+.qp-hl .warn { color: #b7791f; }
+.qp-hl .bad { color: var(--red-alert); }
 
 /* Phones and touch tablets stack every row, as the deck and the dashboard rows
    already did at this breakpoint. !important because each cell's share is an

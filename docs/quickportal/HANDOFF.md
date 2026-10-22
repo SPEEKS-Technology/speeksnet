@@ -1,21 +1,19 @@
-# QuickPortal revamp — handoff (2026-10-21)
+# QuickPortal revamp — handoff (2026-10-22)
 
 Picking this up in a new session? Read this first, then `CLAUDE.md`.
 
 ## Where the work is
 
-- **Folder:** `C:\Users\User\Documents\GitHub\speeksnet-nov3` — a git worktree.
+- **Folder:** the main checkout, `C:\Users\User\Documents\GitHub\speeksnet`.
+  The `speeksnet-nov3` worktree was removed on 2026-10-22 (Update 3 became a
+  normal branch here; Update 2 was deleted). Any older note naming
+  `speeksnet-nov3` now means this folder.
 - **Branch:** `Main-November-Update-3---Ethan`, cut from `origin/pre-release` at `b8dbb73`.
-- **Committed and pushed** to origin (`563fc68` + `b7ff25f`, 2026-10-21). Only
-  `.claude/launch.json` is left untracked, on purpose (local config). Pull
-  before working on it from another machine or the cloud.
-- **Don't touch `C:\Users\User\Documents\GitHub\speeksnet`.** That folder is a
-  separate session's: `Main-November-Update-2---Ethan`, Picture Quality work,
-  with an uncommitted local-only un-park in `speeks.js` and untracked
-  `scripts/pq-gold/*` label files. In GitHub Desktop, switch *repositories*,
-  never branches inside that folder — doing so once stashed the PQ files.
+- Other sessions work in this same folder and branch (Listing Health, reports…),
+  so commit only the QuickPortal files and check `git diff` for anyone else's
+  edits before committing.
 - Shared: the git stash stack, and the live Supabase database (migrations and
-  edge-function deploys from either folder hit production).
+  edge-function deploys hit production).
 
 ## What the project is
 
@@ -23,116 +21,129 @@ Ethan's plan: turn QuickPortal into a customizable dashboard — move cards,
 resize, split and combine them, and later add widgets (email/notification
 connectors, usage-based "suggested for you", Claude-backed report/Ask widgets).
 He wants it done **very slowly, one small step at a time, in the site's
-existing look**, starting with the manager role (then DM).
+existing look**, starting with the manager role (then DM). Show a design
+before building anything new; labels in Title Case.
 
 Design mockups (private Claude artifact, two artboards — the DM dashboard
 vision and the split/combine interaction):
-https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8
+https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8 — 404s from Claude's account;
+designs since have been shown inline in chat.
 
 ## What's built
 
 **Customize mode** on QuickPortal, managers only (`qp-customize` in
-`FEATURE_CATALOG`, `speeks.js` ~44057 — widen it from Feature Access):
+`FEATURE_CATALOG` — widen it from Feature Access):
 
 - Top of page: a bar with **Customize** → in edit mode **Reset to Default** +
-  **Save**, then the High Priority bar (pinned, never moves). Customize sits
-  ABOVE the banner (Ethan: under it looked odd). No instruction text.
+  **Save**, then the High Priority bar, then **Quick Links** — both pinned, never
+  move. Quick Links is not a block any more (2026-10-22); a saved layout naming
+  `links` just drops the key.
 - **Edit mode = dashed outline on every card, the whole card is the handle**
-  (no drag bars — tried twice, dropped; see styles.css "THE WHOLE CARD IS THE
-  HANDLE"). Nothing inside a card can be clicked in edit mode (pointer off in
-  CSS + capture-phase `_qpBlockClicks`); piece grips stay draggable only.
-- **Every card in a row is the same height** — the Action Items card stretches
-  its frame, its rows keep their own height.
+  (no drag bars — tried twice, dropped). Nothing inside a card can be clicked
+  in edit mode (pointer off in CSS + capture-phase `_qpBlockClicks`); piece
+  grips stay draggable only.
 - **Nothing moves when a drag starts**: drop slots live inside the 22px row
-  gaps and show a green line; the width strips go `visibility: hidden`, not
-  `display: none`. "Place beside" is a green line in the gap beside a card.
-- Blocks (`data-qp-block` in `index.html`): `feed`, `actions`, `links`,
-  `command`, `district` (DM/CEO), `chart`, `leaderboard`. The old feed deck and
-  Performance card were each split into two blocks.
-- **Rows of 1–3 cards.** Drag a card: near another card's left/right edge →
-  "Place beside"; into the gap between rows → its own row; a full row says
-  "Row is full · 3 max". No arrow buttons (removed on request).
-- **Card widths** strip above any two-card row: "Same width / X wider / Y
-  wider" with little pictures (fractions were rejected as unclear).
-- **Card pieces:** the Command Center (Live Sales, eBay, Scorecard & Audit — one
-  per tab) and Action Items (one per row) can be split and recombined in any
-  combination. Drag a tab/row out to a card edge or a +; drag a card over the
-  **middle** of a same-group card → "Drop to combine — Makes one card: …".
-  Split cards reuse the *real* elements (moved with their ids), so all existing
-  renderers keep filling them.
-- Default layout = today's page exactly. Layout saves **per person in
-  localStorage** (`speeksQpLayout_<name>`), not the database yet.
+  gaps (green line); width strips go `visibility: hidden`. **Edge scrolling**:
+  hold a card near the top/bottom of the window and the page scrolls
+  (`_qpEdgeScroll`).
+- **Rows of 1–3 cards**; **Card Widths** strip above a two-card row:
+  "X Wider | Same Width | Y Wider" (Same Width in the middle).
+- **Card pieces:** the Command Center (Live Dashboard, eBay, Scorecard & Audit)
+  and Action Items (one per row) split and recombine. A split-out card has an
+  **×** in edit mode that puts it back into its family's original card in its
+  usual place (`qpPutBack`).
+- **ONE CARD HEIGHT:** every card in a row is at least 350px, so every row is
+  350 (Quick Links excepted). The Performance chart and Leaderboard fill their
+  card instead of the old fixed 380px.
+- **Command Center — no summary view.** Tabs only switch, never collapse; a
+  card opens on its first tab (Live Dashboard first, `CC_TABS` order).
+  - **One tab** (`data-qp-single`): no tab button; title "OVL Command Center ·
+    eBay"; shows a **headline view** (`_QP_HL_BUILD` live / score / ebay) that
+    opens nothing. eBay and Scorecard show everything their panel did; Live has
+    **Today / Yesterday / Month**, Projected Month-End boxes, the latest order,
+    **Open Full Dashboard** (the board over the page, not in the card),
+    Daily Breakdown and the sale chime.
+  - **Two or more tabs** (`data-qp-hl`): normal-size tab buttons, title "OVL
+    Command Center", and the OPEN tab's headline in place of the panel — a
+    leaner version (`h.compact`) so it fits 350 with the tab bar.
+  - Headline data comes from each tab's own loader (`_qpSetHeadline` in
+    `fetchScorecardData`, `fetchAlertsData`, `renderLiveDashboard`) — no second
+    fetch. Desktop only: phones keep the tab panels.
+- Layout saves **per person in localStorage** (`speeksQpLayout_<name>`), not the
+  database yet.
 
 ## Where the code is
 
 - `speeks.js`
-  - `// QUICKPORTAL LAYOUT` (~49609) — the whole module. The banner comment
-    explains the model (rows → cards → pieces, shells, keys like
-    `command:ebay,score`). Entry point `_qpApplyLayout()`, called at the end of
-    `applyRoleBasedUI` (~32848).
-  - `// --- TEST SESSION` (~68) — local test login support (see below).
-  - `_tabSwitch` (~12882), `_tabCollapse`, `_openDefaultTab` (~13118) — now
-    scoped to the card a tab sits in (needed for split Command Center cards).
-  - `samInit` / `_samSyncRailFill` — rail lookups point at
-    `[data-qp-block="actions"] .sam-rail` (a split card adds a second rail).
-  - `handleSignOut` — also clears the test-login restore copy.
-- `styles.css` — `QUICKPORTAL LAYOUT — rows of 1–3 cards…` section at the end (~25243).
-- `index.html` — `CUSTOMIZE BAR` comment (~719) and the `data-qp-block` tags.
+  - `// QUICKPORTAL LAYOUT` — the whole module. Entry point `_qpApplyLayout()`,
+    called at the end of `applyRoleBasedUI`. Headlines: `_qpRenderHeadlines`,
+    `_QP_HL_BUILD`, `_qpLivePast`, `qpLiveMode`.
+  - `// --- TEST SESSION` (~68) — local test login support (see below);
+    `_lvTestPayload` (beside `fetchLiveDashboard`) — sample live data.
+  - `_tabSwitch`, `switchCommandTab`, `_ccSyncCompactOpen`, `_ccOpenDefaultTab`
+    — Command Center tabs never collapse; card-scoped for split cards.
+  - `openLiveFullscreen(false)` — the board filling the window without the
+    browser's real full screen (Live's "Open Full Dashboard").
+- `styles.css` — the `QUICKPORTAL LAYOUT` section at the end: ONE CARD HEIGHT,
+  ONE-TAB CARDS, HEADLINE VIEW.
+- `index.html` — `CUSTOMIZE BAR`, `QUICK LINKS — pinned`, `.qp-cc-piece` in the
+  Command Center title, and the `data-qp-block` tags.
 
 ## How to run and test it
 
-1. Serve this folder on **port 8081** (the PQ session uses 8080):
-   `python scripts/serve-local.py 8081` (the `speeksnet-nov3` entry in
-   `.claude/launch.json`). Note: `preview_start` in the Claude app once started
-   the *other* folder's config instead — check what it serves.
-2. Open `http://localhost:8081/scripts/test-login.html` → **Sign in as OVL
+1. `preview_start` with the **`speeksnet`** launch config → port **8080**
+   (`python scripts/serve-local.py`).
+2. Open `http://localhost:8080/scripts/test-login.html` → **Sign in as OVL
    Manager (test)**. There is deliberately **no account in the database**: a
    real OVL manager row would change OVL's listing goal (`store-targets`), KPI
    roster, usage report and nudges. The test session (localhost only) blocks
-   every non-GET call to Supabase (allow-list `READ_POSTS` for read-only POSTs);
-   Live tab and leaderboard need a real PIN, so they stay "Syncing" for it.
+   every non-GET call to Supabase (allow-list `READ_POSTS` for read-only POSTs).
+   Live sales need a real PIN, so the test session gets made-up SAMPLE live data
+   (`_lvTestPayload`) — Live card, full Live view and Leaderboard fill from it.
+   Buying, Scorecard, eBay, Daily Breakdown and the chart are real.
 3. The Claude desktop browser pane wipes sessionStorage when it re-opens a tab;
    the test login keeps a localhost-only copy (`speeksTestRestore`) and restores
    itself. Sign Out clears it.
-4. `powershell -File scripts/browser-check.ps1 b2b-check.js` — last run 292
-   passed, 0 failed (2026-10-21, after whole-card drag).
-5. Ethan's own test layout lives in the pane's localStorage
-   (`speeksQpLayout_test manager ovl`) — back it up before testing, put it back after.
+4. **The pane is often ~800px wide = the phone layout**, where headlines and
+   Customize are off. Use `resize_window` 1440×900 to test desktop, and reset
+   it with preset "desktop" afterwards.
+5. `powershell -File scripts/browser-check.ps1 b2b-check.js` — last run 292
+   passed, 0 failed (2026-10-22).
+6. Ethan's test layout lives in the pane's localStorage per PORT
+   (`speeksQpLayout_test manager ovl`) — back it up to a file before testing
+   and put it back after. He rearranges it between turns; restore the latest.
 
 ## Lessons that cost time (don't relearn them)
 
 - **Never change the layout inside `dragstart`** — Chrome cancels the drag.
-  Defer to `requestAnimationFrame`. Simulated drag events don't catch this;
-  always also test with a **real mouse drag** (`left_click_drag`).
+  Defer to `requestAnimationFrame`. Always also test with a **real mouse drag**.
 - Rebuilding rows briefly shrinks the page → scroll jumps to top; wrap commits
   in `_qpKeepScroll`.
 - `.employee-widget-card` carries `max-width: calc(33.33% - 20px)`; split
   Command Center cards need `max-width: none !important`.
-- The feed card uses `contain: size` on `.sam-feed` so a long feed doesn't
-  stretch its row.
 - **Anything added to or removed from the flow when a drag starts moves the
-  page under the mouse** and the drop lands somewhere else. Keep drop targets
-  inside existing space.
+  page under the mouse.** Keep drop targets inside existing space.
 - A drag near the window edge auto-scrolls the page: take a fresh screenshot
-  before the next `left_click_drag`, or you aim at stale positions and it looks
-  like the drag failed.
+  (or click by element ref) before the next action.
+- With an emulated viewport, screenshot positions and click positions don't
+  match — click by `find` ref instead.
 - A split-out shell never passes through `applyRoleBasedUI`, so it doesn't get
   the inline `display:flex` the originals get — give shells layout in CSS.
-- The mockup artifact link below 404s from this account (2026-10-21); designs
-  were shown inline in chat instead.
+- The original Command Center's `data-qp-block` is on the `.ew-dash` wrapper,
+  not on `#ccWidget` — selectors need both (`:is(...)`).
+- Every new line on a headline card costs height: measure all three Live modes
+  × every tab at 1/3 width before calling it done (target 350).
 
 ## Not done / next steps
 
-- When it ships, bump the cache-buster (`?v=`) in all five HTML
-  pages when it ships (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
+- **Split-out Action Items cards** — option B ("progress and what's next") was
+  suggested, not yet picked or built.
+- When it ships, bump the cache-buster (`?v=`) in all five HTML pages
+  (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
 - **Save layouts to the database** so they follow a person across devices
-  (new table + edge function; check `list_migrations` before numbering — the
-  database, not the checkout, is the authority; max was 0149 on 2026-10-16).
+  (new table + edge function; check `list_migrations` before numbering).
 - Customize is hidden on phones; drag doesn't work on touch.
-- Split-out Action Items still look like a rail row; the mockup's bigger single
-  card (count, bar, "next up" list) needs new content.
 - Then, per the mockup: DM role, widget library ("Add widget"), "Needs you"
-  alerts widget, usage-based suggestions (`usage` table already logs opens),
-  Gmail connector (Workspace?), Ask/report widgets via the `speeks-mcp` tools.
-- A real test account for other people to try it needs a "test" marker that
-  every backend skips (`store-targets`, `kpi-manage`, `usage-report`, `notify`).
+  alerts widget, usage-based suggestions, Gmail connector, Ask/report widgets.
+- A real test account for other people needs a "test" marker that every
+  backend skips (`store-targets`, `kpi-manage`, `usage-report`, `notify`).
