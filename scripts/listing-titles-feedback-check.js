@@ -299,6 +299,21 @@ console.log('\n== 6. the ask stands on its own in a fresh session ==');
         (ask.match(/undefined|\[object Object\]/) || [''])[0]);
 }
 
+console.log('\n== 7. the reader can go and look (2026-10-22) ==');
+{
+    // Ethan: "add links to the Shopify listing so I can check things out too",
+    // and the photo that settled a name finding goes with it.
+    const text = buildAsk({ days: 30, stores: ['LEE'], total: 1, settled: 1, done: [],
+        groups: [{ code: 'name-wrong', n: 1, rows: [Object.assign({}, LENOVO, {
+            link: 'https://admin.shopify.com/store/paymore-lees-summit/products/1',
+            photos: [{ n: 7, url: 'https://cdn.shopify.com/x/7.jpg' }],
+            saysItself: null, was: '', now: '' })] }] });
+    ok(/SHOPIFY:    https:\/\/admin\.shopify\.com\/store\/paymore-lees-summit\/products\/1/.test(text),
+        'each row carries its Shopify admin link');
+    ok(/PHOTO 7:    https:\/\/cdn\.shopify\.com\/x\/7\.jpg/.test(text), 'and the photo that settled it');
+    ok(!/SHOPIFY:|PHOTO \d/.test(ask), 'a row without them prints neither line');
+}
+
 if (process.argv.indexOf('--print') > -1) {
     console.log('\n' + '-'.repeat(74) + '\nWHAT THE COPY BUTTON HANDS OVER\n' + '-'.repeat(74));
     console.log(ask);

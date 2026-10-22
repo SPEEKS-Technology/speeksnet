@@ -421,7 +421,24 @@ console.log('\n== 8. MPL, 2026-10-05: "it\'s fine" on four titles that were wron
     const cpf = cP.findings[0] || {};
     ok(cpf.code === 'name-wrong' && cP.fixable === true, 'Canon, photo shows f/4-5.6: a one-click fix', cpf.code);
     ok(cP.title === CANON.replace('f/1.4-5.6', 'f/4-5.6'), 'Canon: the aperture is corrected', cP.title);
-    ok(/Photo 3 shows it: the barrel reads 1:4-5\.6/.test(cpf.says || ''), 'Canon: quoting what the photo shows', cpf.says);
+    // ⚠️ "LOOK AT", NOT "SHOWS IT" (2026-10-22): the reviewer is sent to the
+    // photo, and the photo itself rides on the finding so the panel can show it.
+    ok(/Look at photo 3: the barrel reads 1:4-5\.6/.test(cpf.says || ''), 'Canon: sends the reviewer to the photo', cpf.says);
+    ok(cpf.photo && cpf.photo.n === 3, 'Canon: and carries the photo number for the panel', JSON.stringify(cpf.photo));
+    const cU = run(CANON, Object.assign({}, cV, { photo: { answer: 'ours', photo: 3,
+        seen: 'the barrel reads 1:4-5.6', url: 'https://cdn.shopify.com/x/3.jpg' } }), cSpecs);
+    ok((cU.findings[0] || {}).photo && cU.findings[0].photo.url === 'https://cdn.shopify.com/x/3.jpg',
+       'Canon: with its URL when the sweep attached one');
+    ok(!cf.photo, 'Canon, no photos: no photo on the finding');
+    // LEE 2026-10-08: "Photos of the lens confirm that the zoom is 1.5-4.9". The
+    // wrong value was a real marking, and saying which one is what persuades.
+    const cM = run(CANON, Object.assign({}, cV, { mixup: '1.5m/4.9ft is the closest focusing distance printed on the barrel, not the aperture.',
+        photo: { answer: 'ours', photo: 3, seen: 'the barrel reads 1:4-5.6' } }), cSpecs);
+    ok(/1\.5m\/4\.9ft is the closest focusing distance printed on the barrel, not the aperture\. Look at photo 3/.test((cM.findings[0] || {}).says || ''),
+       'Canon: says what the wrong value really is, before the photo', (cM.findings[0] || {}).says);
+    const dM = run(CANON, Object.assign({}, cV, { mixup: 'f/1.4 is a prime-lens aperture' }), cSpecs);
+    ok(/f\/1\.4 is a prime-lens aperture\./.test((dM.findings[0] || {}).says || '') && dM.findings[0].code === 'name-disputed',
+       'and a dispute says it too', (dM.findings[0] || {}).says);
     ok(/Maximum Aperture field \("f\/1\.4-5\.6"\) says otherwise, and approving corrects that field too/.test(cpf.says || ''),
        'Canon: and the Maximum Aperture field is corrected too');
     ok(/Settled by photo 3/.test(cpf.warn || ''), 'Canon: it says a photo settled it', cpf.warn);

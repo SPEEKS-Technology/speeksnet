@@ -79,6 +79,8 @@ const NameReportSchema = z.object({
     evidence_field: z.string().optional(),
     evidence_text: z.string().optional(),
     check: z.string().optional(),
+    // See NAME_SYSTEM: what the wrong text really is, when it is a real thing.
+    mixup: z.string().optional(),
   })),
 });
 
@@ -451,6 +453,9 @@ type Finding = {
   // `says` so it cannot be skimmed past. Only for edits where our data is a
   // proxy for something a human has to confirm against the item in their hand.
   warn?: string;
+  // The listing's own photo that settled a name finding, for the panel to show
+  // beside the sentence. `n` is 1-based, as the sentence numbers it.
+  photo?: { n: number; url: string | null };
 };
 
 // ⚠️ ENTITIES MUST BE DECODED BEFORE NORMALISING, and forgetting it produced a
@@ -1663,6 +1668,7 @@ type NameVerdict = {
   evidence_field?: string;
   evidence_text?: string;
   check?: string;
+  mixup?: string;
   // Attached by the sweep, never by the name check: what the listing's own
   // photos said when the listing's fields could not settle it. Absent means
   // nobody looked.
@@ -1671,6 +1677,9 @@ type NameVerdict = {
 type PhotoAnswer = {
   answer: "ours" | "listing" | "other" | "cannot_tell";
   photo?: number; seen?: string; should_say?: string;
+  // Attached in code, never by the model: the photo it pointed at, so the
+  // reviewer can open the evidence instead of taking the sentence on trust.
+  url?: string;
 };
 
 // What the name check is shown of the listing, beyond its title. Identity
@@ -1808,7 +1817,14 @@ would settle it, in a few words a person holding it can act on: "the model
 number engraved on the back of the watch", "the aperture printed on the lens
 barrel (1:4-5.6 or 1:1.4)", "the label on the bottom of the box".
 
-Keep "why" to one short sentence a shop manager can act on.`;
+Keep "why" to one short sentence a shop manager can act on.
+
+When the wrong text is itself a REAL thing — another product's model number, a
+different marking printed on the item — say what it really is in "mixup", in one
+short sentence, so a reviewer who believes the title can see why it looks right:
+"PCH-1001 is the PS Vita's model number", "1.5m/4.9ft is the closest focusing
+distance printed on the barrel, not the aperture", "NUS-005 is the Nintendo 64
+controller". Leave it out when the wrong text is simply a typo.`;
 
 // A stable, human-readable stamp of the exact title we asked about. Compared
 // against the live title to decide whether a listing still has an answer.
@@ -1989,7 +2005,8 @@ async function photoTiebreak(client: any, ask: {
     && Number.isInteger(p.photo) && p.photo! >= 1 && p.photo! <= ask.urls.length
     && !!photos[p.photo! - 1];
   return {
-    answer: p.answer === "cannot_tell" || !pointed ? { answer: "cannot_tell" } : p,
+    answer: p.answer === "cannot_tell" || !pointed ? { answer: "cannot_tell" }
+      : { ...p, url: ask.urls[p.photo! - 1] },
     input: Number(res?.usage?.input_tokens || 0),
     output: Number(res?.usage?.output_tokens || 0),
   };
@@ -2405,6 +2422,20 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     const photoSaysOurs = !!seen && photo?.answer === "ours";
     const settled = !!backedBy || photoSaysOurs || !!photoFix;
     const fixTo = photoFix || right;
+    // ⚠️ SAY WHY THE WRONG VALUE LOOKS RIGHT. LEE, 2026-10-08 to 10-19: the
+    // PSP's "PCH-1001" and the Canon's "f/1.5-4.9" were both denied by a
+    // reviewer who believed them, and both were real markings — a PS Vita model
+    // number, and the 1.5m/4.9ft close-focus distance printed on the barrel.
+    // "Should be X" read as our word against theirs; naming what the wrong
+    // value actually IS is what lets them see how it got there.
+    const mixup = String(nameVerdict.mixup || "").trim().replace(/[.;,]$/, "");
+    // ⚠️ THE PHOTO IS THE EVIDENCE, SO THE REVIEWER IS SENT TO IT. Ethan,
+    // 2026-10-22: "tell the user to look at pictures when the pictures give the
+    // correct answer so they can see your evidence." A sentence quoting photo 7
+    // was still our word; the photo itself is not. Carried on the finding so the
+    // panel can put the picture beside the sentence.
+    const evidence = (photoSaysOurs || photoFix) && photo?.photo
+      ? { n: photo.photo, url: photo.url || null } : null;
     if (saidBy && seen && photo?.answer === "listing") {
       // The photos show what the listing says, so the listing was right and our
       // knowledge was not. Nothing to report — counted by the sweep instead, so
@@ -2428,6 +2459,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         fixable: false,
         says: `We recommend "${right}" in place of "${wrong}"`
           + (why ? ` — ${why}.` : ".")
+          + (mixup ? ` ${mixup}.` : "")
           + (recommended.length <= EBAY_TITLE_MAX ? ` Recommended title: "${recommended}".` : "")
           + ` It is not one click because the listing's own ${saidBy.field} says`
           + ` "${saidBy.value}"`
@@ -2468,6 +2500,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
               : `The title says "${wrong}"; it should be "${right}".`)
           : `"${wrong}" is not a real product name — it looks like "${right}" typed wrong`
             + (tidyWhy ? `. ${tidyWhy}.` : `, so nobody searching for it will find this listing.`))
+          + (mixup ? ` ${mixup}.` : "")
           // Say so, or the reviewer sees the same typo in the Type field and
           // reads it as the listing disagreeing with us.
           + (respelling && echoed
@@ -2480,7 +2513,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
               ? ` The listing's own ${backedBy.field} says "${backedBy.value}", which agrees; only its ${saidBy.field} ("${saidBy.value}") says otherwise, and approving corrects that field too.`
               : "")
           + (photoSaysOurs && saidBy
-              ? ` ${shot} shows it: ${seen}. The ${saidBy.field} field ("${saidBy.value}") says otherwise, and approving corrects that field too.`
+              ? ` Look at ${shot.toLowerCase()}: ${seen}. The ${saidBy.field} field ("${saidBy.value}") says otherwise, and approving corrects that field too.`
               : photoFix && saidBy
                 ? ` The ${saidBy.field} field says "${saidBy.value}"; approving corrects it where it repeats the title.`
                 : "")
@@ -2491,8 +2524,9 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         warn: backedBy
           ? `Settled by this listing's own ${backedBy.field}, not by outside knowledge.`
           : (photoSaysOurs || photoFix)
-            ? `Settled by ${shot.toLowerCase()} of this listing — open ${photo?.photo ? "it" : "them"} if in any doubt.`
+            ? `Settled by ${shot.toLowerCase()} of this listing, not by outside knowledge — look at ${photo?.photo ? "it" : "them"} before you decide.`
             : "Checked against outside product knowledge, not against your own listing — verify this one against the product before approving.",
+        ...(evidence ? { photo: evidence } : {}),
       });
     }
     // Quote not found in the title: the model described an error it could not
@@ -2778,10 +2812,20 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // ⚠️ `s?` IS LOAD-BEARING. Shopify's collections are plural — a gaming laptop's
   // is literally "Windows Laptops" — so `\blaptop\b` matched none of them and
   // every RTX gaming laptop in the estate came back as a bundle.
+  // ⚠️ A SERVER IS A COMPUTER TOO. WSP, 2026-10-21: three Dell PowerEdge
+  // R510/R530s ("Dell PowerEdge 2x Xeon E5-2630V3 64GB RAM R530") were offered
+  // " Bundle" and all three denied "Not a bundle". Neither list knew a server:
+  // the Collection was "General/Other" and one Type was the spec line itself.
+  // `server` is only a host when it is not describing a PART — "Server RAM" and
+  // "Server CPU" are components sold for one, and a Xeon with server memory is
+  // exactly the CPU-and-RAM pair this rule exists for.
   const hostSpec = `${collection} ${specType}`;
+  const SERVER_HOST = /\b(server(?!\s+(ram|memory|cpu|processor|ssd|hdd|drive|psu|power|rail|caddy|tray))s?|poweredge|proliant)\b/i;
   const hasHost = cats.some(c => HOSTS.includes(c))
     || /\b(laptop|notebook|computer|desktop|handheld|console|tablet|phone|monitor|camera|printer|pc)s?\b/i.test(hostSpec)
-    || /\b(desktop|inspiron|optiplex|thinkpad|thinkcentre|pavilion|elitedesk|prodesk|imac|mac\s*mini|mac\s*pro|all-?in-?one|tower|workstation|custom\s+pc|gaming\s+pc|mini\s*pc|steam\s*deck|legion\s+go|rog\s+ally|yoga\s+\d|\bpc\b)\b/i.test(original);
+    || SERVER_HOST.test(hostSpec)
+    || /\b(desktop|inspiron|optiplex|thinkpad|thinkcentre|pavilion|elitedesk|prodesk|imac|mac\s*mini|mac\s*pro|all-?in-?one|tower|workstation|custom\s+pc|gaming\s+pc|mini\s*pc|steam\s*deck|legion\s+go|rog\s+ally|yoga\s+\d|\bpc\b)\b/i.test(original)
+    || SERVER_HOST.test(original);
   // ⚠️ A HOST DEVICE MEANS THIS IS ONE PRODUCT, FULL STOP — not merely that its
   // components do not count. The intermediate version only dropped components
   // and still called a "Graphics/Drawing Tablet" a bundle (tablet + display) and
@@ -3898,10 +3942,11 @@ const CODE_LABEL: Record<string, string> = {
 };
 
 type FbRow = {
-  store: string; sku: string | null; productId: string;
+  store: string; sku: string | null; productId: string; link?: string | null;
   current: string; suggested: string | null;
   note: string; by: string | null; at: string | null;
   codes: string[]; said: string[]; was: string; now: string; takenAt?: string | null;
+  photos?: { n: number; url: string }[];
   specs: Record<string, string>;
   saysItself: { field: string; value: string } | null;
 };
@@ -4080,6 +4125,10 @@ async function feedbackFor(stores: string[], days: number) {
     // The listing's own fields, which is the whole point — the note says "it is
     // an Xbox One version" and the answer is sitting in the spec table.
     let extras: Record<string, Extra> = {};
+    // The admin link, built from the domain map rather than the shopFor read so
+    // a failed token lookup still leaves the reader a way to go and look.
+    const admin = SHOP_BY_STORE[store]
+      ? `https://admin.shopify.com/store/${SHOP_BY_STORE[store].replace(".myshopify.com", "")}/products/` : "";
     try {
       const { shop, token } = await shopFor(store);
       extras = await extrasFor(shop, token, d.map((r: any) => r.product_id));
@@ -4101,6 +4150,8 @@ async function feedbackFor(stores: string[], days: number) {
       // double the Shopify read this route already pays for per store.
       (r.feedback_triaged_at ? done : out).push({
         store, sku: r.sku, productId: r.product_id,
+        link: admin && /^\d+$/.test(String(r.product_id || "").split("/").pop() || "")
+          ? admin + String(r.product_id).split("/").pop() : null,
         takenAt: r.feedback_triaged_at || null,
         current: String(r.current_title || ""),
         suggested: r.suggested_title || null,
@@ -4109,6 +4160,8 @@ async function feedbackFor(stores: string[], days: number) {
         // What the tool told the reviewer about THIS row, which is the half of
         // the disagreement the note is answering.
         said: (r.findings || []).map((f: any) => String(f?.says || "")).filter(Boolean),
+        photos: (r.findings || []).filter((f: any) => f?.photo?.url)
+          .map((f: any) => ({ n: Number(f.photo.n), url: String(f.photo.url) })),
         was: run.was, now: run.now,
         specs: keep,
         saysItself: listingSaysItself(run.was, specs),
@@ -4187,8 +4240,10 @@ function buildAsk(fb: Awaited<ReturnType<typeof feedbackFor>>): string {
       i++;
       L.push(``);
       L.push(`${i}. ${r.store} · ${r.sku || "(no sku)"}${r.by ? ` · denied by ${r.by}` : ""}${r.at ? ` on ${when(r.at)}` : ""}`);
+      if (r.link) L.push(`   SHOPIFY:    ${r.link}`);
       L.push(`   NOTE:       "${r.note}"`);
       for (const said of (r.said || [])) L.push(`   WE SAID:    ${said}`);
+      for (const p of (r.photos || [])) L.push(`   PHOTO ${p.n}:${" ".repeat(Math.max(1, 5 - String(p.n).length))}${p.url}`);
       L.push(`   TITLE NOW:  ${r.current}`);
       if (r.suggested) L.push(`   SUGGESTED:  ${r.suggested}`);
       if (r.was || r.now) {

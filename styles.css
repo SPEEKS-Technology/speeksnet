@@ -19655,6 +19655,14 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     margin-left: -16px;   /* out of the ul's bullet indent, back to the edge */
 }
 .lt-why li.lt-caution { color: #a3352c; font-weight: 700; }
+/* The photo that settled a name finding, shown rather than quoted. Capped in
+   both directions so a portrait shot cannot push the row's buttons off a phone
+   screen; the link opens it full size. */
+.lt-evidence { list-style: none; margin: 4px 0 2px -16px; }
+.lt-evidence a { display: inline-flex; flex-direction: column; gap: 3px; max-width: 100%;
+    font-size: 12px; font-weight: 600; color: #1d4ed8; text-decoration: none; }
+.lt-evidence img { display: block; max-width: min(260px, 100%); max-height: 200px;
+    object-fit: contain; border: 1px solid #e2e8f0; border-radius: 6px; background: #f8fafc; }
 
 /* The scope line. Quiet by default — it is context, not an alarm — and amber
    when it has to admit half the scope is not being applied. */

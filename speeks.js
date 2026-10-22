@@ -59941,8 +59941,14 @@ function _ltWhy(f) {
     // Two findings carry one: CIB (only the person holding the game can settle
     // whether it is complete) and the checked-name results (judged against
     // outside product knowledge, not against anything in the listing).
+    // A name finding the listing's own photo settled carries that photo, and it
+    // is shown, not described — the reviewer who denied the PSP and the Canon
+    // had a sentence quoting the photo and believed the listing anyway.
     return (f || []).map(x => `<li>${_ecEsc(x.says || '')}</li>`
-        + (x.warn ? `<li class="lt-caution">${_ecEsc(x.warn)}</li>` : '')).join('');
+        + (x.warn ? `<li class="lt-caution">${_ecEsc(x.warn)}</li>` : '')
+        + (x.photo && x.photo.url ? `<li class="lt-evidence"><a href="${_ecEsc(x.photo.url)}" target="_blank" rel="noopener">
+            <img src="${_ecEsc(x.photo.url)}" alt="Photo ${_ecEsc(String(x.photo.n))}" loading="lazy">
+            <span>Photo ${_ecEsc(String(x.photo.n))} — Open Full Size ↗</span></a></li>` : '')).join('');
 }
 
 // The changed run, located as word indexes into BOTH titles. A word-level diff
@@ -60136,6 +60142,19 @@ function _lhToolEl() {
     return el;
 }
 
+// The listing in Shopify admin, so a note can be checked against the photos
+// and fields it is arguing about. Ethan, 2026-10-22: "add links to the Shopify
+// listing so I can check things out too." Every store's admin, not only the
+// reader's own as cbMatchAdminUrl insists — this tool is the DM's, and the DM
+// is signed into all five.
+function _lhShopifyLink(r) {
+    const shop = CB_SHOP_DOMAINS[r && r.store];
+    const id = String((r && r.productId) || '').split('/').pop();
+    if (!shop || !/^[0-9]+$/.test(id)) return '';
+    return `<a class="ec-pill ec-pill-shopify" href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/products/${id}"
+      target="_blank" rel="noopener">Shopify ↗</a>`;
+}
+
 let _lhToolFb = null;
 let _lhToolPq = null;   // picture-quality?view=feedback, or { error }
 
@@ -60159,6 +60178,7 @@ function _lhToolPqHtml() {
           <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
           <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
           <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
+          ${_lhShopifyLink(r)}
         </div>`).join('')}
       </details>` : '';
     if (!n) {
@@ -60178,6 +60198,7 @@ function _lhToolPqHtml() {
               <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
               <span>${_ecEsc(r.store || '')}</span>
               <span>${_ecEsc(r.by || '')}</span>
+              ${_lhShopifyLink(r)}
             </div>
             <div class="lh-tool-ttl"><span class="lt-lab">Listing</span><span>${_ecEsc(r.title || '')}</span></div>
             ${(r.findings || []).map(t => `<div class="lh-tool-ttl"><span class="lt-lab">We said</span><span>${_ecEsc(t)}</span></div>`).join('')}
@@ -60290,6 +60311,7 @@ function renderListingHealthTool() {
           <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
           <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
           <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
+          ${_lhShopifyLink(r)}
         </div>`).join('')}
       </details>` : '';
     // Nothing waiting. The handled list still renders under it, so the tool is
@@ -60322,6 +60344,7 @@ function renderListingHealthTool() {
               <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
               <span>${_ecEsc(r.store || '')}</span>
               <span>${_ecEsc(r.by || '')}</span>
+              ${_lhShopifyLink(r)}
             </div>
             <div class="lh-tool-ttl"><span class="lt-lab">Title</span>
               <span>${_ecEsc(r.current || '')}</span></div>
