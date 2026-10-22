@@ -2723,7 +2723,10 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       // what went, why it was safe, and where it still lives.
       ...(trimmed.length ? { trimmed } : {}),
       says: (applied && trimmed.length
-        ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the word a buyer would type. There was no room for it, so ${trimmed.join(" and ")} ${trimmed.length === 1 ? "comes" : "come"} out to make space — the spec table still states ${trimmed.length === 1 ? "it" : "them"}, so the listing keeps ${trimmed.length === 1 ? "it" : "them"} and only the title is shorter.`
+        ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the word a buyer would type. There was no room for it, so ${trimmed.join(" and ")} ${trimmed.length === 1 ? "comes" : "come"} out to make space — `
+          + (impliedByCpu(original, trimmed)
+              ? `every ${impliedByCpu(original, trimmed)} is a ${[...trimmed].sort((a, b) => Number(/hz/i.test(a)) - Number(/hz/i.test(b))).join(", ")} chip, so the model number in the title still says it, and the spec table still states ${trimmed.length === 1 ? "it" : "them"}.`
+              : `the spec table still states ${trimmed.length === 1 ? "it" : "them"}, so the listing keeps ${trimmed.length === 1 ? "it" : "them"} and only the title is shorter.`)
         : applied
         ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the word a buyer would type — most people search for the kind of thing they want, and those words never match this listing.`
         // ⚠️ WE KNOW THE WORD, AND EVEN TRADING WOULD NOT FIT IT. The last
@@ -4680,6 +4683,20 @@ function replaceRun(v: string, was: string, now: string): string | null {
   const out = v.replace(runRe(was), now).replace(/\s+/g, " ").trim();
   if (!out || out === v.trim() || PLACEHOLDER.test(out)) return null;
   return out;
+}
+
+// ⚠️ "THE SPEC TABLE STILL STATES THEM" WAS TRUE AND DID NOT PERSUADE. LEE,
+// 2026-10-10, on an i9-12900K combo that lost "16 Core 3.20GHz" to fit "CPU
+// Motherboard Combo": "Removing the core and speed for the cpu removes important
+// info". It removes nothing a buyer needs — every i9-12900K is 16 cores at
+// 3.20GHz — but the sentence pointed at the spec table, which a reviewer reading
+// the TITLE does not think of. Naming the model number that still says it does.
+// Returns that model number only when EVERY trimmed value is a clock, core or
+// thread count; anything else has no CPU standing in for it.
+function impliedByCpu(title: string, trimmed: string[]): string | null {
+  if (!trimmed.length || !trimmed.every(v => /ghz|mhz|\bcores?\b|\bthreads?\b/i.test(v))) return null;
+  const m = title.match(/\b(?:Core\s+)?(i[3579]-\d{4,5}[A-Z]{0,3}|Ultra\s+[579]\s+\d{3}[A-Z]{0,2}|Ryzen\s+(?:[3579]|Threadripper)\s+(?:PRO\s+)?\d{4}[A-Z0-9]{0,3}|Xeon\s+(?:[A-Z]+\s+)?(?:E[357]-)?[A-Z]?\d{4,5}[A-Z0-9-]*)\b/i);
+  return m ? m[0] : null;
 }
 
 // ⚠️ TAKING WORDS OUT IS ONLY SAFE WHEN THEY WERE WRONG.

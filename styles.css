@@ -19464,8 +19464,15 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
    everything under it is the evidence for reading it. */
 .lh-tool-note { font-size: 13px; font-weight: 700; color: #0f172a; line-height: 1.5; }
 .lh-tool-meta {
-    display: flex; gap: 10px; flex-wrap: wrap; margin: 5px 0 7px;
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 5px 0 7px;
     font-size: 11px; color: #64748b;
+}
+/* The Shopify link on a note, the same pill as everywhere else but sized to the
+   11px line it sits on — the full 82px pill was the loudest thing in the row,
+   louder than the note it belongs to. No min-width: there is no eBay pill
+   beside it to match. */
+.lh-tool-meta .ec-pill, .lh-tool-done-row .ec-pill {
+    min-width: 0; padding: 1px 8px; font-size: 10.5px; gap: 4px;
 }
 .lh-tool-ttl {
     display: flex; gap: 8px; align-items: baseline; font-size: 12px;

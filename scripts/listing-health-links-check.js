@@ -82,3 +82,15 @@ t('a portrait photo stays inside a phone row', function () {
     if (r.right > h.right + 1) return 'past the row edge by ' + Math.round(r.right - h.right) + 'px';
     return true;
 });
+
+t('the pill is sized to the note line, not the full 82px pill', function () {
+    var host = stage(390, '<div class="lh-tool-row"><div class="lh-tool-meta"><span class="lh-sku">MO01-5786A-E3</span>'
+        + '<span>LEE</span><span>Ethan Frye</span>'
+        + _lhShopifyLink({ store: 'LEE', productId: '42' }) + '</div></div>');
+    var a = host.querySelector('.ec-pill'), r = a.getBoundingClientRect();
+    if (!a.querySelector('svg')) return 'no link icon — the other Shopify pills carry one';
+    if (/↗/.test(a.textContent)) return 'still the arrow glyph';
+    if (r.width >= 82) return 'still the full pill: ' + Math.round(r.width) + 'px wide';
+    if (r.height > 20) return 'taller than the line: ' + Math.round(r.height) + 'px';
+    return true;
+});

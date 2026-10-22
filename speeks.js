@@ -60152,7 +60152,7 @@ function _lhShopifyLink(r) {
     const id = String((r && r.productId) || '').split('/').pop();
     if (!shop || !/^[0-9]+$/.test(id)) return '';
     return `<a class="ec-pill ec-pill-shopify" href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/products/${id}"
-      target="_blank" rel="noopener">Shopify ↗</a>`;
+      target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>`;
 }
 
 let _lhToolFb = null;
