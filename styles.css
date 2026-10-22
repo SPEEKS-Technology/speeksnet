@@ -19541,6 +19541,25 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     font-family: inherit; cursor: pointer; white-space: nowrap;
 }
 .lh-tool-done-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
+/* Send Back, per note. The same quiet button as Clear: it is one of two ways a
+   note ends, not an alarm. Right-aligned so it never reads as part of the
+   evidence above it. */
+.lh-tool-send { display: flex; justify-content: flex-end; margin-top: 7px; }
+.lh-tool-send-btn {
+    padding: 4px 10px; border-radius: 7px; border: 1px solid #cbd5e1;
+    background: #fff; color: #334155; font-size: 11px; font-weight: 700;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.lh-tool-send-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
+.lh-tool-send-btn:disabled { opacity: 0.5; cursor: default; }
+/* The DM's reason a denied row is back in the queue (0156). Amber, not red: it
+   is an instruction to look again, not a statement that the title is broken. */
+.lt-returned {
+    margin: 0 0 8px; padding: 7px 10px; border-left: 3px solid #d97706;
+    border-radius: 0 6px 6px 0; background: #fffbeb;
+    font-size: 12px; color: #78350f; line-height: 1.45; overflow-wrap: anywhere;
+}
+.lt-returned-h { font-weight: 800; font-size: 11px; color: #92400e; margin-bottom: 2px; }
 .lh-tool-clear, .lh-tool-err {
     display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
     padding: 14px 16px; border-radius: 10px;

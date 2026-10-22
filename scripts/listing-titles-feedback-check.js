@@ -312,6 +312,9 @@ console.log('\n== 7. the reader can go and look (2026-10-22) ==');
         'each row carries its Shopify admin link');
     ok(/PHOTO 7:    https:\/\/cdn\.shopify\.com\/x\/7\.jpg/.test(text), 'and the photo that settled it');
     ok(!/SHOPIFY:|PHOTO \d/.test(ask), 'a row without them prints neither line');
+    // A mistaken reviewer leaves a wrong listing, so it goes back with a reason.
+    ok(/BACK TO THE STORE/.test(ask) && /SEND BACK note/.test(ask),
+        'C asks for a Send Back note for the store, not only a verdict');
 }
 
 if (process.argv.indexOf('--print') > -1) {

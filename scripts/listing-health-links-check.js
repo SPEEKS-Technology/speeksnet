@@ -94,3 +94,40 @@ t('the pill is sized to the note line, not the full 82px pill', function () {
     if (r.height > 20) return 'taller than the line: ' + Math.round(r.height) + 'px';
     return true;
 });
+
+// --- SENT BACK (0156) ---------------------------------------------------------
+// Ethan, 2026-10-22: a note where the reviewer was mistaken goes back to the
+// store's queue, with the DM's reason shown on the row.
+
+t('every note row in the tool has a Send Back button for its own listing', function () {
+    _lhToolFb = { total: 1, settled: 0, keys: [], done: [], groups: [{ code: 'name-wrong', n: 1, rows: [
+        { store: 'LEE', sku: 'MO01-5786A-E3', productId: 'gid://shopify/Product/77', note: 'x', current: 't',
+          saysItself: null }] }] };
+    if (typeof renderListingHealthTool !== 'function') return 'renderListingHealthTool missing';
+    if (!document.getElementById('listingHealthToolBody')) _lhToolEl();
+    renderListingHealthTool();
+    var b = document.querySelector('#listingHealthToolBody .lh-tool-send-btn');
+    if (!b) return 'no Send Back button';
+    if (b.dataset.store !== 'LEE' || b.dataset.pid !== 'gid://shopify/Product/77') return 'wrong row: ' + b.dataset.store + ' ' + b.dataset.pid;
+    return typeof window.lhToolSendBack === 'function' ? true : 'the handler is not on window';
+});
+
+t('a sent-back row shows who sent it and why, above the title', function () {
+    var html = _ltRow({ productId: 'gid://shopify/Product/77', sku: 'MO01-5786A-E3', current: 'Sony PSP PCH-1001',
+        suggested: 'Sony PSP PSP-1001', findings: [], severity: 3,
+        returned: { note: 'PCH-1001 is the PS Vita model number — photo 7 shows PSP-1001.', by: 'Ethan Kushnir', at: '2026-10-22T20:00:00Z' } });
+    var host = stage(390, html);
+    var box = host.querySelector('.lt-returned');
+    if (!box) return 'no Sent Back box';
+    if (!/Sent Back By Ethan Kushnir/.test(box.textContent)) return 'header: ' + box.textContent.trim().slice(0, 80);
+    if (!/PS Vita model number/.test(box.textContent)) return 'the note is missing';
+    var now = host.querySelector('.lt-now');
+    if (!(box.compareDocumentPosition(now) & Node.DOCUMENT_POSITION_FOLLOWING)) return 'not above the title';
+    if (box.getBoundingClientRect().right > host.getBoundingClientRect().right + 1) return 'overflows a phone row';
+    return true;
+});
+
+t('a row nobody sent back has no box', function () {
+    return /lt-returned/.test(_ltRow({ productId: '1', current: 'a', suggested: 'b', findings: [], severity: 1 }))
+        ? 'an empty Sent Back box' : true;
+});

@@ -60356,6 +60356,11 @@ function renderListingHealthTool() {
             </div>` : `<div class="lh-tool-unsettled">
               Nothing in the listing settles this one.
             </div>`}
+            <div class="lh-tool-send">
+              <button type="button" class="lh-tool-send-btn" data-store="${_ecEsc(r.store || '')}"
+                      data-pid="${_ecEsc(r.productId || '')}" data-sku="${_ecEsc(r.sku || '')}"
+                      onclick="lhToolSendBack(this)">Send Back To The Store</button>
+            </div>
           </div>`).join('')}
       </div>`).join('');
     // ⚠️ THE COPY BUTTON IS THE FIRST THING IN THE TOOL. What sent Ethan here was
@@ -60439,6 +60444,45 @@ async function lhToolDone() {
     renderListingHealthTool();
 }
 window.lhToolDone = lhToolDone;
+// ⚠️ THE OTHER ENDING FOR A NOTE: THE REVIEWER WAS WRONG, SO THE LISTING STILL
+// IS. Ethan, 2026-10-22: "make sure we put this back in the queue for the teams
+// to fix on SPEEKS Connect." Clearing only says the note was read; this puts the
+// row back in that store's Title Quality queue with a note on it saying why —
+// the SEND BACK note the ask has Claude write for every "reviewer was mistaken"
+// row. Required, because a row that comes back with no reason is denied again
+// by the same person for the same reason.
+async function lhToolSendBack(btn) {
+    const store = btn.dataset.store, productId = btn.dataset.pid, sku = btn.dataset.sku;
+    if (!store || !productId) return;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Listing Health',
+        title: `Send ${sku || 'This Listing'} Back To ${store}?`,
+        body: `<p class="lt-ask-say">It goes back into ${_ecEsc(store)}'s Title Quality queue on
+                SPEEKS Connect, with your note shown above the title. The note they
+                wrote stays on the row as history.</p>`,
+        note: { label: 'Why The Suggestion Was Right', required: true,
+                placeholder: 'e.g. PCH-1001 is the PS Vita model number — photo 7 shows PSP-1001',
+                hint: 'The store reads this on the row. Paste the Send Back note Claude wrote.' },
+        go: 'Send It Back', cancel: 'Not Yet' });
+    if (!said || !said.note) return;
+    btn.disabled = true;
+    // _ltPost reports failure in its result rather than throwing, so a refused
+    // send (not the DM, row already decided again) has to be read, not caught.
+    let res;
+    try { res = await _ltPost({ action: 'send-back', store, productId, note: said.note }); }
+    catch (e) { res = { ok: false, body: { detail: String((e && e.message) || e) } }; }
+    if (!res.ok) {
+        btn.disabled = false;
+        await _ltAsk({ kind: 'warn', eyebrow: 'Listing Health', title: 'Not Sent Back',
+            body: `<p class="lt-ask-say">${_ecEsc((res.body && (res.body.detail || res.body.error)) || 'The request failed.')}</p>`,
+            go: 'OK', cancel: null });
+        return;
+    }
+    try { _lhToolFb = await _ltFetch('?view=feedback&days=30'); } catch (_) {}
+    if (typeof checkTitleNoteReminders === 'function') checkTitleNoteReminders();
+    renderListingHealthTool();
+}
+window.lhToolSendBack = lhToolSendBack;
 
 // The tag resolved to a person, from the map the server sends. Falls back to
 // the tag verbatim, because "JSmith" still tells you who a leaver was — the
@@ -60667,6 +60711,15 @@ function _ltRow(r) {
 
     return `<div class="lt-row lt-sev-${r.severity}">
       <div class="lt-main">
+        <!-- ⚠️ FIRST, ABOVE THE TITLE. A row the DM sent back was denied once
+             already by somebody who believed the listing; the reason it is back
+             is the one thing that stops a second denial, so it is read before
+             the suggestion it argues for (0156). -->
+        ${r.returned ? `<div class="lt-returned">
+          <div class="lt-returned-h">Sent Back${r.returned.by ? ` By ${_ecEsc(r.returned.by)}` : ''}${
+            r.returned.at ? ` · ${_ecEsc(_lhWhen(r.returned.at))}` : ''}</div>
+          <div>${_ecEsc(r.returned.note || '')}</div>
+        </div>` : ''}
         <div class="lt-now">
           <span class="lt-lab">Now</span>
           <span class="lt-cur">${r.suggested

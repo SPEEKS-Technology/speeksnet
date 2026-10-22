@@ -3829,7 +3829,8 @@ async function queueFor(store: string) {
   const q: any[] = await rows(
     `listing_title_queue?store_code=eq.${store}`
     + `&select=product_id,sku,current_title,suggested_title,findings,basis,confidence,`
-    + `comps,category_name,ebay_title,severity,price,quantity,swept_at,lister_tag`
+    + `comps,category_name,ebay_title,severity,price,quantity,swept_at,lister_tag,`
+    + `returned_note,returned_by,returned_at`
     + `&order=severity.desc,price.desc.nullslast&limit=250`);
   return q.map(r => ({
     productId: r.product_id, sku: r.sku,
@@ -3841,6 +3842,9 @@ async function queueFor(store: string) {
     // The Shopify tag verbatim. The panel resolves it to a name; see listerFrom
     // for why nothing is resolved on the way in.
     listerTag: r.lister_tag || null,
+    // Sent back from the rule review with a note for the store (0156).
+    returned: r.returned_note
+      ? { note: r.returned_note, by: r.returned_by || null, at: r.returned_at || null } : null,
   }));
 }
 
@@ -4224,7 +4228,12 @@ function buildAsk(fb: Awaited<ReturnType<typeof feedbackFor>>): string {
   L.push(`     no rule can settle it. Say which fields, and it goes on the list for`);
   L.push(`     a person (photo review, when that exists).`);
   L.push(`  C. THE REVIEWER WAS MISTAKEN — the rule was right. Say so plainly and`);
-  L.push(`     say what would have made the suggestion easier to trust.`);
+  L.push(`     say what would have made the suggestion easier to trust. The listing`);
+  L.push(`     is still wrong, so it goes BACK TO THE STORE: for each such row write`);
+  L.push(`     a SEND BACK note — one or two sentences to the person who denied it,`);
+  L.push(`     with the evidence they can check (the photo number, what the wrong`);
+  L.push(`     value really is). The DM pastes it into Send Back on that note.`);
+  L.push(`     Do the same for any row a rule change in A still leaves wrong.`);
   L.push(``);
   L.push(`The "THE LISTING ITSELF ALREADY SAYS THIS" line is a mechanical check already`);
   L.push(`run for you: the words the suggestion took OUT, found as whole words in one`);
@@ -5256,7 +5265,8 @@ async function handlePost(req: Request, scope: Scope) {
   // were left saying the old thing. It still needs a row — this tool reviewed
   // the listing — so it is never a licence to edit an arbitrary product.
   const fieldsOnly = action === "fields" || action === "fields-preview";
-  const q: any[] = action === "reopen" || fieldsOnly
+  const fromTable = action === "reopen" || action === "send-back";
+  const q: any[] = fromTable || fieldsOnly
     ? await rows(
         `listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
         + (fieldsOnly ? "" : `&status=eq.denied`)
@@ -5292,6 +5302,11 @@ async function handlePost(req: Request, scope: Scope) {
         status: "denied", decided_by: scope.name, decided_at: new Date().toISOString(),
         decided_as: decidedAs,
         decided_note: String(body.reason || "").slice(0, 300) || null,
+        // ⚠️ A NEW DENIAL IS A NEW NOTE. The "read into an ask" stamp from an
+        // earlier denial stayed on the row, so a row reopened or sent back
+        // (0156) and then denied again went straight to Cleared — the second
+        // note, the one answering our explanation, never reached the DM.
+        feedback_triaged_at: null, feedback_triaged_by: null,
       }),
     });
     return json({ ok: true, denied: productId, decidedAs });
@@ -5310,6 +5325,28 @@ async function handlePost(req: Request, scope: Scope) {
       }),
     });
     return json({ ok: true, reopened: productId });
+  }
+
+  // ⚠️ SENT BACK IS NOT UNDO. Ethan, 2026-10-22: when the rule review finds the
+  // reviewer was mistaken, "put this back in the queue for the teams to fix on
+  // SPEEKS Connect". Undo (reopen, above) erases the decision so the row reads
+  // as never decided — right for a mis-click, wrong here, where the store needs
+  // to be told WHY the row is back or the same person denies it again for the
+  // same reason. So a note is required, it is shown on the row (returned_note,
+  // migration 0156), and the original denial stays on the row as history.
+  // DM and CEO only: it overrules a store's decision.
+  if (action === "send-back") {
+    if (!scope.corp) return json({ error: "forbidden", detail: "Only the DM or CEO can send a row back." }, 403);
+    const note = String(body.note || "").trim().slice(0, 500);
+    if (!note) return json({ error: "note required", detail: "Say why the suggestion was right — the store reads this on the row." }, 400);
+    await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}&status=eq.denied`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        status: "open", returned_note: note, returned_by: scope.name,
+        returned_at: new Date().toISOString(),
+      }),
+    });
+    return json({ ok: true, sentBack: productId });
   }
 
   // "preview" is approve's own reading half, stopped one line before it writes.
