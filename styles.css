@@ -25272,3 +25272,9 @@ select.dd-native {
     .b2b-flow-n { font-size: 17px; }
     .b2b-flow-l { font-size: 10.5px; }
 }
+
+/* Listing is worth what is still left to list (2026-10-22): the stage tile and
+   the Listing cards say so in a quiet suffix, so the figure is not misread as
+   the offer every other stage shows. */
+.b2b-flow-v i, .b2b-card-tolist { font-style: normal; font-weight: 600; color: var(--b2b-faint); }
+.b2b-flow-v { white-space: normal; text-align: right; }

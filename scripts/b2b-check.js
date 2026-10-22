@@ -3320,3 +3320,33 @@ t('ws listing says how many units are left beside the Complete button', function
         return some === '3 units left to list' || 'got: ' + some;
     } finally { _b2bModalItems = keep; }
 });
+
+// --- Listing is worth what is left to list (2026-10-22) ---------------------
+t('to-list: summed from each store part, so a store reads only its own', function () {
+    var d = { listing_parts: [{ store: 'OVL', remaining_value: 400 }, { store: 'LEE', remaining_value: 250 }],
+              total_value: 9999, total_units: 10, outstanding_units: 10 };
+    return _b2bToListValue(d) === 650 || 'got ' + _b2bToListValue(d);
+});
+t('to-list: a row from before 0152 estimates pro rata, never above the deal value', function () {
+    var d = { listing_parts: [{ store: 'OVL' }], total_value: 1000, total_units: 10, outstanding_units: 4 };
+    if (_b2bToListValue(d) !== 400) return 'got ' + _b2bToListValue(d);
+    return _b2bToListValue({ total_value: 1000, total_units: 0 }) === 0 || 'an empty deal is worth something';
+});
+t('to-list: the Listing tile and cards show it; other stages keep the offer', function () {
+    var keepR = sessionStorage.getItem('speeksUserRole');
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try {
+        var deals = [
+            { id: 'tl1', ref: 'TL-001', stage: 'listing', pricing_store: 'OVL', listing_store: 'OVL', listing_stores: ['OVL'],
+              client: { company: 'Kessler' }, total_offer: 500, net_offer: 500, stage_changed_at: '2026-10-20T15:00:00Z',
+              listing_parts: [{ store: 'OVL', remaining_value: 3410 }] },
+            { id: 'tl2', ref: 'TL-002', stage: 'quote', pricing_store: 'OVL', client: { company: 'Prairie' },
+              total_offer: 640, net_offer: 640, stage_changed_at: '2026-10-20T15:00:00Z' },
+        ];
+        var h = _b2bRenderPipeline(deals);
+        var tile = h.slice(h.indexOf('b2b-flow-teal'));
+        if (tile.indexOf('$3,410') === -1 || tile.slice(0, tile.indexOf('</button>')).indexOf('to list') === -1) return 'the Listing tile does not show $3,410 to list';
+        if (h.indexOf('$3,410 <i class="b2b-card-tolist">to list</i>') === -1) return 'the Listing card does not show what is left to list';
+        return h.indexOf('$640') > -1 || 'the quote stage lost its offer';
+    } finally { sessionStorage.setItem('speeksUserRole', keepR); }
+});

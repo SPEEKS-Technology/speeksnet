@@ -21717,6 +21717,23 @@ function b2bSetMineOnly(on) { _b2bMineOnly = !!on; b2bRender(); }
 let _b2bStageFocus = null;
 function b2bFocusStage(key) { _b2bStageFocus = (key && key !== _b2bStageFocus) ? key : null; b2bRender(); }
 
+// The projected resale value still to list on a deal: what a deal in Listing is
+// worth on the pipeline (2026-10-22). Summed from listing_parts[].remaining_value
+// (0152), which the server has already narrowed to the viewer's own store on a
+// split deal -- so a store sees its part and corp sees the whole deal. A row
+// fetched before 0152 has no remaining_value; it falls back to the deal's value
+// pro rata to the units still out, which is close and never claims more than
+// the deal is worth.
+function _b2bToListValue(d) {
+    const parts = Array.isArray(d && d.listing_parts) ? d.listing_parts : [];
+    if (parts.length && parts.every(p => p && p.remaining_value != null)) {
+        return parts.reduce((n, p) => n + (Number(p.remaining_value) || 0), 0);
+    }
+    const total = Number(d && d.total_units) || 0;
+    const out = Number(d && d.outstanding_units) || 0;
+    return total ? (Number(d.total_value) || 0) * Math.min(1, out / total) : 0;
+}
+
 function b2bRender() {
     const body = document.getElementById('b2bBody');
     if (!body) return;
@@ -21933,11 +21950,15 @@ function _b2bRenderPipeline(scoped) {
     // or "Show all", puts the rest back.
     const byStage = Object.fromEntries(B2B_BOARD.map(key => [key, deals.filter(d => d.stage === key)]));
     if (_b2bStageFocus && !byStage[_b2bStageFocus]?.length) _b2bStageFocus = null;
-    const worth = (list) => list.reduce((n, d) => n + (d.total_offer ? Number(_b2bNetOffer(d)) || 0 : 0), 0);
+    // Every stage is worth what we offered -- except Listing, which is worth what
+    // is still left to list (Nick, 2026-10-22: "For listing stage. Represent it
+    // as projected amount to list remaining"). See _b2bToListValue.
+    const worth = (list, key) => list.reduce((n, d) => n + (key === 'listing'
+        ? _b2bToListValue(d) : (d.total_offer ? Number(_b2bNetOffer(d)) || 0 : 0)), 0);
     const flow = `
         <div class="b2b-flow" role="group" aria-label="Stages">
             ${B2B_BOARD.map(key => {
-                const s = B2B_STAGE[key], list = byStage[key], n = list.length, v = worth(list);
+                const s = B2B_STAGE[key], list = byStage[key], n = list.length, v = worth(list, key);
                 const mine = list.some(d => _b2bActionFor(d));
                 return `
                 <button class="b2b-flow-s b2b-flow-${s.tone} ${n ? 'busy' : 'idle'} ${_b2bStageFocus === key ? 'on' : ''}"
@@ -21945,7 +21966,7 @@ function _b2bRenderPipeline(scoped) {
                     title="${escapeHtml(s.label)}: ${n} deal${n === 1 ? '' : 's'}${n ? ` · ${_b2bStageFocus === key ? 'show every stage' : 'show only this stage'}` : ''}">
                     <span class="b2b-flow-l">${escapeHtml(s.label)}${mine ? '<i class="b2b-flow-you" title="Needs you"></i>' : ''}</span>
                     <span class="b2b-flow-n">${n}</span>
-                    <span class="b2b-flow-v">${v ? _b2bMoney(v) : '&nbsp;'}</span>
+                    <span class="b2b-flow-v">${v ? _b2bMoney(v) + (key === 'listing' ? ' <i>to list</i>' : '') : '&nbsp;'}</span>
                 </button>`;
             }).join('')}
         </div>`;
@@ -21966,7 +21987,8 @@ function _b2bRenderPipeline(scoped) {
                 <div class="b2b-card-co">${escapeHtml(d.client?.company || '')}</div>
                 ${bar}
                 <div class="b2b-card-foot">
-                    <span>${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : _b2bLineCount(d)}</span>
+                    <span>${key === 'listing' ? `${_b2bMoney(_b2bToListValue(d))} <i class="b2b-card-tolist">to list</i>`
+                        : d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : _b2bLineCount(d)}</span>
                     <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d</span>
                 </div>
                 ${act ? '<span class="b2b-card-pill">Needs you</span>' : ''}
