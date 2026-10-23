@@ -25322,7 +25322,10 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 
 /* Performance: the chart and the leaderboard are two cards now. */
 .ew-perf.qp-part .ew-perf-body { grid-template-columns: minmax(0, 1fr); }
-.ew-perf-lb .ew-standings { border-left: none; }
+/* On its own card the Leaderboard is white like every other card (Ethan,
+   2026-10-23). The pale green .ew-standings fill was there to set it apart
+   from the chart beside it, back when the two shared one card. */
+.ew-perf-lb .ew-standings { border-left: none; background: #fff; }
 
 /* --- Customize bar --- */
 /* First thing in <main> now, above High Priority — no negative top margin to
@@ -25847,3 +25850,52 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 /* On the page: Remove in Add's place, the same size, outlined red. */
 .qp-lib-rm { font: inherit; font-size: 12px; font-weight: 750; padding: 6px 14px; border-radius: 8px; border: 1px solid #f3c4c4; background: #fff; color: #c53030; cursor: pointer; flex: none; }
 .qp-lib-rm:hover { background: #fdecec; border-color: #ef4444; }
+/* Drawer sections (_QP_LIB_SECTIONS): a quiet heading per page the tools live
+   on, with how many widgets it offers. */
+.qp-lib-sec + .qp-lib-sec { margin-top: 10px; }
+.qp-lib-sec-h { display: flex; align-items: center; gap: 8px; padding: 10px 2px 6px; border-bottom: 1px solid #eef1f4;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+.qp-lib-sec-h span { margin-left: auto; letter-spacing: 0; font-weight: 700; color: #b4bcc6; }
+.qp-lib-sec .qp-lib-row:last-child { border-bottom: none; }
+.qp-lib-ico.b, .qp-cw-ico.b { background: #e8f0fb; color: #2563b8; }
+.qp-cw-due.info { background: #e8f0fb; color: #2563b8; }
+/* Monthly Breakdown's key rows: name, value, change from last month, place. */
+.qp-mb-ln .qp-mb-d { flex: none; min-width: 56px; text-align: right; font-size: 11px; font-weight: 700; }
+.qp-mb-ln .qp-mb-d .good { color: #1f9d57; } .qp-mb-ln .qp-mb-d .bad { color: var(--red-alert); }
+.qp-widget .qp-hl-sub .warn { color: #b7791f; }
+/* Monthly Breakdown's rows as four fixed columns (Ethan, 2026-10-23: "better
+   align these 3 columns"): name | value | change | place — figures and arrows
+   right-aligned, the place chip one width and centred, so every row lines up
+   down the card whatever its numbers. */
+.qp-cw-ln.qp-mb-ln { display: grid; grid-template-columns: minmax(0, 1fr) 70px 72px 38px; column-gap: 10px; align-items: center; }
+.qp-mb-ln > b { text-align: right; font-variant-numeric: tabular-nums; }
+.qp-mb-ln .qp-mb-d { min-width: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qp-mb-ln > .qp-cw-due { justify-self: stretch; text-align: center; padding-left: 0; padding-right: 0; }
+/* DROP TO SWAP (_qpSwapRows): the combine overlay's look, with a swap arrow;
+   red, and the reason, when the swap would break a size rule. */
+.qp-ov-swap .qp-ov-ico svg { stroke-linejoin: round; }
+.qp-ov-combine.qp-ov-no { background: rgba(253,236,236,.95); border-color: var(--red-alert); }
+.qp-ov-no .qp-ov-ico { background: var(--red-alert); }
+.qp-ov-no .qp-ov-big { color: #9b2c2c; }
+.qp-ov-no .qp-ov-small { color: #c53030; }
+.main-content.qp-editing .qp-cell:has(> .qp-ov-no) > [data-qp-block].qp-drop { outline-color: var(--red-alert); }
+/* SPLIT MIDDLE (same-group cards): two labelled halves over the card — top
+   Combine, bottom Swap — the one under the pointer full strength, the other
+   faded, so both choices are always in view while dragging. Compact (each
+   half is 175px of a 350px card). */
+.qp-ov-split { display: flex; flex-direction: column; gap: 6px; padding: 6px; background: #fff; box-sizing: border-box; }
+.qp-ov-split > .qp-ov-half { flex: 1 1 0; min-height: 0; border-radius: 12px; padding: 10px; gap: 4px; background: #f6f8f7; border-color: #cfd8d3; border-style: dashed; }
+.qp-ov-split > .qp-ov-half:not(.on) > * { opacity: .5; }
+.qp-ov-split > .qp-ov-half.on { background: rgba(232,247,238,.98); border-color: #1f9d57; border-style: solid; }
+.qp-ov-split .qp-ov-ico { width: 34px; height: 34px; border-radius: 10px; }
+.qp-ov-split .qp-ov-ico svg { width: 18px; height: 18px; }
+.qp-ov-split .qp-ov-big { font-size: 15px; }
+.qp-ov-split .qp-ov-small { font-size: 11.5px; }
+.main-content.qp-editing .qp-cell:has(> .qp-ov-split) > [data-qp-block].qp-drop { outline: 2px solid #1f9d57; }
+.main-content.qp-editing .qp-cell:has(> .qp-ov-split .qp-ov-no.on) > [data-qp-block].qp-drop { outline-color: var(--red-alert); }
+.qp-ov-split > .qp-ov-half.qp-ov-no.on { background: rgba(253,236,236,.98); border-color: var(--red-alert); }
+/* Value and change columns centred in their tracks (Ethan, 2026-10-23). */
+.qp-cw-ln.qp-mb-ln > b, .qp-cw-ln.qp-mb-ln .qp-mb-d { text-align: center; }
+/* REPLACE (10-23): red even when allowed; refused is dashed and says why. */
+.qp-ov-replace.qp-ov-refused { border-style: dashed; }
+.qp-ov-replace.qp-ov-refused .qp-ov-ico { background: #b4b2a9; }

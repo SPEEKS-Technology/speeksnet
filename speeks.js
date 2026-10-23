@@ -5296,7 +5296,9 @@ function _kpiUpdateRow(pk, empIdx) {
     if (statusEl) { statusEl.textContent = '●'; statusEl.style.color = '#f59e0b'; statusEl.title = 'Unsaved'; }
 }
 
-function _kpiStoreTotalRowHtml(entries) {
+// The Store Total row's numbers, shared with the QuickPortal Store KPIs widget
+// so the two can never judge the same week differently.
+function _kpiStoreTotals(entries) {
     // Sum all numeric input fields; average avg_transaction_time
     const totals = { employee_name: 'Store Total' };
     _KPI_INPUT_FIELDS.forEach(function(f) {
@@ -5308,7 +5310,10 @@ function _kpiStoreTotalRowHtml(entries) {
             totals[f] = vals.length ? vals.reduce(function(a, b) { return a + b; }, 0) : null;
         }
     });
-    const computed = _kpiCalcDerived(totals);
+    return _kpiCalcDerived(totals);
+}
+function _kpiStoreTotalRowHtml(entries) {
+    const computed = _kpiStoreTotals(entries);
     let cells = '<td class="kpi-grid-name-col kpi-total-name-col"><div class="kpi-grid-name-cell"><span class="kpi-grid-emp-name kpi-total-emp-name">Store Total</span></div></td>';
     _KPI_GRID_FIELDS.forEach(function(f) {
         const tc = _kpiThresholdCls(f.key, computed[f.key], true);
@@ -21012,7 +21017,7 @@ function _b2bNoteHtml(s) {
 // both got it wrong, which is the usual argument for a helper.
 function _b2bLineCount(deal) {
     const n = Number(deal?.line_count) || 0;
-    return `${n} line${n === 1 ? '' : 's'}`;
+    return `${n} Line${n === 1 ? '' : 's'}`;
 }
 function _b2bDaysIn(deal) {
     const t = deal.stage_changed_at || deal.updated_at || deal.created_at;
@@ -22255,14 +22260,16 @@ function _b2bRenderQueue(scoped, queue) {
         const a     = _b2bActionWords(d, _b2bActionFor(d));
         const quick = _b2bQuickAction(d);
         const days  = _b2bDaysIn(d);
+        // First word capitalised after the number, as everywhere on the site
+        // (Ethan, 2026-10-23): "33 Units", "$450 Offer", "3d In stage".
         const meta = [
-            d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : null,
-            d.total_offer ? `${_b2bMoney(_b2bNetOffer(d))} offer` : null,
+            d.total_units ? `${d.total_units} Unit${d.total_units === 1 ? '' : 's'}` : null,
+            d.total_offer ? `${_b2bMoney(_b2bNetOffer(d))} Offer` : null,
             d.pickup_date ? `${_b2bIntake(d).was} ${_b2bDate(d.pickup_date)}` : null,
         ].filter(Boolean).map(t => `<span>${escapeHtml(t)}</span>`).join('');
         const bar = (d.stage === 'listing')
             ? `<div class="b2b-q-bar"><div class="b2b-pace-bar"><i style="width:${_b2bListedPct(d)}%"></i></div>
-               <span>${d.listed_units + d.recycled_units} of ${d.total_units} units done</span></div>` : '';
+               <span>${d.listed_units + d.recycled_units} Of ${d.total_units} units done</span></div>` : '';
         return `
         <div class="b2b-q-card" onclick="b2bOpenDeal('${a.kind}','${d.id}')">
             <div class="b2b-q-main">
@@ -22272,7 +22279,7 @@ function _b2bRenderQueue(scoped, queue) {
                     ${_b2bStageChip(d.stage, d)}
                     ${_b2bDealStoreTag(d)}
                 </div>
-                <div class="b2b-q-meta">${meta}<span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d in stage</span></div>
+                <div class="b2b-q-meta">${meta}<span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d In stage</span></div>
                 ${bar}
             </div>
             <div class="b2b-q-act">
@@ -22981,7 +22988,7 @@ function _b2bClientDrawer(id) {
             <span class="b2b-mono b2b-cd-ref">${escapeHtml(d.ref)}</span>
             ${_b2bStageChip(d.stage, d)}
             ${_b2bDealStoreTag(d)}
-            <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : _b2bLineCount(d)}</span>
+            <span class="b2b-cd-units">${d.total_units ? `${d.total_units} Unit${d.total_units === 1 ? '' : 's'}` : _b2bLineCount(d)}</span>
             <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d))
                 : d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
             <span class="b2b-cd-date">${_b2bDate(d.created_at)}</span>
@@ -23715,8 +23722,8 @@ function _b2bRenderPrevals() {
         const meta    = _b2bPrevalMeta(v);
         const expired = _b2bPrevalExpired(v);
         const bits = [
-            v.line_count ? `${v.line_count} line${v.line_count === 1 ? '' : 's'}` : 'No lines yet',
-            v.total_units ? `${v.total_units} unit${v.total_units === 1 ? '' : 's'}` : null,
+            v.line_count ? `${v.line_count} Line${v.line_count === 1 ? '' : 's'}` : 'No lines yet',
+            v.total_units ? `${v.total_units} Unit${v.total_units === 1 ? '' : 's'}` : null,
             `Evaluated ${_b2bDate(v.eval_date)}`,
             v.valid_until ? `${expired ? 'Expired' : 'Good until'} ${_b2bDate(v.valid_until)}` : null,
         ].filter(Boolean).map(t => `<span>${escapeHtml(t)}</span>`).join('');
@@ -32007,7 +32014,7 @@ function _cbMatchesSubtitle(entries) {
     if (!entries.length) {
         return mine ? 'Nothing you have is on a call back' : 'Nothing in stock for anybody';
     }
-    return mine ? `${entries.length} you can answer` : `${entries.length} with stock`;
+    return mine ? `${entries.length} You can answer` : `${entries.length} With stock`;
 }
 
 function cbRender() {
@@ -49907,12 +49914,16 @@ function startDailyBriefReminder() {
 const QP_LAYOUT_KEY = 'speeksQpLayout_';
 const QP_MAX_PER_ROW = 3;
 const QP_DEFAULT_ROWS = [
-    { items: ['feed', 'actions'], w: [3, 2] },
+    // Two to a row, equal: no card may pass half a row any more (_qpMaxW,
+    // Ethan 2026-10-23), so the old 3:2 feed and 3:1 chart are gone and the
+    // two Command Centers share a row. Where one of them is not shown (a store
+    // manager has no District Command Center) the other joins a row with room
+    // (_qpPairWidgets).
+    { items: ['feed', 'actions'], w: null },
     // No 'links': Quick Links is pinned under High Priority, not a block
     // (index.html, QUICK LINKS — pinned; Ethan, 2026-10-22).
-    { items: ['command'] },
-    { items: ['district'] },
-    { items: ['chart', 'leaderboard'], w: [3, 1] },
+    { items: ['command', 'district'], w: null },
+    { items: ['chart', 'leaderboard'], w: null },
 ];
 // The two-block weightings offered in Customize. Default rows may carry their
 // own (above); picking one of these replaces it. The buttons NAME THE CARD that
@@ -49975,6 +49986,14 @@ const QP_FAMILIES = {
     b2b: {
         label: 'Business-to-Business', kind: 'widget',
         pieces: [{ key: 'pricing', label: 'Pricing' }, { key: 'need', label: 'Waiting On You' }, { key: 'unlisted', label: 'Unlisted Value' }],
+    },
+    kpis: {
+        label: 'Store KPIs', kind: 'widget',
+        pieces: [{ key: 'weekly', label: 'Weekly KPIs' }, { key: 'monthly', label: 'Monthly KPIs' }],
+    },
+    variance: {
+        label: 'Variance Replies', kind: 'widget',
+        pieces: [{ key: 'explain', label: 'Lines To Explain' }, { key: 'dm', label: 'DM Notes' }],
     },
     connect: {
         label: 'SPEEKS Connect', kind: 'widget',
@@ -50311,6 +50330,12 @@ function _qpResolve(saved, keys, main) {
     return rows;
 }
 function _qpDefaults(keys) { return _qpResolve(QP_DEFAULT_ROWS, keys, null); }
+// The default as this person sees it: with no card full-width, a default row
+// that loses a card to visibility (a store manager has no District Command
+// Center) would leave half a row empty, so it goes through the same no-gap
+// pass a saved layout does. Re-run on every _qpApplyLayout, so it follows
+// visibility that lands late (feature overrides).
+function _qpDefaultRows(main, keys) { return _qpPairWidgets(main, _qpDefaults(keys)); }
 
 function _qpVisible(b) {
     if (b.hidden) return false;
@@ -50400,7 +50425,7 @@ function _qpLayout(main) {
     _qpEnsureWidgets(main, saved);
     _qpDiscover(main);
     const keys = _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell'); }).map(_qpKey);
-    return saved ? _qpPairWidgets(main, _qpResolve(saved, keys, main)) : _qpDefaults(keys);
+    return saved ? _qpPairWidgets(main, _qpResolve(saved, keys, main)) : _qpDefaultRows(main, keys);
 }
 
 // The tab a Command Center card has open (openOnly), or the one it opens on: its
@@ -50661,6 +50686,34 @@ const _QP_HL_BUILD = {
 };
 // rows: the layout being applied, when called mid-build (_qpDistribute runs
 // before the rows exist in the page); otherwise the page's own.
+// FIRST WORD CAPITALISED, NUMBERS OR NOT (Ethan, 2026-10-23: "the first letter
+// of the first word regardless of if numbers are in front of it" — as the feed
+// already does, "1 Delete request…"). The QuickPortal cards build their lines
+// from counts and phrases ("19 overdue", "of 13 done", "8 orders"), so rather
+// than remember it in every string, the small text beside a big number and the
+// lines under it are put right after each draw. Letters glued to a number are
+// part of the value and are skipped ("$55.4k", "3d", "1st"), so the first
+// capital lands on the first real word.
+const _QP_CAP_SEL = '.qp-hl-big small, .qp-hl-sub, .qp-hl-bs';
+function _qpCapLines(root) {
+    if (!root) return;
+    root.querySelectorAll(_QP_CAP_SEL).forEach(function (el) {
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let n, prev = '';
+        while ((n = w.nextNode())) {
+            const s = n.nodeValue;
+            for (let i = 0; i < s.length; i++) {
+                const c = s[i];
+                if (/[A-Za-z]/.test(c)) {
+                    if (/[0-9.,A-Za-z]/.test(prev)) { prev = c; continue; }   // part of a value, or mid-word
+                    if (c !== c.toUpperCase()) n.nodeValue = s.slice(0, i) + c.toUpperCase() + s.slice(i + 1);
+                    return;
+                }
+                prev = c;
+            }
+        }
+    });
+}
 let _qpHLBusy = false;
 function _qpRenderHeadlines(rows) {
     const main = _qpMain();
@@ -50735,6 +50788,7 @@ function _qpRenderHeadlinesNow(main, rows) {
         // everything their panel did, and Live has its own "Open Full
         // Dashboard" link and Daily Breakdown button.
         hl.innerHTML = h && _QP_HL_BUILD[piece] ? _QP_HL_BUILD[piece](h) : '<div class="status-message">Syncing…</div>';
+        _qpCapLines(hl);
     });
 }
 function _qpSetHeadline(piece, h) {
@@ -50950,7 +51004,7 @@ function _qpRenderActions(rows) {
             + '<div class="qp-ai-body">' + built[tab].body + '</div>';
         // Redrawn every few seconds by samRefreshListing: only touch the DOM when
         // something changed, or an open hover/scroll inside it would keep resetting.
-        if (ai._qpHtml !== html) { ai.innerHTML = html; ai._qpHtml = html; }
+        if (ai._qpHtml !== html) { ai.innerHTML = html; ai._qpHtml = html; _qpCapLines(ai); }
     });
 }
 
@@ -50979,7 +51033,7 @@ const QP_WIDGETS = {
         label: 'Claims & Disputes',
         sub: 'What needs attention, and what is due next',
         icon: '<svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M12 8v5M12 16h.01"/></svg>',
-        tone: 'r',
+        tone: 'r', section: 'Workspace',
         // Store managers with the store tool, as the 4pm claims card
         // (_claimsDueScope); the DM's all-stores oversight comes later.
         avail: function () { return typeof _claimsDueScope === 'function' && _claimsDueScope().length > 0; },
@@ -50991,7 +51045,7 @@ const QP_WIDGETS = {
         label: 'Customer Call Backs',
         sub: 'Items your customers asked for that are in stock',
         icon: '<svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>',
-        tone: 'a',
+        tone: 'a', section: 'Operations',
         // A store to hold stock (corp has none — same as the feed's match card).
         avail: function () {
             const s = typeof _cbMatchScope === 'function' ? _cbMatchScope() : null;
@@ -51002,7 +51056,7 @@ const QP_WIDGETS = {
         label: 'Business-to-Business',
         sub: 'Deals to price, deals waiting on you, unlisted value',
         icon: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>',
-        tone: 't',
+        tone: 't', section: 'Operations',
         // The same people checkB2BReminders reaches, who also have the tab.
         avail: function () {
             if (typeof _b2bRole !== 'function') return false;
@@ -51013,9 +51067,9 @@ const QP_WIDGETS = {
     },
     connect: {
         label: 'SPEEKS Connect',
-        sub: 'Listings with no pictures or no category',
+        sub: 'Listings with no pictures, category or title',
         icon: '<svg viewBox="0 0 24 24"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/></svg>',
-        tone: 'g',
+        tone: 'g', section: 'Operations',
         // The Pictures or Categories half of the tab, at a store: the counts
         // are per store and corp gets none (checkCategoryQueueReminders).
         avail: function () {
@@ -51023,6 +51077,31 @@ const QP_WIDGETS = {
             if (['district manager', 'ceo', 'mocd'].includes(role)) return false;
             return _jumpFeatureVisible('ec-view-photos') || _jumpFeatureVisible('ec-view-categories');
         },
+    },
+    // Workspace tabs (Ethan, 2026-10-23: Monthly Breakdown, Store KPIs and
+    // Variance Replies; Margin Replies is gone from the site). Each open to
+    // whoever has that Workspace tab, by its own Feature Access key.
+    monthly: {
+        label: 'Monthly Breakdown',
+        sub: 'Last month\'s key numbers and where the store ranked',
+        icon: '<svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>',
+        tone: 'b', section: 'Workspace',
+        avail: function () { return _claimStores().length > 0 && _jumpFeatureVisible('widget-ws-monthly-breakdown'); },
+    },
+    kpis: {
+        label: 'Store KPIs',
+        sub: 'When KPIs are due, and how the store did',
+        icon: '<svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+        tone: 'g', section: 'Workspace',
+        avail: function () { return _kpiMyStores().length > 0 && _jumpFeatureVisible('widget-ws-weekly-kpis'); },
+    },
+    variance: {
+        label: 'Variance Replies',
+        sub: 'Lines to explain, DM notes, and the deadline',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 7h18M6 7l-3 7h6l-3-7zM18 7l-3 7h6l-3-7z"/></svg>',
+        tone: 'a', section: 'Workspace',
+        // The manager side; the DM version (review queue) comes later.
+        avail: function () { return _vrIsManager() && _vrMyStores().length > 0 && _jumpFeatureVisible('widget-variance-replies'); },
     },
 };
 const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WIDGETS[id] ? id : null; };
@@ -51039,13 +51118,65 @@ const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WID
 // space): Add puts it in a row with room, the new-row slots refuse it while
 // it is carried, and one left alone joins the nearest row with room
 // (_qpPairWidgets).
-const _QP_WIDGET_MAXW = { claims: 1, callbacks: 0.5, b2b: 0.5, connect: 0.5 };
+// Every widget so far is ⅓ or ½ (Ethan, 2026-10-23: Claims and Monthly
+// Breakdown lost their full size too — no widget has enough to fill a row).
+// Variance Replies, Store KPIs and Monthly Breakdown are ⅓ only (Ethan, same
+// day): there is a card's worth in each, no more.
+const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3 };
+// Cards that are not widgets can be held under a full row too, by family —
+// the card and every piece split out of it (Ethan, 2026-10-23: "the feed cards
+// should not be allowed to be full size either").
+const _QP_FAMILY_MAXW = { feed: 0.5 };
+// NO FULL-WIDTH CARDS (Ethan, later the same day: "get rid of the full size for
+// everything and just keep it to half size or 1/3"). Anything not held tighter
+// above is held to half a row — Command Center, the chart, all of them. So
+// every card needs one beside it, and a row is two or three cards that fill it.
+const _QP_DEFAULT_MAXW = 0.5;
+// A piece split out on its own can be held tighter than its family, by
+// 'family/piece' (Ethan, same day: "Due dates need to remain at 1/3" — a short
+// list of dates). A card holding several pieces takes the widest of theirs,
+// so Due Dates combined with News is a half again.
+const _QP_PIECE_MAXW = { 'feed/due': 1 / 3 };
 function _qpMaxW(key) {
     const id = _qpWidgetId(key || '');
-    return id ? (_QP_WIDGET_MAXW[id] || null) : null;
+    if (id) return _QP_WIDGET_MAXW[id] || _QP_DEFAULT_MAXW;
+    const p = _qpParse(String(key || ''));
+    const fam = (p && _QP_FAMILY_MAXW[p.fam]) || _QP_DEFAULT_MAXW;
+    if (p && p.shell && p.pieces.length) {
+        return Math.max.apply(null, p.pieces.map(function (k) { return _QP_PIECE_MAXW[p.fam + '/' + k] || fam; }));
+    }
+    return fam;
 }
 // Held under a full row, so it needs a card beside it.
 function _qpNeedsPartner(key) { const m = _qpMaxW(key); return !!m && m < 1; }
+// SMALLEST SIZES (Ethan, 2026-10-23: "make it so the performance chart can't be
+// 1/3 size"). The least of a row a card may have; a row holding one can take
+// only as many cards as leave it that much (_qpRowLimit), and no Card Widths
+// choice may squeeze it below it.
+const _QP_MIN_W = { chart: 0.5 };
+function _qpMinW(key) { return _QP_MIN_W[key] || 0; }
+function _qpRowLimit(keys) {
+    return keys.reduce(function (n, k) { const m = _qpMinW(k); return m ? Math.min(n, Math.floor(1 / m + 1e-9)) : n; }, QP_MAX_PER_ROW);
+}
+// Can these cards share one row at these widths (w: null = equal)? A card's
+// share may not fall under its minimum, the row may not hold more than its
+// smallest-allowed card leaves room for, and capped widgets alone may not leave
+// a gap. Returns '' when it can, else the reason, in words.
+function _qpRowWhyNot(main, items, w) {
+    const keys = items.filter(k => _qpKeyShown(main, k));
+    if (!keys.length) return '';
+    const name = k => { const b = main.querySelector('[data-qp-block="' + k + '"]'); return (b && b.getAttribute('data-qp-label')) || k; };
+    const minK = keys.find(k => _qpMinW(k));
+    if (keys.length > _qpRowLimit(keys)) return name(minK) + ' Needs ½ Row';
+    const ws = w && w.length === items.length ? items.map((k, i) => w[i]).filter((v, i) => keys.indexOf(items[i]) !== -1) : null;
+    const sum = ws ? ws.reduce((a, v) => a + v, 0) : keys.length;
+    for (let i = 0; i < keys.length; i++) {
+        const share = ws ? ws[i] / sum : 1 / keys.length;
+        if (share < _qpMinW(keys[i]) - 0.001) return name(keys[i]) + ' Needs ½ Row';
+    }
+    if (keys.every(_qpNeedsPartner) && keys.reduce((a, k) => a + (_qpMaxW(k) || 1), 0) < 0.999) return 'It Would Leave A Gap';
+    return '';
+}
 // A card that is not built yet (a shell this layout is about to make) counts
 // as shown: it will be.
 function _qpKeyShown(main, k) {
@@ -51057,18 +51188,55 @@ function _qpKeyShown(main, k) {
 // the nearest row that has room (by distance, so it stays near where it was),
 // and that row goes back to equal widths. With no room anywhere it stays put,
 // and Customize marks the space beside it (_qpRenderControls).
+// With ⅓-only widgets "alone" is not the whole story: two ⅓ cards together
+// still leave a third of the row empty. So a row is SHORT when every card in it
+// is held under a full row and their shares cannot fill it; its last card moves
+// on, preferring a row with a card that can stretch (a full-size card takes
+// whatever the capped ones leave), then any row with room.
 function _qpPairWidgets(main, rows) {
+    const cap = k => _qpMaxW(k) || 1;
     for (let guard = 0; guard < 12; guard++) {
         const shown = r => r.items.filter(k => _qpKeyShown(main, k));
-        const lone = rows.findIndex(r => { const v = shown(r); return v.length === 1 && _qpNeedsPartner(v[0]); });
+        const short = r => { const v = shown(r); return v.length > 0 && v.every(_qpNeedsPartner) && v.reduce((a, k) => a + cap(k), 0) < 0.999; };
+        // ...and a row holding more than its smallest-allowed card leaves room
+        // for (the chart with two others): the last card without a minimum goes.
+        const over = r => { const v = shown(r); return v.length > _qpRowLimit(v); };
+        const lone = rows.findIndex(r => short(r) || over(r));
         if (lone === -1) break;
-        const key = shown(rows[lone])[0];
-        let best = -1;
+        const v = shown(rows[lone]);
+        const key = over(rows[lone]) ? v.filter(k => !_qpMinW(k)).pop() : v[v.length - 1];
+        if (!key) break;
+        let best = -1, bestFlex = false;
         rows.forEach(function (r, i) {
-            const n = shown(r).length;
-            if (i === lone || n < 1 || n >= QP_MAX_PER_ROW) return;
-            if (best === -1 || Math.abs(i - lone) < Math.abs(best - lone)) best = i;
+            const sv = shown(r);
+            if (i === lone || sv.length < 1 || sv.length >= _qpRowLimit(sv.concat([key]))) return;
+            const flex = sv.some(k => !_qpNeedsPartner(k));
+            if (best === -1 || (flex && !bestFlex) || (flex === bestFlex && Math.abs(i - lone) < Math.abs(best - lone))) { best = i; bestFlex = flex; }
         });
+        // No row has room — every other row is full. With nothing full-width
+        // left (_QP_DEFAULT_MAXW) that happens: Action Items (½) and Store KPIs
+        // (⅓) alone, beside three full rows. So BORROW instead: the nearest
+        // three-card row gives up a card that can be a half or a third, as
+        // long as the two it keeps still fill their row; the short row takes it.
+        if (best === -1 && short(rows[lone])) {
+            let from = -1, give = null;
+            rows.forEach(function (r, i) {
+                const sv = shown(r);
+                if (i === lone || sv.length !== 3) return;
+                const k = sv.slice().reverse().find(function (c) {
+                    const keep = sv.filter(x => x !== c), get = v.concat([c]);
+                    return !_qpMinW(c) && cap(c) >= 0.5 && keep.reduce((a, x) => a + cap(x), 0) >= 0.999
+                        && get.length <= _qpRowLimit(get) && (get.length === 3 || get.reduce((a, x) => a + cap(x), 0) >= 0.999);
+                });
+                if (k && (from === -1 || Math.abs(i - lone) < Math.abs(from - lone))) { from = i; give = k; }
+            });
+            if (from === -1) break;
+            rows[from].items.splice(rows[from].items.indexOf(give), 1);
+            rows[from].w = null;
+            rows[lone].items.push(give);
+            rows[lone].w = null;
+            continue;
+        }
         if (best === -1) break;
         rows[lone].items.splice(rows[lone].items.indexOf(key), 1);
         rows[lone].w = null;
@@ -51143,8 +51311,8 @@ function qpAddWidget(id, t) {
         // A widget that may not fill a row goes beside cards already there:
         // the first row, from the top, with room. Otherwise a row of its own.
         const room = _qpNeedsPartner(id) ? rows.find(function (r) {
-            const n = r.items.filter(function (k) { return _qpKeyShown(main, k) && k !== id; }).length;
-            return n >= 1 && n < QP_MAX_PER_ROW;
+            const sv = r.items.filter(function (k) { return _qpKeyShown(main, k) && k !== id; });
+            return sv.length >= 1 && sv.length < _qpRowLimit(sv.concat([id]));
         }) : null;
         if (room) { room.items.push(id); room.w = null; }
         else rows.push({ items: [id], w: null });
@@ -51207,6 +51375,7 @@ function qpLibraryRemove(id) {
     qpRemoveWidget(id);
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
+const _QP_LIB_SECTIONS = ['Operations', 'Workspace', 'Other'];
 function _qpLibraryList(q) {
     const list = document.getElementById('qpLibList');
     const main = _qpMain();
@@ -51214,9 +51383,14 @@ function _qpLibraryList(q) {
     q = String(q || '').trim().toLowerCase();
     const ids = Object.keys(QP_WIDGETS).filter(_qpWidgetOk).filter(function (id) {
         const w = QP_WIDGETS[id];
-        return !q || (w.label + ' ' + w.sub).toLowerCase().indexOf(q) !== -1;
+        // The section name counts too (Ethan, 2026-10-23): "workspace" lists
+        // every Workspace widget, "operations" every Operations one.
+        return !q || (w.label + ' ' + w.sub + ' ' + (w.section || '')).toLowerCase().indexOf(q) !== -1;
     });
-    list.innerHTML = ids.length ? ids.map(function (id) {
+    // SECTIONS (Ethan, 2026-10-23): one per page the tools live on, in the site
+    // menu's order (Operations, then Workspace). A section with nothing this
+    // person can add — or nothing matching the search — is left out.
+    const row = function (id) {
         const w = QP_WIDGETS[id];
         const on = !!(main && main.querySelector('[data-qp-widget="' + id + '"]'));
         return '<div class="qp-lib-row' + (on ? '' : ' qp-lib-drag') + '"' + (on ? '' : ' draggable="true" data-qp-add="' + id + '" title="Drag onto the page, or click Add"') + '>'
@@ -51230,6 +51404,11 @@ function _qpLibraryList(q) {
             + (on ? '<button type="button" class="qp-lib-rm" onclick="qpLibraryRemove(\x27' + id + '\x27)">Remove</button>'
                 : '<button type="button" class="qp-lib-add" draggable="false" onclick="qpAddWidget(\'' + id + '\')">Add</button>')
             + '</div>';
+    };
+    list.innerHTML = ids.length ? _QP_LIB_SECTIONS.map(function (sec) {
+        const mine = ids.filter(function (id) { return (QP_WIDGETS[id].section || 'Other') === sec; });
+        return mine.length ? '<div class="qp-lib-sec"><div class="qp-lib-sec-h">' + escapeHtml(sec) + '<span>' + mine.length + '</span></div>'
+            + mine.map(row).join('') + '</div>' : '';
     }).join('') : '<div class="qp-lib-none">' + (q ? 'No widgets match “' + escapeHtml(q) + '”.' : 'No widgets to add yet.') + '</div>';
 }
 // A drag out of the drawer is a card drag (_qpDrag.key) for a card that is not
@@ -51295,6 +51474,33 @@ function _qpWReload(id) {
 function _qpClaimsReload() { return _qpWReload('claims'); }
 function _qpWReloadB2b() { return _qpWReload('b2b'); }
 function _qpWReloadCallbacks() { return _qpWReload('callbacks'); }
+function _qpWReloadKpis() { return _qpWReload('kpis'); }
+function _qpWReloadVariance() { return _qpWReload('variance'); }
+// The test login's made-up variance (see the variance widget's load). Same
+// shape as variance-replies' list + period reads; every name and number is made up.
+function _qpVarianceSample() {
+    const s = (_vrMyStores()[0] || 'OVL'), day = 86400000, now = Date.now();
+    const iso = ms => new Date(ms).toISOString();
+    const periods = [
+        { id: 'sample-new', store: s, uploaded_at: iso(now - day), manager_due_at: iso(now + 6 * day), items: 4, answered: 1,
+          awaiting_reply: 0, mgr_replied: 0, all_clear: false, ended_at: null, dm_notes_at: null, uploaded_by: 'Ethan Kushnir' },
+        { id: 'sample-old', store: s, uploaded_at: iso(now - 9 * day), manager_due_at: iso(now - 2 * day), items: 3, answered: 3,
+          awaiting_reply: 1, mgr_replied: 0, all_clear: false, ended_at: null, dm_notes_at: iso(now - 3600000), uploaded_by: 'Ethan Kushnir' },
+    ];
+    const line = (title, buyer, pct, note) => ({ item_title: title, buyer_name: buyer, variance_pct: pct, needs_reply: true, gm_note: note || null });
+    return { periods, items: {
+        'sample-new': [line('PS5 Slim Digital Edition 1TB', 'Nathan Zuklin', -38), line('iPhone 13 128GB Midnight Unlocked', 'Colin Davis', -22),
+            line('AirPods Pro 2nd Gen USB-C', 'Dan Ohanesian', -14), line('Nintendo Switch OLED White', 'Kaden Fry', -11, 'Priced to the market that week')],
+        'sample-old': [Object.assign(line('MacBook Air M1 8GB 256GB', 'Colin Davis', -27, 'Screen had a pressure mark we missed'),
+            { dm_note: 'Who checked the screen at intake?', dm_reply_requested: true, mgr_reply: null })],
+    } };
+}
+// "September" from "2026-09-30" (Monthly Breakdown's period end dates).
+function _qpMbMonth(iso) { return new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'long' }); }
+// The Store KPIs the tool judges green/red on (_kpiThresholdCls), with names.
+const _QP_KPI_JUDGED = [['gross_margin_pct', 'Gross Margin'], ['customer_conversion_pct', 'Customer Conversion'],
+    ['device_conversion_pct', 'Device Conversion'], ['avg_transaction_time', 'Average Transaction Time'],
+    ['no_deal_count', 'No-Deal Count'], ['listed_count', 'Listed Count']];
 function qpWTab(id, key, tab) {
     _qpWState(id).tab[key] = tab;
     _qpRenderWidgets();
@@ -51342,7 +51548,10 @@ function _qpWidgetCard(el, rows, id) {
     const one = pieces.length === 1 ? spec.tabs.find(t => t[0] === pieces[0]) : null;
     const where = spec.where(st.data) || 'Your Store';
     const head = '<div class="qp-ai-head"><span class="sam-mico qp-cw-ico ' + w.tone + '" aria-hidden="true">' + w.icon + '</span><div>'
-        + '<div class="ew-eyebrow">' + escapeHtml(where + ' · ' + (one ? w.label : spec.when)) + '</div>'
+        // A widget with ONE tab (Monthly Breakdown) has no pieces: its eyebrow
+        // says when, not its own name a second time.
+        + '<div class="ew-eyebrow">' + escapeHtml(where + ' · ' + (one && spec.tabs.length > 1 ? w.label
+            : (typeof spec.when === 'function' ? spec.when(st.data) : spec.when))) + '</div>'
         + '<div class="qp-ai-title">' + escapeHtml(one ? one[2] : w.label) + '</div></div></div>';
     let body;
     const off = st.data && spec.off ? spec.off(st.data) : '';
@@ -51360,7 +51569,8 @@ function _qpWidgetCard(el, rows, id) {
             return '<button type="button" class="toggle-btn' + (t[0] === tab ? ' active' : '') + (_qpEditing ? ' qp-piece-drag" draggable="true' : '')
                 + '" data-qp-drag-piece="' + id + '/' + t[0] + '" title="' + escapeHtml(_qpEditing ? 'Drag out to give it its own card' : t[2])
                 + '" onclick="qpWTab(\'' + id + '\', \'' + key + '\', \'' + t[0] + '\')">'
-                + escapeHtml(t[1]) + ' <span class="qp-ai-cnt">' + m[t[0]].n + '</span></button>';
+                // badge: a model may say "Due" / "✓" instead of a count.
+                + escapeHtml(t[1]) + ' <span class="qp-ai-cnt">' + escapeHtml(String(m[t[0]].badge != null ? m[t[0]].badge : m[t[0]].n)) + '</span></button>';
         }).join('') + '</div>';
         // A card with no tabs has room for one more line.
         const room = one ? 4 : 3;
@@ -51372,7 +51582,7 @@ function _qpWidgetCard(el, rows, id) {
             + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
     }
     const html = head + body;
-    if (box._qpHtml !== html) { box.innerHTML = html; box._qpHtml = html; }
+    if (box._qpHtml !== html) { box.innerHTML = html; box._qpHtml = html; _qpCapLines(box); }
 }
 
 const _QP_WSPEC = {
@@ -51410,6 +51620,238 @@ const _QP_WSPEC = {
                     + (it.waiting ? ' · ' + it.waiting + ' waiting on someone else' : ''),
                 cap: 'Due Next', lines: it.due.map(e => _qpClaimsLine(e, today)),
                 link: ['Open Claims & Disputes', "openClaimsTool('" + tab + "')"],
+            };
+        },
+    },
+    // MONTHLY BREAKDOWN (Ethan, 2026-10-23: option A, "just show the previous
+    // month's info until new info gets added"). The tool has NO goals and no
+    // projection: it is the DM's hand-entered numbers for a closed month, each
+    // row ranked across the five stores (best first, lower-is-better rows
+    // flipped). So the card is the LATEST month that has numbers, its key rows,
+    // this store's place among the stores that month, and the change from the
+    // month before — and it moves on by itself once the DM fills the next one.
+    // One tab, so no tabs and no pieces. Five GETs (one per store, the same read
+    // the tool's Overview makes), cached ten minutes: these numbers change once
+    // a month.
+    monthly: {
+        when: d => (d && d.month ? _qpMbMonth(d.month) : 'Last Month'),
+        ttl: 600000,
+        tabs: [['key', 'Key Rows', 'Monthly Breakdown']],
+        where: () => (_claimStores()[0] || ''),
+        load: async function () {
+            const mine = _claimStores()[0];
+            const all = await Promise.all(STORE_CODES.map(s =>
+                fetch(`${MONTHLY_BRIEF_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()).catch(() => null)));
+            const by = {};
+            STORE_CODES.forEach((s, i) => { if (all[i] && all[i].data) by[s] = all[i]; });
+            const me = by[mine];
+            if (!me) throw new Error('no monthly brief for ' + mine);
+            // The latest month this store has numbers for. A month the DM has
+            // opened but not filled has no data row, so it is simply skipped.
+            const months = (me.months || []).filter(m => me.data[m] && Object.keys(me.data[m]).length).sort();
+            return { by, mine, metrics: me.metrics || [], month: months[months.length - 1] || null, prev: months[months.length - 2] || null };
+        },
+        off: d => d.month ? '' : 'No monthly numbers have been entered for this store yet.',
+        model: function (d) {
+            const metric = k => d.metrics.find(m => m.key === k);
+            const val = (s, m, k) => { const r = d.by[s] && d.by[s].data && d.by[s].data[m]; return r && r[k] != null && r[k] !== '' ? Number(r[k]) : null; };
+            // Place among the stores with a number for that row that month.
+            const rank = k => {
+                const mt = metric(k); if (!mt) return null;
+                const mine = val(d.mine, d.month, k); if (mine == null) return null;
+                const vals = STORE_CODES.map(s => val(s, d.month, k)).filter(v => v != null);
+                const better = vals.filter(v => mt.lower_is_better ? v < mine : v > mine).length;
+                return { place: better + 1, of: vals.length };
+            };
+            const fmt = (k, v) => {
+                const t = (metric(k) || {}).type;
+                if (v == null) return '—';
+                if (t === 'money') return _qpHLK(v);
+                if (t === 'pct') return (Math.round(v * 10) / 10) + '%';
+                if (t === 'rating') return (Math.round(v * 10) / 10).toFixed(1);
+                return Math.round(v).toLocaleString('en-US');
+            };
+            const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+            const chip = r => !r ? '<span></span>' : '<span class="qp-cw-due ' + (r.place === 1 ? 'good' : r.place === r.of ? 'bad' : 'grey') + '" title="Of ' + r.of + ' stores">' + ord(r.place) + '</span>';
+            // Change from the month before, coloured by whether it is better.
+            const delta = k => {
+                const a = val(d.mine, d.month, k), b = d.prev ? val(d.mine, d.prev, k) : null;
+                if (a == null || b == null || b === 0) return '';
+                const t = (metric(k) || {}).type;
+                const ch = t === 'pct' ? a - b : (a - b) / Math.abs(b) * 100;
+                if (Math.abs(ch) < 0.05) return '';
+                const good = (ch > 0) !== !!(metric(k) || {}).lower_is_better;
+                return '<span class="' + (good ? 'good' : 'bad') + '">' + (ch > 0 ? '▲' : '▼') + ' ' + Math.abs(Math.round(ch * 10) / 10) + (t === 'pct' ? ' pts' : '%') + '</span>';
+            };
+            // Net Profit leads (the company's headline since the NP switch);
+            // then four rows a store acts on. Any the tool does not carry are skipped.
+            const rows = ['net_sales', 'gross_profit_pct', 'return_rate', 'google_reviews'].filter(metric);
+            const np = rank('net_profit');
+            return {
+                n: 0, big: fmt('net_profit', val(d.mine, d.month, 'net_profit')), small: 'Net Profit' + (np ? ' · ' + ord(np.place) + ' of ' + np.of : ''),
+                // Only when last month HAS a Net Profit to compare with (August
+                // has none — NP rows began with the NP switch), never "no change".
+                sub: d.prev && delta('net_profit') ? 'vs ' + _qpMbMonth(d.prev) + ' ' + delta('net_profit') : '',
+                cap: 'Key Rows · Place Among Stores',
+                lines: rows.map(k => '<div class="qp-cw-ln qp-mb-ln"><span class="qp-cw-lt">' + escapeHtml((metric(k) || {}).label || k)
+                    + '</span><b>' + fmt(k, val(d.mine, d.month, k)) + '</b><span class="qp-mb-d">' + delta(k) + '</span>' + chip(rank(k)) + '</div>'),
+                link: ['Open Monthly Breakdown', "window.location.href='workspace.html#brief'"],
+            };
+        },
+    },
+    // STORE KPIs — the reminder's own rules (checkKpiDueReminders): WEEKLY is
+    // the open week, due while nothing is saved for it and overdue after the
+    // Monday 8:30am CT after its Sunday; MONTHLY opens on the month's last day
+    // and is due from the first Sunday after (overdue that Monday 8:30am).
+    // Saved at all = done, and then the card shows how the store did on the
+    // tool's own green/red limits (_kpiThresholdCls, Store Total row).
+    kpis: {
+        when: 'Right Now',
+        tabs: [['weekly', 'Weekly', 'Weekly KPIs'], ['monthly', 'Monthly', 'Monthly KPIs']],
+        where: () => _kpiMyStores().join(' · '),
+        load: async function () {
+            const stores = _kpiMyStores();
+            const get = (s, t) => fetch(`${KPI_MANAGE_URL}?store=${s}&period_type=${t}&v=${Date.now()}`).then(r => r.json()).catch(() => null);
+            const out = { weekly: {}, monthly: {} };
+            await Promise.all(stores.flatMap(s => ['weekly', 'monthly'].map(t => get(s, t).then(j => { out[t][s] = (j && j.periods) || []; }))));
+            return out;
+        },
+        model: function (d, tab) {
+            const parts = _kpiCentralParts();
+            const stores = _kpiMyStores();
+            const weekly = tab === 'weekly';
+            const link = [weekly ? 'Open Weekly KPIs' : 'Open Monthly KPIs',
+                "sessionStorage.setItem('speeksKpiTab','" + tab + "'); window.location.href='workspace.html#kpis'"];
+            let pending = [], overdue = false, dueOn = '', openEnd = '';
+            stores.forEach(s => {
+                const p = (d[tab][s] || []).find(x => x.is_editable);
+                if (!p) return;
+                openEnd = p.period_end_date;
+                const sun = weekly ? p.period_end_date : _kpiFirstSundayAfter(p.period_end_date);
+                dueOn = _kpiAddDays(sun, 1);
+                if ((p.saved_count || 0) === 0 && (weekly || parts.date >= sun)) {
+                    pending.push(s);
+                    if (_kpiPastDeadline(sun, parts)) overdue = true;
+                }
+            });
+            const day = iso => new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            const label = end => weekly ? 'Week ending ' + _samShortDate(Date.parse(end + 'T12:00:00'))
+                : new Date(end + 'T12:00:00').toLocaleDateString('en-US', { month: 'long' });
+            const who = stores.length > 1 && pending.length ? ' (' + pending.join(' & ') + ')' : '';
+            if (pending.length) {
+                return {
+                    n: 1, badge: overdue ? '!' : 'Due', big: overdue ? 'Overdue' : 'Due', small: label(openEnd),
+                    sub: overdue ? '<span class="bad">Were due ' + day(dueOn) + ' 8:30am' + who + ' — enter them now</span>'
+                        : '<span class="warn">Due ' + day(dueOn) + ' by 8:30am' + who + '</span>',
+                    cap: '', lines: [], link: [weekly ? 'Enter Weekly KPIs' : 'Enter Monthly KPIs', link[1]],
+                };
+            }
+            // Done (or not due yet): the latest period with numbers, judged on
+            // the Store Total — one store's, or the first of an MSM's two.
+            const p = (d[tab][stores[0]] || []).find(x => (x.saved_count || 0) > 0);
+            if (!p) return { n: 0, badge: '', big: '—', small: 'nothing entered yet', sub: '', cap: '', lines: [], link };
+            const tot = _kpiStoreTotals(p.entries || []);
+            const judged = _QP_KPI_JUDGED.map(f => ({ f, cls: _kpiThresholdCls(f[0], tot[f[0]], true), v: tot[f[0]] }))
+                .filter(j => j.v != null && !isNaN(Number(j.v)));
+            const green = judged.filter(j => j.cls === 'kpi-cell-green').length;
+            const notGreen = judged.filter(j => j.cls !== 'kpi-cell-green')
+                .sort((a, b) => (a.cls === 'kpi-cell-red' ? 0 : 1) - (b.cls === 'kpi-cell-red' ? 0 : 1));
+            const at = (p.entries || []).map(e => e.updated_at || e.created_at).filter(Boolean).sort().pop();
+            const openNotDue = !weekly && openEnd && openEnd !== p.period_end_date;
+            return {
+                n: 0, badge: '✓', big: green, small: 'of ' + judged.length + ' in the green · ' + label(p.period_end_date),
+                sub: openNotDue ? '<span class="warn">' + label(openEnd) + ' is due ' + day(dueOn) + ' by 8:30am</span>'
+                    : (at ? '<span class="good">Entered ' + new Date(at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + '</span>' : ''),
+                cap: notGreen.length ? 'Not in the Green' : '',
+                lines: notGreen.map(j => _qpWLine(_qpWChip(j.cls === 'kpi-cell-red' ? 'Red' : 'Close', j.cls === 'kpi-cell-red' ? 'bad' : 'warn'),
+                    j.f[1], _kpiFormatComputed(j.f[0], j.v))),
+                link,
+            };
+        },
+    },
+    // VARIANCE REPLIES — the manager side of the tool's own rules
+    // (_vrMaybePopup): lines to explain (needs_reply with no manager note), due
+    // the whole 7th day after upload, then overdue; DM notes that asked for a
+    // reply (two days to answer); "in the clear" reports and DM reviews as
+    // FYIs. Ended periods and anything over 45 days old say nothing. The tool's
+    // list GET, plus one period's lines for whichever has work in it.
+    variance: {
+        when: 'Right Now',
+        tabs: [['explain', 'To Explain', 'Lines To Explain'], ['dm', 'DM Notes', 'DM Notes']],
+        where: () => _vrMyStores().join(' · '),
+        load: async function () {
+            // SAMPLE REPORT for the localhost test login, like SPEEKS Connect's
+            // sample counts (Ethan, 2026-10-23: "put some dummy data in variance
+            // replies"): OVL's real periods are all answered, so the card only
+            // ever said "nothing to explain". A made-up report, uploaded
+            // yesterday with three lines owed, and a reply-requested DM note on
+            // an older one. Never reached on a real login (_speeksTestSession is
+            // localhost-only).
+            if (window._speeksTestSession) return _qpVarianceSample();
+            const stores = _vrMyStores();
+            const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+            const j = await res.json();
+            if (!j || j.success === false) throw new Error('load failed');
+            const cutoff = Date.now() - 45 * 86400000;
+            const periods = (j.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff && !p.ended_at);
+            const work = periods.filter(p => !p.all_clear && ((p.items || 0) > (p.answered || 0) || (p.awaiting_reply || 0) > 0));
+            const items = {};
+            await Promise.all(work.slice(0, 3).map(p => fetch(`${VARIANCE_REPLIES_URL}?period_id=${p.id}&v=${Date.now()}`)
+                .then(r => r.json()).then(x => { items[p.id] = (x && x.items) || []; }).catch(() => {})));
+            return { periods, items };
+        },
+        model: function (d, tab) {
+            const link = ['Open Variance Replies', "window.location.href='workspace.html#vreplies'"];
+            const short = n => _qpWWho(n);
+            const pctChip = v => _qpWChip(Math.round(Number(v)) + '%', Number(v) <= -20 ? 'bad' : 'warn');
+            const seen = _vrGetReviewSeen();
+            if (tab === 'explain') {
+                const open = d.periods.filter(p => !p.all_clear && (p.items || 0) > (p.answered || 0));
+                const n = open.reduce((a, p) => a + (p.items - (p.answered || 0)), 0);
+                if (n) {
+                    const first = open.slice().sort((a, b) => new Date(a.manager_due_at) - new Date(b.manager_due_at))[0];
+                    const over = open.some(_vrIsPastDue), today = !over && open.some(_vrIsDueToday);
+                    const due = new Date(first.manager_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+                    const lines = open.flatMap(p => (d.items[p.id] || []).filter(x => x.needs_reply && !x.gm_note))
+                        .sort((a, b) => Number(a.variance_pct) - Number(b.variance_pct));
+                    return {
+                        n, big: n, small: n === 1 ? 'line to explain' : 'lines to explain',
+                        sub: over ? '<span class="bad">Overdue — were due ' + due + '</span>'
+                            : today ? '<span class="bad">Due today</span>' : '<span class="warn">Due ' + due + '</span>',
+                        cap: 'Worst First', link: ['Write Replies', link[1]],
+                        lines: lines.map(x => _qpWLine(pctChip(x.variance_pct), _qpClaimsText(x.item_title) + (x.buyer_name ? ' · ' + short(x.buyer_name) : ''), '')),
+                    };
+                }
+                // Nothing owed: say which quiet state it is, newest report first.
+                const cleared = d.periods.find(p => p.all_clear && new Date(p.uploaded_at).getTime() > (seen[p.id] || 0));
+                const waiting = d.periods.find(p => !p.all_clear && p.items && p.answered >= p.items && !p.dm_notes_at);
+                return {
+                    n: 0, big: 0, small: 'lines to explain',
+                    sub: cleared ? '<span class="good">New report — you\'re in the clear. Have a read of it.</span>'
+                        : waiting ? '<span class="good">All replied — waiting on the DM\'s review</span>'
+                        : '<span class="good">Nothing to explain right now</span>',
+                    cap: '', lines: [], link: cleared ? ['Read the Report', link[1]] : link,
+                };
+            }
+            const asked = d.periods.filter(p => (p.awaiting_reply || 0) > 0);
+            const n = asked.reduce((a, p) => a + p.awaiting_reply, 0);
+            if (n) {
+                const p0 = asked[0];
+                const over = asked.some(p => _vrDayPast(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()), 2));
+                const lines = asked.flatMap(p => (d.items[p.id] || []).filter(x => x.dm_note && x.dm_reply_requested && !x.mgr_reply));
+                return {
+                    n, big: n, small: n === 1 ? 'DM note to answer' : 'DM notes to answer',
+                    sub: over ? '<span class="bad">Overdue — two days to answer have passed</span>'
+                        : '<span class="warn">' + escapeHtml(_qpWWho(p0.uploaded_by) || 'The DM') + ' asked for a reply · two days to answer</span>',
+                    cap: 'From the DM', link: ['Reply', link[1]],
+                    lines: lines.map(x => _qpWLine(_qpWChip('Reply', 'info'), _qpClaimsText(x.item_title) + ' — “' + String(x.dm_note).replace(/\s+/g, ' ') + '”', '')),
+                };
+            }
+            const reviewed = d.periods.find(p => p.dm_notes_at && new Date(p.dm_notes_at).getTime() > (seen[p.id] || 0));
+            return {
+                n: 0, big: 0, small: 'DM notes to answer',
+                sub: reviewed ? '<span class="good">The DM reviewed your replies — have a look</span>' : '<span class="good">No DM notes waiting on you</span>',
+                cap: '', lines: [], link,
             };
         },
     },
@@ -51640,7 +52082,7 @@ function _qpCommit(main, rows) {
     rows = _qpPairWidgets(main, rows.filter(function (r) { return r.items.length; }));
     _qpKeepScroll(function () {
         _qpBuild(main, rows);
-        const isDefault = _qpSig(rows) === _qpSig(_qpDefaults(_qpOriginalKeys(main)));
+        const isDefault = _qpSig(rows) === _qpSig(_qpDefaultRows(main, _qpOriginalKeys(main)));
         _qpSave(isDefault ? null : rows);
         main.classList.toggle('qp-custom', !isDefault);
         _qpRenderControls(main);
@@ -51689,8 +52131,64 @@ function _qpPlace(rows, key, target, rowObj, beforeRow) {
 }
 
 // Is there room beside the cards in this row? A card leaving it makes room.
+// The card arriving counts too: the chart cannot join a row that already has
+// two cards, and nothing can join the chart's row once it has one beside it.
 function _qpRoomIn(main, row, leavingKey) {
-    return _qpShownCount(main, row, leavingKey) < QP_MAX_PER_ROW;
+    const others = row.items.filter(function (k) { return k !== leavingKey && _qpIsShown(main, k); });
+    return others.length < _qpRowLimit(others.concat(leavingKey ? [leavingKey] : []));
+}
+
+// Can `nk` (a new card) take the place of the card `key`? '' when it can,
+// else why, in words. The cards the page is built from — Your Feed, Action
+// Items, Command Center, the chart — always stay; a tab split OUT of one can
+// be replaced, and goes back into it.
+function _qpReplaceWhyNot(main, b, key, nk) {
+    const name = b.getAttribute('data-qp-label') || key;
+    const p = _qpParse(key);
+    if (!_qpWidgetId(key) && !(p && p.shell)) return name + ' Stays on Your Page';
+    const rows = _qpCurrentRows(main);
+    const row = rows.find(function (r) { return r.items.indexOf(key) !== -1; });
+    if (!row) return 'Card Not Found';
+    return _qpRowWhyNot(main, row.items.map(function (k) { return k === key ? nk : k; }), null);
+}
+// What happens to the card a Replace pushes off (and what the hint says): a
+// widget's own card takes the whole widget off the page, every card split
+// out of it too, and it is back in Add a Widget; a split-out card's tabs go
+// home into their group's card (dropping the shell key is enough —
+// _qpDistribute sends them).
+function _qpRetireWords(main, b, key) {
+    const name = b.getAttribute('data-qp-label') || key;
+    const p = _qpParse(key);
+    if (p && p.shell) return name + ' Goes Back Into ' + QP_FAMILIES[p.fam].label;
+    return name + ' Goes Back to Add a Widget';
+}
+function _qpRetire(main, rows, key, nk) {
+    _qpReplace(rows, key, nk);
+    const p = _qpParse(key);
+    if (!(p && p.shell)) {
+        const id = _qpWidgetId(key);
+        rows.forEach(function (r) { r.items.slice().forEach(function (k) { if (k !== nk && _qpWidgetId(k) === id) _qpTakeOut(rows, k); }); });
+    }
+    rows.forEach(function (r) { r.w = r.items.indexOf(nk) !== -1 ? null : r.w; });
+    _qpEnsureWidgets(main, rows);
+}
+
+// SWAP two cards' places (rows[] untouched; a copy comes back). In one row they
+// trade places and keep their widths; across rows each takes the other's slot
+// and width, and a row whose widths then break a size goes back to equal. If a
+// row still cannot hold its new card, why (in words) instead of rows.
+function _qpSwapRows(main, rows, a, b) {
+    const out = rows.map(r => ({ items: r.items.slice(), w: r.w ? r.w.slice() : null }));
+    const ra = out.find(r => r.items.indexOf(a) !== -1), rb = out.find(r => r.items.indexOf(b) !== -1);
+    if (!ra || !rb) return { why: 'Card Not Found' };
+    const ia = ra.items.indexOf(a), ib = rb.items.indexOf(b);
+    ra.items[ia] = b; rb.items[ib] = a;
+    for (const r of (ra === rb ? [ra] : [ra, rb])) {
+        if (_qpRowWhyNot(main, r.items, r.w)) r.w = null;
+        const why = _qpRowWhyNot(main, r.items, r.w);
+        if (why) return { why };
+    }
+    return { rows: out, why: '' };
 }
 
 // Every drop goes through here. `t` is what _qpTargetAt worked out.
@@ -51702,6 +52200,15 @@ function _qpDropAt(main, drag, t) {
 
     if (drag.key) {
         const key = drag.key;
+        if (t.zone === 'swap') {
+            const sw = _qpSwapRows(main, rows, key, t.key);
+            if (sw.why) return _qpRenderControls(main);
+            return done(sw.rows);
+        }
+        if (t.zone === 'replace') {
+            _qpRetire(main, rows, t.key, key);
+            return done();
+        }
         if (t.zone === 'combine') {
             const src = _qpParse(key), dst = _qpParse(t.key);
             const all = _qpCardPieces(main, rows, t.key).concat(_qpCardPieces(main, rows, key));
@@ -51735,6 +52242,12 @@ function _qpDropAt(main, drag, t) {
         if (fromPieces.length) _qpReplace(rows, from, _qpShellKey(fam, fromPieces));
         else _qpTakeOut(rows, from);
     };
+    if (t.zone === 'replace') {
+        if (t.key === from) return _qpRenderControls(main);
+        shrink();
+        _qpRetire(main, rows, t.key, _qpShellKey(fam, [piece]));
+        return done();
+    }
     if (t.zone === 'combine') {
         const dst = _qpParse(t.key);
         if (t.key === from) return _qpRenderControls(main);
@@ -51796,11 +52309,17 @@ function _qpRowBar(row, cells) {
     bar.className = 'qp-rowbar';
     bar.setAttribute('role', 'group');
     bar.setAttribute('aria-label', 'Card widths: ' + labels.join(' and '));
+    // Only the splits that keep BOTH cards within their size (_qpMaxW): no
+    // "SPEEKS Connect Wider" past a widget's most, and no "Same Width" for a
+    // ⅓-only widget — the button would do nothing. One left (or none) is no
+    // choice at all, so no strip.
+    const fits = s => [0, 1].every(function (i) {
+        const c = _qpMaxW(keys[i]), share = s.w[i] / (s.w[0] + s.w[1]);
+        return (!c || share <= c + 0.001) && share >= _qpMinW(keys[i]) - 0.001;
+    });
+    if (QP_SPLITS.filter(fits).length < 2) return null;
     bar.innerHTML = '<span class="qp-rowbar-lab">Card Widths</span>' + QP_SPLITS.map(function (s, n) {
-        // No "SPEEKS Connect Wider" when that would take a widget past the
-        // most of a row it may have (_qpMaxW) — the button would do nothing.
-        const cap = s.wide === -1 ? null : _qpMaxW(keys[s.wide]);
-        if (cap && s.w[s.wide] / (s.w[0] + s.w[1]) > cap) return '';
+        if (!fits(s)) return '';
         const on = g[0] === s.w[0] && g[1] === s.w[1];
         const words = s.wide === -1 ? 'Same Width' : escapeHtml(labels[s.wide]) + ' Wider';
         return '<button type="button" class="qp-size' + (on ? ' on' : '') + '" aria-pressed="' + on + '"'
@@ -51816,7 +52335,10 @@ function _qpRenderControls(main) {
     const rows = Array.from(main.querySelectorAll(':scope > .qp-row:not([hidden])'));
     rows.forEach(function (row) {
         const cells = Array.from(row.querySelectorAll(':scope > .qp-cell:not([hidden])'));
-        if (cells.length === 2) main.insertBefore(_qpRowBar(row, cells), row);
+        // No strip when a ⅓ widget leaves nothing to choose (it is a third,
+        // the other card the rest).
+        const rb = cells.length === 2 ? _qpRowBar(row, cells) : null;
+        if (rb) main.insertBefore(rb, row);
         // A widget that needs a card beside it, alone because no row had room
         // (_qpPairWidgets): mark the space it is waiting to share.
         if (cells.length === 1 && _qpNeedsPartner(_qpKey(cells[0].querySelector(':scope > [data-qp-block]')))) {
@@ -51915,7 +52437,7 @@ function _qpClearSlots(main) {
 // What letting go at this point would do, or null for nothing. Over a card:
 // its outer quarters place beside it, its middle combines — but only with a
 // card from the same group, and never a piece with the card it came from.
-function _qpTargetAt(main, el, x) {
+function _qpTargetAt(main, el, x, y) {
     const slot = el && el.closest && el.closest('.qp-slot');
     if (slot && main.contains(slot)) {
         const b = slot.getAttribute('data-qp-before');
@@ -51939,6 +52461,39 @@ function _qpTargetAt(main, el, x) {
     const sameGroup = !!fam && fam === (_qpDrag.key ? (_qpParse(_qpDrag.key) || {}).fam : _qpDrag.fam);
     const fromHere = !_qpDrag.key && _qpDrag.from === key;
     let zone = f < 0.25 ? 'left' : f > 0.75 ? 'right' : 'combine';
+    // The middle of a card from ANOTHER group swaps the two (Ethan, 2026-10-23:
+    // trading places used to mean removing one and adding it back). Whole cards
+    // only — a tab dragged out still places beside — and not one still in the drawer.
+    if (zone === 'combine' && !sameGroup && _qpDrag.key && !_qpDrag.add) {
+        const sw = _qpSwapRows(main, _qpCurrentRows(main), _qpDrag.key, key);
+        return { zone: 'swap', el: b, cell: cell, key: key, row: rows.indexOf(row), full: !!sw.why, why: sw.why };
+    }
+    // A whole card over the middle of one from its OWN group could mean either,
+    // so the middle splits (Ethan, 2026-10-23): the top half combines, the
+    // bottom half swaps, and the hint shows both with the live one lit
+    // (t.split). A tab dragged out (a piece) still only combines.
+    if (zone === 'combine' && sameGroup && !fromHere && _qpDrag.key && !_qpDrag.add) {
+        const sw = _qpSwapRows(main, _qpCurrentRows(main), _qpDrag.key, key);
+        const lower = y != null && (y - r.top) / r.height >= 0.5;
+        return { zone: lower ? 'swap' : 'combine', split: 'swap', el: b, cell: cell, key: key, row: rows.indexOf(row),
+            full: lower && !!sw.why, why: sw.why };
+    }
+    // REPLACE (Ethan, 2026-10-23): something NEW — a widget out of the drawer,
+    // or a tab dragged out to be a card of its own — over the middle of a card
+    // takes that card's place, in red. What it pushes off goes where it came
+    // from (_qpRetire). Over another card of the tab's own group the middle
+    // splits: top combines, bottom replaces. A tab over the card it left, or
+    // over its group's original card, still only combines.
+    if (zone === 'combine' && !fromHere && (_qpDrag.add || (!_qpDrag.key && _qpDrag.piece))) {
+        const nk = _qpDrag.add || _qpShellKey(_qpDrag.fam, [_qpDrag.piece]);
+        const why = _qpReplaceWhyNot(main, b, key, nk);
+        const at = { el: b, cell: cell, key: key, row: rows.indexOf(row), full: !!why, why: why };
+        if (!sameGroup) return Object.assign(at, { zone: 'replace' });
+        if ((_qpParse(key) || {}).shell) {
+            const lower = y != null && (y - r.top) / r.height >= 0.5;
+            return Object.assign(at, { zone: lower ? 'replace' : 'combine', split: 'replace', full: lower && !!why });
+        }
+    }
     if (zone === 'combine' && (!sameGroup || fromHere)) zone = f < 0.5 ? 'left' : 'right';
     const shown = Array.from(row.querySelectorAll(':scope > .qp-cell:not([hidden])'));
     let beforeKey = key;
@@ -51952,11 +52507,23 @@ function _qpTargetAt(main, el, x) {
     return { zone: zone, el: b, cell: cell, key: key, row: rows.indexOf(row), beforeKey: beforeKey, full: full, fromHere: fromHere };
 }
 
+// What combining here would make: the family's name when it holds every piece
+// this person can see, else the pieces it holds ("Due Dates + News").
+function _qpCombineLabel(main, b, t) {
+    const rows = _qpCurrentRows(main);
+    const fam = b.getAttribute('data-qp-family');
+    const adding = _qpDrag.key ? _qpCardPieces(main, rows, _qpDrag.key) : [_qpDrag.piece];
+    const names = _qpCardPieces(main, rows, t.key).concat(adding)
+        .filter(function (p, i, a) { return a.indexOf(p) === i && _qpPieceShown(main, fam, p); });
+    const all = _qpFamPieces(main, fam).filter(function (p) { return _qpPieceShown(main, fam, p); });
+    return names.length === all.length ? QP_FAMILIES[fam].label
+        : names.map(function (p) { return QP_FAMILIES[fam].pieces.find(function (x) { return x.key === p; }).label; }).join(' + ');
+}
 // The hint over the card under the pointer: "Drop to Combine" with what it makes,
 // or an edge saying what letting go there does.
 function _qpShowHint(main, t) {
     const old = main.querySelector('.qp-ov');
-    const sig = t && t.cell ? t.key + '|' + t.zone + '|' + (t.full ? 1 : 0) : '';
+    const sig = t && t.cell ? t.key + '|' + t.zone + '|' + (t.full ? 1 : 0) + (t.split ? '|' + t.split : '') : '';
     if (old && old.getAttribute('data-sig') === sig) return;
     if (old) old.remove();
     main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop', 'qp-slot-no'); });
@@ -51971,21 +52538,59 @@ function _qpShowHint(main, t) {
     const b = t.el;
     ov.style.top = b.offsetTop + 'px';
     ov.style.height = b.offsetHeight + 'px';
-    if (t.zone === 'combine') {
-        const rows = _qpCurrentRows(main);
-        const fam = b.getAttribute('data-qp-family');
-        const adding = _qpDrag.key ? _qpCardPieces(main, rows, _qpDrag.key) : [_qpDrag.piece];
-        const names = _qpCardPieces(main, rows, t.key).concat(adding)
-            .filter(function (p, i, a) { return a.indexOf(p) === i && _qpPieceShown(main, fam, p); });
-        const all = _qpFamPieces(main, fam).filter(function (p) { return _qpPieceShown(main, fam, p); });
-        const label = names.length === all.length ? QP_FAMILIES[fam].label
-            : names.map(function (p) { return QP_FAMILIES[fam].pieces.find(function (x) { return x.key === p; }).label; }).join(' + ');
+    // Replace is red whether or not it is allowed (Ethan: something is being
+    // taken off); refused, it says why instead of what goes where.
+    const replaceHtml = function () {
+        return '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></span>'
+            + (t.why ? '<span class="qp-ov-big">Can\'t Replace</span><span class="qp-ov-small">' + escapeHtml(t.why) + '</span>'
+                : '<span class="qp-ov-big">Drop to Replace</span><span class="qp-ov-small">' + escapeHtml(_qpRetireWords(main, b, t.key)) + '</span>');
+    };
+    if (t.split === 'replace') {
+        ov.className = 'qp-ov qp-ov-split';
+        ov.innerHTML = '<div class="qp-ov-half qp-ov-combine' + (t.zone === 'combine' ? ' on' : '') + '">'
+            + '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
+            + '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Makes One Card: ' + escapeHtml(_qpCombineLabel(main, b, t)) + '</span></div>'
+            + '<div class="qp-ov-half qp-ov-combine qp-ov-no qp-ov-replace' + (t.zone === 'replace' ? ' on' : '') + (t.why ? ' qp-ov-refused' : '') + '">'
+            + replaceHtml() + '</div>';
+    } else if (t.zone === 'replace') {
+        ov.className = 'qp-ov qp-ov-combine qp-ov-no qp-ov-replace' + (t.why ? ' qp-ov-refused' : '');
+        ov.innerHTML = replaceHtml();
+    } else if (t.split) {
+        // Both halves, labelled; the one under the pointer lit.
+        const other = b.getAttribute('data-qp-label') || t.key;
+        ov.className = 'qp-ov qp-ov-split';
+        ov.innerHTML = '<div class="qp-ov-half qp-ov-combine' + (t.zone === 'combine' ? ' on' : '') + '">'
+            + '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
+            + '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Makes One Card: ' + escapeHtml(_qpCombineLabel(main, b, t)) + '</span></div>'
+            + '<div class="qp-ov-half qp-ov-combine qp-ov-swap' + (t.zone === 'swap' ? ' on' : '') + (t.why ? ' qp-ov-no' : '') + '">'
+            + '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></span>'
+            + (t.why ? '<span class="qp-ov-big">Can\'t Swap Here</span><span class="qp-ov-small">' + escapeHtml(t.why) + '</span>'
+                : '<span class="qp-ov-big">Drop to Swap</span><span class="qp-ov-small">Trades Places With ' + escapeHtml(other) + '</span>') + '</div>';
+    } else if (t.zone === 'swap') {
+        const other = b.getAttribute('data-qp-label') || t.key;
+        ov.className = 'qp-ov qp-ov-combine qp-ov-swap' + (t.full ? ' qp-ov-no' : '');
+        ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></span>'
+            + (t.full ? '<span class="qp-ov-big">Can\'t Swap Here</span><span class="qp-ov-small">' + escapeHtml(t.why) + '</span>'
+                : '<span class="qp-ov-big">Drop to Swap</span><span class="qp-ov-small">Trades Places With ' + escapeHtml(other) + '</span>');
+    } else if (t.zone === 'combine') {
+        const label = _qpCombineLabel(main, b, t);
         ov.className = 'qp-ov qp-ov-combine';
         ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
             + '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Makes One Card: ' + escapeHtml(label) + '</span>';
     } else {
         ov.className = 'qp-ov qp-ov-edge ' + (t.zone === 'left' ? 'l' : 'r') + (t.full ? ' full' : '');
         let words = t.full ? 'Row Is Full · 3 Max' : t.fromHere ? 'Take Out · Place Here' : 'Place Beside';
+        // Full because of a minimum, not the three-card limit: say whose.
+        if (t.full && t.row != null) {
+            const rr = _qpCurrentRows(main)[t.row];
+            const dk0 = _qpDrag.key || '';
+            const others = rr ? rr.items.filter(k => k !== dk0 && _qpIsShown(main, k)) : [];
+            const mk = others.concat(dk0 ? [dk0] : []).find(k => _qpMinW(k));
+            if (mk && others.length < QP_MAX_PER_ROW) {
+                const mb = main.querySelector('[data-qp-block="' + mk + '"]');
+                words = 'Row Is Full · ' + ((mb && mb.getAttribute('data-qp-label')) || mk) + ' Needs ½ Row';
+            }
+        }
         // Carrying a widget: say the size it will be there (Ethan: "inform
         // when dragging"). The row shares evenly once a card joins it.
         const dk = _qpDrag.key || (_qpDrag.fam + ':' + _qpDrag.piece);
@@ -51993,7 +52598,9 @@ function _qpShowHint(main, t) {
             const rows = _qpCurrentRows(main);
             const row = rows[t.row];
             const n = row ? row.items.filter(function (k) { return k !== dk && _qpKeyShown(main, k); }).length + 1 : 1;
-            words += ' · ' + ({ 1: 'Full Row', 2: '½ Row', 3: '⅓ Row' }[n] || '');
+            // Its share there: an even split, but never past its own size.
+            const share = Math.min(_qpMaxW(dk), 1 / n);
+            words += ' · ' + (share < 0.34 ? '⅓ Row' : share < 0.51 ? '½ Row' : 'Full Row');
         }
         ov.innerHTML = '<span>' + words + '</span>';
     }
@@ -52051,14 +52658,14 @@ function _qpWireDrag(main) {
     });
     main.addEventListener('dragover', function (e) {
         if (!_qpEditing || !_qpDrag) return;
-        const t = _qpTargetAt(main, e.target, e.clientX);
+        const t = _qpTargetAt(main, e.target, e.clientX, e.clientY);
         _qpShowHint(main, t);
         if (!t || t.full) return;
         e.preventDefault();
     });
     main.addEventListener('drop', function (e) {
         if (!_qpEditing || !_qpDrag) return;
-        const t = _qpTargetAt(main, e.target, e.clientX);
+        const t = _qpTargetAt(main, e.target, e.clientX, e.clientY);
         const drag = _qpDrag;
         _qpDrag = null;
         _qpClearSlots(main);
@@ -52195,7 +52802,7 @@ function _qpResetNow() {
     // The default has no added widgets: they go, not to the bottom of the page.
     _qpEnsureWidgets(main, []);
     _qpSave(null);
-    _qpKeepScroll(function () { _qpBuild(main, _qpDefaults(_qpOriginalKeys(main))); });
+    _qpKeepScroll(function () { _qpBuild(main, _qpDefaultRows(main, _qpOriginalKeys(main))); });
     main.classList.remove('qp-custom');
     if (_qpEditing) _qpRenderControls(main);
 }
@@ -53627,7 +54234,7 @@ const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
     claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', '_qpClaimsReload'],
     recycle:       ['checkRecycleReminders'],
-    variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
+    variance:      ['checkVarianceReminders', 'checkVarianceDmReminders', '_qpWReloadVariance'],
     bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
     comments:      ['fetchAndDisplayStoreComment'],
     announcements: ['loadCMS'],
@@ -53639,7 +54246,7 @@ const _RT_TOOL_CHECKS = {
     // every client and no row appeared until the next login ran the sweep.
     // loadPatchNotes still runs after, to refresh an already-open hub.
     patch:         ['checkForNewPatchNotes', 'loadPatchNotes'],
-    kpi:           ['checkKpiDueReminders'],
+    kpi:           ['checkKpiDueReminders', '_qpWReloadKpis'],
     // The morning cron broadcasts once it has written the drafts, so the card
     // appears without a refresh; each approve/skip broadcasts too, so a decision
     // made on the laptop clears the card on the phone.

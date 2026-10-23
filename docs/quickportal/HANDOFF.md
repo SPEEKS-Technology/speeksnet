@@ -150,7 +150,60 @@ designs since have been shown inline in chat.
   + **Remove** (`qpLibraryRemove`). SPEEKS Connect has a **Titles** tab
   (listing-titles `?view=counts` → `titles` per store; `has` per tab drops a
   tab the person lacks, by its Feature Access key); `operations.html#titles`
-  opens it. **Test login:** SPEEKS
+  opens it. **Workspace widgets** (2026-10-23): Monthly Breakdown (the latest
+  month the DM has filled — the tool has NO goals or projection — Net Profit
+  first, four key rows with change vs the month before and place among the 5
+  stores; one tab, no pieces; 5 GETs cached 10 min), Store KPIs (Weekly /
+  Monthly by the reminder's own due rules; done = the Store Total judged by
+  `_kpiThresholdCls` via the new shared `_kpiStoreTotals`), Variance Replies
+  (To Explain / DM Notes, manager side, by `_vrMaybePopup`'s rules). Margin
+  Replies was deleted from the site in its own session (a1ce290). The drawer
+  has sections (`_QP_LIB_SECTIONS`: Operations, Workspace). ⚠️ speeks.js is
+  CRLF in the working copy now — scripted edits must match `\r\n`.
+  **2026-10-23 later:** every widget is ⅓/½ now (Claims and Monthly
+  Breakdown lost Full). Variance Replies gets a made-up report on the test
+  login (`_qpVarianceSample`). **First word capitalised after numbers**
+  (Ethan's site-wide rule, as the feed's "1 Delete request…"):
+  `_qpCapLines` fixes `.qp-hl-big small, .qp-hl-sub, .qp-hl-bs` after every
+  headline / Action Items / widget draw, skipping letters glued to a number
+  ("$55.4k", "3d"). A DOM scan of all five pages (test manager, visible tabs)
+  found the rest only in B2B deal cards and the Call Backs header — fixed at
+  the source ("33 Units", "$450 Offer", "3d In stage", "2 You can answer").
+  Not scanned: modals, panels and other roles' views.
+  **Sizes, final (2026-10-23):** Variance, Store KPIs, Monthly Breakdown ⅓
+  only; Claims and the Operations widgets ⅓·½. `_QP_MIN_W` gives the
+  Performance Chart a ½ minimum: `_qpRowLimit` caps its row at 2 cards,
+  `_qpRoomIn` / Add / pairing respect it, and Card Widths offers only splits
+  that keep every card within its min and max. `_qpPairWidgets` also fixes
+  rows over their limit and rows of only-capped cards that leave a gap.
+  **Drop to Swap:** a whole card dropped on the middle of a card from another
+  group trades places with it (`_qpSwapRows`; widths kept, reset to equal if
+  they break a size); if a row can't take its new card the overlay goes red
+  with the reason (`_qpRowWhyNot`). **Split middle (10-23):** a whole card
+  over the middle of a card from its OWN group (where either makes sense)
+  gets both: top half Combine, bottom half Swap (`_qpTargetAt` takes the
+  pointer's y; target carries `split: true`; `_qpShowHint` draws
+  `.qp-ov-split` with two labelled `.qp-ov-half`s, the live one lit, a
+  refused swap red). A tab dragged out (a piece) still only combines.
+  **No full-width cards (10-23):** every card is held to ½ unless already
+  held tighter (⅓-only Variance/KPIs/Monthly; chart min ½ so exactly ½):
+  `_QP_DEFAULT_MAXW` in `_qpMaxW`. Defaults are now two to a row
+  (feed+actions, command+district, chart+leaderboard, all equal) and go
+  through `_qpPairWidgets` too (`_qpDefaultRows`), so a manager's lone
+  Command Center joins the feed row. When a short row has nowhere to go,
+  `_qpPairWidgets` BORROWS a ½-capable card from the nearest three-card row
+  whose other two still fill it. Due Dates on its own is ⅓
+  (`_QP_PIECE_MAXW['feed/due']`; a combined card takes its widest piece's cap).
+  **Replace (10-23):** something NEW (a drawer widget, or a tab dragged out)
+  over a card's middle shows red "Drop to Replace" (`t.zone === 'replace'`).
+  Over a split-out card of the tab's own group the middle splits: top
+  Combine, bottom Replace (`split: 'replace'`). `_qpRetire` puts the new card
+  in its place: a widget's own card takes the whole widget off (back in the
+  drawer); a split-out card's tabs go home (built-in ones too, e.g. To Do back
+  into Your Feed). Built-in cards themselves refuse ("… Stays on Your Page"),
+  and so does a replace that would leave a gap (`_qpReplaceWhyNot`).
+  The Leaderboard card is white on its own (`.ew-perf-lb .ew-standings`).
+  **Test login:** SPEEKS
   Connect gets SAMPLE counts when `_speeksTestSession` and no PIN (like
   `_lvTestPayload`).
   Not yet: drawer categories, DM oversight versions, more widgets (Variance,
