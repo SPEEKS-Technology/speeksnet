@@ -1,6 +1,32 @@
 # Handoff: Picture Quality local model (as of 2026-10-21)
 
-## ⚡⚡⚡⚡⚡ NEWEST (2026-10-22 night) — free local-model prefill BUILT, batch waiting on Ethan's go
+## ⚡⚡⚡⚡⚡⚡ NEWEST (2026-10-23) — round 5 READY, Ethan starts it himself
+
+- **Labelled:** 104 of the 112 local-prefill listings (8 skipped: 3 consoles, 5 Windows
+  laptops, still in More For Training). He changed the local model's answer on 34% of
+  the 1,038 photos (lenses 53%), so the prefill was corrected, not rubber-stamped.
+- **Renames:** labels store a shot's NAME as text, so a guide rename strands old labels.
+  He renamed Item Lots "… of Box" → "… of Item" and the Gaming PC internals shot;
+  labels were remapped sheet by sheet, plus a few stray 10-17 names, and the guide's
+  double-spaced Item Lots names fixed (before-copy `pq-train\label-renames-20261023-before.json`).
+  **Any future guide rename needs the same remap before build_data.**
+- **gold.sql fix (`484ca10`):** listings with only Confirm Shots labels (no Opus grade)
+  were silently dropped; confirmed is now a full join. Gold = 618 listings.
+- **Data:** train 3,404 photos / 419 listings, test 899 / 112, reviewed 147. All 94 old
+  test listings stayed in test; 18 new. Round 4 files kept in `data\round4-cleaned-jsonl`.
+- **Round 5's bar = 75%:** round 4 re-scored on the new test (`runs\rescore-round4-r5test`);
+  still 78% on the old 705 photos. Weak: lenses 51, item lots 47, motherboards 64,
+  GPUs 67, consoles 68, misc 70. No new item-lot or misc labels this round.
+- **Round 5 = round 4's recipe on more data** (prompt 4 + contact sheet, rank 16, lr 1e-4,
+  3 epochs), so the comparison is data only. Fit-check OK: 11.1 GB, 27.4 s a step,
+  426 steps an epoch → ~9.7 h training + ~40 min scoring ≈ **10.5 h**.
+- **Prepped:** `runs\tonight.log` renamed `tonight-round4.log`; keep-awake.ps1 cap 10 → 12 h;
+  finish-and-shutdown.ps1 writes `round5-finish.txt`. `runs\baseline` exists, so
+  run-tonight skips it (fine: the re-score is the comparison).
+- **To start (Ethan):** plugged in, lid open; start keep-awake.ps1 (and finish-and-shutdown.ps1
+  if he wants the laptop off after), then `tools\pq-train\run-tonight.cmd`.
+
+## ⚡⚡⚡⚡⚡ (2026-10-22 night) — free local-model prefill BUILT, batch waiting on Ethan's go
 
 - **Branch is now `Main-November-Update-3---Ethan`**, checked out in the main
   `C:\Users\User\Documents\GitHub\speeksnet` folder. Update 2 and the
