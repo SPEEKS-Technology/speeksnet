@@ -25327,15 +25327,29 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 /* --- Customize bar --- */
 /* First thing in <main> now, above High Priority — no negative top margin to
    tuck it under the banner any more. */
-.qp-bar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 10px; margin: 0 0 14px; }
+/* THE CORNER BUTTON (Ethan, 2026-10-22): round icon buttons pinned to the
+   bottom-right of the window, so Customize is reachable wherever you have
+   scrolled to — and in edit mode Save is too, which matters when you've just
+   dragged a card to the bottom of the page. Out of the page flow, so it takes
+   no row of its own above the cards any more.
+   SMALL, AND IN THE GUTTER (Ethan, 2026-10-22: it sat over a card's corner).
+   .main-content has 50px of right padding, so a 30px button 10px from the
+   window's edge lives in that empty strip and never covers a card. Reset
+   stacks ABOVE Save rather than beside it, which would need twice the width.
+   z-index 100: over the cards, UNDER the side panels (101) that slide in
+   from the same edge, so an open Checklist isn't wearing a button. */
+.qp-bar { position: fixed; right: 10px; bottom: 18px; z-index: 100; display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 0; }
 /* Just the two buttons in edit mode — no sentence of instructions (Ethan,
    2026-10-21): the handles and drop bars say what to do. */
 .qp-btn {
-    font: inherit; font-size: 13px; font-weight: 600; min-height: 34px; padding: 0 14px; border-radius: 9px; cursor: pointer;
-    border: 1px solid #d5dce4; background: #fff; color: #1a1c1e;
+    width: 30px; height: 30px; padding: 0; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+    border: 1px solid #d5dce4; background: #fff; color: #1a1c1e; box-shadow: 0 3px 10px rgba(16,24,40,.14);
 }
+.qp-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .qp-btn:hover { background: #f1f4f7; }
 .qp-btn[hidden] { display: none; }
+.qp-btn-main .qp-ico-save, .qp-bar.is-editing .qp-btn-main .qp-ico-edit { display: none; }
+.qp-bar.is-editing .qp-btn-main .qp-ico-save { display: block; }
 .qp-bar.is-editing .qp-btn-main { background: #1f9d57; border-color: #1f9d57; color: #fff; }
 .qp-bar.is-editing .qp-btn-main:hover { background: #178048; }
 
@@ -25544,7 +25558,11 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-hl-link:hover { text-decoration: underline; }
 /* Live: "Open Full Dashboard" on the left, the board's own Daily Breakdown and
    full-screen buttons on the right (.bd-open / .lv-full keep their own look). */
-.qp-hl-footrow { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; }
+/* padding-top 8, not 10 (2026-10-22): a one-tab Live card on Yesterday or
+   Month came to 352px with 10 — the card's content is the same height at any
+   width, so the 2px had to come from somewhere fixed, and this gap is only a
+   floor (margin-top: auto pushes the row down whenever there is room). */
+.qp-hl-footrow { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; }
 .qp-hl-footrow .qp-hl-link { margin-top: 0; padding: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-hl-footrow .qp-hl-tools { flex: none; }
 .qp-hl-tools { display: inline-flex; align-items: center; gap: 6px; }
@@ -25624,4 +25642,78 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 @media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .qp-row { flex-direction: column; }
     .qp-cell { flex: none !important; }
+}
+
+/* FEED TABS (Ethan, 2026-10-22) — All · Due · To Do · News on the QuickPortal
+   feed card (_samRenderFeedTabs). A grid, not the segment's inline-flex, so the
+   four buttons are always the SAME WIDTH whatever their label and count say.
+   [hidden] needs saying: .ew-seg's display would otherwise win over it. */
+.speeks-action-menu .sam-ftabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 9px 12px 2px; flex: none; }
+.speeks-action-menu .sam-ftabs[hidden] { display: none; }
+.speeks-action-menu .sam-ftabs .toggle-btn { white-space: nowrap; text-align: center; padding: 6px 4px; overflow: hidden; text-overflow: ellipsis; }
+.sam-ftabs .toggle-btn.active .qp-ai-cnt { color: #647082; }
+/* A group label on the All tab — the same caption as "Next Up" on the Action Items cards. */
+.speeks-action-menu .sam-fsec { padding: 8px 12px 2px; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+.speeks-action-menu .sam-fsec:first-child { padding-top: 4px; }
+/* FEED PIECES: the Due / To Do / News markers the layout moves between feed
+   cards. Present and "shown" (the layout tests display), but take no room. */
+.speeks-action-menu .sam-fpiece { display: block; width: 0; height: 0; overflow: hidden; flex: none; pointer-events: none !important; }
+
+/* RESET TO DEFAULT asks first (qpReset) — an HTML dialog, never confirm(). */
+.qp-ask { position: fixed; inset: 0; z-index: 10000; background: rgba(15, 23, 42, .45); display: grid; place-items: center; padding: 16px; }
+.qp-ask-card { width: min(380px, 100%); background: #fff; border-radius: 16px; padding: 22px 22px 18px; box-shadow: 0 18px 50px rgba(16,24,40,.25); text-align: center; }
+.qp-ask-ico { width: 42px; height: 42px; margin: 0 auto 12px; border-radius: 50%; background: #fdecec; color: var(--red-alert); display: grid; place-items: center; }
+.qp-ask-ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-ask-t { font-size: 16px; font-weight: 800; color: var(--slate-charcoal); }
+.qp-ask-d { margin-top: 6px; font-size: 13px; line-height: 1.5; color: #647082; }
+.qp-ask-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+.qp-ask-btns button { font: inherit; font-size: 13px; font-weight: 700; min-height: 38px; border-radius: 10px; cursor: pointer; }
+.qp-ask-no { border: 1px solid #d5dce4; background: #fff; color: #1a1c1e; }
+.qp-ask-no:hover { background: #f1f4f7; }
+.qp-ask-yes { border: 1px solid var(--red-alert); background: var(--red-alert); color: #fff; }
+.qp-ask-yes:hover { filter: brightness(.93); }
+
+/* ONE TAB LOOK (Ethan, 2026-10-22: "switch the tabs to all be designed like
+   the command center tabs"). Every tab bar and switch on the QuickPortal takes
+   .cc-seg's design (line ~11557): a light green track, each option its own
+   white bordered button, the chosen one pale green with an emerald edge. Two
+   sizes, because they are two jobs:
+     tab bars  — Your Feed, Action Items: what the card shows. The Command
+                 Center's size, sharing the card's width like a combined
+                 Command Center card (max 440px, every button the same width).
+     switches  — Daily/Weekly, Today/Yesterday/Month, 4-Week/Monthly,
+                 Averages/My Team, Revenue/Net Profit: a filter on what is
+                 shown. Same look, smaller, so a 350px card stays 350px:
+                 26px tall, what the old switch was (the Live card has no
+                 room to spare — 30px made the Command Center 353).
+   !important where .cc-seg needs it: the global .toggle-btn rules mark
+   padding/font/radius and the active background/colour !important. */
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs).ew-seg { background: #f3f7f4; border: 1px solid #e4ece7; border-radius: 12px; padding: 4px; gap: 5px; max-width: 440px; }
+[data-qp-block] .qp-ai-tabs.ew-seg { display: flex; flex-wrap: nowrap; align-self: stretch; }
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn {
+    flex: 1 1 0; min-width: 0; display: block; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    padding: 7px 8px !important; font-size: 11.5px !important; font-weight: 750 !important; border-radius: 8px !important;
+    background: #fff; border: 1px solid #dde6e0; color: #5b6b64; box-shadow: none;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn:hover:not(.active) { border-color: #c3d6cb; color: var(--slate-charcoal); box-shadow: 0 1px 2px rgba(16, 24, 40, .06); }
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn.active {
+    background: #e8f7ee !important; color: #146c3c !important; font-weight: 800 !important;
+    border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10);
+}
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn.active .qp-ai-cnt { color: #1f9d57; }
+
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs),
+[data-qp-block] .qp-hl-switch { display: inline-flex; background: #f3f7f4; border: 1px solid #e4ece7; border-radius: 9px; padding: 1px; gap: 3px; overflow: visible; }
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs) .toggle-btn,
+[data-qp-block] .qp-hl-switch button {
+    padding: 2px 10px !important; font-size: 11px !important; font-weight: 750 !important; line-height: 16px; border-radius: 7px !important;
+    background: #fff; border: 1px solid #dde6e0; color: #5b6b64; box-shadow: none;
+}
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs) .toggle-btn:hover:not(.active),
+[data-qp-block] .qp-hl-switch button:hover:not(.on) { background: #fff; border-color: #c3d6cb; color: var(--slate-charcoal); }
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs) .toggle-btn.active,
+[data-qp-block] .qp-hl-switch button.on {
+    background: #e8f7ee !important; color: #146c3c !important; font-weight: 800 !important;
+    border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35);
 }

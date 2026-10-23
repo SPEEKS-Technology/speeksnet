@@ -77,6 +77,31 @@ designs since have been shown inline in chat.
   Goals & Initiatives. Two or more pieces → "Action Items" with tabs + counts. The
   rows stay in the card, hidden (the layout reads them); in Customize the TABS
   are the drag handles (`data-qp-drag-piece`). Managers only, desktop only.
+- **Your Feed tabs and pieces** (2026-10-22): Customize users on desktop get
+  All · Due · To Do · News tabs (equal width, a grid), and All shows the three
+  groups under labels. Due = a reminder with `kind: 'due'` in
+  `_samReminderCfg` (always red); News = announcements, messages, patch notes
+  and `noDue` reminders; To Do = the rest. The feed is a third family
+  (`QP_FAMILIES.feed`): its pieces are empty markers (`.sam-fpiece` in
+  index.html) the layout moves between cards, and `_samPaintFeedCard` paints
+  each feed card from the markers it holds. One-kind cards are titled by the
+  kind and have no tabs; in Customize the tabs are the drag handles.
+  Not done: real due DATES and Overdue / Today / This Week groups (claims, B2B
+  pricing and variance need to stamp their dates on their bubbles first).
+- **Customize is a corner button** (2026-10-22): 30px round icons fixed
+  bottom-right in `.main-content`'s 50px right padding (never over a card);
+  Reset stacks above Save. z-index 100, under the side panels (101).
+- **One tab look** (2026-10-22): every tab bar and switch on the QuickPortal
+  uses the Command Center's `.cc-seg` design (styles.css, ONE TAB LOOK at the
+  end). Tab bars (feed, Action Items) at the CC size, max 440px; small switches
+  (Daily/Weekly, Today/Yesterday/Month, chart and leaderboard toggles) the same
+  look at 26px tall so cards stay 350. The one-tab Live card was 351–352px on
+  Yesterday/Month (older than the tab change); `.qp-hl-footrow` padding-top
+  10→8 fixed it — 350 everywhere at 1280/1366/1440.
+- **Reset to Default asks first** (2026-10-22): an HTML dialog (`qpReset` →
+  `_qpResetNow`), Cancel focused; Escape and the backdrop cancel.
+- **Quick links removed for everyone** (2026-10-22): B2B Records and Training,
+  links and catalog keys; the DM's Resources bar went with them.
 - **Headline views are for Customize users only** (`_qpHeadlinesOn`): everyone
   else, and the store TV board, keep the full Command Center panels and rows.
 - Layout saves **per person in localStorage** (`speeksQpLayout_<name>`), not the
@@ -141,6 +166,12 @@ designs since have been shown inline in chat.
   the inline `display:flex` the originals get — give shells layout in CSS.
 - The original Command Center's `data-qp-block` is on the `.ew-dash` wrapper,
   not on `#ccWidget` — selectors need both (`:is(...)`).
+- **Real drags in the pane under emulation** (2026-10-22): `left_click_drag`
+  scales its START by viewport/800 (1.8 at 1440) but its END by ~1.22, so
+  compute both from `getBoundingClientRect` and divide separately. A missed
+  drag that started on page text leaves a selection behind, and the next drag
+  becomes a text drag (dragstart target is a #text node) — clear it with
+  `getSelection().removeAllRanges()` first. Log dragstart/dragover/drop.
 - Every new line on a headline card costs height: measure all three Live modes
   × every tab at 1/3 width before calling it done (target 350).
 

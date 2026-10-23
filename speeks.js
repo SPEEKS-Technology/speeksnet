@@ -44445,10 +44445,13 @@ const FEATURE_CATALOG = [
     { key: 'b2b-capture-download',     label: 'B2B Capture Tool (Download)',   tab: 'widgets', group: 'Operations', def: [] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
-    //      the link just inherits it. ----
+    //      the link just inherits it.
+    //      B2B Records (a Drive folder, on every bar) was removed for everyone
+    //      on 2026-10-22 at Ethan's word -- links and keys both, not parked --
+    //      and Training the same day, which emptied the DM's Resources bar, so
+    //      that bar went too. ----
     { key: 'hb-ceo-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
-    { key: 'hb-ceo-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-tom-folder', label: 'MOCD Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
@@ -44457,39 +44460,26 @@ const FEATURE_CATALOG = [
     { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-tom-tom-folder', label: 'MOCD Folder', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
-    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
     { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
-    { key: 'hb-res-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
-    { key: 'hb-res-training', label: 'Training', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
     { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-asm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
     { key: 'hb-lee-passwords', label: 'Passwords', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
     { key: 'hb-lee-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
     { key: 'hb-lee-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
     { key: 'hb-lee-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
-    { key: 'hb-lee-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
-    { key: 'hb-lee-training', label: 'Training', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
     { key: 'hb-ovl-passwords', label: 'Passwords', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
     { key: 'hb-ovl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
     { key: 'hb-ovl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
     { key: 'hb-ovl-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
-    { key: 'hb-ovl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
-    { key: 'hb-ovl-training', label: 'Training', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
     { key: 'hb-wsp-passwords', label: 'Passwords', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
     { key: 'hb-wsp-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
     { key: 'hb-wsp-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
-    { key: 'hb-wsp-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
-    { key: 'hb-wsp-training', label: 'Training', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
     { key: 'hb-mpl-passwords', label: 'Passwords', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
     { key: 'hb-mpl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
     { key: 'hb-mpl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
-    { key: 'hb-mpl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
-    { key: 'hb-mpl-training', label: 'Training', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
     { key: 'hb-bal-passwords', label: 'Passwords', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
     { key: 'hb-bal-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
     { key: 'hb-bal-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
-    { key: 'hb-bal-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
-    { key: 'hb-bal-training', label: 'Training', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
 ];
 
 // The settings UI only lets you toggle a feature that's in the list above — but
@@ -49964,6 +49954,18 @@ const QP_FAMILIES = {
             { key: 'dmlisting', label: 'Listing Goals', feature: 'widget-dm-listing-goals' },
         ],
     },
+    // Your Feed's three kinds (Ethan, 2026-10-22). A piece here is an empty
+    // marker in index.html (.sam-fpiece, already tagged data-qp-piece), not
+    // content: the feed renderer shows a card the kinds whose markers it holds
+    // (FEED PIECES in the SPEEKS ACTION MENU block).
+    feed: {
+        label: 'Your Feed', kind: 'feed',
+        pieces: [
+            { key: 'due', label: 'Due Dates' },
+            { key: 'todo', label: 'To Do' },
+            { key: 'news', label: 'News' },
+        ],
+    },
 };
 // The shell's slots, by the class of the container a piece's element lives in
 // at home. Each element goes into the shell's container of the same class.
@@ -50105,6 +50107,17 @@ function _qpMakeShell(main, key) {
             // back to (Ethan, 2026-10-21) — see _tabSwitch.
             + '<div class="cc-tabbar"><div class="ew-seg cc-seg"></div></div>'
             + '<div class="cc-summary"></div><div class="cc-strips"></div><div class="cc-body"></div>';
+    } else if (QP_FAMILIES[k.fam].kind === 'feed') {
+        // The original feed card's own header (icon, title, pip, All
+        // announcements), ids stripped, then its tab bar and list. The feed
+        // renderer fills it (_samPaintFeedCard).
+        el.className = 'speeks-action-menu qp-part qp-shell';
+        const head = main.querySelector('[data-qp-block="feed"] .sam-card-h');
+        el.innerHTML = '<div class="sam-board"><div class="sam-card">'
+            + (head ? head.outerHTML : '')
+            + '<div class="sam-ftabs ew-seg" role="group" aria-label="Feed filter" hidden></div>'
+            + '<div class="sam-feed"><div class="sam-empty">Syncing your feed...</div></div></div></div>';
+        el.querySelectorAll('[id]').forEach(function (n) { n.removeAttribute('id'); });
     } else {
         el.className = 'speeks-action-menu qp-part qp-shell';
         el.innerHTML = '<div class="sam-board"><div class="sam-rail"><div class="sam-card"></div></div></div>';
@@ -50207,6 +50220,9 @@ function _qpDistribute(main, rows) {
     });
     _qpRenderHeadlines(rows);
     _qpRenderActions(rows);
+    // Feed cards repaint for what they now hold — once the feed has painted at
+    // all, so a card never says "all caught up" before its data has arrived.
+    if (typeof _samPainted !== 'undefined' && _samPainted) _samRenderFeedNow(rows);
 }
 
 // The saved rows, reconciled with the blocks this page actually has: a key that
@@ -51383,13 +51399,19 @@ function _qpSetEditing(main, on) {
     // Action Items cards keep their card view in Customize mode; their tabs
     // become drag handles (and stop being them again), so redraw.
     if (typeof _qpRenderActions === 'function') _qpRenderActions();
+    // So do the feed's tabs.
+    if (typeof _samPainted !== 'undefined' && _samPainted) renderActionFeedNow();
     const bar = document.getElementById('qpBar');
     if (bar) bar.classList.toggle('is-editing', _qpEditing);
     const btn = document.getElementById('qpEditBtn');
     if (btn) {
         // "Save", though every change is already saved as it is made: it is the
         // word people expect on the button that ends an edit (Ethan, 2026-10-21).
-        btn.textContent = _qpEditing ? 'Save' : 'Customize';
+        // An icon since 2026-10-22 (the corner button) — the word lives on as its
+        // name and tooltip; the CSS swaps the sliders for a tick in edit mode.
+        const word = _qpEditing ? 'Save' : 'Customize';
+        btn.title = word;
+        btn.setAttribute('aria-label', word);
         btn.setAttribute('aria-pressed', String(_qpEditing));
     }
     const reset = document.getElementById('qpResetBtn');
@@ -51401,7 +51423,32 @@ function qpToggleEdit() {
     if (main) _qpSetEditing(main, !_qpEditing);
 }
 
+// Reset to Default asks first (Ethan, 2026-10-22: "give a pop up warning"),
+// because it throws away every move, width and split-out card at once and there
+// is no undo. An HTML dialog, never confirm(): the browser's dialogs are banned
+// here and dead in the Claude pane. Cancel has the focus, so Enter is safe;
+// Escape and a click on the dim background cancel too.
 function qpReset() {
+    if (document.getElementById('qpResetAsk')) return;
+    const ov = document.createElement('div');
+    ov.id = 'qpResetAsk';
+    ov.className = 'qp-ask';
+    ov.innerHTML = '<div class="qp-ask-card" role="alertdialog" aria-modal="true" aria-labelledby="qpResetAskT" aria-describedby="qpResetAskD">'
+        + '<div class="qp-ask-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></div>'
+        + '<div class="qp-ask-t" id="qpResetAskT">Reset to Default?</div>'
+        + '<div class="qp-ask-d" id="qpResetAskD">Every card goes back to where it started. Your card widths and any cards you split out will be lost. This can\'t be undone.</div>'
+        + '<div class="qp-ask-btns"><button type="button" class="qp-ask-no" onclick="qpResetClose()">Cancel</button>'
+        + '<button type="button" class="qp-ask-yes" onclick="qpResetClose(); _qpResetNow()">Reset Layout</button></div></div>';
+    ov.addEventListener('click', function (e) { if (e.target === ov) qpResetClose(); });
+    ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') qpResetClose(); });
+    document.body.appendChild(ov);
+    ov.querySelector('.qp-ask-no').focus();
+}
+function qpResetClose() {
+    const ov = document.getElementById('qpResetAsk');
+    if (ov) ov.remove();
+}
+function _qpResetNow() {
     const main = _qpMain();
     if (!main) return;
     _qpSave(null);
@@ -51567,11 +51614,13 @@ function renderActionFeedNow() {
     _samRenderFeedNow();
 }
 
-function _samRenderFeedNow() {
+// rows: the QuickPortal layout being applied, when _qpDistribute calls this
+// mid-build (the new rows are not in the page yet); otherwise the page's own.
+function _samRenderFeedNow(rows) {
     if (_samRaf) { cancelAnimationFrame(_samRaf); _samRaf = null; }
     clearTimeout(_samDebounce);
-    const feed = document.getElementById('samFeed');
-    if (!feed) return; // not a manager / menu not present
+    const cards = _samFeedCards(rows);
+    if (!cards.length) return; // not a manager / menu not present
 
     // Auto-archived by the onboarding cutoff — see _samAnnHidden in loadCMS.
     // Dropped here rather than at each use, so the pip, the feed list and the
@@ -51638,7 +51687,6 @@ function _samRenderFeedNow() {
     // (rather than stacking in the feed). Non-priority announcements flow normally.
     const all = rems.concat(notes, anns.filter(a => !a.read && a.rowId !== heroRowId && !a.priority))
         .sort((a, b) => (b.dateMs || 0) - (a.dateMs || 0));
-    const items = all.slice(0, 8);
 
     // Compact "new patch notes" row — patch notes collapse to one entry in the
     // main feed (the full notes live in the hub). Only when there are unseen ones.
@@ -51657,18 +51705,54 @@ function _samRenderFeedNow() {
     // "Active" = anything not a read announcement (drives the pip). No bulk
     // mark-all — each item must be read individually.
     const activeCount = rems.length + notes.length + anns.filter(a => !a.read).length + (patchUnseen ? 1 : 0);
-    const pip = document.getElementById('samAnnPip');
-    if (pip) { pip.textContent = activeCount; pip.style.display = activeCount > 0 ? 'inline-grid' : 'none'; }
 
-    if (!items.length && !patchRow) {
-        _samReconcileFeed(feed, [{ key: 'empty', html: '<div class="sam-empty">You\'re all caught up.</div>' }]);
-        // Must run on this path too: a caught-up feed is exactly when the deck
-        // looked lopsided, because the early return skipped the rail sync.
-        _samSyncRailFill();
+    const ctx = { all, patchRow, patchUnseen, activeCount, tabsOn: _samFeedTabsOn(), showStoreChip: _samIsMSM() };
+    cards.forEach(c => _samPaintFeedCard(c, ctx));
+    _samAddReadFull();
+    _samSyncRailFill();
+}
+
+// One feed card: the original "Your Feed", or one split out of it on the
+// QuickPortal (FEED PIECES below). It shows only the kinds it holds.
+function _samPaintFeedCard(c, ctx) {
+    const feed = c.root.querySelector('.sam-feed');
+    if (!feed) return;
+    const whole = c.kinds.length === _SAM_FEED_KINDS.length;
+    const has = k => c.kinds.indexOf(k) !== -1;
+    // FEED TABS (QuickPortal card view only — see _samFeedTabsOn): the same
+    // items, grouped Due / To Do / News. The All tab shows the groups in that
+    // order under a label each, so a deadline is never buried under news that
+    // happens to be newer. The cap is still eight, counted in group order. A
+    // card holding one kind has no tabs — its title says which it is.
+    const showTabs = ctx.tabsOn && c.kinds.length > 1;
+    let tab = showTabs ? (_samFeedTabOf[c.key] || 'all') : 'all';
+    if (tab !== 'all' && !has(tab)) tab = 'all';
+    const grouped = _SAM_FEED_KINDS.map(k => has(k[0]) ? ctx.all.filter(it => _samFeedKind(it) === k[0]) : []);
+    const items = (ctx.tabsOn
+        ? [].concat.apply([], grouped.filter((g, i) => tab === 'all' || tab === _SAM_FEED_KINDS[i][0]))
+        : ctx.all.filter(it => has(_samFeedKind(it)))).slice(0, 8);
+    const counts = { due: grouped[0].length, todo: grouped[1].length, news: grouped[2].length + (has('news') && ctx.patchUnseen ? 1 : 0) };
+
+    const pip = c.root.querySelector('.sam-pip');
+    const n = whole ? ctx.activeCount : counts.due + counts.todo + counts.news;
+    if (pip) { pip.textContent = n; pip.style.display = n > 0 ? 'inline-grid' : 'none'; }
+    const ttl = c.root.querySelector('.sam-fttl');
+    if (ttl) ttl.textContent = c.kinds.length === 1 ? _SAM_FEED_KINDS.find(k => k[0] === c.kinds[0])[1] : 'Your Feed';
+    // "All announcements" belongs to the card that has the announcements.
+    const viewAll = c.root.querySelector('.sam-viewall');
+    if (viewAll) viewAll.style.display = has('news') ? '' : 'none';
+
+    // Patch notes are News: on the tabs they show under All and News only.
+    const showPatch = !!ctx.patchRow && has('news') && (tab === 'all' || tab === 'news');
+    _samRenderFeedTabs(c, showTabs ? tab : null, counts);
+
+    if (!items.length && !showPatch) {
+        const one = tab !== 'all' ? tab : (c.kinds.length === 1 ? c.kinds[0] : '');
+        const none = { due: 'Nothing due.', todo: 'Nothing to do.', news: 'No news.' }[one] || 'You\'re all caught up.';
+        _samReconcileFeed(feed, [{ key: 'empty', html: '<div class="sam-empty">' + none + '</div>' }]);
         return;
     }
 
-    const showStoreChip = _samIsMSM();
     // Each item gets an explicit "Mark read" button (no bulk skip) — a checkmark
     // + label so reading is a deliberate action, not a reflex ✕.
     const readBtn = onclick => `<button class="sam-markread-btn" onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>`;
@@ -51690,8 +51774,20 @@ function _samRenderFeedNow() {
     // a 5s interval — so cards flickered as data streamed in and churned forever.
     // Now unchanged cards are left untouched; only new/changed ones touch the DOM.
     const desired = [];
-    if (patchRow) desired.push({ key: 'patch', html: patchRow });
+    // On the tabs, All puts a label over each group, and the patch row leads
+    // the News group rather than the whole list.
+    let lastKind = null, patchDone = !showPatch;
+    const startGroup = kind => {
+        if (showTabs && tab === 'all' && kind !== lastKind) {
+            lastKind = kind;
+            const label = _SAM_FEED_KINDS.find(k => k[0] === kind)[1];
+            desired.push({ key: 'sec:' + kind, html: `<div class="sam-fsec">${label}</div>` });
+        }
+        if (kind === 'news' && !patchDone) { patchDone = true; desired.push({ key: 'patch', html: ctx.patchRow }); }
+    };
+    if (!showTabs && !patchDone) { patchDone = true; desired.push({ key: 'patch', html: ctx.patchRow }); }
     items.forEach(it => {
+        startGroup(_samFeedKind(it));
         if (it.type === 'rem') {
             // grey = informational rather than a task, so it gets the calm blue dot
             const dotcls = it.dueCls === 'sam-due-red' ? 'urgent'
@@ -51725,7 +51821,7 @@ function _samRenderFeedNow() {
             return;
         }
         if (it.type === 'note') {
-            const chip = (showStoreChip && it.store) ? `<span class="sam-schip">${_samEsc(it.store)}</span>` : '';
+            const chip = (ctx.showStoreChip && it.store) ? `<span class="sam-schip">${_samEsc(it.store)}</span>` : '';
             desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}','unread')">
                 <span class="sam-adot"></span>
                 <div class="sam-a-body">
@@ -51749,10 +51845,75 @@ function _samRenderFeedNow() {
             ${readBtn(`samDismissItem(event,'ann','${it.rowId ? _samEsc(it.rowId) : ''}')`)}
         </div>` });
     });
+    // A patch row with no other news under the eight-item cap still gets its group.
+    if (!patchDone) startGroup('news');
 
     _samReconcileFeed(feed, desired);
-    _samAddReadFull();
-    _samSyncRailFill();
+}
+
+// --- FEED TABS (Ethan, 2026-10-22) ---
+// The QuickPortal feed card gets tabs, like Action Items: All · Due · To Do ·
+// News, each with its count, every button the SAME WIDTH (Ethan: "make sure the
+// feed tab buttons are the same size as one another"). Same people and same
+// screens as the Command Center headlines — Customize users on a desktop.
+// Phones and everyone else keep the one newest-first list.
+//   Due   = a reminder with a deadline (kind: 'due' in _samReminderCfg)
+//   News  = announcements, store messages, patch notes, and the reminders that
+//           are news rather than tasks (noDue: Unlisted B2B Value, Purchase
+//           Request Answered)
+//   To Do = every other reminder: work with no deadline to have missed
+// The tab each card is on is kept for the page, not saved.
+//
+// FEED PIECES: Due / To Do / News split out into cards of their own and
+// combine back, exactly like the Action Items (QP_FAMILIES.feed). A feed piece
+// is no element of its own — it is a slice of the one list — so each is an
+// empty marker (.sam-fpiece) that the layout moves into the card holding it,
+// and this reads which markers a card holds to know what to show. In Customize
+// the tabs are what you drag a piece out by (data-qp-drag-piece), as on Action
+// Items; a one-kind card has no tabs and moves as a whole.
+const _SAM_FEED_KINDS = [['due', 'Due Dates', 'Due'], ['todo', 'To Do', 'To Do'], ['news', 'News', 'News']];
+const _samFeedTabOf = {};
+function samFeedTab(key, tab) {
+    _samFeedTabOf[key] = tab;
+    renderActionFeedNow();
+}
+function _samFeedTabsOn() {
+    if (typeof _isMobileLayout === 'function' && _isMobileLayout()) return false;
+    return typeof _qpHeadlinesOn === 'function' && _qpHeadlinesOn();
+}
+function _samFeedKind(it) {
+    if (it.type !== 'rem') return 'news';
+    if (it.kind === 'due') return 'due';
+    return it.noDue ? 'news' : 'todo';
+}
+// Every feed card on the page and the kinds each holds. Before the QuickPortal
+// layout has tagged the page (or on a page without it) there is only the one.
+function _samFeedCards(rows) {
+    const main = typeof _qpMain === 'function' ? _qpMain() : null;
+    const els = main ? Array.from(main.querySelectorAll('[data-qp-family="feed"]')) : [];
+    if (!els.length) {
+        const f = document.getElementById('samFeed');
+        return f ? [{ key: 'feed', root: f.closest('.sam-card'), kinds: _SAM_FEED_KINDS.map(k => k[0]) }] : [];
+    }
+    rows = rows || _qpCurrentRows(main);
+    return els.map(card => ({ key: _qpKey(card), root: card.querySelector('.sam-card'), kinds: _qpCardPieces(main, rows, _qpKey(card)) }))
+        .filter(c => c.root && c.kinds.length);
+}
+function _samRenderFeedTabs(c, tab, counts) {
+    const bar = c.root.querySelector('.sam-ftabs');
+    if (!bar) return;
+    if (!tab) { bar.hidden = true; return; }
+    const kinds = _SAM_FEED_KINDS.filter(k => c.kinds.indexOf(k[0]) !== -1);
+    const total = kinds.reduce((a, k) => a + counts[k[0]], 0);
+    const html = [['all', 'All', total]].concat(kinds.map(k => [k[0], k[2], counts[k[0]]])).map(t =>
+        `<button type="button" class="toggle-btn${t[0] === tab ? ' active' : ''}${_qpEditing && t[0] !== 'all' ? ' qp-piece-drag" draggable="true" title="Drag out to give it its own card' : ''}"`
+        + `${t[0] !== 'all' ? ` data-qp-drag-piece="feed/${t[0]}"` : ''} aria-pressed="${t[0] === tab}" onclick="samFeedTab('${c.key}', '${t[0]}')">`
+        + `${t[1]} <span class="qp-ai-cnt">${t[2]}</span></button>`).join('');
+    // Redrawn on every feed paint: only touch the DOM when it changed.
+    if (bar._samHtml !== html) { bar.innerHTML = html; bar._samHtml = html; }
+    // One column per button, so they are always the same width (styles.css).
+    bar.style.gridTemplateColumns = 'repeat(' + (kinds.length + 1) + ', minmax(0, 1fr))';
+    bar.hidden = false;
 }
 
 // The feed card is taller than the action-items card beside it, and the rail's
@@ -51836,7 +51997,9 @@ function _samReconcileFeed(feed, desired) {
 // Reminders are skipped: they snooze rather than read, and their row already
 // carries its own open-the-tool action.
 function _samAddReadFull() {
-    document.querySelectorAll('#samFeed .sam-ann:not(.rem)').forEach(row => {
+    // .sam-feed, not #samFeed: a feed piece split out on the QuickPortal is a
+    // second feed card with its own list (FEED PIECES).
+    document.querySelectorAll('.sam-feed .sam-ann:not(.rem)').forEach(row => {
         if (row.querySelector('.sam-readfull')) return;       // already converted (reused card)
         const el = row.querySelector('.sam-a-snip');
         if (!el) return;
@@ -52258,12 +52421,17 @@ function _samReminderCfg() {
     const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
     const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
         ? _cdT.dataset.tab : 'cases';
+    // kind: 'due' marks a card that answers to a DEADLINE, which is what puts it
+    // under Due on the QuickPortal feed tabs (_samFeedKind). Everything else with
+    // a badge is To Do, and a noDue card is News. A card whose deadline comes and
+    // goes with its state (variance FYI, aging with no reply date) sets it the
+    // same way it sets its title, so the tab can't disagree with the badge.
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
                         : 'Variance Replies Due' + (_vrDue ? ' — ' + _vrDue : ''),
           urgency: _vrFyi ? 1 : 2, due: _vrFyi ? 'Review' : 'Due',
-          cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red',
+          cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red', kind: _vrFyi ? '' : 'due',
           // _vrMarkReviewed first: opening the card IS the DM's review, and it
           // must be stamped before the navigation tears this context down.
           action: "_vrMarkReviewed(); window.location.href='workspace.html#vreplies'" },
@@ -52284,7 +52452,7 @@ function _samReminderCfg() {
         // happened.
         { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
           title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
-          urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true,
+          urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true, kind: 'due',
           action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
@@ -52319,7 +52487,7 @@ function _samReminderCfg() {
                          : 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
           urgency: _agLate ? 2 : 1,
           due: _agLate ? 'Overdue' : 'Review',
-          cls: _agLate ? 'sam-due-red' : 'sam-due-amber',
+          cls: _agLate ? 'sam-due-red' : 'sam-due-amber', kind: (_agLate || _agDue) ? 'due' : '',
           action: "closeAgingAlertBubble(); window.location.href='workspace.html#aging'" },
         // Store goals — DM/CEO only, and the only reminder here that is about
         // a DECISION rather than a queue. It is deliberately not snoozeable:
@@ -52336,13 +52504,13 @@ function _samReminderCfg() {
         { key: 'b2bPricing', id: 'b2bPricingAlertBubble', text: 'b2bPricingAlertBubbleText',
           title: _b2bPricingLate ? 'B2B Pricing Overdue' : 'B2B Pricing Due',
           urgency: _b2bPricingLate ? 2 : 1, due: _b2bPricingLate ? 'Overdue' : 'Due',
-          cls: _b2bPricingLate ? 'sam-due-red' : 'sam-due-amber',
+          cls: _b2bPricingLate ? 'sam-due-red' : 'sam-due-amber', kind: 'due',
           noSnooze: !(typeof _b2bIsCorp === 'function' && _b2bIsCorp()),
           action: "window.location.href='operations.html#b2b'" },
         { key: 'b2bUnlisted', id: 'b2bUnlistedAlertBubble', text: 'b2bUnlistedAlertBubbleText',
           title: 'Unlisted B2B Value', urgency: 0, due: '', cls: 'sam-due-grey', noDue: true,
           readAction: "b2bUnlistedRead(event)", action: "window.location.href='operations.html#b2b'" },
-        { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
+        { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', kind: 'due', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.
         // The requester's is an answer that came back: information, not a task, so
@@ -52364,11 +52532,11 @@ function _samReminderCfg() {
     // it away; the card stays until the KPIs are actually entered.
     cfg.push({ key: 'kpiWeekly', id: 'kpiWeeklyAlertBubble', text: 'kpiWeeklyAlertBubbleText',
         title: _wkOd ? 'Weekly KPIs Overdue' : 'Weekly KPIs Due', urgency: _wkOd ? 3 : 2,
-        due: _wkOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
+        due: _wkOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true, kind: 'due',
         action: "sessionStorage.setItem('speeksKpiTab','weekly'); window.location.href='workspace.html#kpis'" });
     cfg.push({ key: 'kpiMonthly', id: 'kpiMonthlyAlertBubble', text: 'kpiMonthlyAlertBubbleText',
         title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
-        due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
+        due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true, kind: 'due',
         action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
     // Daily store messages — DM only (checkDailyBriefDrafts gates it). Two very
     // different cards off one bubble: drafts waiting to approve, and a generator
@@ -52402,11 +52570,11 @@ function _samReminderCfg() {
     // by the person saying so — Snooze quiets it for today, "Mark filed" is what
     // ends it, and that assertion is stored server-side per person + month.
     cfg.push({ key: 'expenseFile', id: 'expenseFileAlertBubble', text: 'expenseFileAlertBubbleText',
-        title: 'File Your Expense Report', urgency: 1, due: 'Due', cls: 'sam-due-amber',
+        title: 'File Your Expense Report', urgency: 1, due: 'Due', cls: 'sam-due-amber', kind: 'due',
         doneAction: "expMarkFiled(event)", doneLabel: 'Mark filed',
         action: "openExpenses()" });
     cfg.push({ key: 'listingGoalsDaily', id: 'listingGoalsDailyAlertBubble', text: 'listingGoalsDailyAlertBubbleText',
-        title: 'Set Today’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-red', noSnooze: true,
+        title: 'Set Today’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-red', noSnooze: true, kind: 'due',
         action: "openListingGoals()" });
     // Call Back matches — the store that HAS the item. An opportunity rather than
     // a deadline, so it is amber and snoozeable: nothing is late, somebody just
@@ -52664,8 +52832,12 @@ function _samGatherReminders() {
         }
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
-            due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: nowBase + c.urgency,
-            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || '',
+            // A deadline is red, every time (Ethan, 2026-10-22: "make all Due
+            // notifications red. some are yellow"). B2B Pricing, the expense
+            // report and an aging review with a reply date were amber until they
+            // went overdue, so the Due tab read as two grades of the same thing.
+            due: c.due, dueCls: c.kind === 'due' ? 'sam-due-red' : c.cls, urgency: c.urgency, read: false, dateMs: nowBase + c.urgency,
+            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, kind: c.kind || '', readAction: c.readAction || '',
             doneAction: c.doneAction || '', doneLabel: c.doneLabel || ''
         });
     });
