@@ -1,0 +1,13 @@
+store,ebay_order_id,shopify_order,sku,sale_price,ebay_refund_lost,ebay_status_sep1,ebay_shipped,note
+BAL,18-15027-41970,#MO04-2753,MO04-1401A-E8,44.99,40.02,FULLY_REFUNDED,FULFILLED,not on your write-off list or your recovered list
+LEE,14-15045-49235,#MO01-9023,MO01-5162B-E2,54.99,50.70,FULLY_REFUNDED,FULFILLED,not on your write-off list or your recovered list
+OVL,13-15033-39914,#KS01-14212,KS01-7354F-E3,104.99,94.03,FULLY_REFUNDED,FULFILLED,not on your write-off list or your recovered list
+OVL,17-15028-86919,#KS01-14272,KS01-B2B313-E3,32.91,27.41,FULLY_REFUNDED,FULFILLED,not on your write-off list or your recovered list
+OVL,24-15029-35651,#KS01-14222,KS01-7395G3-E4,24.99,21.73,FULLY_REFUNDED,FULFILLED,not on your write-off list or your recovered list
+LEE,06-15074-41241,#MO01-9054,MO01-5367A-R1R3,349.99,326.44,FULLY_REFUNDED,NOT_STARTED,ON your list - but never shipped per eBay
+LEE,10-15068-88311,#MO01-9040,MO01-5287A-R1R3,63.99,59.36,FULLY_REFUNDED,NOT_STARTED,ON your list - but never shipped per eBay
+LEE,16-15056-34667,#MO01-9053,MO01-5368E4-E4,29.99,25.92,FULLY_REFUNDED,NOT_STARTED,ON your list - but never shipped per eBay
+LEE,24-15057-44040,#MO01-9047,MO01-5369A2-E4 + MO01-5339D5-E4,59.98,52.19,FULLY_REFUNDED,NOT_STARTED,ON your list - but never shipped per eBay
+MPL,09-15073-11379,#MO03-3037,MO03-2483A1-CB1R1,33.55,24.65,FULLY_REFUNDED,NOT_STARTED,ON your list - but never shipped per eBay
+MPL,11-15069-26192,#MO03-3038,MO03-2583A7-E10,24.99,20.17,FULLY_REFUNDED,NOT_STARTED,ON your list - but never shipped per eBay
+MPL,25-15040-35554,#MO03-3045,MO03-2583A2-E10,31.58,24.00,FULLY_REFUNDED,NOT_STARTED,ON your list - but never shipped per eBay
