@@ -1,5 +1,22 @@
 # Handoff: Picture Quality local model (as of 2026-10-21)
 
+## ⚡⚡⚡⚡ AFTER THE LABEL RE-CHECK (2026-10-22 evening) — round 4 is really 78%
+
+**Ethan's new bar (10-22): 85% across the board**, then live feedback training
+toward 100%. **Root cause of the bad prefills:** before `d3b3b8f` (10-14),
+Approve Order reordered Shopify and moved the stamp but left the report in the
+OLD numbering; Confirm Shots laid old labels onto the new order. 5 rows ever, 4
+labelled. `634c58c` reopened 25 doubted listings (REDO; the 4 broken ones
+prefilled from round 4 via LOCAL_PREFILL); Ethan re-saved 21. Not re-saved: Dell
+WD19S + Crucial Ballistix (sold), PS5 Slim Disc LEE (photo count changed), Sony
+SEL18200 (still live, still in his queue). WD19S is in `build_data.KNOWN_BAD`.
+Test is now 705 photos / 94 listings (old test set minus WD19S; 24 test labels
+changed). **Round 4 re-scored (`runs\rescore-round4-cleaned`): 76.5% → 78.4%**
+on the same 705 photos; Windows laptops 65→75, misc 62→70, new-in-box 81→92.
+Item lots still 41 (re-checked; a real model weakness). Misses: 127 wholly
+wrong, 19 missed a second label, 6 added one. **85% = cut 46 more misses.**
+Picture Quality is re-parked in the working copy.
+
 ## ⚡⚡⚡ ROUND 4 RESULT (2026-10-22, `runs\run-20261021-2247`) — 65% → 76%
 
 Started 10-21 22:47 with Ethan's go; 963 steps at ~26 s, training done 05:51, scored
