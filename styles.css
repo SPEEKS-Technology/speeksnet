@@ -25717,3 +25717,133 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
     background: #e8f7ee !important; color: #146c3c !important; font-weight: 800 !important;
     border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35);
 }
+
+/* ADD A WIDGET — the Side Drawer (qpLibraryOpen; Ethan picked Option A,
+   2026-10-22). Slides in from the right over a light dim so the page stays in
+   view; above the side panels and the corner buttons. */
+.qp-lib { position: fixed; inset: 0; z-index: 9000; background: rgba(15, 23, 42, .28); display: flex; justify-content: flex-end; }
+.qp-lib-panel { width: min(340px, 100%); height: 100%; background: #fff; box-shadow: -12px 0 40px rgba(16,24,40,.18); padding: 18px 18px 14px; display: flex; flex-direction: column; animation: qpLibIn .18s ease-out; }
+@keyframes qpLibIn { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.qp-lib-head { display: flex; align-items: center; justify-content: space-between; }
+.qp-lib-t { font-size: 16px; font-weight: 800; color: var(--slate-charcoal); }
+.qp-lib-x { width: 30px; height: 30px; border-radius: 50%; border: 1px solid #d5dce4; background: #fff; display: grid; place-items: center; cursor: pointer; color: #647082; }
+.qp-lib-x:hover { background: #f1f4f7; }
+.qp-lib-x svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-lib-search { margin: 14px 0 6px; font: inherit; font-size: 13px; padding: 9px 12px; border: 1px solid #d5dce4; border-radius: 10px; outline: none; }
+.qp-lib-search:focus { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
+.qp-lib-list { flex: 1 1 auto; overflow-y: auto; }
+.qp-lib-row { display: flex; align-items: center; gap: 11px; padding: 12px 2px; border-bottom: 1px solid #eef1f4; }
+.qp-lib-ico, .qp-cw-ico { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; }
+.qp-lib-ico svg, .qp-cw-ico svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-lib-ico.r, .qp-cw-ico { background: #fdecec; color: #c53030; }
+.qp-lib-body { flex: 1; min-width: 0; }
+.qp-lib-name { font-size: 13px; font-weight: 750; color: #1a1c1e; }
+.qp-lib-sub { font-size: 11.5px; color: #647082; margin-top: 1px; }
+.qp-lib-add { font: inherit; font-size: 12px; font-weight: 750; padding: 6px 14px; border-radius: 8px; border: 1px solid #1f9d57; background: #1f9d57; color: #fff; cursor: pointer; }
+.qp-lib-add:hover { background: #178048; }
+.qp-lib-none { padding: 24px 4px; text-align: center; font-size: 12.5px; color: #8a94a3; }
+
+/* The Claims & Disputes widget: the Action Items card's frame (.qp-ai), its
+   "Due Next" lines with an Overdue / Today / date chip. */
+/* Four tabs in a third of a 1280 window: 10.5px, or the bold active
+   "Mismatches 0" is cut off at ~82px. */
+.qp-widget .qp-ai-tabs .toggle-btn { padding-left: 3px !important; padding-right: 3px !important; font-size: 10.5px !important; }
+.qp-cw-ln { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid #eef1f4; font-size: 12.5px; font-weight: 600; color: #1a1c1e; min-width: 0; }
+.qp-hl-cap + .qp-cw-ln { border-top: none; }
+.qp-cw-lt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-cw-ln b { flex: none; font-weight: 750; color: #3c4654; }
+.qp-cw-due { flex: none; font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 6px; }
+.qp-cw-due.bad { background: #fdecec; color: #c53030; }
+.qp-cw-due.warn { background: #fdf3e2; color: #a46412; }
+.qp-widget .qp-hl-sub .good { color: #1f9d57; }
+.qp-widget .qp-hl-sub .bad { color: var(--red-alert); }
+/* Dragging a widget out of the drawer: the row says it can be carried, and
+   while it is (.qp-lib-carrying, set the frame after dragstart) the drawer
+   slides away and lets every pointer event through to the page's drop targets. */
+.qp-lib-hint { font-size: 11.5px; color: #8a94a3; margin: 2px 0 4px; }
+.qp-lib-row.qp-lib-drag { cursor: grab; border-radius: 10px; }
+.qp-lib-row.qp-lib-drag:hover { background: #f6f9f7; }
+.qp-lib-row.qp-lib-drag:active { cursor: grabbing; }
+.qp-lib.qp-lib-carrying { background: transparent; pointer-events: none; }
+.qp-lib.qp-lib-carrying .qp-lib-panel { transform: translateX(105%); transition: transform .18s ease-in; }
+
+/* ONE TAB LOOK, SITE-WIDE (Ethan, 2026-10-22: "everywhere on the site that has
+   the old tab look, change them to the command center style tabs"). The site's
+   tab bars are .notif-tabs holding .tab-btn — the Claims & Disputes tabs, the
+   Checklist / Cleaning panels, Feature Access, Quick Messages, the manage
+   modals and the rest, on all five pages — and the Listing Goals Today /
+   Yesterday switch (.timeframe-toggle). They take .cc-seg's design: a light
+   green track, each tab its own white bordered button, the chosen one pale
+   green with an emerald edge.
+   ONLY THE LOOK. Sizes, padding, gaps and the phone heights stay with each
+   bar's own rules (several are tuned: equal columns in .fa-tabs/.claims-tabs,
+   30px strips on a phone), so nothing here moves a layout.
+   The doubled classes and !important are deliberate: the Checklist panel marks
+   its tab colours !important at (0,3,0), and #quickMsgDropdown / the manage menu
+   set theirs at id or (0,3,0) — this has to outrank all of them. */
+.notif-tabs { gap: 5px; }
+.notif-tabs.notif-tabs { background: #f3f7f4 !important; border: 1px solid #e4ece7 !important; border-radius: 12px !important; }
+.notif-tabs.notif-tabs > .tab-btn.tab-btn {
+    background: #fff !important; border: 1px solid #dde6e0 !important; color: #5b6b64 !important;
+    border-radius: 8px !important; box-shadow: none !important; font-weight: 750 !important;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+.notif-tabs.notif-tabs > .tab-btn.tab-btn:hover:not(.active) { border-color: #c3d6cb !important; color: var(--slate-charcoal) !important; box-shadow: 0 1px 2px rgba(16, 24, 40, .06) !important; }
+.notif-tabs.notif-tabs > .tab-btn.tab-btn.active {
+    background: #e8f7ee !important; color: #146c3c !important; font-weight: 800 !important;
+    border-color: #1f9d57 !important; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10) !important;
+}
+.notif-tabs.notif-tabs > .tab-btn.tab-btn:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+/* The Listing Goals Today / Yesterday switch — the small-switch version. */
+.timeframe-toggle.timeframe-toggle { background: #f3f7f4 !important; border: 1px solid #e4ece7; gap: 3px; }
+.timeframe-toggle.timeframe-toggle .toggle-btn {
+    background: #fff !important; border: 1px solid #dde6e0; color: #5b6b64 !important; border-radius: 7px !important; box-shadow: none;
+}
+.timeframe-toggle.timeframe-toggle .toggle-btn.active {
+    background: #e8f7ee !important; color: #146c3c !important; border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35);
+}
+/* The Operations widgets' icon tones (QP_WIDGETS[...].tone), in the drawer
+   and on the card, and the two quieter chips their lines use. */
+.qp-cw-ico.r { background: #fdecec; color: #c53030; }
+.qp-lib-ico.a, .qp-cw-ico.a { background: #fdf3e2; color: #a46412; }
+.qp-lib-ico.t, .qp-cw-ico.t { background: #e6f6f4; color: #0f766e; }
+.qp-lib-ico.g, .qp-cw-ico.g { background: #e8f7ee; color: #178048; }
+.qp-cw-due.good { background: #e8f7ee; color: #146c3c; }
+.qp-cw-due.grey { background: #f1f4f7; color: #5b6b64; }
+/* A widget's half-row cap (_qpMaxW, an inline max-width on its cell) is for
+   rows of cards side by side. Stacked on a phone or touch tablet every card is
+   the full width, widgets included. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .qp-cell { max-width: none !important; }
+}
+/* NO DEAD SPACE (_qpPairWidgets). While a ⅓/½ widget is carried, a new-row
+   slot it may not take goes red and says why (it is a 22px line in the row
+   gap, so the words sit on it, inside the same space — nothing moves). */
+.qp-slot-row.qp-slot-no::before { background: var(--red-alert); }
+.qp-slot-row.qp-slot-no::after {
+    content: "Needs a Card Beside It"; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    padding: 1px 10px; border-radius: 999px; background: #fdecec; color: #c53030; font-size: 10.5px; font-weight: 800; white-space: nowrap;
+}
+/* A ⅓/½ widget alone because no row had room: the space it is waiting to
+   share, in Customize only (it is removed with the rest of edit mode). */
+.qp-row > .qp-lone {
+    flex: 1 1 0; min-width: 0; align-self: stretch; display: grid; place-items: center; border: 2px dashed #c9d3dd; border-radius: 14px;
+    color: #8a94a3; font-size: 12.5px; font-weight: 750; min-height: 120px;
+}
+/* THE DRAWER SLIDES LIKE THE CHECKLIST PANEL (Ethan, 2026-10-22): the same
+   place (under the nav, --panel-top), size, shadow and 0.3s slide from the
+   right, in on .open and out again on close (qpLibraryClose waits for it).
+   No dim: the page stays as it is, as with the Checklist. The full-window
+   layer is still there, clear, so a click off the drawer closes it. */
+.qp-lib, .qp-lib.qp-lib-carrying { background: transparent; }
+.qp-lib .qp-lib-panel {
+    position: absolute; top: var(--panel-top, 64px); right: 0; width: min(420px, 100%); height: calc(100vh - var(--panel-top, 64px));
+    border-radius: 0 0 0 14px; box-shadow: -8px 0 32px rgba(0, 0, 0, .12); border: 1px solid #e2e8f0; border-top: none; border-right: none;
+    animation: none; transform: translateX(105%); opacity: 0;
+    transition: transform .3s cubic-bezier(.25, .46, .45, .94), opacity .3s ease;
+}
+.qp-lib.open .qp-lib-panel { transform: none; opacity: 1; }
+.qp-lib.open.qp-lib-carrying .qp-lib-panel { transform: translateX(105%); }
+/* On the page: Remove in Add's place, the same size, outlined red. */
+.qp-lib-rm { font: inherit; font-size: 12px; font-weight: 750; padding: 6px 14px; border-radius: 8px; border: 1px solid #f3c4c4; background: #fff; color: #c53030; cursor: pointer; flex: none; }
+.qp-lib-rm:hover { background: #fdecec; border-color: #ef4444; }

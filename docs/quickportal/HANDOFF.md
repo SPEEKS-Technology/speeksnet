@@ -98,6 +98,70 @@ designs since have been shown inline in chat.
   look at 26px tall so cards stay 350. The one-tab Live card was 351–352px on
   Yesterday/Month (older than the tab change); `.qp-hl-footrow` padding-top
   10→8 fixed it — 350 everywhere at 1280/1366/1440.
+- **Added widgets + the Side Drawer** (2026-10-22, Ethan picked Option A):
+  "+" in the corner (Customize only) opens `qpLibraryOpen` — search, each
+  widget with Add / On Page. `QP_WIDGETS` is the registry (label, sub, icon,
+  `avail` = the source tool's own gate, `render`). A widget is a block that
+  exists only while the saved layout names it (`w:claims`):
+  `_qpEnsureWidgets` builds them before `_qpResolve` (which drops unknown
+  keys), × removes (`qpRemoveWidget`), Reset clears them, and
+  `_qpOriginalKeys` leaves them out so a page with one is never "default".
+  First widget: **Claims & Disputes** — the tool's four tabs (card label
+  "Cases", tooltip "Cases & Disputes"), counts by `_HOLD_VIEWS.due`, Due Next
+  by `due_on`, the tool's GET only (never its eBay sync POST), 2-min cache +
+  `_RT_TOOL_CHECKS.claims`. Store managers only (`_claimsDueScope`).
+  **Later the same day:** the key is now the plain id (`claims`, not
+  `w:claims` — its colon clashed with `family:pieces`), and Claims is a card
+  family (`QP_FAMILIES.claims`, kind `widget`): its four tabs are pieces
+  (markers in the widget's `.sam-card`), split into `claims:returns` etc.,
+  combine, × puts a piece back; × on the widget's own card removes it and
+  every split-out piece. A one-piece card is titled by the piece ("Returns",
+  eyebrow "OVL · Claims & Disputes"). `_qpSetEditing` redraws widgets so their
+  tabs become drag handles. **Drawer rows drag onto the page**
+  (`_qpLibDragStart`: `_qpDrag = {key, add}`; the drawer slides away via
+  `.qp-lib-carrying`; the drop builds it with `qpAddWidget(id, t)`).
+  **Operations widgets** (Ethan: build Call Backs, B2B, SPEEKS Connect; NOT
+  Margin Guide or Picture Guide): every widget now draws through one painter,
+  `_qpWidgetCard`, from `_QP_WSPEC[id]` = { tabs, load (the tool's own GET),
+  model(data, tab) → {n, big, small, aside, sub, cap, lines, link}, ttl }.
+  `_qpWLoad` caches and backs off a minute after a failure (the first Claims
+  code retried on every redraw, which looped). Call Backs = In Stock (the feed
+  card's suggested-match rule) · Open · Contacted; B2B = Pricing
+  (`_b2bPricingDue`) · Need You (`_b2bActionFor`) · Unlisted value; SPEEKS
+  Connect = Pictures · Categories from `?view=counts` (counts only — no item
+  list; Titles is DM-only so left out). Realtime: `_qpWReloadB2b`,
+  `_qpWReloadCallbacks` in `_RT_TOOL_CHECKS`. SPEEKS Connect needs a PIN, so
+  on the test login it says "Couldn't load" — it was checked with a stubbed
+  `_rcFetch` in the pane only.
+  **Locked sizes:** a widget's cell never takes more than `_QP_WIDGET_MAXW`
+  of a row (0.5 for all four — Ethan: stretched full width it "feels odd");
+  set as an inline max-width in `_qpBuild`, lifted on phones, and the Card
+  Widths strip drops options that would pass it. **No dead space** (Ethan,
+  same day): sizes are ⅓·½·Full by default, the three Operations widgets
+  built without Full (`_QP_WIDGET_MAXW` 0.5; Claims 1). A widget under Full
+  never sits alone: `_qpPairWidgets` (in `_qpLayout` and `_qpCommit`) moves a
+  lone one into the nearest row with room; Add puts it in the first row with
+  room; new-row slots refuse it while dragging (red, "Needs a Card Beside
+  It"); edge hints say the size it will be ("Place Beside · ⅓ Row"); with no
+  room anywhere Customize shows a dashed "Add a Card Beside It" (`.qp-lone`).
+  **Drawer, final shape:** slides in/out like the Checklist panel (under the
+  nav, 420px, no dim; `.open`, and `qpLibraryClose` waits for the slide); no
+  size pills (the drag hints say the size); widgets on the page show On Page
+  + **Remove** (`qpLibraryRemove`). SPEEKS Connect has a **Titles** tab
+  (listing-titles `?view=counts` → `titles` per store; `has` per tab drops a
+  tab the person lacks, by its Feature Access key); `operations.html#titles`
+  opens it. **Test login:** SPEEKS
+  Connect gets SAMPLE counts when `_speeksTestSession` and no PIN (like
+  `_lvTestPayload`).
+  Not yet: drawer categories, DM oversight versions, more widgets (Variance,
+  Recycle suggested).
+- **Site-wide tab look** (2026-10-22): every `.notif-tabs` bar of `.tab-btn`
+  (all five pages: Claims, Checklist/Cleaning panels, Feature Access, Quick
+  Messages, manage modals…) and the Listing Goals `.timeframe-toggle` take the
+  `.cc-seg` look — LOOK ONLY, sizes stay each bar's own (styles.css, ONE TAB
+  LOOK, SITE-WIDE, at the end; doubled classes + !important outrank the
+  Checklist panel's own !important). Left alone: `.ws-subtabs` (the underlined
+  page menu at the top of Workspace/Operations) — a different control.
 - **Reset to Default asks first** (2026-10-22): an HTML dialog (`qpReset` →
   `_qpResetNow`), Cancel focused; Escape and the backdrop cancel.
 - **Quick links removed for everyone** (2026-10-22): B2B Records and Training,

@@ -10511,12 +10511,13 @@ function initOperations() {
     // #photos is the no-pictures card's: the same view, on the Picture Quality
     // tab. Since Listing Health became tabs (2026-09-30) each card lands on ITS
     // tool — the category card opening on Titles would bury what it pointed at.
-    if (hash === 'categories' || hash === 'photos') {
+    // #titles: the QuickPortal SPEEKS Connect widget's Titles tab (2026-10-22).
+    if (hash === 'categories' || hash === 'photos' || hash === 'titles') {
         _ecView = 'cats';
-        _lhTab = hash === 'photos' ? 'photos' : 'cats';
+        _lhTab = hash === 'photos' ? 'photos' : hash === 'titles' ? 'titles' : 'cats';
     }
     let initial = sign ? 'b2b'
-        : (hash === 'categories' || hash === 'photos') ? 'ebay'
+        : (hash === 'categories' || hash === 'photos' || hash === 'titles') ? 'ebay'
         : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     // COMPUTED display, not the inline one. The fallback below was written for
     // Feature Access, which writes `display: none !important` onto the element —
@@ -49954,6 +49955,31 @@ const QP_FAMILIES = {
             { key: 'dmlisting', label: 'Listing Goals', feature: 'widget-dm-listing-goals' },
         ],
     },
+    // The Claims & Disputes widget's four tabs (Ethan, 2026-10-22). Exists
+    // only while the widget is on the page (QP_WIDGETS, _qpEnsureWidgets);
+    // its pieces are markers like the feed's, inside the widget's .sam-card.
+    claims: {
+        label: 'Claims & Disputes', kind: 'widget',
+        pieces: [
+            { key: 'mismatch', label: 'Mismatches' },
+            { key: 'returns', label: 'Returns' },
+            { key: 'cases', label: 'Cases & Disputes' },
+            { key: 'payments', label: 'Payments' },
+        ],
+    },
+    // The Operations widgets' tabs (QP_WIDGETS / _QP_WSPEC), as Claims above.
+    callbacks: {
+        label: 'Customer Call Backs', kind: 'widget',
+        pieces: [{ key: 'instock', label: 'In Stock' }, { key: 'open', label: 'Open Call Backs' }, { key: 'contacted', label: 'Contacted' }],
+    },
+    b2b: {
+        label: 'Business-to-Business', kind: 'widget',
+        pieces: [{ key: 'pricing', label: 'Pricing' }, { key: 'need', label: 'Waiting On You' }, { key: 'unlisted', label: 'Unlisted Value' }],
+    },
+    connect: {
+        label: 'SPEEKS Connect', kind: 'widget',
+        pieces: [{ key: 'photos', label: 'Pictures' }, { key: 'category', label: 'Categories' }, { key: 'titles', label: 'Titles' }],
+    },
     // Your Feed's three kinds (Ethan, 2026-10-22). A piece here is an empty
     // marker in index.html (.sam-fpiece, already tagged data-qp-piece), not
     // content: the feed renderer shows a card the kinds whose markers it holds
@@ -50107,6 +50133,11 @@ function _qpMakeShell(main, key) {
             // back to (Ethan, 2026-10-21) — see _tabSwitch.
             + '<div class="cc-tabbar"><div class="ew-seg cc-seg"></div></div>'
             + '<div class="cc-summary"></div><div class="cc-strips"></div><div class="cc-body"></div>';
+    } else if (QP_FAMILIES[k.fam].kind === 'widget') {
+        // A piece split out of an added widget: the widget's own frame, which
+        // its render fills (QP_WIDGETS[...].render reads the pieces it holds).
+        el.className = 'speeks-action-menu qp-part qp-shell qp-widget';
+        el.innerHTML = '<div class="sam-board"><div class="sam-card"><div class="qp-ai"><div class="status-message">Syncing…</div></div></div></div>';
     } else if (QP_FAMILIES[k.fam].kind === 'feed') {
         // The original feed card's own header (icon, title, pip, All
         // announcements), ids stripped, then its tab bar and list. The feed
@@ -50223,6 +50254,7 @@ function _qpDistribute(main, rows) {
     // Feed cards repaint for what they now hold — once the feed has painted at
     // all, so a card never says "all caught up" before its data has arrived.
     if (typeof _samPainted !== 'undefined' && _samPainted) _samRenderFeedNow(rows);
+    _qpRenderWidgets(rows);
 }
 
 // The saved rows, reconciled with the blocks this page actually has: a key that
@@ -50323,6 +50355,11 @@ function _qpBuild(main, rows) {
                 const cell = document.createElement('div');
                 cell.className = 'qp-cell';
                 cell.style.flexGrow = String(r.w ? r.w[i] : 1);
+                // A widget never stretches past its share of the row (_qpMaxW):
+                // alone in a row it takes that much and leaves the rest free.
+                // 11px is half the 22px gap between cards.
+                const mw = _qpMaxW(k);
+                if (mw && mw < 1) cell.style.maxWidth = 'calc(' + (mw * 100) + '% - 11px)';
                 cell.appendChild(byKey[k]);
                 row.appendChild(cell);
             });
@@ -50355,10 +50392,15 @@ function _qpSyncHidden(main) {
 
 function _qpLayout(main) {
     _qpDiscover(main);
-    const keys = _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell'); }).map(_qpKey);
     const board = typeof _tvIsBoardRole === 'function' && _tvIsBoardRole();
     const saved = board ? null : _qpSaved();
-    return saved ? _qpResolve(saved, keys, main) : _qpDefaults(keys);
+    // Before the keys: a widget the layout names has to exist as a block, or
+    // _qpResolve drops it as a card this page does not have — and its pieces
+    // have to be found, which the _qpDiscover above ran too early to do.
+    _qpEnsureWidgets(main, saved);
+    _qpDiscover(main);
+    const keys = _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell'); }).map(_qpKey);
+    return saved ? _qpPairWidgets(main, _qpResolve(saved, keys, main)) : _qpDefaults(keys);
 }
 
 // The tab a Command Center card has open (openOnly), or the one it opens on: its
@@ -50912,6 +50954,657 @@ function _qpRenderActions(rows) {
     });
 }
 
+// --- ADDED WIDGETS (Ethan, 2026-10-22: "widgets for other tabs on the site",
+// picked Option A, the Side Drawer) ---
+// Cards for the site's other tools that a person ADDS from the drawer ("+" in
+// Customize), rather than cards that are always on the page. A widget is a
+// block like any other — it moves, sizes and sits in rows the same way — but it
+// exists only while someone's saved layout names it, so it is built here, not
+// in index.html: _qpEnsureWidgets makes the blocks a layout names before the
+// layout is resolved (a key with no block is dropped), and takes away the ones
+// it no longer names. The × on a widget removes it, split-out pieces and all.
+//
+// A widget's key is its id ("claims"), so a widget with pieces is a card
+// family like any other (QP_FAMILIES.claims): split-out cards are
+// "claims:returns", and _qpWidgetId reads the id off either form. ("w:claims"
+// was the first try; its colon collided with the family:pieces form.)
+//
+// Each widget says who may add it (avail: the same gate as the tool it comes
+// from), and draws itself from that tool's own read — never a second copy of a
+// rule the tool already has. Adding is a click on Add, or a drag of the row
+// out of the drawer onto the page (Ethan, same day: "click add or drag and
+// drop ourselves").
+const QP_WIDGETS = {
+    claims: {
+        label: 'Claims & Disputes',
+        sub: 'What needs attention, and what is due next',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M12 8v5M12 16h.01"/></svg>',
+        tone: 'r',
+        // Store managers with the store tool, as the 4pm claims card
+        // (_claimsDueScope); the DM's all-stores oversight comes later.
+        avail: function () { return typeof _claimsDueScope === 'function' && _claimsDueScope().length > 0; },
+    },
+    // The three Operations tabs Ethan asked for (2026-10-22; Margin Guide and
+    // Picture Guide are not wanted as widgets). Each is open to whoever has
+    // that Operations tab, by the same Feature Access key as the tab itself.
+    callbacks: {
+        label: 'Customer Call Backs',
+        sub: 'Items your customers asked for that are in stock',
+        icon: '<svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>',
+        tone: 'a',
+        // A store to hold stock (corp has none — same as the feed's match card).
+        avail: function () {
+            const s = typeof _cbMatchScope === 'function' ? _cbMatchScope() : null;
+            return !!(s && s.length) && _jumpFeatureVisible('widget-ops-callbacks');
+        },
+    },
+    b2b: {
+        label: 'Business-to-Business',
+        sub: 'Deals to price, deals waiting on you, unlisted value',
+        icon: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>',
+        tone: 't',
+        // The same people checkB2BReminders reaches, who also have the tab.
+        avail: function () {
+            if (typeof _b2bRole !== 'function') return false;
+            const role = _b2bRole();
+            const who = B2B_CORP_ROLES.includes(role) || B2B_STORE_ROLES.includes(role) || _b2bIsEmployee() || _b2bHasCorpDelegation();
+            return who && _jumpFeatureVisible('widget-ops-b2b');
+        },
+    },
+    connect: {
+        label: 'SPEEKS Connect',
+        sub: 'Listings with no pictures or no category',
+        icon: '<svg viewBox="0 0 24 24"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/></svg>',
+        tone: 'g',
+        // The Pictures or Categories half of the tab, at a store: the counts
+        // are per store and corp gets none (checkCategoryQueueReminders).
+        avail: function () {
+            const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+            if (['district manager', 'ceo', 'mocd'].includes(role)) return false;
+            return _jumpFeatureVisible('ec-view-photos') || _jumpFeatureVisible('ec-view-categories');
+        },
+    },
+};
+const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WIDGETS[id] ? id : null; };
+// LOCKED SIZES (Ethan, 2026-10-22: a widget stretched across a whole row "feels
+// odd" with so little in it). The most of a row a widget's card may take —
+// its own and any piece split out of it. Half for every widget so far: alone in
+// a row it sits at half and leaves the rest for another card, and the Card
+// Widths strip offers nothing past it. Set per widget, so one with more to show
+// can be given more (1) or one that only ever needs a third held to 1/3.
+// Sizes (Ethan, later the same day): every widget comes in a third, a half
+// and a full row unless it is built without the full one — the three
+// Operations widgets are (too little in them to fill a row); Claims keeps all
+// three. A widget held under a full row can never sit ALONE in one (no dead
+// space): Add puts it in a row with room, the new-row slots refuse it while
+// it is carried, and one left alone joins the nearest row with room
+// (_qpPairWidgets).
+const _QP_WIDGET_MAXW = { claims: 1, callbacks: 0.5, b2b: 0.5, connect: 0.5 };
+function _qpMaxW(key) {
+    const id = _qpWidgetId(key || '');
+    return id ? (_QP_WIDGET_MAXW[id] || null) : null;
+}
+// Held under a full row, so it needs a card beside it.
+function _qpNeedsPartner(key) { const m = _qpMaxW(key); return !!m && m < 1; }
+// A card that is not built yet (a shell this layout is about to make) counts
+// as shown: it will be.
+function _qpKeyShown(main, k) {
+    const b = main.querySelector('[data-qp-block="' + k + '"]');
+    return !b || _qpVisible(b);
+}
+// NO DEAD SPACE: a widget that may not fill a row, left alone in one — its
+// partner moved or removed, or a layout saved before this rule — moves into
+// the nearest row that has room (by distance, so it stays near where it was),
+// and that row goes back to equal widths. With no room anywhere it stays put,
+// and Customize marks the space beside it (_qpRenderControls).
+function _qpPairWidgets(main, rows) {
+    for (let guard = 0; guard < 12; guard++) {
+        const shown = r => r.items.filter(k => _qpKeyShown(main, k));
+        const lone = rows.findIndex(r => { const v = shown(r); return v.length === 1 && _qpNeedsPartner(v[0]); });
+        if (lone === -1) break;
+        const key = shown(rows[lone])[0];
+        let best = -1;
+        rows.forEach(function (r, i) {
+            const n = shown(r).length;
+            if (i === lone || n < 1 || n >= QP_MAX_PER_ROW) return;
+            if (best === -1 || Math.abs(i - lone) < Math.abs(best - lone)) best = i;
+        });
+        if (best === -1) break;
+        rows[lone].items.splice(rows[lone].items.indexOf(key), 1);
+        rows[lone].w = null;
+        rows[best].items.push(key);
+        rows[best].w = null;
+    }
+    return rows.filter(r => r.items.length);
+}
+function _qpWidgetOk(id) {
+    const w = QP_WIDGETS[id];
+    try { return !!w && w.avail(); } catch (e) { return false; }
+}
+// The original card of a widget. A widget with pieces carries their empty
+// markers in its .sam-card (the slot the layout moves pieces between), as the
+// feed does (.sam-fpiece).
+function _qpMakeWidget(id) {
+    const w = QP_WIDGETS[id];
+    const fam = QP_FAMILIES[id];
+    const el = document.createElement('section');
+    el.className = 'speeks-action-menu qp-part qp-widget';
+    el.setAttribute('data-qp-block', id);
+    el.setAttribute('data-qp-widget', id);
+    el.setAttribute('data-qp-label', w.label);
+    el.innerHTML = '<div class="sam-board"><div class="sam-card"><div class="qp-ai"><div class="status-message">Syncing…</div></div>'
+        // Only the pieces this person has (_QP_WSPEC[id].has): SPEEKS Connect's
+        // Titles is its own switch, and a tab you cannot open is no tab at all.
+        + (fam ? fam.pieces.filter(function (p) { const sp = _QP_WSPEC[id]; return !sp || !sp.has || sp.has(p.key); })
+            .map(function (p) { return '<i class="sam-fpiece" data-qp-piece="' + id + '/' + p.key + '"></i>'; }).join('') : '')
+        + '</div></div>';
+    return el;
+}
+// The widget blocks a layout names, and only those. A split-out piece names
+// its widget too: "claims:returns" needs the Claims card to exist, because
+// that is where the rest of its pieces live.
+function _qpEnsureWidgets(main, rows) {
+    const want = {};
+    (rows || []).forEach(function (r) {
+        (r && r.items || []).forEach(function (k) { const id = _qpWidgetId(k); if (id && _qpWidgetOk(id)) want[id] = true; });
+    });
+    main.querySelectorAll('[data-qp-widget]').forEach(function (el) {
+        if (want[el.getAttribute('data-qp-widget')]) return;
+        const cell = el.parentElement && el.parentElement.classList.contains('qp-cell') ? el.parentElement : null;
+        el.remove();
+        if (cell) cell.remove();
+    });
+    Object.keys(want).forEach(function (id) {
+        if (!main.querySelector('[data-qp-widget="' + id + '"]')) main.insertBefore(_qpMakeWidget(id), _qpAnchor(main));
+    });
+}
+// rows: the layout being applied, when _qpDistribute calls this mid-build.
+function _qpRenderWidgets(rows) {
+    const main = _qpMain();
+    if (!main) return;
+    main.querySelectorAll('[data-qp-block]').forEach(function (el) {
+        const id = _qpWidgetId(el.getAttribute('data-qp-block'));
+        if (!id || !(el.hasAttribute('data-qp-widget') || el.hasAttribute('data-qp-shell'))) return;
+        try { _qpWidgetCard(el, rows, id); } catch (e) { console.error('QuickPortal widget:', e); }
+    });
+}
+// Put a widget on the page: a row of its own at the bottom (Add), or wherever
+// it was dropped (t, from a drag out of the drawer — _qpWireDrag's drop).
+function qpAddWidget(id, t) {
+    const main = _qpMain();
+    if (!main || !_qpWidgetOk(id)) return;
+    // The drawer stays open: its Add turns into Remove (Ethan, 2026-10-22), so
+    // several can be added or taken off in one go. × or a click off it closes.
+    if (main.querySelector('[data-qp-widget="' + id + '"]')) return;
+    main.insertBefore(_qpMakeWidget(id), _qpAnchor(main));
+    if (t) _qpDropAt(main, { key: id }, t);
+    else {
+        const rows = _qpCurrentRows(main);
+        // A widget that may not fill a row goes beside cards already there:
+        // the first row, from the top, with room. Otherwise a row of its own.
+        const room = _qpNeedsPartner(id) ? rows.find(function (r) {
+            const n = r.items.filter(function (k) { return _qpKeyShown(main, k) && k !== id; }).length;
+            return n >= 1 && n < QP_MAX_PER_ROW;
+        }) : null;
+        if (room) { room.items.push(id); room.w = null; }
+        else rows.push({ items: [id], w: null });
+        _qpCommit(main, rows);
+    }
+    const el = main.querySelector('[data-qp-widget="' + id + '"]');
+    if (el && !t) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
+}
+// The × on a widget's own card: the widget goes, with every card split out of it.
+function qpRemoveWidget(key) {
+    const main = _qpMain();
+    if (!main || !_qpEditing) return;
+    const id = _qpWidgetId(key);
+    const rows = _qpCurrentRows(main);
+    rows.forEach(function (r) { r.items.slice().forEach(function (k) { if (_qpWidgetId(k) === id) _qpTakeOut(rows, k); }); });
+    _qpEnsureWidgets(main, rows);
+    _qpCommit(main, rows);
+}
+
+// THE SIDE DRAWER. Opened by the "+" corner button in Customize. The page stays
+// in view behind a light dim; Escape, the × and a click on the dim close it.
+// A widget already on the page says so instead of offering Add. A row that can
+// be added can also be DRAGGED onto the page: the drawer steps aside while it
+// is carried (.qp-lib-carrying), and the page's own drop targets — beside a
+// card, or the + between rows — say where it lands.
+function qpLibraryOpen() {
+    if (document.getElementById('qpLib')) return;
+    const ov = document.createElement('div');
+    ov.id = 'qpLib';
+    ov.className = 'qp-lib';
+    ov.innerHTML = '<aside class="qp-lib-panel" role="dialog" aria-modal="true" aria-labelledby="qpLibT">'
+        + '<div class="qp-lib-head"><span class="qp-lib-t" id="qpLibT">Add a Widget</span>'
+        + '<button type="button" class="qp-lib-x" aria-label="Close" onclick="qpLibraryClose()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>'
+        + '<input type="search" class="qp-lib-search" placeholder="Search widgets" aria-label="Search widgets" oninput="_qpLibraryList(this.value)">'
+        + '<div class="qp-lib-hint">Click Add, or drag a widget onto the page.</div>'
+        + '<div class="qp-lib-list" id="qpLibList"></div></aside>';
+    ov.addEventListener('click', function (e) { if (e.target === ov) qpLibraryClose(); });
+    ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') qpLibraryClose(); });
+    ov.addEventListener('dragstart', _qpLibDragStart);
+    ov.addEventListener('dragend', _qpLibDragEnd);
+    document.body.appendChild(ov);
+    _qpLibraryList('');
+    // Slides in like the Checklist panel (Ethan, 2026-10-22): .open on the
+    // next frame, so the browser has the closed position to move from.
+    requestAnimationFrame(function () { requestAnimationFrame(function () { ov.classList.add('open'); }); });
+    ov.querySelector('.qp-lib-search').focus({ preventScroll: true });
+}
+// ...and out the same way, then goes.
+function qpLibraryClose() {
+    const ov = document.getElementById('qpLib');
+    if (!ov || ov._closing) return;
+    ov._closing = true;
+    ov.id = '';
+    ov.classList.remove('open');
+    setTimeout(function () { ov.remove(); }, 320);
+}
+// Remove from the drawer: the widget's × without finding it on the page.
+function qpLibraryRemove(id) {
+    qpRemoveWidget(id);
+    _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
+}
+function _qpLibraryList(q) {
+    const list = document.getElementById('qpLibList');
+    const main = _qpMain();
+    if (!list) return;
+    q = String(q || '').trim().toLowerCase();
+    const ids = Object.keys(QP_WIDGETS).filter(_qpWidgetOk).filter(function (id) {
+        const w = QP_WIDGETS[id];
+        return !q || (w.label + ' ' + w.sub).toLowerCase().indexOf(q) !== -1;
+    });
+    list.innerHTML = ids.length ? ids.map(function (id) {
+        const w = QP_WIDGETS[id];
+        const on = !!(main && main.querySelector('[data-qp-widget="' + id + '"]'));
+        return '<div class="qp-lib-row' + (on ? '' : ' qp-lib-drag') + '"' + (on ? '' : ' draggable="true" data-qp-add="' + id + '" title="Drag onto the page, or click Add"') + '>'
+            + '<span class="qp-lib-ico ' + w.tone + '" aria-hidden="true">' + w.icon + '</span>'
+            + '<div class="qp-lib-body"><div class="qp-lib-name">' + escapeHtml(w.label) + '</div><div class="qp-lib-sub">' + escapeHtml(w.sub) + '</div>'
+            // No size pills (Ethan, 2026-10-22): the drag hints say the size
+            // as it is placed ("Place Beside · ⅓ Row"), which is when it matters.
+            + '</div>'
+            // On the page: Remove where Add was (Ethan, 2026-10-22 — no "On Page"
+            // label; the button says it). The same as the widget's ×.
+            + (on ? '<button type="button" class="qp-lib-rm" onclick="qpLibraryRemove(\x27' + id + '\x27)">Remove</button>'
+                : '<button type="button" class="qp-lib-add" draggable="false" onclick="qpAddWidget(\'' + id + '\')">Add</button>')
+            + '</div>';
+    }).join('') : '<div class="qp-lib-none">' + (q ? 'No widgets match “' + escapeHtml(q) + '”.' : 'No widgets to add yet.') + '</div>';
+}
+// A drag out of the drawer is a card drag (_qpDrag.key) for a card that is not
+// on the page yet (_qpDrag.add). <main>'s own dragover/drop do the rest; the
+// drop builds the widget there (see the drop handler in _qpWireDrag).
+function _qpLibDragStart(e) {
+    const row = e.target.closest && e.target.closest('[data-qp-add]');
+    const main = _qpMain();
+    if (!row || !main || !_qpEditing) return;
+    const id = row.getAttribute('data-qp-add');
+    _qpDrag = { key: id, add: id };
+    _qpWireDrag(main);
+    try { e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', 'qp-add:' + id); } catch (_) {}
+    // Next frame, as for every drag here: changing anything inside dragstart
+    // makes Chrome cancel the drag. Then the drawer steps out of the way.
+    requestAnimationFrame(function () {
+        if (!_qpDrag) return;
+        const ov = document.getElementById('qpLib');
+        if (ov) ov.classList.add('qp-lib-carrying');
+        main.classList.add('qp-dragging-any');
+        _qpRenderSlots(main);
+    });
+}
+// Let go anywhere that is not a drop target: the drawer comes back as it was.
+function _qpLibDragEnd() {
+    const main = _qpMain();
+    _qpEdgeV = 0;
+    if (_qpDrag && _qpDrag.add) { _qpDrag = null; if (main) { _qpClearSlots(main); _qpRenderControls(main); } }
+    const ov = document.getElementById('qpLib');
+    if (ov) ov.classList.remove('qp-lib-carrying');
+}
+
+// --- WIDGET CARDS: one painter for every added widget ---
+// Each widget is the same card (Ethan wanted them to read as one set): its
+// tool's tabs with counts, a big number, one line of context, the next few
+// items with an Overdue / Today / date chip, and "Open … →". A widget's tabs
+// are PIECES (QP_FAMILIES[id]): drag one out for a card of its own, combine
+// them back, × to put one back. A card holding one piece is titled by it (the
+// widget's name moves up to the eyebrow) and has no tabs; in Customize the
+// tabs are what you drag a piece out by, as on Action Items and Your Feed.
+//
+// _QP_WSPEC[id] says how: load() is the tool's OWN read (never a write, never
+// anything that costs a call to eBay or Shopify), and model(data, tab) turns it
+// into { n, big, small, aside, sub, cap, lines, link } for one tab. Loads are
+// cached (ttl) and re-run at once by the tool's realtime ping where it has one
+// (_RT_TOOL_CHECKS → _qpWReload*). A failed load waits a minute before trying
+// again: retrying on every redraw would loop, because each try redraws.
+const _qpW = {};
+function _qpWState(id) { return _qpW[id] || (_qpW[id] = { data: null, at: 0, busy: false, err: false, tab: {} }); }
+async function _qpWLoad(id, force) {
+    const spec = _QP_WSPEC[id], st = _qpWState(id);
+    if (!spec || st.busy) return;
+    if (!force && st.at && Date.now() - st.at < (st.data ? (spec.ttl || 120000) : 60000)) return;
+    st.busy = true;
+    try { st.data = await spec.load(); st.err = false; }
+    catch (e) { st.err = !st.data; }   // keep showing the last good read
+    finally { st.at = Date.now(); st.busy = false; }
+    _qpRenderWidgets();
+}
+function _qpWReload(id) {
+    if (document.querySelector('[data-qp-widget="' + id + '"]')) return _qpWLoad(id, true);
+}
+function _qpClaimsReload() { return _qpWReload('claims'); }
+function _qpWReloadB2b() { return _qpWReload('b2b'); }
+function _qpWReloadCallbacks() { return _qpWReload('callbacks'); }
+function qpWTab(id, key, tab) {
+    _qpWState(id).tab[key] = tab;
+    _qpRenderWidgets();
+}
+// An Overdue / Today / date chip for a YYYY-MM-DD deadline; '' with no date.
+function _qpWDue(day, today) {
+    const d = String(day || '').slice(0, 10);
+    if (!d) return '';
+    if (d < today) return '<span class="qp-cw-due bad">Overdue</span>';
+    if (d === today) return '<span class="qp-cw-due bad">Today</span>';
+    return '<span class="qp-cw-due warn">' + escapeHtml(_samShortDate(Date.parse(d + 'T12:00:00'))) + '</span>';
+}
+function _qpWChip(text, cls) { return '<span class="qp-cw-due ' + (cls || 'grey') + '">' + escapeHtml(text) + '</span>'; }
+function _qpWLine(chip, text, right) {
+    return '<div class="qp-cw-ln">' + (chip || '') + '<span class="qp-cw-lt">' + escapeHtml(text) + '</span>'
+        + (right ? '<b>' + escapeHtml(right) + '</b>' : '') + '</div>';
+}
+const _qpWToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+// "Emerson H." — a first name and initial is enough to know who to call;
+// the number stays in the tool.
+function _qpWWho(name) {
+    const p = String(name || '').trim().split(/\s+/).filter(Boolean);
+    return p.length > 1 ? p[0] + ' ' + p[p.length - 1].charAt(0) + '.' : (p[0] || '');
+}
+// eBay titles arrive with HTML entities in them ("21.5&#34;").
+function _qpClaimsText(s) {
+    const t = document.createElement('textarea');
+    t.innerHTML = String(s || '');
+    return t.value;
+}
+
+// One widget card — the widget's own, or a piece split out of it.
+function _qpWidgetCard(el, rows, id) {
+    const spec = _QP_WSPEC[id], w = QP_WIDGETS[id];
+    const box = el.querySelector('.qp-ai');
+    const main = _qpMain();
+    if (!spec || !box || !main) return;
+    _qpWLoad(id, false);
+    const st = _qpWState(id);
+    const key = _qpKey(el);
+    const order = spec.tabs.map(t => t[0]);
+    const mine = _qpCardPieces(main, rows || _qpCurrentRows(main), key)
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    const pieces = mine.length ? mine : order;
+    const one = pieces.length === 1 ? spec.tabs.find(t => t[0] === pieces[0]) : null;
+    const where = spec.where(st.data) || 'Your Store';
+    const head = '<div class="qp-ai-head"><span class="sam-mico qp-cw-ico ' + w.tone + '" aria-hidden="true">' + w.icon + '</span><div>'
+        + '<div class="ew-eyebrow">' + escapeHtml(where + ' · ' + (one ? w.label : spec.when)) + '</div>'
+        + '<div class="qp-ai-title">' + escapeHtml(one ? one[2] : w.label) + '</div></div></div>';
+    let body;
+    const off = st.data && spec.off ? spec.off(st.data) : '';
+    if (!st.data) {
+        body = '<div class="status-message">' + (st.err ? 'Couldn\'t load. It will try again shortly.' : 'Syncing…') + '</div>';
+    } else if (off) {
+        body = '<div class="qp-hl-sub" style="margin-top:12px">' + off + '</div>';
+    } else {
+        const m = {};
+        pieces.forEach(p => { m[p] = spec.model(st.data, p); });
+        let tab = st.tab[key];
+        if (pieces.indexOf(tab) === -1) tab = pieces.find(p => m[p].n) || pieces[0];
+        const it = m[tab];
+        const tabs = one ? '' : '<div class="qp-ai-tabs ew-seg">' + spec.tabs.filter(t => pieces.indexOf(t[0]) !== -1).map(function (t) {
+            return '<button type="button" class="toggle-btn' + (t[0] === tab ? ' active' : '') + (_qpEditing ? ' qp-piece-drag" draggable="true' : '')
+                + '" data-qp-drag-piece="' + id + '/' + t[0] + '" title="' + escapeHtml(_qpEditing ? 'Drag out to give it its own card' : t[2])
+                + '" onclick="qpWTab(\'' + id + '\', \'' + key + '\', \'' + t[0] + '\')">'
+                + escapeHtml(t[1]) + ' <span class="qp-ai-cnt">' + m[t[0]].n + '</span></button>';
+        }).join('') + '</div>';
+        // A card with no tabs has room for one more line.
+        const room = one ? 4 : 3;
+        body = tabs + '<div class="qp-ai-body">'
+            + '<div class="qp-ai-top"><div class="qp-hl-big">' + it.big + '<small>' + escapeHtml(it.small) + '</small></div>'
+            + (it.aside ? '<span class="qp-hl-sub">' + escapeHtml(it.aside) + '</span>' : '') + '</div>'
+            + (it.sub ? '<div class="qp-hl-sub">' + it.sub + '</div>' : '')
+            + (it.lines && it.lines.length ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '') + it.lines.slice(0, room).join('') : '')
+            + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
+    }
+    const html = head + body;
+    if (box._qpHtml !== html) { box.innerHTML = html; box._qpHtml = html; }
+}
+
+const _QP_WSPEC = {
+    // CLAIMS & DISPUTES — the store tool's own four tabs, each counting what
+    // needs attention by the tool's rules (_HOLD_VIEWS.due, the same count as
+    // its red badges), the next ones due by due_on. The tool's own GET and NEVER
+    // its sync: the sync POST asks eBay for fresh data, and a card on the home
+    // page must not cost an eBay call each time it is drawn.
+    // [tab, label on a tab, full name]. "Cases" on a tab: four equal tabs leave
+    // no room for "Cases & Disputes 2" (it was cut off at 104px), so the full
+    // name rides in the tooltip — and is the title of a Cases card on its own.
+    claims: {
+        when: 'Right Now',
+        tabs: [['mismatch', 'Mismatches', 'Mismatches'], ['returns', 'Returns', 'Returns'], ['cases', 'Cases', 'Cases & Disputes'], ['payments', 'Payments', 'Payments']],
+        where: () => (typeof _claimsDueScope === 'function' ? _claimsDueScope() : []).join(' · '),
+        load: async function () {
+            const stores = _claimsDueScope();
+            const res = await fetch(`${CLAIMS_DISPUTES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+            const j = await res.json();
+            if (!j || !j.success) throw new Error((j && j.error) || 'load failed');
+            return j;
+        },
+        off: d => (d.stores || []).length ? '' : 'Claims &amp; Disputes isn\'t switched on for '
+            + escapeHtml(_claimsDueScope().join(' and ') || 'your store') + ' yet.',
+        model: function (d, tab) {
+            if (!d._split) d._split = _qpClaimsSplit(d);
+            const it = d._split[tab];
+            const today = String(d.today || '').slice(0, 10);
+            const open = it.due.reduce((a, e) => a + (Number(e.x.amount || e.x.outstanding || e.x.total) || 0), 0);
+            const late = it.due.filter(e => e.x.due_on && String(e.x.due_on).slice(0, 10) < today).length;
+            return {
+                n: it.due.length, big: it.due.length, small: 'need attention',
+                aside: open ? _qpHLK(open) + ' on them' : '',
+                sub: (late ? '<span class="bad">' + late + ' overdue</span>' : (it.due.length ? '<span class="good">Nothing overdue</span>' : '<span class="good">All clear</span>'))
+                    + (it.waiting ? ' · ' + it.waiting + ' waiting on someone else' : ''),
+                cap: 'Due Next', lines: it.due.map(e => _qpClaimsLine(e, today)),
+                link: ['Open Claims & Disputes', "openClaimsTool('" + tab + "')"],
+            };
+        },
+    },
+    // CUSTOMER CALL BACKS — In Stock is the feed card's own rule: a call back
+    // (any store's) with a SUGGESTED match at a store you hold, not completed or
+    // archived (checkCallbackMatchReminders). Open and Contacted are your own
+    // store's list by status. The tool's GET; refreshed by its realtime ping.
+    callbacks: {
+        when: 'Right Now',
+        tabs: [['instock', 'In Stock', 'In Stock'], ['open', 'Open', 'Open Call Backs'], ['contacted', 'Contacted', 'Contacted']],
+        where: () => (_cbMatchScope() || []).join(' · '),
+        load: () => cbFetch('active', 'ALL'),
+        model: function (rows, tab) {
+            const scope = _cbMatchScope() || [];
+            const live = (rows || []).filter(e => !e.archived_at && e.status !== 'completed');
+            const link = ['Open Call Backs', "window.location.href='operations.html#callbacks'"];
+            if (tab === 'instock') {
+                const hits = live.map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
+                    .filter(h => h.m.length).sort((a, b) => String(a.e.date_of_call).localeCompare(String(b.e.date_of_call)));
+                return {
+                    n: hits.length, big: hits.length, small: hits.length === 1 ? 'call to make' : 'calls to make',
+                    sub: hits.length ? 'Something a customer asked for is on your shelf' : '<span class="good">Nothing to call about yet</span>',
+                    cap: 'Call Next', link,
+                    lines: hits.map(h => _qpWLine(_qpWChip('In Stock', 'good'),
+                        h.e.item + ' — ' + _qpWWho(h.e.customer_name) + (scope.includes(h.e.store) ? '' : ' (' + h.e.store + ')'),
+                        h.m[0].price ? _qpHLK(h.m[0].price) : '')),
+                };
+            }
+            const list = live.filter(e => scope.includes(e.store) && e.status === tab)
+                .sort((a, b) => String(a.date_of_call).localeCompare(String(b.date_of_call)));
+            return {
+                n: list.length, big: list.length, small: tab === 'open' ? 'open' : 'contacted',
+                sub: tab === 'open' ? 'Waiting for the item to come in' : 'Called — waiting to hear back',
+                cap: tab === 'open' ? 'Oldest First' : 'Called', link,
+                lines: list.map(e => _qpWLine(_qpWChip(_samShortDate(Date.parse(String(e.date_of_call).slice(0, 10) + 'T12:00:00')) || '—'),
+                    e.item + ' — ' + _qpWWho(e.customer_name), '')),
+            };
+        },
+    },
+    // BUSINESS-TO-BUSINESS — Pricing is the feed's B2B Pricing card: deals in
+    // pricing that are yours (or corp's), due a week after they entered it
+    // (_b2bPricingDue). Need You is the other stages waiting on you
+    // (_b2bActionFor), oldest first. Unlisted is the weekly unlisted-value read.
+    // The tool's GETs; refreshed by its realtime ping.
+    b2b: {
+        when: 'This Week',
+        tabs: [['pricing', 'Pricing', 'Pricing'], ['need', 'Need You', 'Waiting On You'], ['unlisted', 'Unlisted', 'Unlisted Value']],
+        where: () => (_b2bIsCorp() ? 'All Stores' : _b2bMyStores().join(' · ')),
+        load: async function () {
+            const scope = encodeURIComponent(_b2bFetchScope());
+            const deals = (await _b2bGet(`store=${scope}&archive=0`)).map(_b2bShapeDeal).filter(_b2bInScope);
+            const unl = await _b2bGet(`unlisted=1&store=${scope}`).catch(() => []);
+            return { deals, unl };
+        },
+        model: function (d, tab) {
+            const link = ['Open Business-to-Business', "window.location.href='operations.html#b2b'"];
+            if (tab === 'pricing') {
+                const today = _b2bCentralDay(new Date());
+                const list = d.deals.filter(x => x.stage === 'pricing' && (_b2bIsCorp() || _b2bActionFor(x)))
+                    .map(x => ({ x, due: _b2bPricingDue(x, today) })).filter(e => e.due)
+                    .sort((a, b) => a.due.left - b.due.left);
+                const late = list.filter(e => e.due.late).length;
+                return {
+                    n: list.length, big: list.length, small: list.length === 1 ? 'deal to price' : 'deals to price',
+                    sub: late ? '<span class="bad">' + late + ' overdue</span>' : (list.length ? '<span class="good">Nothing overdue</span>' : '<span class="good">All clear</span>'),
+                    cap: 'Due Next', link,
+                    lines: list.map(e => _qpWLine(_qpWDue(e.due.dueOn, today),
+                        e.x.ref + (e.x.company ? ' · ' + e.x.company : '') + (e.x.total_units ? ' · ' + e.x.total_units + (Number(e.x.total_units) === 1 ? ' unit' : ' units') : ''),
+                        Number(e.x.total_value) > 0 ? _qpHLK(e.x.total_value) : '')),
+                };
+            }
+            if (tab === 'need') {
+                const list = d.deals.filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor)
+                    .sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
+                return {
+                    n: list.length, big: list.length, small: list.length === 1 ? 'deal needs you' : 'deals need you',
+                    sub: list.length ? 'Oldest has been ' + _b2bDaysIn(list[0]) + ' days at its stage' : '<span class="good">Nothing waiting on you</span>',
+                    cap: 'Oldest First', link,
+                    lines: list.map(x => _qpWLine(_qpWChip((B2B_STAGE[x.stage] || {}).label || x.stage, 'warn'),
+                        x.ref + (x.company ? ' · ' + x.company : ''), _b2bDaysIn(x) + 'd')),
+                };
+            }
+            const list = (d.unl || []).filter(r => Number(r.unlisted_units) > 0)
+                .sort((a, b) => (Number(b.unlisted_value) || 0) - (Number(a.unlisted_value) || 0));
+            const total = list.reduce((a, r) => a + (Number(r.unlisted_value) || 0), 0);
+            const units = list.reduce((a, r) => a + (Number(r.unlisted_units) || 0), 0);
+            return {
+                n: list.length, big: _qpHLK(total), small: 'unlisted',
+                sub: list.length ? units + ' unit' + (units === 1 ? '' : 's') + ' on ' + list.length + ' deal' + (list.length === 1 ? '' : 's') : '<span class="good">Everything is listed</span>',
+                cap: 'Largest First', link,
+                lines: list.map(r => _qpWLine(_qpWChip(r.unlisted_units + (Number(r.unlisted_units) === 1 ? ' unit' : ' units')),
+                    r.ref + (r.company ? ' · ' + r.company : '') + (_b2bIsCorp() && r.store ? ' (' + r.store + ')' : ''), _qpHLK(r.unlisted_value))),
+            };
+        },
+    },
+    // SPEEKS CONNECT — the two numbers the feed's photo and category cards read
+    // (?view=counts: per-store counts only, the light payload that runs on a
+    // timer anyway), so the lines are a breakdown, not a list of listings.
+    connect: {
+        when: 'Listing Health',
+        ttl: 300000,
+        // Titles (Ethan, 2026-10-22: "why is titles not showing up"): the
+        // Titles tool's own ?view=counts — open title suggestions per store,
+        // what its page header shows — from listing-titles, a second light read.
+        tabs: [['photos', 'Pictures', 'Pictures'], ['category', 'Categories', 'Categories'], ['titles', 'Titles', 'Titles']],
+        has: t => _jumpFeatureVisible(t === 'titles' ? 'ec-view-titles' : t === 'photos' ? 'ec-view-photos' : 'ec-view-categories'),
+        where: d => ((d && d.scope && d.scope.stores) || []).join(' · ') || (sessionStorage.getItem('speeksUserStore') || ''),
+        load: async function () {
+            // SAMPLE COUNTS for the localhost test login, like _lvTestPayload:
+            // ?view=counts answers only to a real PIN, which the test user has
+            // not got, so the card sat on "Couldn't load" (Ethan, 2026-10-22: "get
+            // SPEEKS Connect to load ... or put dummy data in it"). Same shape as
+            // the function's reply; every number is made up. Never reached on a
+            // real login: _speeksTestSession is localhost-only, AND no PIN.
+            if (window._speeksTestSession && !sessionStorage.getItem('speeksUserPin')) {
+                const s = (sessionStorage.getItem('speeksUserStore') || 'OVL').toUpperCase();
+                const one = n => ({ [s]: n });
+                return { scope: { stores: [s] }, photos: one(3), other: one(9), unmatched: one(2), misfiled: one(1), lt: { titles: one(5) }, sample: true };
+            }
+            const has = _QP_WSPEC.connect.has;
+            const [d, lt] = await Promise.all([
+                has('photos') || has('category') ? _rcFetch('?view=counts') : Promise.resolve({ scope: { stores: _claimStores() } }),
+                has('titles') ? _ltFetch('?view=counts').catch(() => null) : Promise.resolve(null),
+            ]);
+            if (d) d.lt = lt;
+            if (!d || (d.scope && d.scope.corp)) throw new Error('no store counts');
+            return d;
+        },
+        model: function (d, tab) {
+            const stores = (d.scope && d.scope.stores) || [];
+            const sum = k => stores.reduce((t, s) => t + (Number(d[k] && d[k][s]) || 0), 0);
+            if (tab === 'photos') {
+                const n = sum('photos');
+                return {
+                    n, big: n, small: n === 1 ? 'listing with no pictures' : 'listings with no pictures',
+                    sub: n ? '<span class="bad">Live on the online store — a shopper sees an empty box</span>' : '<span class="good">Every live listing has a picture</span>',
+                    cap: stores.length > 1 ? 'By Store' : '',
+                    lines: stores.length > 1 ? stores.map(s => _qpWLine(_qpWChip(s), (Number(d.photos && d.photos[s]) || 0) + ' with no pictures', '')) : [],
+                    link: ['Open Pictures', "window.location.href='operations.html#photos'"],
+                };
+            }
+            if (tab === 'titles') {
+                const n = stores.reduce((t, s) => t + (Number(d.lt && d.lt.titles && d.lt.titles[s]) || 0), 0);
+                return {
+                    n, big: n, small: n === 1 ? 'title to check' : 'titles to check',
+                    sub: n ? 'Suggested fixes waiting for someone to read them' : '<span class="good">No title fixes waiting</span>',
+                    cap: stores.length > 1 ? 'By Store' : '',
+                    lines: stores.length > 1 ? stores.map(s => _qpWLine(_qpWChip(s), (Number(d.lt && d.lt.titles && d.lt.titles[s]) || 0) + ' to check', '')) : [],
+                    link: ['Open Titles', "window.location.href='operations.html#titles'"],
+                };
+            }
+            const other = sum('other'), unm = sum('unmatched'), mis = sum('misfiled');
+            const n = other + unm + mis;
+            const lines = [];
+            if (other) lines.push(_qpWLine(_qpWChip(String(other), 'warn'), 'In “Other” — a shelf is suggested', ''));
+            if (unm) lines.push(_qpWLine(_qpWChip(String(unm), 'warn'), 'In “Other” — nothing matched, pick one', ''));
+            if (mis) lines.push(_qpWLine(_qpWChip(String(mis), 'bad'), 'In the wrong category', ''));
+            return {
+                n, big: n, small: n === 1 ? 'listing to sort' : 'listings to sort',
+                sub: n ? 'Filed where a shopper will not look for them' : '<span class="good">Every listing is on its shelf</span>',
+                cap: 'What Is Waiting', lines,
+                link: ['Open Categories', "window.location.href='operations.html#categories'"],
+            };
+        },
+    },
+};
+function _qpClaimsSplit(d) {
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state);
+    const wait = x => _HOLD_VIEWS.waiting.states.includes(x.state) && !_HOLD_DONE.includes(x.state);
+    const cases = (d.cases || []);
+    const by = {
+        mismatch: (d.mismatches || []).map(x => ({ x, type: 'mismatch' })),
+        returns: cases.filter(_holdIsReturn).map(x => ({ x, type: 'return' })),
+        cases: cases.filter(c => !_holdIsReturn(c)).map(x => ({ x, type: _holdIsInr(x) ? 'inr' : 'case' }))
+            .concat((d.disputes || []).map(x => ({ x, type: x.source === 'shopify' ? 'chargeback' : 'dispute' }))),
+        payments: (d.payments || []).map(x => ({ x, type: 'payment' })),
+    };
+    const out = {};
+    Object.keys(by).forEach(function (t) {
+        out[t] = {
+            due: by[t].filter(e => need(e.x)).sort((a, b) => String(a.x.due_on || '9').localeCompare(String(b.x.due_on || '9'))),
+            waiting: by[t].filter(e => wait(e.x)).length,
+        };
+    });
+    return out;
+}
+function _qpClaimsLine(e, today) {
+    const x = e.x;
+    const what = { mismatch: 'Refund Mismatch', return: 'Return', inr: 'Item Not Received', case: 'eBay Case',
+        dispute: 'Payment Dispute', chargeback: 'Chargeback', payment: 'Unpaid Order' }[e.type];
+    const name = _qpClaimsText(x.item_title) || x.shopify_order_name || x.order_name || x.order_no || x.ebay_order_id || '';
+    const amt = Number(x.amount || x.outstanding || x.total) || 0;
+    return _qpWLine(_qpWDue(x.due_on, today), what + (name ? ' · ' + name : ''), amt ? _qpHLK(amt) : '');
+}
+
 function _qpApplyLayout() {
     const main = _qpMain();
     if (!main) return;
@@ -50935,14 +51628,16 @@ function _qpKeepScroll(fn) {
     se.scrollTop = y;
 }
 
+// The cards the page always has: not split-out shells, and not added widgets
+// (so a page with a widget on it is never "the default").
 function _qpOriginalKeys(main) {
-    return _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell'); }).map(_qpKey);
+    return _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell') && !b.hasAttribute('data-qp-widget'); }).map(_qpKey);
 }
 
 // Commit a new arrangement: rebuild, save (or forget, if it IS the default),
 // and redraw the handles for where everything now sits.
 function _qpCommit(main, rows) {
-    rows = rows.filter(function (r) { return r.items.length; });
+    rows = _qpPairWidgets(main, rows.filter(function (r) { return r.items.length; }));
     _qpKeepScroll(function () {
         _qpBuild(main, rows);
         const isDefault = _qpSig(rows) === _qpSig(_qpDefaults(_qpOriginalKeys(main)));
@@ -51102,6 +51797,10 @@ function _qpRowBar(row, cells) {
     bar.setAttribute('role', 'group');
     bar.setAttribute('aria-label', 'Card widths: ' + labels.join(' and '));
     bar.innerHTML = '<span class="qp-rowbar-lab">Card Widths</span>' + QP_SPLITS.map(function (s, n) {
+        // No "SPEEKS Connect Wider" when that would take a widget past the
+        // most of a row it may have (_qpMaxW) — the button would do nothing.
+        const cap = s.wide === -1 ? null : _qpMaxW(keys[s.wide]);
+        if (cap && s.w[s.wide] / (s.w[0] + s.w[1]) > cap) return '';
         const on = g[0] === s.w[0] && g[1] === s.w[1];
         const words = s.wide === -1 ? 'Same Width' : escapeHtml(labels[s.wide]) + ' Wider';
         return '<button type="button" class="qp-size' + (on ? ' on' : '') + '" aria-pressed="' + on + '"'
@@ -51111,13 +51810,21 @@ function _qpRowBar(row, cells) {
 }
 
 function _qpRenderControls(main) {
-    main.querySelectorAll('.qp-slot, .qp-rowbar, .qp-ov, .qp-x').forEach(function (c) { c.remove(); });
+    main.querySelectorAll('.qp-slot, .qp-rowbar, .qp-ov, .qp-x, .qp-lone').forEach(function (c) { c.remove(); });
     main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
     const rowsNow = _qpCurrentRows(main);
     const rows = Array.from(main.querySelectorAll(':scope > .qp-row:not([hidden])'));
     rows.forEach(function (row) {
         const cells = Array.from(row.querySelectorAll(':scope > .qp-cell:not([hidden])'));
         if (cells.length === 2) main.insertBefore(_qpRowBar(row, cells), row);
+        // A widget that needs a card beside it, alone because no row had room
+        // (_qpPairWidgets): mark the space it is waiting to share.
+        if (cells.length === 1 && _qpNeedsPartner(_qpKey(cells[0].querySelector(':scope > [data-qp-block]')))) {
+            const lone = document.createElement('div');
+            lone.className = 'qp-lone';
+            lone.innerHTML = '<span>Add a Card Beside It</span>';
+            row.appendChild(lone);
+        }
         cells.forEach(function (cell) {
             const b = cell.querySelector(':scope > [data-qp-block]');
             const key = _qpKey(b);
@@ -51142,6 +51849,17 @@ function _qpRenderControls(main) {
                 x.setAttribute('aria-label', x.title);
                 x.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
                 x.onclick = function () { qpPutBack(key); };
+                cell.appendChild(x);
+            }
+            // An added widget's × takes it off the page (it goes back in the drawer).
+            if (b.hasAttribute('data-qp-widget')) {
+                const x = document.createElement('button');
+                x.type = 'button';
+                x.className = 'qp-x';
+                x.title = 'Remove from Page';
+                x.setAttribute('aria-label', x.title);
+                x.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+                x.onclick = function () { qpRemoveWidget(key); };
                 cell.appendChild(x);
             }
             // A card with two or more pieces showing lets each one be dragged out
@@ -51201,7 +51919,11 @@ function _qpTargetAt(main, el, x) {
     const slot = el && el.closest && el.closest('.qp-slot');
     if (slot && main.contains(slot)) {
         const b = slot.getAttribute('data-qp-before');
-        return { zone: 'gap', el: slot, before: b == null ? null : Number(b) };
+        const t = { zone: 'gap', el: slot, before: b == null ? null : Number(b) };
+        // A row of its own would leave a gap beside a widget that may not
+        // fill one, so the slot says so and will not take it (full = refused).
+        if (_qpDrag && _qpNeedsPartner(_qpDrag.key || (_qpDrag.fam + ':' + _qpDrag.piece))) { t.full = true; t.lone = true; }
+        return t;
     }
     const cell = el && el.closest && el.closest('.qp-cell');
     if (!cell || !main.contains(cell) || !_qpDrag) return null;
@@ -51237,9 +51959,12 @@ function _qpShowHint(main, t) {
     const sig = t && t.cell ? t.key + '|' + t.zone + '|' + (t.full ? 1 : 0) : '';
     if (old && old.getAttribute('data-sig') === sig) return;
     if (old) old.remove();
-    main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
+    main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop', 'qp-slot-no'); });
     if (!t) return;
     t.el.classList.add('qp-drop');
+    // Told while dragging (Ethan, 2026-10-22): a new row is no place for a
+    // widget that needs a card beside it — the slot goes red and says why.
+    if (t.lone) t.el.classList.add('qp-slot-no');
     if (!t.cell) return;
     const ov = document.createElement('div');
     ov.setAttribute('data-sig', sig);
@@ -51260,7 +51985,16 @@ function _qpShowHint(main, t) {
             + '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Makes One Card: ' + escapeHtml(label) + '</span>';
     } else {
         ov.className = 'qp-ov qp-ov-edge ' + (t.zone === 'left' ? 'l' : 'r') + (t.full ? ' full' : '');
-        const words = t.full ? 'Row Is Full · 3 Max' : t.fromHere ? 'Take Out · Place Here' : 'Place Beside';
+        let words = t.full ? 'Row Is Full · 3 Max' : t.fromHere ? 'Take Out · Place Here' : 'Place Beside';
+        // Carrying a widget: say the size it will be there (Ethan: "inform
+        // when dragging"). The row shares evenly once a card joins it.
+        const dk = _qpDrag.key || (_qpDrag.fam + ':' + _qpDrag.piece);
+        if (!t.full && _qpMaxW(dk)) {
+            const rows = _qpCurrentRows(main);
+            const row = rows[t.row];
+            const n = row ? row.items.filter(function (k) { return k !== dk && _qpKeyShown(main, k); }).length + 1 : 1;
+            words += ' · ' + ({ 1: 'Full Row', 2: '½ Row', 3: '⅓ Row' }[n] || '');
+        }
         ov.innerHTML = '<span>' + words + '</span>';
     }
     t.cell.appendChild(ov);
@@ -51330,6 +52064,8 @@ function _qpWireDrag(main) {
         _qpClearSlots(main);
         if (!t || t.full) { _qpRenderControls(main); return; }
         e.preventDefault();
+        // A widget carried out of the drawer is built where it lands.
+        if (drag.add) return qpAddWidget(drag.add, t);
         _qpDropAt(main, drag, t);
     });
     main.addEventListener('dragend', function () {
@@ -51387,7 +52123,7 @@ function _qpSetEditing(main, on) {
         _qpWireDrag(main);
         _qpRenderControls(main);
     } else {
-        main.querySelectorAll('.qp-rowbar, .qp-x').forEach(function (c) { c.remove(); });
+        main.querySelectorAll('.qp-rowbar, .qp-x, .qp-lone').forEach(function (c) { c.remove(); });
         main.querySelectorAll('[data-qp-block][data-qp-grab]').forEach(function (b) {
             b.draggable = false;
             b.removeAttribute('data-qp-grab');
@@ -51399,8 +52135,9 @@ function _qpSetEditing(main, on) {
     // Action Items cards keep their card view in Customize mode; their tabs
     // become drag handles (and stop being them again), so redraw.
     if (typeof _qpRenderActions === 'function') _qpRenderActions();
-    // So do the feed's tabs.
+    // So do the feed's tabs, and an added widget's.
     if (typeof _samPainted !== 'undefined' && _samPainted) renderActionFeedNow();
+    _qpRenderWidgets();
     const bar = document.getElementById('qpBar');
     if (bar) bar.classList.toggle('is-editing', _qpEditing);
     const btn = document.getElementById('qpEditBtn');
@@ -51416,6 +52153,10 @@ function _qpSetEditing(main, on) {
     }
     const reset = document.getElementById('qpResetBtn');
     if (reset) reset.hidden = !(_qpEditing && main.classList.contains('qp-custom'));
+    // "+" opens the widget drawer — in Customize only, like Reset.
+    const add = document.getElementById('qpAddBtn');
+    if (add) add.hidden = !_qpEditing;
+    if (!_qpEditing) qpLibraryClose();
 }
 
 function qpToggleEdit() {
@@ -51451,6 +52192,8 @@ function qpResetClose() {
 function _qpResetNow() {
     const main = _qpMain();
     if (!main) return;
+    // The default has no added widgets: they go, not to the bottom of the page.
+    _qpEnsureWidgets(main, []);
     _qpSave(null);
     _qpKeepScroll(function () { _qpBuild(main, _qpDefaults(_qpOriginalKeys(main))); });
     main.classList.remove('qp-custom');
@@ -52882,7 +53625,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', '_qpClaimsReload'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
     bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
@@ -52903,10 +53646,10 @@ const _RT_TOOL_CHECKS = {
     dailyBrief:    ['checkDailyBriefDrafts'],
     gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
-    b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
+    b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders', '_qpWReloadB2b'],
     // callback-match broadcasts when the SET of matches moves — a new one lights
     // the card, a sold unit clears it, both without a reload.
-    callbackMatch: ['checkCallbackMatchReminders', '_cbRealtimeRefresh'],
+    callbackMatch: ['checkCallbackMatchReminders', '_cbRealtimeRefresh', '_qpWReloadCallbacks'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
     // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
