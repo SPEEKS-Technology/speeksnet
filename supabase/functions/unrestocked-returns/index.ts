@@ -491,9 +491,13 @@ function build(fresh: Row[], older: Row[], blind: string[], days: string[]) {
   const stat = (value: string, label: string, color: string) =>
     `<td width="33%" align="center" style="font-size:12px;color:${C.faint};text-align:center;">
        <b style="color:${color};font-size:20px;">${value}</b><br>${esc(label)}</td>`;
-  return `<!doctype html><html><body style="margin:0;padding:18px;background:#f4f7f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+  // The card is width 100% capped at 600, not a fixed 600: on a phone a fixed
+  // 600 overflowed, the mail app shrank it to fit, and the grey page behind it
+  // stopped short of the card's right edge (Ethan's phone, 2026-10-23).
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:10px;background:#f4f7f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border:1px solid ${C.line};border-radius:12px;overflow:hidden;">
+<table width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#fff;border:1px solid ${C.line};border-radius:12px;overflow:hidden;">
   <tr><td style="padding:16px 14px;background:${C.chip};">
     <div style="font-size:17px;font-weight:800;color:${C.ink};">Returned But Not Back In Stock</div>
     <div style="font-size:12.5px;color:${C.faint};margin-top:5px;line-height:1.6;">
@@ -502,7 +506,7 @@ function build(fresh: Row[], older: Row[], blind: string[], days: string[]) {
   </td></tr>
   <tr><td style="padding:14px;border-top:1px solid ${C.line};">
     <table width="100%" cellpadding="0" cellspacing="0"><tr>
-      ${stat(String(fresh.length), "New", C.bad)}
+      ${stat(String(fresh.length), "New", fresh.length ? C.bad : C.ink)}
       ${stat(String(older.length), "Still Open", older.length ? C.warn : C.ink)}
       ${stat(money(total([...fresh, ...older])), "Refunded", C.ink)}
     </tr></table>
