@@ -1724,6 +1724,20 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
   // sb() throws on a missing table; before 0148 is applied, say so plainly.
   const doneRows = await allRows(`pq_shot_labels?select=product_id,sheet_slug,confirmed_at&order=id`).catch(() => null);
   if (!Array.isArray(doneRows)) return { error: "no_table", detail: "pq_shot_labels is not in the database yet (migration 0148)" };
+  // LOCAL PREFILL (0157, Ethan 2026-10-22). Never-graded listings the LOCAL model
+  // answered (tools/pq-train/prefill.py), so More For Training has more to offer
+  // without an Opus grade (~$0.26 each). They join the queue like a grade with
+  // only shots, closeup and reflection known; everything else starts blank.
+  // `model` (e.g. local-r4) rides onto the saved labels.
+  const prefilled = await allRows(`pq_local_prefill?store_code=in.(${scope.stores.join(",")})`
+    + `&select=store_code,product_id,sheet_slug,title,model,photos,created_at&order=product_id`).catch(() => []);
+  const gradedIds = new Set(graded.map((g: any) => g.product_id));
+  for (const r of prefilled) {
+    if (gradedIds.has(r.product_id) || !Array.isArray(r.photos) || !r.photos.length) continue;
+    graded.push({ store_code: r.store_code, product_id: r.product_id, sku: null, title: r.title, sheet_slug: r.sheet_slug,
+                  model: r.model, stamp: null, reviewed_at: r.created_at, status: "open", decided_note: null,
+                  photos: r.photos.map((p: any) => ({ n: p.n, shots: p.shots })), local: r.photos });
+  }
   const lastSaved = new Map<string, string>();
   for (const r of doneRows) {
     const at = new Date(r.confirmed_at).toISOString();
@@ -1796,8 +1810,13 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
         // A reopened listing (REDO) starts from his own saved answers, by photo address.
         const mine = reopened(g.product_id) ? new Map<string, any>((await rows(`pq_shot_labels?product_id=eq.${encodeURIComponent(g.product_id)}`
           + `&select=photo_src,photo_n,shots,flags,repeat_of,listing,confirmed_at&limit=100`)).map((r: any) => [r.photo_src, r])) : null;
-        const local = LOCAL_PREFILL[num(g.product_id)] || null;
-        const localOf = (p: { src: string }) => local?.[p.src.split("?")[0].split("/").pop() || ""] || null;
+        const fileOf = (src: string) => String(src).split("?")[0].split("/").pop() || "";
+        const local: Record<string, any> | null = LOCAL_PREFILL[num(g.product_id)]
+          || (g.local ? Object.fromEntries(g.local.map((p: any) => [fileOf(p.src), p])) : null);
+        const localOf = (p: { src: string }) => local?.[fileOf(p.src)] || null;
+        // A local prefill is only good for the photos it looked at: one retaken,
+        // added or moved since means the answers no longer line up.
+        if (g.local && l.photos.some((p, k) => fileOf(g.local[k]?.src || "") !== fileOf(p.src))) { misaligned.push(g.product_id); continue; }
         // A listing broken by the old reorder: his shifted labels give way to the
         // local model's (shots, closeup, reflection; nothing else prefilled).
         const mineOf = (p: { src: string }) => {
@@ -1813,10 +1832,11 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
           // Quick Fix built on these labels. modelSays: the grade's answer on
           // every flag and fact. Each photo's `framing` is his own grade.
           youSaid: ETHAN_SAID[num(g.product_id)] || [],
-          accepted: local ? "your labels here were shifted by an old reorder: these are the local model's answers, check every photo"
+          accepted: g.local ? `prefilled by the local model (${g.model}), never graded: check every photo`
+                  : local ? "your labels here were shifted by an old reorder: these are the local model's answers, check every photo"
                   : anyMine ? `your own labels from ${String(anyMine.confirmed_at).slice(0, 10)}, reopened to re-check`
                   : g.status === "applied" ? String(g.decided_note || "approved") : null,
-          modelSays: mine ? { photos: l.photos.map((p, k) => ({ n: k + 1, flags: (mineOf(p)?.flags || []).filter((x: string) => CONFIRM_FLAGS.includes(x)),
+          modelSays: (mine || local) ? { photos: l.photos.map((p, k) => ({ n: k + 1, flags: (mineOf(p)?.flags || []).filter((x: string) => CONFIRM_FLAGS.includes(x)),
                                                                 repeatOf: mineOf(p)?.repeat_of ?? null })),
                               facts: anyMine?.listing || {} }
                           : modelAnswers(g),
