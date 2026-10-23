@@ -1,5 +1,27 @@
 # Handoff: Picture Quality local model (as of 2026-10-21)
 
+## ⚡⚡⚡⚡⚡ NEWEST (2026-10-22 night) — free local-model prefill BUILT, batch waiting on Ethan's go
+
+- **Branch is now `Main-November-Update-3---Ethan`**, checked out in the main
+  `C:\Users\User\Documents\GitHub\speeksnet` folder. Update 2 and the
+  `speeksnet-nov3` worktree are gone. A **QuickPortal session shares this folder**
+  and has uncommitted `speeks.js` / `styles.css` work. Don't switch branches,
+  pull or reset, and don't commit its files. Commits are local, ahead of origin (not pushed).
+- **Built (`d6245d0`):** migration **0157 `pq_local_prefill`** (applied; next
+  free number is **0158**), `tools/pq-train/prefill.py` (`pick` → `run` → `load`),
+  and confirmView reading the table in More For Training (deployed, live == repo).
+  Saved labels carry `model = local-r4` and `model_shots` = the local answer.
+- **Batch picked, NOT run:** `C:\Users\User\pq-train\prefill-20261022\pick.json`,
+  112 listings / 1,138 photos (consoles 30, lenses 20, motherboards 15, gaming PCs
+  15, Windows laptops 12, desktops 8, GPUs 5, receivers 4, action cams 3, **item
+  lots 0: none never-graded left**). Next, only on Ethan's go:
+  `python tools/pq-train/prefill.py run` (~40 min GPU, free) → `prefill.py load`
+  → un-park Picture Quality in the WORKING COPY (never commit that line) →
+  he labels in More For Training → re-park → re-export gold → build_data →
+  round 5 (his go; rotate `runs\tonight.log` first; keep-awake.ps1 cap is 10 h).
+- **Watch for:** untouched local prefills lean toward what the model already
+  thinks. Saved labels record their source, so measure it before trusting it.
+
 ## ⚡⚡⚡⚡ AFTER THE LABEL RE-CHECK (2026-10-22 evening) — round 4 is really 78%
 
 **Ethan's new bar (10-22): 85% across the board**, then live feedback training
