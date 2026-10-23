@@ -25473,7 +25473,21 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
     .cc-widget[data-qp-hl] > .qp-hl { display: flex; }
     .cc-widget[data-qp-hl].cc-expanded { min-height: 0; }
     /* Less padding round the tab bar — the buttons keep their size (Ethan). */
-    .cc-widget[data-qp-hl] > .cc-tabbar { padding-top: 7px; padding-bottom: 7px; }
+    .cc-widget[data-qp-hl] > .cc-tabbar { padding-top: 5px; padding-bottom: 5px; flex-wrap: nowrap; }
+    /* ...but in a narrow card three 140px buttons do not fit (440px in a 428px
+       card cut "Scorecard" off and wrapped the bar), so they share the width —
+       still all one size as each other. */
+    .cc-widget[data-qp-hl] .cc-seg { flex: 1 1 auto; min-width: 0; max-width: 440px; }
+    /* !important to match the base .cc-seg .toggle-btn (padding) and the flex
+       display set on it elsewhere: "…" only works on a block. */
+    .cc-widget[data-qp-hl] .cc-seg .toggle-btn { flex: 1 1 0; min-width: 0; width: auto; display: block !important; text-align: center; padding: 7px 8px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* The Scorecard data's "Updated as of" goes, as on a one-tab card: each
+       headline carries its own dates, and it wrapped the title in a narrow card. */
+    .cc-widget[data-qp-hl] .cc-updated { display: none; }
+    /* ...and the week beside the title, for the same reason (the Scorecard
+       headline shows its own week): at 1280px it wrapped the title to a second
+       line and took the card past 350. */
+    .cc-widget[data-qp-hl] .ew-title .ew-date { display: none; }
     .cc-widget[data-qp-hl] :is(#sh-tab-action, #cc-collapse) { display: none !important; }
 }
 
@@ -25531,17 +25545,54 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 /* Live: "Open Full Dashboard" on the left, the board's own Daily Breakdown and
    full-screen buttons on the right (.bd-open / .lv-full keep their own look). */
 .qp-hl-footrow { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; }
-.qp-hl-footrow .qp-hl-link { margin-top: 0; padding: 0; }
+.qp-hl-footrow .qp-hl-link { margin-top: 0; padding: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hl-footrow .qp-hl-tools { flex: none; }
 .qp-hl-tools { display: inline-flex; align-items: center; gap: 6px; }
 /* The Live card's Today / Yesterday / Month switch, on its label line, at the
    size of the site's other switches (.ew-seg .toggle-btn — Performance's 4-Week /
    Monthly; Ethan, 2026-10-22), in the site's green for the open one. */
 .qp-hl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* In a narrow card the label trims rather than wrapping to a second line beside
+   the switch (that line cost ~10px of the 350 at 1280px wide). */
+.qp-hl-top > .qp-hl-k { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-hl-switch { display: inline-flex; flex: none; border: 1px solid #d5dce4; border-radius: 8px; overflow: hidden; background: #fff; }
 .qp-hl-switch button { font: inherit; font-size: 11.5px; font-weight: 750; line-height: 16px; padding: 4px 11px; border: none; background: none; color: #647082; cursor: pointer; }
 .qp-hl-switch button + button { border-left: 1px solid #e3e8ee; }
 .qp-hl-switch button:hover { background: #f1f4f7; }
 .qp-hl-switch button.on { background: #e8f7ee; color: #14532d; }
+/* --- ACTION ITEMS CARDS (_qpRenderActions) ---
+   The card's own view (.qp-ai) inside the deck's white frame. The rows stay in
+   the frame, laid out but out of sight — the layout reads each row's display to
+   know which pieces a card holds. They stay hidden in Customize mode too (Ethan,
+   2026-10-22: it should not go back to a list); a combined card's TABS are what
+   you drag a piece out by there. pointer-events !important: Customize turns the
+   pointer back on for drag handles, and the hidden rows are handles too.
+   Tabs reuse the Command Center's .ew-seg .toggle-btn, so they are the same size. */
+.sam-card.qp-ai-on { position: relative; }
+.sam-card.qp-ai-on > .sam-mini { position: absolute !important; left: 0; top: 0; visibility: hidden; pointer-events: none !important; }
+.qp-ai { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: 14px 18px 14px; }
+.qp-ai-head { display: flex; align-items: center; gap: 10px; }
+.qp-ai-head .sam-mico { flex: none; }
+.qp-ai-title { font-size: 15.5px; font-weight: 800; letter-spacing: -.01em; line-height: 1.15; color: var(--slate-charcoal); }
+.qp-ai-tabs { align-self: flex-start; margin-top: 10px; max-width: 100%; flex-wrap: wrap; }
+.qp-ai-cnt { font-weight: 650; color: #8a94a3; margin-left: 2px; }
+.qp-ai-tabs .toggle-btn.active .qp-ai-cnt { color: #647082; }
+.qp-ai-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; margin-top: 10px; }
+.qp-ai-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.qp-ai .qp-hl-big { margin-top: 0; }
+.qp-ai-li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border-top: 1px solid #eef1f4; font-size: 12.5px; font-weight: 600; color: #1a1c1e; }
+.qp-hl-cap + .qp-ai-li { border-top: none; }
+.qp-ai-li > span:last-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-ai-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #c9d3dd; }
+.qp-ai-pp { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12.5px; font-weight: 600; color: #1a1c1e; }
+.qp-ai-pn { flex: none; width: 78px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-ai-pp .qp-hl-bar { flex: 1 1 auto; margin: 0; }
+.qp-ai-pp b { flex: none; min-width: 46px; text-align: right; font-weight: 800; }
+.qp-ai-capnote { text-transform: none; letter-spacing: 0; font-weight: 700; }
+.qp-ai .qp-hl-link { margin-top: auto; padding-top: 8px; }
+.qp-ai .good { color: #1f9d57; }
+.qp-ai .warn { color: #b7791f; }
+.qp-ai .bad { color: var(--red-alert); }
 .qp-hl .status-message { padding: 8px 0; }
 .qp-hl-k { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; }
 .qp-hl-big { font-size: 28px; font-weight: 800; line-height: 1.1; color: #1a1c1e; margin-top: 2px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

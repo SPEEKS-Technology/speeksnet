@@ -40996,6 +40996,7 @@ function updateChecklistChip() {
     const total = dailyItems.length;
     const done = dailyItems.filter(i => i.checked).length;
     if (typeof samSetProgress === 'function') samSetProgress('cl', { done, total });
+    if (typeof _qpRenderActions === 'function') _qpRenderActions();   // QuickPortal Action Items card
 
     const chip = document.getElementById('cl-progress-chip');
     const btn = document.querySelector('.cl-nav-toggle');
@@ -41357,6 +41358,7 @@ function updateAuditChip() {
     const total = daily.total || (daily.items || []).length;
     const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
     if (typeof samSetProgress === 'function') samSetProgress('audit', { done, total });
+    if (typeof _qpRenderActions === 'function') _qpRenderActions();   // QuickPortal Action Items card
 
     const chip = document.getElementById('audit-progress-chip');
     const btn = document.querySelector('.audit-nav-toggle');
@@ -50204,6 +50206,7 @@ function _qpDistribute(main, rows) {
         });
     });
     _qpRenderHeadlines(rows);
+    _qpRenderActions(rows);
 }
 
 // The saved rows, reconciled with the blocks this page actually has: a key that
@@ -50607,6 +50610,17 @@ function _qpRenderHeadlines(rows) {
     _qpHLBusy = true;
     try { _qpRenderHeadlinesNow(main, rows || _qpCurrentRows(main)); } finally { _qpHLBusy = false; }
 }
+// Headline views (Command Center and Action Items) are for the people the
+// QuickPortal revamp is for: those who have Customize — managers, for now. The
+// Customize bar is the test, because applyRoleBasedUI has already shown or hidden
+// it by role AND Feature Access before _qpApplyLayout runs. Everyone else keeps
+// the full panels: an employee's Command Center holds Weekly KPIs, which has no
+// headline, and the store role's wall TV wants the whole Live board, not a card.
+function _qpHeadlinesOn() {
+    if (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole()) return false;
+    const bar = document.getElementById('qpBar');
+    return !!bar && getComputedStyle(bar).display !== 'none';
+}
 function _qpRenderHeadlinesNow(main, rows) {
     main.querySelectorAll('[data-qp-family="command"]').forEach(function (card) {
         const w = card.classList.contains('cc-widget') ? card : card.querySelector('.cc-widget');
@@ -50614,8 +50628,9 @@ function _qpRenderHeadlinesNow(main, rows) {
         let hl = w.querySelector(':scope > .qp-hl');
         const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
         const single = card.hasAttribute('data-qp-single');
-        // A phone keeps the full tab panels, as before: no headlines there.
-        if (compact) {
+        // A phone keeps the full tab panels, as before: no headlines there —
+        // and so does anyone without Customize (_qpHeadlinesOn).
+        if (compact || !_qpHeadlinesOn()) {
             if (hl) hl.remove();
             w.removeAttribute('data-qp-hl');
             if (!w.classList.contains('cc-expanded')) {
@@ -50667,6 +50682,218 @@ function _qpRenderHeadlinesNow(main, rows) {
 function _qpSetHeadline(piece, h) {
     _qpHL[piece] = h;
     try { _qpRenderHeadlines(); } catch (e) { console.error('QuickPortal headline:', e); }
+}
+
+// --- ACTION ITEMS CARDS (Ethan, 2026-10-22) ---
+// An Action Items card shows its piece as a card of its own — the count and bar,
+// then what's next — instead of a rail row: the next unticked tasks for the two
+// checklists, each person's listed-against-goal for Listing Goals, the month's
+// goals and initiatives for Goals & Initiatives. Two or more pieces in one card
+// get TABS, like the Command Center, each tab carrying its count.
+//
+// Everything is read from what the rows already load (checklistDataCache and
+// auditDataCache at page load, the Listing Goals roster and liveGoalsData, the
+// monthly goals and initiatives in localStorage), so no new fetch. It redraws
+// when those change (samSetProgress, samRefreshListing) and on layout changes.
+//
+// The rows stay in the card, laid out but out of sight (.qp-ai-on): the layout
+// reads a row's computed display to know which pieces a card holds, and in
+// Customize mode the rows come back, because a row is what you drag a piece out
+// by. Phones, and anyone without Customize (_qpHeadlinesOn), keep the rows.
+// Manager pieces only — a card holding a DM/CEO piece keeps its rows for now.
+const _QP_AI_PIECES = {
+    checklist: { short: 'Manager', when: 'Today' },
+    cleaning: { short: 'Cleaning', when: 'Today' },
+    listing: { short: 'Listing', when: 'This Week' },
+    goals: { short: 'Goals', when: '' },
+};
+const _qpAiTab = {};
+function qpAiTab(key, piece) {
+    _qpAiTab[key] = piece;
+    _qpRenderActions();
+}
+function _qpAiLink(label, onclick) {
+    return '<button type="button" class="qp-hl-link" onclick="' + onclick + '">' + label + ' →</button>';
+}
+function _qpAiNext(texts, room) {
+    return texts.slice(0, room).map(function (t) {
+        return '<div class="qp-ai-li"><span class="qp-ai-dot"></span><span>' + escapeHtml(t) + '</span></div>';
+    }).join('');
+}
+// A checklist: daily items, done / total, the next unticked ones.
+// The checklists' periods, as their panels name them (Ethan, 2026-10-22: Daily
+// / Weekly / Monthly / Quarterly on the cards too). A period shows only when it
+// has tasks — Quarterly is a CORP list, so a store never sees it.
+const _QP_AI_PERIODS = [['daily', 'Daily', 'Today'], ['weekly', 'Weekly', 'This Week'],
+    ['monthly', 'Monthly', 'This Month'], ['quarterly', 'Quarterly', 'This Quarter']];
+const _qpAiPeriod = {};
+function qpAiPeriod(key, piece, period) {
+    _qpAiPeriod[key + '|' + piece] = period;
+    _qpRenderActions();
+}
+// Which periods a checklist card offers, and which one it is on.
+function _qpAiPeriodsOf(piece, key) {
+    const has = function (p) {
+        if (piece === 'cleaning') return !!(auditDataCache[p] && (auditDataCache[p].items || []).length);
+        return !!(checklistDataCache[p] && checklistDataCache[p].length);
+    };
+    const list = _QP_AI_PERIODS.filter(function (p) { return p[0] === 'daily' || has(p[0]); });
+    const want = _qpAiPeriod[key + '|' + piece];
+    const on = list.find(function (p) { return p[0] === want; }) || list[0];
+    return { list: list, on: on };
+}
+function _qpAiChecklist(items, room, open, name, key, piece, per) {
+    const total = items.length, done = items.filter(function (i) { return i.checked; }).length;
+    const when = per.on[2].toLowerCase();
+    // The period switch sits where "13 left today" was, beside the big number,
+    // so the card is no taller; the "left" count moves into the Next Up caption.
+    const sw = per.list.length > 1 ? '<span class="qp-hl-switch" role="group" aria-label="' + escapeHtml(name) + ' period">'
+        + per.list.map(function (p) {
+            return '<button type="button" class="' + (p === per.on ? 'on' : '') + '" aria-pressed="' + (p === per.on)
+                + '" onclick="qpAiPeriod(\'' + key + '\', \'' + piece + '\', \'' + p[0] + '\')">' + p[1] + '</button>';
+        }).join('') + '</span>' : '';
+    if (!total) return { count: '', body: '<div class="qp-ai-top"><div class="qp-hl-big">0<small>tasks ' + when + '</small></div>' + sw + '</div>'
+        + _qpAiLink('Open ' + name, open) };
+    const left = items.filter(function (i) { return !i.checked; }).map(function (i) { return String(i.text || ''); });
+    return {
+        count: done + '/' + total,
+        body: '<div class="qp-ai-top"><div class="qp-hl-big">' + done + '<small>of ' + total + ' done</small></div>' + sw + '</div>'
+            + _qpHLBar(done / total * 100, [], '')
+            + (left.length ? '<div class="qp-hl-cap">Next Up <span class="qp-ai-capnote">· ' + left.length + ' left ' + when + '</span></div>' + _qpAiNext(left, room)
+                : '<div class="qp-hl-sub"><span class="good">All done ' + when + '</span></div>')
+            // Just the link — no "+ 9 more" (Ethan, 2026-10-22).
+            + _qpAiLink('Open ' + name, open),
+    };
+}
+// Listing Goals: this week's records off the roster the Listing Goals modal
+// uses. "Listed" is each person's RESULT; their goal is what they were assigned.
+// The rail row's "200/292" is goals assigned against the weekly target — not
+// listings — so this card names both.
+function _qpAiListing(room) {
+    if (typeof liveGoalsData === 'undefined' || !Array.isArray(liveGoalsData)) return { count: '', body: '<div class="status-message">Syncing…</div>' };
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    start.setHours(0, 0, 0, 0);
+    const by = {};
+    liveGoalsData.forEach(function (r) {
+        if (typeof goalDateObj !== 'function' || goalDateObj(r.date) < start) return;
+        const k = String(r.employee || '').trim();
+        if (!k) return;
+        by[k] = by[k] || { goal: 0, done: 0 };
+        by[k].goal += parseInt(r.goal) || 0;
+        by[k].done += parseInt(r.result) || 0;
+    });
+    const people = Object.keys(by).map(function (k) { return { name: k, goal: by[k].goal, done: by[k].done }; })
+        .filter(function (p) { return p.goal || p.done; })
+        .sort(function (a, b) { return b.goal - a.goal; });
+    const listed = people.reduce(function (a, p) { return a + p.done; }, 0);
+    const assigned = people.reduce(function (a, p) { return a + p.goal; }, 0);
+    const target = (typeof _weekTargetTotal === 'number' && _weekTargetTotal) ? _weekTargetTotal : assigned;
+    const short = function (n) {
+        if (/^temp$/i.test(n)) return 'Temps';
+        const p = n.split(/\s+/);
+        return p.length > 1 ? p[0] + ' ' + p[p.length - 1].charAt(0) + '.' : n;
+    };
+    const left = Math.max(0, target - listed);
+    const daysLeft = (7 - ((now.getDay() + 6) % 7)) - 1;
+    return {
+        count: listed + '/' + target,
+        body: '<div class="qp-ai-top"><div class="qp-hl-big">' + listed + '<small>of ' + target + ' listed</small></div>'
+            + '<span class="qp-hl-sub">' + (left ? '<span class="warn">' + left + ' to go</span> · ' + daysLeft + (daysLeft === 1 ? ' day' : ' days') + ' left' : '<span class="good">Weekly goal hit</span>') + '</span></div>'
+            + _qpHLBar(target ? listed / target * 100 : 0, [], '')
+            + '<div class="qp-hl-cap">By Person <span class="qp-ai-capnote">· ' + assigned + ' assigned so far</span></div>'
+            + people.slice(0, room).map(function (p) {
+                const pct = p.goal ? Math.min(100, p.done / p.goal * 100) : (p.done ? 100 : 0);
+                return '<div class="qp-ai-pp"><span class="qp-ai-pn">' + escapeHtml(short(p.name)) + '</span>'
+                    + _qpHLBar(pct, [], p.done >= p.goal ? '' : 'warn') + '<b>' + p.done + '/' + p.goal + '</b></div>';
+            }).join('')
+            + _qpAiLink('Open Listing Goals', 'openListingGoals()'),
+    };
+}
+// Goals & Initiatives: this month's team goals and the store's initiatives,
+// as the Goals & Initiatives panel keeps them.
+function _qpAiGoals(room) {
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const g = (typeof getMonthlyGoals === 'function' && getMonthlyGoals(store)) || {};
+    const ini = (typeof getStoreInitiatives === 'function' && getStoreInitiatives(store)) || {};
+    const goals = (g.goals || []).map(function (x) { return String(x.title || ''); }).filter(Boolean);
+    const inits = (ini.initiatives || []).map(function (x) { return String(x.title || ''); }).filter(Boolean);
+    const gRoom = inits.length ? Math.max(1, room - 2) : room;
+    let body = '<div class="qp-hl-cap" style="margin-top:0">Team Goals'
+        + (g.setBy ? ' <span class="qp-ai-capnote">· set by ' + escapeHtml(g.setBy) + '</span>' : '') + '</div>'
+        + (goals.length ? _qpAiNext(goals, gRoom) : '<div class="qp-hl-sub">No goals set for this month yet</div>');
+    if (inits.length) body += '<div class="qp-hl-cap">Initiatives</div>' + _qpAiNext(inits, room - gRoom);
+    return {
+        count: String(goals.length + inits.length),
+        body: body + _qpAiLink('Open Goals & Initiatives', 'toggleGoalsPanel(event)'),
+    };
+}
+function _qpAiBuild(piece, room, key) {
+    // "Open Checklist" opens the panel on the period the card is showing.
+    if (piece === 'checklist') {
+        const per = _qpAiPeriodsOf('checklist', key);
+        return _qpAiChecklist(checklistDataCache[per.on[0]] || [], room,
+            "switchChecklistTab('" + per.on[0] + "'); toggleChecklistPanel(event); loadChecklist();", 'Checklist', key, 'checklist', per);
+    }
+    if (piece === 'cleaning') {
+        const per = _qpAiPeriodsOf('cleaning', key);
+        return _qpAiChecklist((auditDataCache[per.on[0]] && auditDataCache[per.on[0]].items) || [], room,
+            "switchAuditTab('" + per.on[0] + "'); toggleAuditPanel(event); loadAudit();", 'Cleaning', key, 'cleaning', per);
+    }
+    if (piece === 'listing') return _qpAiListing(room);
+    if (piece === 'goals') return _qpAiGoals(room);
+    return null;
+}
+function _qpRenderActions(rows) {
+    const main = _qpMain();
+    if (!main) return;
+    rows = rows || _qpCurrentRows(main);
+    const on = !(typeof _isMobileLayout === 'function' && _isMobileLayout()) && _qpHeadlinesOn()
+        && !(typeof _isPersonalGoalsUser === 'function' && _isPersonalGoalsUser());
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    main.querySelectorAll('[data-qp-family="actions"]').forEach(function (card) {
+        const frame = card.querySelector('.sam-rail > .sam-card');
+        if (!frame) return;
+        const key = _qpKey(card);
+        const pieces = _qpShownPieces(main, rows, key);
+        let ai = frame.querySelector(':scope > .qp-ai');
+        if (!on || !pieces.length || pieces.some(function (p) { return !_QP_AI_PIECES[p]; })) {
+            if (ai) ai.remove();
+            frame.classList.remove('qp-ai-on');
+            return;
+        }
+        if (!ai) { ai = document.createElement('div'); ai.className = 'qp-ai'; frame.appendChild(ai); }
+        frame.classList.add('qp-ai-on');
+        const multi = pieces.length > 1;
+        let tab = _qpAiTab[key];
+        if (pieces.indexOf(tab) === -1) tab = pieces[0];
+        const room = multi ? 3 : 4;
+        const built = {};
+        pieces.forEach(function (p) { built[p] = _qpAiBuild(p, room, key) || { count: '', body: '' }; });
+        const row = card.querySelector('[data-qp-piece="actions/' + tab + '"][data-qp-piece-main]');
+        const icon = row && row.querySelector('.sam-mico') ? row.querySelector('.sam-mico').outerHTML : '';
+        const label = row && row.querySelector('.sam-m-t') ? row.querySelector('.sam-m-t').textContent : '';
+        // A checklist's eyebrow follows its period switch ("OVL · This Week").
+        const when = (tab === 'checklist' || tab === 'cleaning') ? _qpAiPeriodsOf(tab, key).on[2]
+            : (_QP_AI_PIECES[tab].when || (tab === 'goals' ? new Date().toLocaleDateString('en-US', { month: 'long' }) : ''));
+        const eyebrow = escapeHtml(store && store !== 'ALL' ? store + (when ? ' · ' + when : '') : when);
+        // Combined: the card is "Action Items" and its tabs say which, with counts.
+        const html = '<div class="qp-ai-head">' + (multi ? '' : icon) + '<div><div class="ew-eyebrow">' + eyebrow + '</div>'
+            + '<div class="qp-ai-title">' + escapeHtml(multi ? 'Action Items' : label) + '</div></div></div>'
+            // In Customize mode the tabs are what you drag a piece out by (like
+            // the Command Center's) — data-qp-drag-piece, not data-qp-piece,
+            // which would have _qpDistribute move the tab itself into a shell.
+            + (multi ? '<div class="qp-ai-tabs ew-seg">' + pieces.map(function (p) {
+                return '<button type="button" class="toggle-btn' + (p === tab ? ' active' : '') + (_qpEditing ? ' qp-piece-drag" draggable="true" title="Drag out to give it its own card' : '')
+                    + '" data-qp-drag-piece="actions/' + p + '" onclick="qpAiTab(\'' + key + '\', \'' + p + '\')">'
+                    + _QP_AI_PIECES[p].short + (built[p].count ? ' <span class="qp-ai-cnt">' + built[p].count + '</span>' : '') + '</button>';
+            }).join('') + '</div>' : '')
+            + '<div class="qp-ai-body">' + built[tab].body + '</div>';
+        // Redrawn every few seconds by samRefreshListing: only touch the DOM when
+        // something changed, or an open hover/scroll inside it would keep resetting.
+        if (ai._qpHtml !== html) { ai.innerHTML = html; ai._qpHtml = html; }
+    });
 }
 
 function _qpApplyLayout() {
@@ -50987,7 +51214,7 @@ function _qpTargetAt(main, el, x) {
     return { zone: zone, el: b, cell: cell, key: key, row: rows.indexOf(row), beforeKey: beforeKey, full: full, fromHere: fromHere };
 }
 
-// The hint over the card under the pointer: "Drop to combine" with what it makes,
+// The hint over the card under the pointer: "Drop to Combine" with what it makes,
 // or an edge saying what letting go there does.
 function _qpShowHint(main, t) {
     const old = main.querySelector('.qp-ov');
@@ -51014,10 +51241,10 @@ function _qpShowHint(main, t) {
             : names.map(function (p) { return QP_FAMILIES[fam].pieces.find(function (x) { return x.key === p; }).label; }).join(' + ');
         ov.className = 'qp-ov qp-ov-combine';
         ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
-            + '<span class="qp-ov-big">Drop to combine</span><span class="qp-ov-small">Makes one card: ' + escapeHtml(label) + '</span>';
+            + '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Makes One Card: ' + escapeHtml(label) + '</span>';
     } else {
         ov.className = 'qp-ov qp-ov-edge ' + (t.zone === 'left' ? 'l' : 'r') + (t.full ? ' full' : '');
-        const words = t.full ? 'Row is full · 3 max' : t.fromHere ? 'Take out · place here' : 'Place beside';
+        const words = t.full ? 'Row Is Full · 3 Max' : t.fromHere ? 'Take Out · Place Here' : 'Place Beside';
         ov.innerHTML = '<span>' + words + '</span>';
     }
     t.cell.appendChild(ov);
@@ -51053,7 +51280,9 @@ function _qpWireDrag(main) {
         if (!card && !piece) return;
         if (card) _qpDrag = { key: _qpKey(card) };
         else {
-            const id = piece.getAttribute('data-qp-piece').split('/');
+            // A row or Command Center tab carries data-qp-piece; an Action Items
+            // card's tab carries data-qp-drag-piece (_qpRenderActions).
+            const id = (piece.getAttribute('data-qp-piece') || piece.getAttribute('data-qp-drag-piece')).split('/');
             const from = piece.closest('[data-qp-block]');
             _qpDrag = { fam: id[0], piece: id[1], from: _qpKey(from) };
         }
@@ -51151,6 +51380,9 @@ function _qpSetEditing(main, on) {
         _qpClearSlots(main);
         _qpClearPieceDrag(main);
     }
+    // Action Items cards keep their card view in Customize mode; their tabs
+    // become drag handles (and stop being them again), so redraw.
+    if (typeof _qpRenderActions === 'function') _qpRenderActions();
     const bar = document.getElementById('qpBar');
     if (bar) bar.classList.toggle('is-editing', _qpEditing);
     const btn = document.getElementById('qpEditBtn');
@@ -52647,7 +52879,9 @@ function samInit() {
     // The alert bubbles and listing widget populate asynchronously and from many
     // code paths; a light interval keeps the deck in sync without wiring every
     // one. Cheap DOM reads only.
-    setInterval(() => { renderActionFeed(); samRefreshListing(); }, 5000);
+    // _qpRenderActions: the QuickPortal Action Items cards pick up Listing Goals
+    // and Goals & Initiatives changes on the same beat (it skips unchanged cards).
+    setInterval(() => { renderActionFeed(); samRefreshListing(); if (typeof _qpRenderActions === 'function') _qpRenderActions(); }, 5000);
     // Realtime: push notifications the moment a write lands, instead of waiting
     // for the tool's 10-min poll. Feed users only (we're past the visible gate).
     initRealtimeNotifications();

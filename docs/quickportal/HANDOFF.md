@@ -69,6 +69,16 @@ designs since have been shown inline in chat.
   - Headline data comes from each tab's own loader (`_qpSetHeadline` in
     `fetchScorecardData`, `fetchAlertsData`, `renderLiveDashboard`) — no second
     fetch. Desktop only: phones keep the tab panels.
+- **Action Items cards** (`_qpRenderActions`, 2026-10-22): a card holding one
+  piece shows it as a card — count + bar + Next Up for the two checklists (with a
+  Daily / Weekly / Monthly / Quarterly switch, only periods that have tasks),
+  each person's listed/goal for Listing Goals (results vs assigned — the old rail
+  "200/292" was ASSIGNED goals, not listings), the month's goals/initiatives for
+  Goals & Initiatives. Two or more pieces → "Action Items" with tabs + counts. The
+  rows stay in the card, hidden (the layout reads them); in Customize the TABS
+  are the drag handles (`data-qp-drag-piece`). Managers only, desktop only.
+- **Headline views are for Customize users only** (`_qpHeadlinesOn`): everyone
+  else, and the store TV board, keep the full Command Center panels and rows.
 - Layout saves **per person in localStorage** (`speeksQpLayout_<name>`), not the
   database yet.
 
@@ -136,8 +146,7 @@ designs since have been shown inline in chat.
 
 ## Not done / next steps
 
-- **Split-out Action Items cards** — option B ("progress and what's next") was
-  suggested, not yet picked or built.
+- DM/CEO Action Items pieces (dmcleaning, dmgoals, dmlisting) still show as rows.
 - When it ships, bump the cache-buster (`?v=`) in all five HTML pages
   (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
 - **Save layouts to the database** so they follow a person across devices
