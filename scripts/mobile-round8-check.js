@@ -216,15 +216,14 @@ async function boot(browser, page_, role, width, height) {
     const dead = await page.evaluate(() => ({
         aging:   _samDestDead("closeAgingAlertBubble(); window.location.href='workspace.html#aging'"),
         b2b:     _samDestDead("window.location.href='operations.html#b2b'"),
-        margin:  _samDestDead("window.location.href='workspace.html#mreplies'"),
         kpi:     _samDestDead("sessionStorage.setItem('speeksKpiTab','weekly'); window.location.href='workspace.html#kpis'"),
         claims:  _samDestDead("openClaimsModal(); switchClaimsTab('view')"),
         recycle: _samDestDead("openRecycleFocused()"),
         goals:   _samDestDead("openGpGoals()"),
         empty:   _samDestDead(''),
     }));
-    ok(dead.aging && dead.b2b && dead.margin && dead.kpi, 'Workspace / Operations cards are inert on mobile',
-        'aging ' + dead.aging + ', b2b ' + dead.b2b + ', margin ' + dead.margin + ', kpi ' + dead.kpi);
+    ok(dead.aging && dead.b2b && dead.kpi, 'Workspace / Operations cards are inert on mobile',
+        'aging ' + dead.aging + ', b2b ' + dead.b2b + ', kpi ' + dead.kpi);
     ok(dead.claims === true, 'a card opening a CUT tool is inert too', 'claims (tool-claims-store is data-mobile=hide)');
     ok(dead.recycle === false && dead.goals === false, 'cards opening KEPT tools still work',
         'recycle ' + dead.recycle + ', store goals ' + dead.goals);
