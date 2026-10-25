@@ -11095,6 +11095,14 @@ async function fetchRecordsData() {
 
 // Stats page sub-navigation: Champions · Awards · Records. Every view's data is
 // already fetched on load, so switching just toggles which one is visible.
+// Arriving from a QuickPortal Stats & Awards card (_qpStatsOpen): open the
+// view that card was showing, once, then forget it.
+function _statsOpenSaved() {
+    if (!document.getElementById('pane-records')) return;
+    let v = null;
+    try { v = sessionStorage.getItem('speeksStatsView'); sessionStorage.removeItem('speeksStatsView'); } catch (_) {}
+    if (['champions', 'awards', 'records'].indexOf(v) !== -1) showStatsView(v);
+}
 function showStatsView(name) {
     ['champions', 'awards', 'records'].forEach(v => {
         const on = v === name;
@@ -33299,6 +33307,7 @@ function initDashboardData() {
         setTimeout(fetchKPIData, 700);
         setTimeout(fetchDistrictMonthlyKPIs, 750);
         setTimeout(fetchRecordsData, 800);
+        _statsOpenSaved();
         setTimeout(() => { if (document.getElementById('mainKpiChart')) fetchChartData(currentTimeframe); }, 950);
         setTimeout(() => { if (document.getElementById('mbBody')) fetchMonthlyBrief(); }, 1000);
         setTimeout(fetchChampions, 850);
@@ -33896,6 +33905,7 @@ document.addEventListener('click', async (e) => {
                     if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
+                    if (typeof _statsOpenSaved === 'function') _statsOpenSaved();
                     if (document.getElementById('listing-champions-body') && typeof fetchChampions === 'function') fetchChampions();
                 }, 100);
             }
@@ -40347,6 +40357,99 @@ async function fetchAndDisplayStoreComment() {
 }
 
 // --- 14.5. MODULE: WEEKLY CHAMPIONS (LISTERS & BUYERS) ---
+// The three champion boards, worked out ONCE (Ethan, 2026-10-25: the
+// QuickPortal's Stats & Awards widget shows the same champions as this page,
+// so the rules live here and both read them). Each board is everyone merged by
+// name and sorted best first; raw is what the ticker is fed. Every page runs
+// fetchChampions at load for the ticker, so the last result is kept
+// (_champLast) and the widget starts from it. One WEEKLY_KPI_URL read per
+// store: the lister and buyer passes used to fetch the same reply twice.
+let _champLast = null;
+async function _champData() {
+    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const allListers = [];
+    const allBuyers = [];
+    const allGoogleReviews = [];
+
+    // 1. Calculate "Week Of" based on the previous Monday
+    const now = new Date();
+    const day = now.getDay();
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() + diffToMonday);
+    const weekText = "Week of " + startOfWeek.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    // 2. User Directory matching (Gets Full Names)
+    let authCache = {};
+    try { authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {}; } catch(e){}
+    const users = authCache.users || [];
+    const getFullName = (shortName) => {
+        const s = String(shortName).toLowerCase().trim();
+        const matched = users.find(u => {
+            const full = String(u.name).toLowerCase().trim();
+            return full === s || full.split(' ')[0] === s || full.startsWith(s);
+        });
+        return matched ? matched.name : shortName;
+    };
+
+    // 3. LISTERS + REVIEWS
+    const results = await Promise.all(stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())));
+    results.forEach((d, storeIdx) => {
+        // New clean JSON format: { employees, store_total, period_label }
+        (d.employees || []).forEach(e => {
+            const listed  = parseNum(e.listed_count);
+            const reviews = parseNum(e.mtd_google_reviews);
+            if (listed  > 0) allListers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], listed });
+            if (reviews > 0) allGoogleReviews.push({ name: getFullName(e.employee_name), store: stores[storeIdx], reviews });
+        });
+    });
+
+    // 4. BUYERS — ranks by the Buyer Champion Final Score from the old
+    // Team Member KPIs "Weekly Scores" tab, computed from each store's weekly entries:
+    //   Final = (ConvScore + MarginScore) × (BuyValue + 1.2 × #Converted) / 100
+    try {
+        results.forEach((d, storeIdx) => {
+            (d.employees || []).forEach(e => {
+                const bv  = parseNum(e.buying_value);
+                const bc  = parseNum(e.buying_cost);
+                const tc  = parseNum(e.transaction_count);
+                const tco = parseNum(e.transaction_converted);
+                if (bv <= 0) return;
+                const conv = tc > 0 ? tco / tc : 0;
+                const gm   = 1 - bc / bv;
+                const convScore = conv >= 0.95 ? 100 : conv >= 0.9 ? 400 * conv - 280 : conv >= 0.8 ? 600 * conv - 460 : conv >= 0.7 ? 200 * conv - 140 : 0;
+                const mgnScore  = gm >= 0.6 ? 100 : gm >= 0.5 ? 800 * gm - 380 : gm >= 0.45 ? 400 * gm - 180 : 0;
+                const score = ((convScore + mgnScore) * (bv + tco * 1.2)) / 100;
+                if (score > 0) allBuyers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], score });
+            });
+        });
+    } catch (buyerErr) {
+        console.error("Failed to fetch Weekly Buyers:", buyerErr);
+    }
+
+    // 5. One board: a person at two stores is one row — listings and reviews
+    // add up, a buyer keeps their best score — best first.
+    const rank = (dataArray, sortBy, type) => {
+        const merged = {};
+        dataArray.forEach(emp => {
+            if (!merged[emp.name]) merged[emp.name] = { ...emp };
+            else {
+                if (type === 'lister') merged[emp.name].listed += emp.listed;
+                if (type === 'buyer') merged[emp.name].score = Math.max(merged[emp.name].score, emp.score);
+                if (type === 'review') merged[emp.name].reviews += emp.reviews;
+            }
+        });
+        return Object.values(merged).sort((a, b) => b[sortBy] - a[sortBy]);
+    };
+    return (_champLast = {
+        week: weekText, weekStart: startOfWeek,
+        lister: rank(allListers, 'listed', 'lister'),
+        review: rank(allGoogleReviews, 'reviews', 'review'),
+        buyer: rank(allBuyers, 'score', 'buyer'),
+        raw: { buyers: allBuyers, listers: allListers, reviews: allGoogleReviews },
+    });
+}
+
 async function fetchChampions() {
     const listerBody = document.getElementById('lister-champions-body');
     const buyerBody = document.getElementById('buyer-champions-body');
@@ -40355,90 +40458,14 @@ async function fetchChampions() {
     const bDate = document.getElementById('buyer-champions-date');
     const grDate = document.getElementById('google-review-champions-date');
     try {
-        const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-        let allListers = [];
-        let allBuyers = [];
-        let allGoogleReviews = [];
+        const c = await _champData();
+        if (lDate) lDate.innerText = c.week;
+        if (bDate) bDate.innerText = c.week;
+        if (grDate) grDate.innerText = c.week;
 
-        // 1. Calculate "Week Of" based on the previous Monday
-        const now = new Date();
-        const day = now.getDay();
-        const diffToMonday = day === 0 ? -6 : 1 - day;
-        const startOfWeek = new Date(now);
-        startOfWeek.setDate(now.getDate() + diffToMonday);
-        const weekText = "Week of " + startOfWeek.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        
-        if (lDate) lDate.innerText = weekText;
-        if (bDate) bDate.innerText = weekText;
-        if (grDate) grDate.innerText = weekText;
-
-        // 2. User Directory matching (Gets Full Names)
-        let authCache = {};
-        try { authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {}; } catch(e){}
-        const users = authCache.users || [];
-        const getFullName = (shortName) => {
-            const s = String(shortName).toLowerCase().trim();
-            const matched = users.find(u => {
-                const full = String(u.name).toLowerCase().trim();
-                return full === s || full.split(' ')[0] === s || full.startsWith(s);
-            });
-            return matched ? matched.name : shortName; 
-        };
-
-        // 3. FETCH LISTERS
-        const listerFetches = stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()));
-        const listerResults = await Promise.all(listerFetches);
-
-        listerResults.forEach((d, storeIdx) => {
-            // New clean JSON format: { employees, store_total, period_label }
-            (d.employees || []).forEach(e => {
-                const listed  = parseNum(e.listed_count);
-                const reviews = parseNum(e.mtd_google_reviews);
-                if (listed  > 0) allListers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], listed });
-                if (reviews > 0) allGoogleReviews.push({ name: getFullName(e.employee_name), store: stores[storeIdx], reviews });
-            });
-        });
-
-        // 4. FETCH BUYERS — ranks by the Buyer Champion Final Score from the old
-        // Team Member KPIs "Weekly Scores" tab, computed from each store's weekly entries:
-        //   Final = (ConvScore + MarginScore) × (BuyValue + 1.2 × #Converted) / 100
-        try {
-            const buyerFetches = stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()));
-            const buyerResults = await Promise.all(buyerFetches);
-            buyerResults.forEach((d, storeIdx) => {
-                (d.employees || []).forEach(e => {
-                    const bv  = parseNum(e.buying_value);
-                    const bc  = parseNum(e.buying_cost);
-                    const tc  = parseNum(e.transaction_count);
-                    const tco = parseNum(e.transaction_converted);
-                    if (bv <= 0) return;
-                    const conv = tc > 0 ? tco / tc : 0;
-                    const gm   = 1 - bc / bv;
-                    const convScore = conv >= 0.95 ? 100 : conv >= 0.9 ? 400 * conv - 280 : conv >= 0.8 ? 600 * conv - 460 : conv >= 0.7 ? 200 * conv - 140 : 0;
-                    const mgnScore  = gm >= 0.6 ? 100 : gm >= 0.5 ? 800 * gm - 380 : gm >= 0.45 ? 400 * gm - 180 : 0;
-                    const score = ((convScore + mgnScore) * (bv + tco * 1.2)) / 100;
-                    if (score > 0) allBuyers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], score });
-                });
-            });
-        } catch (buyerErr) {
-            console.error("Failed to fetch Weekly Buyers:", buyerErr);
-        }
-
-        // 5. BUILDER HELPER — featured champion + runner-up rows (calm redesign)
-        const buildPodiumHtml = (dataArray, sortBy, labelText, type) => {
-            const merged = {};
-            dataArray.forEach(emp => {
-                if (!merged[emp.name]) merged[emp.name] = { ...emp };
-                else {
-                    if (type === 'lister') merged[emp.name].listed += emp.listed;
-                    if (type === 'buyer') merged[emp.name].score = Math.max(merged[emp.name].score, emp.score);
-                    if (type === 'review') merged[emp.name].reviews += emp.reviews;
-                }
-            });
-
-            const uniqueEmps = Object.values(merged);
-            uniqueEmps.sort((a, b) => b[sortBy] - a[sortBy]);
-            const top3 = uniqueEmps.slice(0, 3);
+        // BUILDER HELPER — featured champion + runner-up rows (calm redesign)
+        const buildPodiumHtml = (ranked, labelText, type) => {
+            const top3 = ranked.slice(0, 3);
 
             if (top3.length === 0) return '<div class="champion-empty">No data available yet.</div>';
 
@@ -40483,12 +40510,12 @@ async function fetchChampions() {
             </div>`;
         };
 
-        feedChampionsToTicker(allBuyers, allListers, allGoogleReviews);
+        feedChampionsToTicker(c.raw.buyers, c.raw.listers, c.raw.reviews);
         _tickerSourceDone('champions');
 
-        if (listerBody) listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
-        if (grBody) grBody.innerHTML = buildPodiumHtml(allGoogleReviews, 'reviews', 'Reviews', 'review');
-        if (buyerBody) buyerBody.innerHTML = buildPodiumHtml(allBuyers, 'score', 'Score', 'buyer');
+        if (listerBody) listerBody.innerHTML = buildPodiumHtml(c.lister, 'Items', 'lister');
+        if (grBody) grBody.innerHTML = buildPodiumHtml(c.review, 'Reviews', 'review');
+        if (buyerBody) buyerBody.innerHTML = buildPodiumHtml(c.buyer, 'Score', 'buyer');
 
     } catch (e) {
         if (listerBody) listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
@@ -49401,6 +49428,10 @@ const QP_FAMILIES = {
         label: 'Variance Replies', kind: 'widget',
         pieces: [{ key: 'explain', label: 'Lines To Explain' }, { key: 'dm', label: 'DM Notes' }],
     },
+    stats: {
+        label: 'Stats & Awards', kind: 'widget',
+        pieces: [{ key: 'champions', label: 'Champions' }, { key: 'awards', label: 'Awards' }, { key: 'records', label: 'Records' }],
+    },
     connect: {
         label: 'SPEEKS Connect', kind: 'widget',
         pieces: [{ key: 'photos', label: 'Pictures' }, { key: 'category', label: 'Categories' }, { key: 'titles', label: 'Titles' }],
@@ -50520,6 +50551,15 @@ const QP_WIDGETS = {
         tone: 'b', section: 'Processes & Policies',
         avail: function () { return true; },
     },
+    // Stats & Awards (Ethan, 2026-10-25: option A — the page's three views as
+    // three tabs). Everyone has stats.html — no Feature Access switch.
+    stats: {
+        label: 'Stats & Awards',
+        sub: 'This week\'s champions, the monthly awards, your store\'s records',
+        icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="7"/><path d="M8.2 13.9L7 23l5-3 5 3-1.2-9.1"/></svg>',
+        tone: 'a', section: 'Stats & Awards',
+        avail: function () { return true; },
+    },
 };
 const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WIDGETS[id] ? id : null; };
 // LOCKED SIZES (Ethan, 2026-10-22: a widget stretched across a whole row "feels
@@ -50539,7 +50579,7 @@ const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WID
 // Breakdown lost their full size too — no widget has enough to fill a row).
 // Variance Replies, Store KPIs and Monthly Breakdown are ⅓ only (Ethan, same
 // day): there is a card's worth in each, no more.
-const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3, docs: 0.5 };
+const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3, docs: 0.5, stats: 0.5 };
 // Cards that are not widgets can be held under a full row too, by family —
 // the card and every piece split out of it (Ethan, 2026-10-23: "the feed cards
 // should not be allowed to be full size either").
@@ -50836,7 +50876,7 @@ function qpLibraryRemove(id) {
     qpRemoveWidget(id);
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
-const _QP_LIB_SECTIONS = ['Operations', 'Workspace', 'Processes & Policies', 'Other'];
+const _QP_LIB_SECTIONS = ['Operations', 'Workspace', 'Processes & Policies', 'Stats & Awards', 'Other'];
 function _qpLibraryList(q) {
     const list = document.getElementById('qpLibList');
     const main = _qpMain();
@@ -51036,11 +51076,12 @@ function _qpWidgetCard(el, rows, id) {
                 // badge: a model may say "Due" / "✓" instead of a count.
                 + escapeHtml(t[1]) + ' <span class="qp-ai-cnt">' + escapeHtml(String(m[t[0]].badge != null ? m[t[0]].badge : m[t[0]].n)) + '</span></button>';
         }).join('') + '</div>';
-        // A card with no tabs has room for one more line.
-        const room = one ? 4 : 3;
+        // A card with no tabs has room for one more line. A tab with no big
+        // number (big: null — Stats & Awards) says how many lines it fits.
+        const room = it.room || (one ? 4 : 3);
         body = tabs + '<div class="qp-ai-body">'
-            + '<div class="qp-ai-top"><div class="qp-hl-big">' + it.big + '<small>' + escapeHtml(it.small) + '</small></div>'
-            + (it.aside ? '<span class="qp-hl-sub">' + escapeHtml(it.aside) + '</span>' : '') + '</div>'
+            + (it.big == null ? '' : '<div class="qp-ai-top"><div class="qp-hl-big">' + it.big + '<small>' + escapeHtml(it.small) + '</small></div>'
+            + (it.aside ? '<span class="qp-hl-sub">' + escapeHtml(it.aside) + '</span>' : '') + '</div>')
             + (it.sub ? '<div class="qp-hl-sub">' + it.sub + '</div>' : '')
             + (it.lines && it.lines.length ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '') + it.lines.slice(0, room).join('') : '')
             + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
@@ -51082,6 +51123,12 @@ function _qpDocSearch(input) {
     const st = _qpWState('docs');
     if (list && st.data) list.innerHTML = _qpDocRows(st.data, input.value);
 }
+// A Stats & Awards card's link: the Stats page, on that card's view.
+// _statsOpenSaved switches to it once the page is up.
+function _qpStatsOpen(view) {
+    try { sessionStorage.setItem('speeksStatsView', view); } catch (_) {}
+    location.href = 'stats.html';
+}
 // A document opened here counts as one opened in the library (doc:open).
 function _qpDocOpened() { try { trackUsage('open', 'doc:open', _usageLabel('doc:open')); } catch (_) {} }
 
@@ -51109,6 +51156,90 @@ const _QP_WSPEC = {
                 + '<input type="search" class="qp-doc-q" placeholder="Search ' + d.length + ' Documents" aria-label="Search Processes & Policies" oninput="_qpDocSearch(this)">'
                 + '<div class="qp-doc-list">' + _qpDocRows(d, '') + '</div>'
                 + _qpAiLink('Open Processes &amp; Policies', "location.href='docs.html'") + '</div>';
+        },
+    },
+    // STATS & AWARDS (Ethan, 2026-10-25: option A — Champions, Awards and
+    // Records, the page's own three views, as tabs that split out like any
+    // widget's). Every read is the page's: the champion boards from
+    // _champData (the same rules — and the result every page already worked
+    // out for the ticker), the awards and records from fetchAwardsData /
+    // fetchRecordsData. No big number: each tab is a short list.
+    stats: {
+        when: 'Company-Wide',
+        ttl: 600000,
+        tabs: [['champions', 'Champions', 'Champions'], ['awards', 'Awards', 'Monthly Awards'], ['records', 'Records', 'Records']],
+        where: () => _claimStores()[0] || 'SPEEKS',
+        load: async function () {
+            await Promise.all([_champLast ? null : _champData(), fetchAwardsData(), fetchRecordsData()]);
+            if (!_champLast) throw new Error('champions load failed');
+            return { champ: _champLast, awards: awardsCache || [], records: recordsCache || [] };
+        },
+        model: function (d, tab) {
+            const mine = _claimStores()[0] || '';
+            const link = v => ["_qpStatsOpen('" + v + "')"];
+            if (tab === 'champions') {
+                const c = d.champ;
+                const boards = [['lister', 'Lister', e => e.listed + ' Items'], ['review', 'Reviews', e => e.reviews + ' Reviews'],
+                    ['buyer', 'Buyer', e => Math.round(e.score / 100) + ' Score']];
+                // How this store did: its best place on any board.
+                let best = null;
+                boards.forEach(b => {
+                    const i = c[b[0]].findIndex(e => e.store === mine);
+                    if (i !== -1 && (!best || i < best.i)) best = { i, e: c[b[0]][i], what: b[1] };
+                });
+                const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+                return {
+                    n: 1, badge: '', big: null, room: 3,
+                    sub: !mine ? '' : best ? '<span class="' + (best.i === 0 ? 'good' : 'warn') + '">' + escapeHtml(mine + ': ' + _qpWWho(best.e.name) + ' is ' + ord(best.i + 1) + ' in ' + best.what) + '</span>'
+                        : '<span class="warn">' + escapeHtml(mine) + ' is not on a board yet</span>',
+                    cap: c.week.replace(/, \d{4}$/, ''),
+                    lines: boards.filter(b => c[b[0]].length).map(b => {
+                        const e = c[b[0]][0];
+                        return _qpWLine(_qpWChip(b[1], e.store === mine ? 'good' : 'grey'), _qpWWho(e.name) + ' · ' + e.store, b[2](e));
+                    }),
+                    link: ['Open Champions'].concat(link('champions')),
+                };
+            }
+            if (tab === 'awards') {
+                const a = d.awards[d.awards.length - 1];
+                const won = a ? [a.winner1, a.winner2, a.winner3] : [];
+                const mineWon = won.filter(w => w && w === mine).length;
+                return {
+                    n: 0, badge: '', big: null, room: 3,
+                    sub: !a ? '<span class="warn">No awards yet</span>'
+                        : mineWon ? '<span class="good">' + escapeHtml(mine) + ' won ' + mineWon + ' of ' + AWARD_NAMES.length + '</span>'
+                        : !won.some(Boolean) ? '<span class="warn">Winners not set yet</span>' : '',
+                    cap: a ? a.month : '',
+                    lines: a ? AWARD_NAMES.map((name, i) => _qpWLine(_qpWChip(won[i] || '—', won[i] && won[i] === mine ? 'good' : 'grey'),
+                        name.replace(/^The /, '').replace(/ Award$/, ''), '')) : [],
+                    link: [a && a.videoUrl ? 'Watch the Award Video' : 'Open Awards'].concat(link('awards')),
+                };
+            }
+            // Records: this store's figure on each store record, and its place
+            // among the five. Gross Profit is left off (the NP switch: no GP on
+            // a screen), and so is a person-held record (Google Reviews) —
+            // its place is a person's, not the store's.
+            const rows = d.records.filter(r => !r.person && STORE_CODES.indexOf(String(r.section).toUpperCase()) !== -1);
+            const labels = RECORD_CARD_ORDER.filter(l => !/Gross Profit/.test(l) && rows.some(r => r.label === l && r.section === mine));
+            let held = 0;
+            const lines = labels.map(l => {
+                const all = rows.filter(r => r.label === l);
+                const me = all.find(r => r.section === mine);
+                const place = all.filter(r => parseNum(r.value) > parseNum(me.value)).length + 1;
+                if (place === 1) held++;
+                const chip = place === 1 ? _qpWChip('1st', 'good') : _qpWChip(['', '1st', '2nd', '3rd'][place] || place + 'th', 'grey');
+                // Dollars to the whole dollar ("$15,996", not "$15,995.81").
+                const v = String(me.value || '');
+                const shown = /^\$/.test(v) ? '$' + Math.round(parseNum(v)).toLocaleString('en-US') : v;
+                return _qpWLine(chip, l.replace(/ Record$/, ''), shown);
+            });
+            // Six records fill the card, so how many it holds rides in the cap.
+            return {
+                n: 0, badge: '', big: null, room: 6, sub: '',
+                cap: mine && labels.length ? mine + ' Holds ' + held + ' of ' + labels.length + ' · Place Among ' + STORE_CODES.length + ' Stores' : '',
+                lines: lines,
+                link: ['Open Records'].concat(link('records')),
+            };
         },
     },
     // CLAIMS & DISPUTES — the store tool's own four tabs, each counting what

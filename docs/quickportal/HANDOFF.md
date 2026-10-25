@@ -229,6 +229,17 @@ designs since have been shown inline in chat.
   title/desc/category otherwise; 5 rows then "+N More"). `_qpDocSearch` swaps
   only the list so the box keeps focus; a click counts as `doc:open`. DOCS_URL,
   10-min cache. `scripts/qp-docs-check.js` (6 pass).
+  **Stats & Awards widget (10-25):** `QP_WIDGETS.stats` + `QP_FAMILIES.stats`
+  (Champions / Awards / Records, split out like any widget's), ⅓·½, everyone,
+  own drawer section. Ethan picked option A (the page's three views as tabs).
+  The champion rules moved out of `fetchChampions` into `_champData()` (one
+  WEEKLY_KPI_URL read per store, was two; result kept in `_champLast`, which
+  every page fills at load for the ticker) — the page and the widget share it.
+  Awards/records reuse `fetchAwardsData` / `fetchRecordsData`. Records leaves
+  out GP (NP switch) and the person-held Google Reviews record. A tab may have
+  no big number now (`big: null`, `room: n` in `_qpWidgetCard`). Links go
+  through `_qpStatsOpen(view)` → `_statsOpenSaved()` on stats.html.
+  `scripts/qp-stats-check.js` (5 pass).
   The Leaderboard card is white on its own (`.ew-perf-lb .ew-standings`).
   **Test login:** SPEEKS
   Connect gets SAMPLE counts when `_speeksTestSession` and no PIN (like

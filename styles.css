@@ -11037,11 +11037,16 @@ body.sam-active .hotbar-btn:hover {
 .modal-menu.manage-menu > .modal-header h3 {
     font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: #0f172a;
 }
-.modal-menu.manage-menu .modal-close-btn {
+/* Settings (the cog) uses the same tool header but is not a manage-menu, so it
+   kept the old round grey X (Ethan, 2026-10-25: "the same style as the rest of
+   the site"). */
+.modal-menu.manage-menu .modal-close-btn,
+.modal-menu.settings-menu .modal-close-btn {
     width: 32px; height: 32px; border-radius: 9px;
     background: #f1f5f9; color: #647082; font-size: 14px; flex: 0 0 auto;
 }
-.modal-menu.manage-menu .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
+.modal-menu.manage-menu .modal-close-btn:hover,
+.modal-menu.settings-menu .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
 
 /* Reusable calm tool header: icon tile + eyebrow + title + subtitle */
 .tool-head .tool-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
