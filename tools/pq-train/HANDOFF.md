@@ -1,6 +1,19 @@
 # Handoff: Picture Quality local model (as of 2026-10-21)
 
-## ⚡⚡⚡⚡⚡⚡⚡ NEWEST (2026-10-24) — round 5 died at step 1240/1278; FINISH it with --resume
+## ⚡⚡⚡⚡⚡⚡⚡⚡ NEWEST (2026-10-25) — ROUND 5 RESULT: 75.4% → 77.9%
+
+Finished via `--resume` (epoch 3 started 10-24 19:59, scored 23:40; `runs\run-20261023-2324`).
+- **899-photo test: 75.4% → 77.9%** (first 78 → 81; closeup P95 R91, reflection P85 R55).
+- **On the old 705 photos it is flat (78.6% both).** The whole gain is on the 194 new test
+  photos (63.9% → 75.3%): the model got better where the new labels went and nowhere else.
+  62 photos fixed, 40 broken.
+- Up: Windows laptops 75→82, gaming PCs 77→88, GPUs 67→80, consoles 68→74, lenses 51→59.
+  Down (no new labels, small n): action cams 71→57, headphones 87→74, new-in-box 92→81,
+  RAM 91→73. Flat: misc 69, item lots 47.
+- 199 misses; **85% needs 64 fewer.** Labels move the sheet they land on, so the next batch
+  should aim at item lots, misc, action cams, lenses, motherboards.
+
+## ⚡⚡⚡⚡⚡⚡⚡ (2026-10-24) — round 5 died at step 1240/1278; FINISH it with --resume
 
 - Started 10-23 23:23 (`runs\run-20261023-2324`). Ethan asked to pause at 08:40; Claude froze
   the process (NtSuspendProcess); ~10 min later the laptop slept (Kernel-Power 42, "Application
