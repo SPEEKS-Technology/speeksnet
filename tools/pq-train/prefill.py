@@ -23,6 +23,15 @@ rules get wrong is fine: he can change the sheet in Confirm Shots.
 RUN uses the same prompt, contact sheet and decoding as evaluate.py
 (common.encode / read_answer, build_data.contact_sheet), so the prefill is
 exactly what the scored model says.
+
+ROUND 6 PICK (2026-10-25): round 5 showed labels move only the sheet they land
+on (flat on the old test photos, +11 points on the new ones), so the batch is
+AIMED: PQ_ONLY=<slug,slug> keeps only those sheets (still matched in SHEETS'
+priority order, so a laptop title can't fall into misc). Misc had no rule; it
+is now built from the titles Ethan filed there (docks, microphones, network
+gear, scanners, smart rings, gimbals, power stations, …). The item-lots rule
+only caught "lot of …" and ran dry, so it also takes "lot"/"bundle" anywhere
+and a count up front ("6 Allworx …"). The default adapter is round 5's.
 """
 import json
 import os
@@ -38,13 +47,14 @@ import build_data  # noqa: E402
 REPO = build_data.REPO
 REF = "ejzaqmyxxrkmxvzbjeuo"
 BATCH = os.environ.get("PQ_BATCH", os.path.join(r"C:\Users\User\pq-train", "prefill-" + time.strftime("%Y%m%d")))
-ADAPTER = os.environ.get("PQ_ADAPTER", r"C:\Users\User\pq-train\runs\run-20261021-2247\adapter")
-MODEL = os.environ.get("PQ_MODEL_NAME", "local-r4")
+ADAPTER = os.environ.get("PQ_ADAPTER", r"C:\Users\User\pq-train\runs\run-20261023-2324\adapter")
+MODEL = os.environ.get("PQ_MODEL_NAME", "local-r5")
+ONLY = {s for s in os.environ.get("PQ_ONLY", "").split(",") if s}
 SHOP = {"OVL": "paymore-overland-park", "LEE": "paymore-lees-summit", "WSP": "paymore-westport",
         "MPL": "paymore-maplewood", "BAL": "paymore-ballwin"}
 
 ACC = (r"\b(charger|adapter|case|sleeve|bag|backpack|battery|cable|cord|keyboard only|screen protector|replacement|"
-       r"stand|dock|mount|skin|cover|power supply|ac adapter|controller|cap|hood|filter)\b")
+       r"stand|dock|mount|skin|cover|power supply|ac adapter|controller|cap|hood|filters?)\b")
 GAMING = r"\b(rog|tuf|legion|omen|alienware|predator|nitro|katana|raider|stealth|blade|aorus|helios|scar|strix|victus|loq|rtx|gtx)\b"
 GAME = r"\(([^()]*),\s*(19|20)\d\d\)\s*$"   # "Title (Platform, 2010)" = a video game
 NEW = r"^\s*new\b"                           # new-in-box has its own sheet
@@ -56,8 +66,8 @@ PART = r"\b(sshd|speakers?|subwoofer|monitor)\b"
 # In priority order: a title takes the FIRST sheet it matches. (sheet, rule, cap)
 SHEETS = [
     # Not "2x Xeon" or "32X": a lot says so.
-    ("item-lots", lambda t: re.search(r"^(lot\b|lot of)|\blot of \d+|\(\s*lot\s*\)|\bbundle of \d+", t, re.I)
-                            and not re.search(GAME, t), 99),
+    ("item-lots", lambda t: re.search(r"\blots?\b|\bbundle of \d+|\b\d+\s*(pcs|pieces|pack)\b|^\s*\d{1,3}\s+(?!gb|tb|mb|mp|mm|in|inch|pc\b)[a-z]", t, re.I)
+                            and not re.search(GAME + r"|\blot\s*#|parking", t, re.I), 99),
     ("windows-laptops", lambda t: re.search(r"\b(laptop|notebook|thinkpad|latitude|elitebook|probook|inspiron|xps 1[3-7]|pavilion|"
                                             r"envy x?360|ideapad|yoga|surface laptop|surface pro|vivobook|zenbook|aspire|spectre|"
                                             r"swift|zbook|galaxy book)\b", t, re.I)
@@ -72,7 +82,7 @@ SHEETS = [
                                  and re.search(r"graphics card|gddr\d", t, re.I)
                                  and not re.search(COMPUTER + r"|laptop|desktop|egpu|dock", t, re.I), 99),
     ("motherboards", lambda t: re.search(r"\bmotherboard\b|\bmain bd\b", t, re.I)
-                               and not re.search(r"\b(case|chassis|power supply|psu)\b", t, re.I), 15),
+                               and not re.search(r"\b(case|chassis|power supply|psu)\b", t, re.I), 25),
     ("gaming-pcs", lambda t: re.search(r"\b(gaming pc|gaming desktop|custom pc)\b", t, re.I)
                              or (re.search(r"\b(desktop|tower)\b", t, re.I) and re.search(GAMING, t, re.I)), 15),
     ("windows-desktop", lambda t: re.search(r"\b(desktop|tower|optiplex|elitedesk|prodesk|thinkcentre|vostro)\b", t, re.I)
@@ -82,7 +92,14 @@ SHEETS = [
                                and not re.search(r"switch|game ?boy|\bds\b|3ds|psp|vita|handheld|steam deck|rog ally|legion go|"
                                                  + ACC, t, re.I), 30),
     ("lenses", lambda t: re.search(r"\b(lens|\d+-\d+mm|\d+mm f/)\b", t, re.I)
-                         and not re.search(r"\b(camera|dslr|mirrorless|camcorder|body only|bundle)\b|" + ACC, t, re.I), 20),
+                         and not re.search(r"\b(camera|dslr|mirrorless|camcorder|body only|bundle)\b|" + ACC, t, re.I), 30),
+    # Last: the catch-all sheet, from the titles Ethan has filed there (2026-10-25).
+    ("small-medium-misc-items", lambda t: re.search(
+        r"\b(docking station|dock\b(?!.*nintendo)|nas\b|enclosure|webcam|microphone|condenser|scanner|scansnap|router|"
+        r"hotspot|firewall|ethernet switch|network switch|catalyst|access point|smart ring|oura|gimbal|stabilizer|"
+        r"power station|power conditioner|thermostat|drawing tablet|pen display|light meter|flashmate|loupedeck|"
+        r"stream deck|capture card|mechanical keyboard|gaming keyboard|ring light|led panel|jump starter)\b", t, re.I)
+        and not re.search(r"\b(case|cover|cable|charger only|screen protector|replacement|parts only)\b", t, re.I), 40),
 ]
 
 
@@ -143,6 +160,9 @@ def pick():
     taken, chosen = set(), {}
     for sheet, rule, cap in SHEETS:
         hits = [p for p in cand if p["id"] not in taken and rule(p["title"])]
+        if ONLY and sheet not in ONLY:
+            taken |= {p["id"] for p in hits}   # claimed by an earlier sheet, so it can't fall into a later one
+            continue
         # Spread across the stores: round-robin by store, oldest product id first.
         by = {}
         for p in sorted(hits, key=lambda p: int(p["id"])):
