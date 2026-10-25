@@ -202,6 +202,25 @@ designs since have been shown inline in chat.
   drawer); a split-out card's tabs go home (built-in ones too, e.g. To Do back
   into Your Feed). Built-in cards themselves refuse ("… Stays on Your Page"),
   and so does a replace that would leave a gap (`_qpReplaceWhyNot`).
+  **⅔ beside a ⅓ + make room (10-25):** a manager's default page was full
+  everywhere, and one ⅓-only widget had NO gap-free layout, so it could not be
+  placed. `_qpCap(key, rowKeys)`: a built-in card (not a widget, held to ½ —
+  chart included) may take ⅔ when its only partner is ⅓-only; used by
+  `_qpBuild`'s max-width, `_qpRowWhyNot`, `_qpPairWidgets`, Card Widths and the
+  drag hint (`_qpShareIn`, `_qpShareWords`). `_qpBumpPlan`: a whole card or
+  drawer widget dropped on a full row's edge (or a new-row slot it can't have
+  alone) is placed and the row's last card without a minimum moves to a new row
+  below, then pairing fixes the rest; the hint says "… · Leaderboard Moves
+  Down", a slot says "⅓ Row · Beside …" in green. Only if no gap is left —
+  else the old red. **Never locked out (same day):** tabs dragged out of a card
+  (Need You out of B2B) go through `_qpBumpPlan` too (it takes the drag, lifts
+  the tab the way `_qpDropAt` does); every card in a full row is tried as the
+  one to bump; last resort `_qpRepack` re-fits the whole page in order (hint
+  "Cards Rearrange to Fit"). Add uses the same plan when no row has room.
+  **Keeps its side:** a card `_qpPairWidgets` moves to another row goes in at
+  the same place from the left it had (`moveTo`) — far-left B2B stays far
+  left; a borrowed card goes on the far side of the one waiting.
+  `scripts/qp-size-check.js` (13 pass, incl. a 60-page random sweep).
   The Leaderboard card is white on its own (`.ew-perf-lb .ew-standings`).
   **Test login:** SPEEKS
   Connect gets SAMPLE counts when `_speeksTestSession` and no PIN (like

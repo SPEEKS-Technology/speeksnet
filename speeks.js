@@ -49781,6 +49781,7 @@ function _qpBuild(main, rows) {
             const row = document.createElement('div');
             row.className = 'qp-row';
             if (r.w) row.setAttribute('data-qp-w', r.w.join(':'));
+            const shownKeys = r.items.filter(function (k) { return byKey[k] && _qpVisible(byKey[k]); });
             r.items.forEach(function (k, i) {
                 if (!byKey[k]) return;
                 const cell = document.createElement('div');
@@ -49788,8 +49789,9 @@ function _qpBuild(main, rows) {
                 cell.style.flexGrow = String(r.w ? r.w[i] : 1);
                 // A widget never stretches past its share of the row (_qpMaxW):
                 // alone in a row it takes that much and leaves the rest free.
-                // 11px is half the 22px gap between cards.
-                const mw = _qpMaxW(k);
+                // 11px is half the 22px gap between cards. Its share of THIS
+                // row (_qpCap): ⅔ beside a ⅓-only widget.
+                const mw = _qpCap(k, shownKeys);
                 if (mw && mw < 1) cell.style.maxWidth = 'calc(' + (mw * 100) + '% - 11px)';
                 cell.appendChild(byKey[k]);
                 row.appendChild(cell);
@@ -50564,6 +50566,36 @@ function _qpMinW(key) { return _QP_MIN_W[key] || 0; }
 function _qpRowLimit(keys) {
     return keys.reduce(function (n, k) { const m = _qpMinW(k); return m ? Math.min(n, Math.floor(1 / m + 1e-9)) : n; }, QP_MAX_PER_ROW);
 }
+// ⅔ BESIDE A ⅓ (Ethan, 2026-10-25). A ⅓-only widget needs a row of three, and
+// a manager's page had none to give: with one such widget there was no layout
+// at all that left no gap, so it could not be placed. Now a card the page is
+// built from (Your Feed, Action Items, Command Center, the chart, Leaderboard,
+// and tabs split out of them) may take ⅔ when its only partner is held to ⅓ —
+// never otherwise, so there is still no ⅔ choice between two ordinary cards.
+// _qpCap is the most of THIS row a card may have; _qpMaxW stays its own size.
+const _QP_STRETCH_W = 2 / 3;
+function _qpCap(key, keys) {
+    const m = _qpMaxW(key) || 1;
+    if (!keys || keys.length !== 2 || _qpWidgetId(key) || m < 0.5 - 1e-9 || m >= _QP_STRETCH_W) return m;
+    const other = keys[0] === key ? keys[1] : keys[0];
+    return (_qpMaxW(other) || 1) < 0.34 ? _QP_STRETCH_W : m;
+}
+// A card's share of a row of these cards at equal widths, as the flex layout
+// gives it: an even split, a card held under that keeps its most, and what it
+// leaves goes to the rest.
+function _qpShareIn(keys, key) {
+    let left = 1, open = keys.slice();
+    const s = {};
+    for (let g = 0; g < 4 && open.length; g++) {
+        const each = left / open.length;
+        const tight = open.filter(k => _qpCap(k, keys) < each - 1e-9);
+        if (!tight.length) { open.forEach(k => { s[k] = each; }); break; }
+        tight.forEach(k => { s[k] = _qpCap(k, keys); left -= s[k]; });
+        open = open.filter(k => tight.indexOf(k) === -1);
+    }
+    return s[key] || 0;
+}
+function _qpShareWords(share) { return share < 0.34 ? '⅓ Row' : share < 0.51 ? '½ Row' : share < 0.67 ? '⅔ Row' : 'Full Row'; }
 // Can these cards share one row at these widths (w: null = equal)? A card's
 // share may not fall under its minimum, the row may not hold more than its
 // smallest-allowed card leaves room for, and capped widgets alone may not leave
@@ -50580,7 +50612,7 @@ function _qpRowWhyNot(main, items, w) {
         const share = ws ? ws[i] / sum : 1 / keys.length;
         if (share < _qpMinW(keys[i]) - 0.001) return name(keys[i]) + ' Needs ½ Row';
     }
-    if (keys.every(_qpNeedsPartner) && keys.reduce((a, k) => a + (_qpMaxW(k) || 1), 0) < 0.999) return 'It Would Leave A Gap';
+    if (keys.every(_qpNeedsPartner) && keys.reduce((a, k) => a + _qpCap(k, keys), 0) < 0.999) return 'It Would Leave A Gap';
     return '';
 }
 // A card that is not built yet (a shell this layout is about to make) counts
@@ -50600,10 +50632,22 @@ function _qpKeyShown(main, k) {
 // on, preferring a row with a card that can stretch (a full-size card takes
 // whatever the capped ones leave), then any row with room.
 function _qpPairWidgets(main, rows) {
-    const cap = k => _qpMaxW(k) || 1;
+    const cap = (k, ks) => _qpCap(k, ks);
+    const shown = r => r.items.filter(k => _qpKeyShown(main, k));
+    // A card that moves rows keeps its place from the left (Ethan, 2026-10-25:
+    // B2B was far left, and recombining Waiting On You into it sent it to the
+    // right end of the Command Center row). The first card stays first, the
+    // last stays last; the cards already there fill in beside it.
+    const moveTo = (from, to, k) => {
+        const at = shown(from).indexOf(k);
+        from.items.splice(from.items.indexOf(k), 1);
+        from.w = null;
+        const before = shown(to)[at];
+        if (at === -1 || before === undefined) to.items.push(k); else to.items.splice(to.items.indexOf(before), 0, k);
+        to.w = null;
+    };
     for (let guard = 0; guard < 12; guard++) {
-        const shown = r => r.items.filter(k => _qpKeyShown(main, k));
-        const short = r => { const v = shown(r); return v.length > 0 && v.every(_qpNeedsPartner) && v.reduce((a, k) => a + cap(k), 0) < 0.999; };
+        const short = r => { const v = shown(r); return v.length > 0 && v.every(_qpNeedsPartner) && v.reduce((a, k) => a + cap(k, v), 0) < 0.999; };
         // ...and a row holding more than its smallest-allowed card leaves room
         // for (the chart with two others): the last card without a minimum goes.
         const over = r => { const v = shown(r); return v.length > _qpRowLimit(v); };
@@ -50631,12 +50675,13 @@ function _qpPairWidgets(main, rows) {
                 if (i === lone || sv.length !== 3) return;
                 const k = sv.slice().reverse().find(function (c) {
                     const keep = sv.filter(x => x !== c), get = v.concat([c]);
-                    return !_qpMinW(c) && cap(c) >= 0.5 && keep.reduce((a, x) => a + cap(x), 0) >= 0.999
-                        && get.length <= _qpRowLimit(get) && (get.length === 3 || get.reduce((a, x) => a + cap(x), 0) >= 0.999);
+                    return !_qpMinW(c) && _qpMaxW(c) >= 0.5 && keep.reduce((a, x) => a + cap(x, keep), 0) >= 0.999
+                        && get.length <= _qpRowLimit(get) && (get.length === 3 || get.reduce((a, x) => a + cap(x, get), 0) >= 0.999);
                 });
                 if (k && (from === -1 || Math.abs(i - lone) < Math.abs(from - lone))) { from = i; give = k; }
             });
             if (from === -1) break;
+            // The card borrowed goes on the far side: the one waiting keeps its place.
             rows[from].items.splice(rows[from].items.indexOf(give), 1);
             rows[from].w = null;
             rows[lone].items.push(give);
@@ -50644,10 +50689,7 @@ function _qpPairWidgets(main, rows) {
             continue;
         }
         if (best === -1) break;
-        rows[lone].items.splice(rows[lone].items.indexOf(key), 1);
-        rows[lone].w = null;
-        rows[best].items.push(key);
-        rows[best].w = null;
+        moveTo(rows[lone], rows[best], key);
     }
     return rows.filter(r => r.items.length);
 }
@@ -50720,7 +50762,11 @@ function qpAddWidget(id, t) {
             const sv = r.items.filter(function (k) { return _qpKeyShown(main, k) && k !== id; });
             return sv.length >= 1 && sv.length < _qpRowLimit(sv.concat([id]));
         }) : null;
+        // No room anywhere: make it, as a drop on the last + would (_qpBumpPlan
+        // — never left alone beside a gap when any layout fits).
+        const plan = room ? null : _qpBumpPlan(main, { key: id }, { zone: 'gap', before: null });
         if (room) { room.items.push(id); room.w = null; }
+        else if (plan) { rows.length = 0; plan.rows.forEach(function (r) { rows.push(r); }); }
         else rows.push({ items: [id], w: null });
         _qpCommit(main, rows);
     }
@@ -51544,6 +51590,122 @@ function _qpRoomIn(main, row, leavingKey) {
     return others.length < _qpRowLimit(others.concat(leavingKey ? [leavingKey] : []));
 }
 
+// MAKE ROOM INSTEAD OF REFUSING (Ethan, 2026-10-25: he was locked out of placing
+// a widget — every row on a manager's page is full, and a new row of its own
+// would leave a gap). A whole card or a drawer widget carried to a full row, or
+// to a new-row slot it may not have alone, is placed as asked and the layout
+// makes room the way Add already did: the row's last card without a minimum
+// moves to a row of its own just below it, and _qpPairWidgets finds every short
+// row a partner (borrowing from a row of three). Only when that leaves no gap
+// anywhere. { rows, key, keys, say } or null: key = the card as placed (a tab
+// dragged out becomes a card of its own), keys = the shown cards of the row it
+// lands in, say = what else moves.
+// NEVER LOCKED OUT (Ethan, same day: "ensure there is never a situation in
+// which a user can't add a new widget" — he could not pull Need You out of B2B).
+// So tabs dragged out of a card get the same treatment as whole cards; if the
+// bumped card has nowhere to go, every other card in that row is tried; and
+// when nothing short of it works, the whole page is re-fitted in its current
+// order (_qpRepack) — the drop still lands, and the hint says so.
+function _qpBumpPlan(main, drag, t) {
+    const shownIn = r => r.items.filter(k => _qpKeyShown(main, k));
+    const name = k => {
+        const b = main.querySelector('[data-qp-block="' + k + '"]');
+        return (b && b.getAttribute('data-qp-label')) || (QP_WIDGETS[_qpWidgetId(k)] || {}).label || k;
+    };
+    // The layout with the dragged card lifted out of where it is now and put
+    // where it was dropped. A tab leaves its card as _qpDropAt does it: a
+    // split-out card shrinks (or goes, if that was its last tab).
+    const lifted = function () {
+        const rows = _qpCurrentRows(main).map(r => ({ items: r.items.slice(), w: r.w ? r.w.slice() : null }));
+        const rowObj = t.row != null ? rows[t.row] : null;
+        const beforeRow = t.before != null ? rows[t.before] : null;
+        if (t.zone !== 'gap' && !rowObj) return null;
+        let key = drag.key, tt = t;
+        if (key) _qpTakeOut(rows, key);
+        else {
+            const fam = drag.fam, from = drag.from;
+            const fromPieces = _qpCardPieces(main, rows, from).filter(p => p !== drag.piece);
+            key = _qpShellKey(fam, [drag.piece]);
+            if (_qpParse(from).shell) {
+                const renamed = fromPieces.length ? _qpShellKey(fam, fromPieces) : null;
+                if (renamed) _qpReplace(rows, from, renamed); else _qpTakeOut(rows, from);
+                if (t.beforeKey === from) tt = Object.assign({}, t, { beforeKey: renamed });
+            }
+        }
+        return { rows: _qpPlace(rows, key, tt, rowObj, beforeRow), rowObj: rowObj, key: key };
+    };
+    const settle = rows => {
+        const next = _qpPairWidgets(main, rows.filter(r => r.items.length));
+        return next.some(r => _qpRowWhyNot(main, r.items, r.w)) ? null : next;
+    };
+    const plan = function (next, key, say) {
+        const home = next.find(r => r.items.indexOf(key) !== -1);
+        if (!home) return null;
+        const keys = shownIn(home);
+        return { rows: next, key: key, keys: keys, say: say || 'Beside ' + keys.filter(k => k !== key).map(name).join(' + ') };
+    };
+    const first = lifted();
+    if (!first) return null;
+    const key = first.key;
+    if (t.zone === 'gap') {
+        const next = settle(first.rows);
+        if (next) return plan(next, key);
+    } else {
+        // Bump each card of the row in turn, the last first, until one works.
+        const v = shownIn(first.rowObj);
+        const over = v.length > _qpRowLimit(v);
+        const tries = over ? v.filter(k => k !== key && !_qpMinW(k)).reverse() : [null];
+        for (const moved of tries) {
+            const l = lifted();
+            if (moved) {
+                l.rowObj.items.splice(l.rowObj.items.indexOf(moved), 1);
+                l.rowObj.w = null;
+                l.rows.splice(l.rows.indexOf(l.rowObj) + 1, 0, { items: [moved], w: null });
+            }
+            const next = settle(l.rows);
+            if (!next) continue;
+            if (!moved) return plan(next, key);
+            const mi = next.findIndex(r => r.items.indexOf(moved) !== -1);
+            const hi = next.findIndex(r => r.items.indexOf(key) !== -1);
+            return plan(next, key, name(moved) + (mi < hi ? ' Moves Up' : ' Moves Down'));
+        }
+    }
+    const all = [].concat.apply([], first.rows.map(r => r.items));
+    const packed = _qpRepack(main, all);
+    return packed ? plan(packed, key, 'Cards Rearrange to Fit') : null;
+}
+// The last resort: every card on the page, in its order, into rows that leave
+// no gap — each row takes the first card left and the nearest one or two after
+// it that make a whole row, searched until the page fits (memo on which cards
+// are placed, so it is quick for the dozen or so a page holds). Hidden cards
+// ride along in the first row, where they take no space. null if nothing fits.
+function _qpRepack(main, keys) {
+    const vis = keys.filter(k => _qpKeyShown(main, k)), hid = keys.filter(k => !_qpKeyShown(main, k));
+    const n = vis.length, done = (1 << n) - 1, memo = {};
+    if (!n || n > 20) return null;
+    const solve = function (mask) {
+        if (mask === done) return [];
+        if (memo[mask] !== undefined) return memo[mask];
+        let i = 0;
+        while (mask & (1 << i)) i++;
+        const free = [];
+        for (let j = i + 1; j < n; j++) if (!(mask & (1 << j))) free.push(j);
+        const groups = free.map(j => [i, j]);
+        free.forEach((j, a) => free.slice(a + 1).forEach(k => groups.push([i, j, k])));
+        groups.push([i]);
+        for (const g of groups) {
+            const items = g.map(x => vis[x]);
+            if (_qpRowWhyNot(main, items, null)) continue;
+            const rest = solve(g.reduce((m, x) => m | (1 << x), mask));
+            if (rest) return (memo[mask] = [{ items: items, w: null }].concat(rest));
+        }
+        return (memo[mask] = null);
+    };
+    const rows = solve(0);
+    if (rows && rows.length) rows[0].items = rows[0].items.concat(hid);
+    return rows;
+}
+
 // Can `nk` (a new card) take the place of the card `key`? '' when it can,
 // else why, in words. The cards the page is built from — Your Feed, Action
 // Items, Command Center, the chart — always stay; a tab split OUT of one can
@@ -51606,6 +51768,7 @@ function _qpDropAt(main, drag, t) {
 
     if (drag.key) {
         const key = drag.key;
+        if (t.bump) return done(t.bump.rows);
         if (t.zone === 'swap') {
             const sw = _qpSwapRows(main, rows, key, t.key);
             if (sw.why) return _qpRenderControls(main);
@@ -51639,6 +51802,7 @@ function _qpDropAt(main, drag, t) {
     }
 
     // A piece dragged out of a card.
+    if (t.bump) return done(t.bump.rows);
     const fam = drag.fam, piece = drag.piece, from = drag.from;
     const fromPieces = _qpCardPieces(main, rows, from).filter(function (p) { return p !== piece; });
     const fromShell = _qpParse(from).shell;
@@ -51720,7 +51884,7 @@ function _qpRowBar(row, cells) {
     // ⅓-only widget — the button would do nothing. One left (or none) is no
     // choice at all, so no strip.
     const fits = s => [0, 1].every(function (i) {
-        const c = _qpMaxW(keys[i]), share = s.w[i] / (s.w[0] + s.w[1]);
+        const c = _qpCap(keys[i], keys), share = s.w[i] / (s.w[0] + s.w[1]);
         return (!c || share <= c + 0.001) && share >= _qpMinW(keys[i]) - 0.001;
     });
     if (QP_SPLITS.filter(fits).length < 2) return null;
@@ -51850,7 +52014,11 @@ function _qpTargetAt(main, el, x, y) {
         const t = { zone: 'gap', el: slot, before: b == null ? null : Number(b) };
         // A row of its own would leave a gap beside a widget that may not
         // fill one, so the slot says so and will not take it (full = refused).
-        if (_qpDrag && _qpNeedsPartner(_qpDrag.key || (_qpDrag.fam + ':' + _qpDrag.piece))) { t.full = true; t.lone = true; }
+        // It may still go, if a card can join it there (_qpBumpPlan).
+        if (_qpDrag && _qpNeedsPartner(_qpDrag.key || (_qpDrag.fam + ':' + _qpDrag.piece))) {
+            const plan = _qpBumpPlan(main, _qpDrag, t);
+            if (plan) t.bump = plan; else { t.full = true; t.lone = true; }
+        }
         return t;
     }
     const cell = el && el.closest && el.closest('.qp-cell');
@@ -51910,7 +52078,13 @@ function _qpTargetAt(main, el, x, y) {
     }
     const rowObj = _qpCurrentRows(main)[rows.indexOf(row)];
     const full = zone !== 'combine' && rowObj && !_qpRoomIn(main, rowObj, _qpDrag.key || null);
-    return { zone: zone, el: b, cell: cell, key: key, row: rows.indexOf(row), beforeKey: beforeKey, full: full, fromHere: fromHere };
+    const t = { zone: zone, el: b, cell: cell, key: key, row: rows.indexOf(row), beforeKey: beforeKey, full: full, fromHere: fromHere };
+    // A full row makes room (_qpBumpPlan).
+    if (full) {
+        const plan = _qpBumpPlan(main, _qpDrag, t);
+        if (plan) { t.full = false; t.bump = plan; }
+    }
+    return t;
 }
 
 // What combining here would make: the family's name when it holds every piece
@@ -51938,6 +52112,10 @@ function _qpShowHint(main, t) {
     // Told while dragging (Ethan, 2026-10-22): a new row is no place for a
     // widget that needs a card beside it — the slot goes red and says why.
     if (t.lone) t.el.classList.add('qp-slot-no');
+    // ...or, when a card can join it there, says which and the size (green).
+    if (t.bump && !t.cell) {
+        t.el.setAttribute('data-qp-say', _qpShareWords(_qpShareIn(t.bump.keys, t.bump.key)) + ' · ' + t.bump.say);
+    }
     if (!t.cell) return;
     const ov = document.createElement('div');
     ov.setAttribute('data-sig', sig);
@@ -52003,10 +52181,11 @@ function _qpShowHint(main, t) {
         if (!t.full && _qpMaxW(dk)) {
             const rows = _qpCurrentRows(main);
             const row = rows[t.row];
-            const n = row ? row.items.filter(function (k) { return k !== dk && _qpKeyShown(main, k); }).length + 1 : 1;
-            // Its share there: an even split, but never past its own size.
-            const share = Math.min(_qpMaxW(dk), 1 / n);
-            words += ' · ' + (share < 0.34 ? '⅓ Row' : share < 0.51 ? '½ Row' : 'Full Row');
+            const keys = t.bump ? t.bump.keys : (row ? row.items.filter(function (k) { return k !== dk && _qpKeyShown(main, k); }) : []).concat([dk]);
+            // Its share there: an even split, but never past its own size
+            // (⅔ beside a ⅓-only widget — _qpCap).
+            words += ' · ' + _qpShareWords(_qpShareIn(keys, t.bump ? t.bump.key : dk));
+            if (t.bump) words += ' · ' + t.bump.say;
         }
         ov.innerHTML = '<span>' + words + '</span>';
     }
