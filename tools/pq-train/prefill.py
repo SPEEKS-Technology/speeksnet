@@ -99,7 +99,7 @@ SHEETS = [
         r"hotspot|firewall|ethernet switch|network switch|catalyst|access point|smart ring|oura|gimbal|stabilizer|"
         r"power station|power conditioner|thermostat|drawing tablet|pen display|light meter|flashmate|loupedeck|"
         r"stream deck|capture card|mechanical keyboard|gaming keyboard|ring light|led panel|jump starter)\b", t, re.I)
-        and not re.search(r"\b(case|cover|cable|charger only|screen protector|replacement|parts only)\b", t, re.I), 40),
+        and not re.search(r"\b(case|cover|cable|charger only|screen protector|replacement|parts only)\b", t, re.I), 80),
 ]
 
 
