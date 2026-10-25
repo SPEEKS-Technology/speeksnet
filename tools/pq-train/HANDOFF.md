@@ -1,6 +1,21 @@
 # Handoff: Picture Quality local model (as of 2026-10-21)
 
-## ⚡⚡⚡⚡⚡⚡ NEWEST (2026-10-23) — round 5 READY, Ethan starts it himself
+## ⚡⚡⚡⚡⚡⚡⚡ NEWEST (2026-10-24) — round 5 died at step 1240/1278; FINISH it with --resume
+
+- Started 10-23 23:23 (`runs\run-20261023-2324`). Ethan asked to pause at 08:40; Claude froze
+  the process (NtSuspendProcess); ~10 min later the laptop slept (Kernel-Power 42, "Application
+  API") and the frozen CUDA process was gone on wake. **Never pause a run by freezing it if the
+  laptop may sleep** — and train.py had no resume.
+- The epoch-2 adapter survived (saved after every epoch). **`train.py --resume <run> --done N`**
+  (RESUME in its header) trains only the epochs left in the same run folder: replays the seeded
+  shuffle, continues the cosine schedule at its step, re-warms 20 steps for the lost AdamW state,
+  backs the epoch-N adapter up to `adapter-epochN`. Checked 10-24: resumed loss 0.020 (= the dead
+  run's), lr 1.25e-6 rising; the epoch-2 adapter's hash unchanged by a fit-check.
+- **To finish round 5 (~3 h 50 min):** keep-awake.ps1, then
+  `tools\pq-train\run-tonight.cmd --resume runs\run-20261023-2324 --done 2`.
+  `runs\tonight.log` already rotated (`tonight-round5-died.log`). Bar is still 75%.
+
+## ⚡⚡⚡⚡⚡⚡ (2026-10-23) — round 5 READY, Ethan starts it himself
 
 - **Labelled:** 104 of the 112 local-prefill listings (8 skipped: 3 consoles, 5 Windows
   laptops, still in More For Training). He changed the local model's answer on 34% of

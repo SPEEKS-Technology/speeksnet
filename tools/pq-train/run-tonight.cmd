@@ -15,6 +15,10 @@ rem
 rem Keep the laptop PLUGGED IN with the LID OPEN (the screen can turn off).
 rem The scripts stop Windows from sleeping, but a closed lid still sleeps it.
 rem Nothing here calls the internet, the API or the database.
+rem
+rem To FINISH a run that died after an epoch (see RESUME in train.py), pass
+rem train.py's resume flags through, e.g. (round 5, 2026-10-24, ~3 h 50 min):
+rem   run-tonight.cmd --resume runs\run-20261023-2324 --done 2
 rem ==========================================================================
 setlocal
 cd /d "%~dp0..\.."
@@ -32,7 +36,7 @@ if exist "%RUNS%\baseline\scores.txt" (
   "%PY%" tools\pq-train\evaluate.py --out "%RUNS%\baseline" >> "%LOG%" 2>&1
 )
 echo Step 2 and 3 of 3: training, then scoring the trained model ...
-"%PY%" tools\pq-train\train.py --epochs 3 >> "%LOG%" 2>&1
+"%PY%" tools\pq-train\train.py --epochs 3 %* >> "%LOG%" 2>&1
 echo [%date% %time%] overnight run finished >> "%LOG%"
 echo.
 echo Done. Results are in %RUNS%  (scores.txt in baseline and in the newest run- folder)
