@@ -240,6 +240,26 @@ designs since have been shown inline in chat.
   no big number now (`big: null`, `room: n` in `_qpWidgetCard`). Links go
   through `_qpStatsOpen(view)` → `_statsOpenSaved()` on stats.html.
   `scripts/qp-stats-check.js` (5 pass).
+  **Drag-and-drop review (10-25, Ethan approved all but touch — desktop only):**
+  - **Undo:** `_qpCommit` records the layout before every change
+    (`_qpUndoPush`, 30 steps, widgets included); corner button `#qpUndoBtn`
+    (shown when there is a step) + Ctrl+Z; Reset is a step too (its dialog now
+    says Undo brings it back). History ends at Save.
+  - **One action per card middle:** the split halves (Combine/Swap,
+    Combine/Replace) are gone. Same group → Combine; whole card of another
+    group → Swap; something new over another group → Replace.
+  - **Live preview:** `_qpPreview` — a map of the page after the drop, docked
+    left of the corner buttons while dragging (green = moving, amber = moves
+    too). Worked out by `_qpDropAt(main, drag, t, dry)`, so it can't disagree.
+  - **Saved to the person:** `qp_layouts` (0158) + `qp-layout` function
+    (GET ?user=, POST {user, rows|seen}). localStorage stays as the instant
+    copy; `_qpLayoutSync` after load — server wins, a browser-only layout goes
+    up the first time; never mid-Customize; saves debounced 600ms. The test
+    login blocks the POST, like every write.
+  - **New mark:** `_QP_WIDGET_ADDED` dates; `_qpIsNew` = added ≤30 days and not
+    in `seen`; opening the drawer marks what it lists as seen (`_qpLibSeen`).
+  `scripts/qp-customize-check.js` (6 pass). A test row `zz-claude-test` may
+  still be in qp_layouts (its delete was declined).
   The Leaderboard card is white on its own (`.ew-perf-lb .ew-standings`).
   **Test login:** SPEEKS
   Connect gets SAMPLE counts when `_speeksTestSession` and no PIN (like

@@ -172,6 +172,7 @@ const B2B_CAPTURE_URL   = `${_BASE}/b2b-capture-tool`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
+const QP_LAYOUT_URL     = `${_BASE}/qp-layout`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const AGING_INV_URL     = `${_BASE}/aging-inventory`;
 const EXPENSES_URL      = `${_BASE}/expenses`;
@@ -33081,7 +33082,9 @@ function applyRoleBasedUI() {
     // Last: it moves blocks, and wants every display above already decided so
     // it knows which ones are on screen to offer arrows for.
     try { _qpApplyLayout(); } catch (e) { console.warn('QuickPortal layout failed:', e); }
+    if (!_qpSyncStarted && _qpMain()) { _qpSyncStarted = true; _qpLayoutSync(); }
 }
+let _qpSyncStarted = false;
 
 // ── THE PICTURE-STATION iPAD'S CHROME ───────────────────────────────────────
 //
@@ -49476,11 +49479,78 @@ function _qpSaved() {
         return v && v.v === 2 && Array.isArray(v.rows) ? v.rows : null;
     } catch (e) { return null; }
 }
+// SAVED TO THE PERSON (0158, Ethan 2026-10-25). The layout used to live only
+// in this browser's localStorage, so it did not follow anyone to another
+// computer and went with the browser's site data. Now qp_layouts (through the
+// qp-layout function) is the record, and localStorage is only the copy the page
+// draws from at once — _qpLayoutSync brings it in line after load, and carries a
+// layout saved before this up the first time. Writes are debounced: a drag
+// session of several drops is one save. On the localhost test login the write
+// is blocked like every other write, so the test page keeps its browser copy.
 function _qpSave(rows) {
+    _qpSaveLocal(rows);
+    clearTimeout(_qpSaveTimer);
+    _qpSaveTimer = setTimeout(function () { _qpPush({ rows: rows || null }); }, 600);
+}
+function _qpSaveLocal(rows) {
     try {
         if (rows) localStorage.setItem(_qpStoreKey(), JSON.stringify({ v: 2, rows: rows }));
         else localStorage.removeItem(_qpStoreKey());
     } catch (e) { /* private mode: the layout just won't survive a reload */ }
+}
+let _qpSaveTimer = null;
+const _qpUser = () => String(sessionStorage.getItem('speeksUserName') || '').trim();
+function _qpPush(body) {
+    const user = _qpUser();
+    if (!user || user.toLowerCase() === 'unknown') return Promise.resolve();
+    return fetch(QP_LAYOUT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, body)) })
+        .catch(function () {});
+}
+// Once per page load, after the layout is drawn from the browser's copy. The
+// server wins; if it has nothing for this person yet, their browser's layout
+// (if any) goes up. Not while someone is mid-Customize — never move a page
+// under their hands.
+async function _qpLayoutSync() {
+    const main = _qpMain(), user = _qpUser();
+    if (!main || !user || (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole())) return;
+    let j = null;
+    try { j = await fetch(QP_LAYOUT_URL + '?user=' + encodeURIComponent(user) + '&v=' + Date.now()).then(function (r) { return r.json(); }); } catch (e) { return; }
+    if (!j || !j.success) return;
+    _qpSeenLocal(Array.isArray(j.seen) ? j.seen : []);
+    const local = _qpSaved();
+    if (!j.found) { if (local) _qpPush({ rows: local }); return; }
+    if (_qpEditing || _qpSig(j.rows || []) === _qpSig(local || [])) return;
+    _qpSaveLocal(j.rows && j.rows.length ? j.rows : null);
+    _qpKeepScroll(_qpApplyLayout);
+}
+// "NEW" IN THE DRAWER (Ethan, 2026-10-25). A widget added in the last 30 days
+// (QP_WIDGETS[id].added) that this person has not yet seen in the drawer
+// carries a New mark. Opening the drawer counts as seeing what it lists; the
+// mark stays for that opening and is gone the next. Kept with the layout
+// (qp_layouts.seen), so it is per person, not per computer.
+const QP_NEW_DAYS = 30;
+function _qpSeenKey() { return 'speeksQpSeen_' + _qpUser().toLowerCase(); }
+function _qpSeenLocal(list) {
+    if (list) { try { localStorage.setItem(_qpSeenKey(), JSON.stringify(list)); } catch (e) {} return list; }
+    try { return JSON.parse(localStorage.getItem(_qpSeenKey()) || '[]') || []; } catch (e) { return []; }
+}
+function _qpIsNew(id, seen) {
+    const w = QP_WIDGETS[id];
+    if (!w || !w.added || seen.indexOf(id) !== -1) return false;
+    return (Date.now() - Date.parse(w.added + 'T12:00:00')) / 86400000 <= QP_NEW_DAYS;
+}
+// Called as the drawer opens: what is new this time, then all of it is seen.
+// The layout rides along, so the person's row always carries a real layout.
+function _qpLibSeen() {
+    const seen = _qpSeenLocal();
+    const ids = Object.keys(QP_WIDGETS).filter(_qpWidgetOk);
+    const fresh = ids.filter(function (id) { return _qpIsNew(id, seen); });
+    if (fresh.length) {
+        const all = seen.concat(fresh);
+        _qpSeenLocal(all);
+        _qpPush({ seen: all, rows: _qpSaved() });
+    }
+    return fresh;
 }
 function _qpSig(rows) {
     return rows.map(function (r) { return r.items.join(',') + '@' + (r.w ? r.w.join(':') : ''); }).join('|');
@@ -50561,6 +50631,14 @@ const QP_WIDGETS = {
         avail: function () { return true; },
     },
 };
+// When each widget joined the drawer — the 'New' mark counts 30 days from
+// here (_qpIsNew). Add a line for every new widget.
+const _QP_WIDGET_ADDED = {
+    claims: '2026-10-22', callbacks: '2026-10-22', b2b: '2026-10-22', connect: '2026-10-22',
+    monthly: '2026-10-23', kpis: '2026-10-23', variance: '2026-10-23',
+    docs: '2026-10-25', stats: '2026-10-25',
+};
+Object.keys(_QP_WIDGET_ADDED).forEach(function (id) { if (QP_WIDGETS[id]) QP_WIDGETS[id].added = _QP_WIDGET_ADDED[id]; });
 const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WIDGETS[id] ? id : null; };
 // LOCKED SIZES (Ethan, 2026-10-22: a widget stretched across a whole row "feels
 // odd" with so little in it). The most of a row a widget's card may take —
@@ -50856,6 +50934,7 @@ function qpLibraryOpen() {
     ov.addEventListener('dragstart', _qpLibDragStart);
     ov.addEventListener('dragend', _qpLibDragEnd);
     document.body.appendChild(ov);
+    _qpLibNew = _qpLibSeen();
     _qpLibraryList('');
     // Slides in like the Checklist panel (Ethan, 2026-10-22): .open on the
     // next frame, so the browser has the closed position to move from.
@@ -50876,6 +50955,7 @@ function qpLibraryRemove(id) {
     qpRemoveWidget(id);
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
+let _qpLibNew = [];
 const _QP_LIB_SECTIONS = ['Operations', 'Workspace', 'Processes & Policies', 'Stats & Awards', 'Other'];
 function _qpLibraryList(q) {
     const list = document.getElementById('qpLibList');
@@ -50896,7 +50976,7 @@ function _qpLibraryList(q) {
         const on = !!(main && main.querySelector('[data-qp-widget="' + id + '"]'));
         return '<div class="qp-lib-row' + (on ? '' : ' qp-lib-drag') + '"' + (on ? '' : ' draggable="true" data-qp-add="' + id + '" title="Drag onto the page, or click Add"') + '>'
             + '<span class="qp-lib-ico ' + w.tone + '" aria-hidden="true">' + w.icon + '</span>'
-            + '<div class="qp-lib-body"><div class="qp-lib-name">' + escapeHtml(w.label) + '</div><div class="qp-lib-sub">' + escapeHtml(w.sub) + '</div>'
+            + '<div class="qp-lib-body"><div class="qp-lib-name">' + escapeHtml(w.label) + (_qpLibNew.indexOf(id) !== -1 ? '<span class="qp-lib-new">New</span>' : '') + '</div><div class="qp-lib-sub">' + escapeHtml(w.sub) + '</div>'
             // No size pills (Ethan, 2026-10-22): the drag hints say the size
             // as it is placed ("Place Beside · ⅓ Row"), which is when it matters.
             + '</div>'
@@ -51734,8 +51814,10 @@ function _qpOriginalKeys(main) {
 
 // Commit a new arrangement: rebuild, save (or forget, if it IS the default),
 // and redraw the handles for where everything now sits.
-function _qpCommit(main, rows) {
+function _qpCommit(main, rows, noUndo) {
+    const before = _qpCurrentRows(main);
     rows = _qpPairWidgets(main, rows.filter(function (r) { return r.items.length; }));
+    if (!noUndo && _qpSig(before) !== _qpSig(rows)) _qpUndoPush(before);
     _qpKeepScroll(function () {
         _qpBuild(main, rows);
         const isDefault = _qpSig(rows) === _qpSig(_qpDefaultRows(main, _qpOriginalKeys(main)));
@@ -51934,7 +52016,7 @@ function _qpRetireWords(main, b, key) {
     if (p && p.shell) return name + ' Goes Back Into ' + QP_FAMILIES[p.fam].label;
     return name + ' Goes Back to Add a Widget';
 }
-function _qpRetire(main, rows, key, nk) {
+function _qpRetire(main, rows, key, nk, dry) {
     _qpReplace(rows, key, nk);
     const p = _qpParse(key);
     if (!(p && p.shell)) {
@@ -51942,7 +52024,7 @@ function _qpRetire(main, rows, key, nk) {
         rows.forEach(function (r) { r.items.slice().forEach(function (k) { if (k !== nk && _qpWidgetId(k) === id) _qpTakeOut(rows, k); }); });
     }
     rows.forEach(function (r) { r.w = r.items.indexOf(nk) !== -1 ? null : r.w; });
-    _qpEnsureWidgets(main, rows);
+    if (!dry) _qpEnsureWidgets(main, rows);
 }
 
 // SWAP two cards' places (rows[] untouched; a copy comes back). In one row they
@@ -51964,22 +52046,28 @@ function _qpSwapRows(main, rows, a, b) {
 }
 
 // Every drop goes through here. `t` is what _qpTargetAt worked out.
-function _qpDropAt(main, drag, t) {
+// dry: work out the layout letting go here WOULD give, change nothing, and
+// return it (null where the drop is refused) — the drag preview (_qpPreview).
+function _qpDropAt(main, drag, t, dry) {
     const rows = _qpCurrentRows(main);
     const rowObj = t.row != null ? rows[t.row] : null;
     const beforeRow = t.before != null ? rows[t.before] : null;
-    const done = function (next) { _qpCommit(main, next || rows); };
+    const done = function (next) {
+        if (dry) return _qpPairWidgets(main, (next || rows).filter(function (r) { return r.items.length; }));
+        _qpCommit(main, next || rows);
+    };
+    const no = function () { return dry ? null : _qpRenderControls(main); };
 
     if (drag.key) {
         const key = drag.key;
         if (t.bump) return done(t.bump.rows);
         if (t.zone === 'swap') {
             const sw = _qpSwapRows(main, rows, key, t.key);
-            if (sw.why) return _qpRenderControls(main);
+            if (sw.why) return no();
             return done(sw.rows);
         }
         if (t.zone === 'replace') {
-            _qpRetire(main, rows, t.key, key);
+            _qpRetire(main, rows, t.key, key, dry);
             return done();
         }
         if (t.zone === 'combine') {
@@ -51999,8 +52087,8 @@ function _qpDropAt(main, drag, t) {
             }
             return done();
         }
-        if (t.beforeKey === key) return _qpRenderControls(main);
-        if (rowObj && rowObj.items.indexOf(key) === -1 && !_qpRoomIn(main, rowObj, key)) return _qpRenderControls(main);
+        if (t.beforeKey === key) return no();
+        if (rowObj && rowObj.items.indexOf(key) === -1 && !_qpRoomIn(main, rowObj, key)) return no();
         _qpTakeOut(rows, key);
         return done(_qpPlace(rows, key, t, rowObj, beforeRow));
     }
@@ -52017,22 +52105,22 @@ function _qpDropAt(main, drag, t) {
         else _qpTakeOut(rows, from);
     };
     if (t.zone === 'replace') {
-        if (t.key === from) return _qpRenderControls(main);
+        if (t.key === from) return no();
         shrink();
-        _qpRetire(main, rows, t.key, _qpShellKey(fam, [piece]));
+        _qpRetire(main, rows, t.key, _qpShellKey(fam, [piece]), dry);
         return done();
     }
     if (t.zone === 'combine') {
         const dst = _qpParse(t.key);
-        if (t.key === from) return _qpRenderControls(main);
+        if (t.key === from) return no();
         if (dst.shell) _qpReplace(rows, t.key, _qpShellKey(fam, dst.pieces.concat([piece])));
         // Into the original: just leave the shell it was in, and it is home.
         shrink();
         return done();
     }
-    if (rowObj && !_qpRoomIn(main, rowObj, null)) return _qpRenderControls(main);
+    if (rowObj && !_qpRoomIn(main, rowObj, null)) return no();
     const fresh = _qpShellKey(fam, [piece]);
-    if (t.beforeKey === from && fromShell && !fromPieces.length) return _qpRenderControls(main);
+    if (t.beforeKey === from && fromShell && !fromPieces.length) return no();
     shrink();
     // The card it left may have been renamed; the target's "before" card too.
     if (t.beforeKey === from && fromShell) t = Object.assign({}, t, { beforeKey: _qpShellKey(fam, fromPieces) });
@@ -52203,6 +52291,8 @@ function _qpRenderSlots(main) {
     main.insertBefore(rowSlot(null), _qpAnchor(main));
 }
 function _qpClearSlots(main) {
+    const pv = document.getElementById('qpPreview');
+    if (pv) pv.remove();
     main.querySelectorAll('.qp-slot, .qp-ov').forEach(function (s) { s.remove(); });
     main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop'); });
     main.classList.remove('qp-dragging-any');
@@ -52246,31 +52336,20 @@ function _qpTargetAt(main, el, x, y) {
         const sw = _qpSwapRows(main, _qpCurrentRows(main), _qpDrag.key, key);
         return { zone: 'swap', el: b, cell: cell, key: key, row: rows.indexOf(row), full: !!sw.why, why: sw.why };
     }
-    // A whole card over the middle of one from its OWN group could mean either,
-    // so the middle splits (Ethan, 2026-10-23): the top half combines, the
-    // bottom half swaps, and the hint shows both with the live one lit
-    // (t.split). A tab dragged out (a piece) still only combines.
-    if (zone === 'combine' && sameGroup && !fromHere && _qpDrag.key && !_qpDrag.add) {
-        const sw = _qpSwapRows(main, _qpCurrentRows(main), _qpDrag.key, key);
-        const lower = y != null && (y - r.top) / r.height >= 0.5;
-        return { zone: lower ? 'swap' : 'combine', split: 'swap', el: b, cell: cell, key: key, row: rows.indexOf(row),
-            full: lower && !!sw.why, why: sw.why };
-    }
+    // ONE THING PER MIDDLE (Ethan, 2026-10-25). The middle used to split in
+    // two over a card of the same group — top half combine, bottom half swap or
+    // replace — and it was easy to let go on the wrong half. Now the middle of a
+    // card of the SAME group always combines; a card of another group swaps
+    // (above) or, for something new, is replaced (below). Two cards of one
+    // group trade places by being placed beside each other instead.
     // REPLACE (Ethan, 2026-10-23): something NEW — a widget out of the drawer,
     // or a tab dragged out to be a card of its own — over the middle of a card
-    // takes that card's place, in red. What it pushes off goes where it came
-    // from (_qpRetire). Over another card of the tab's own group the middle
-    // splits: top combines, bottom replaces. A tab over the card it left, or
-    // over its group's original card, still only combines.
-    if (zone === 'combine' && !fromHere && (_qpDrag.add || (!_qpDrag.key && _qpDrag.piece))) {
+    // from another group takes that card's place, in red. What it pushes off
+    // goes where it came from (_qpRetire). Over its own group it combines.
+    if (zone === 'combine' && !fromHere && !sameGroup && (_qpDrag.add || (!_qpDrag.key && _qpDrag.piece))) {
         const nk = _qpDrag.add || _qpShellKey(_qpDrag.fam, [_qpDrag.piece]);
         const why = _qpReplaceWhyNot(main, b, key, nk);
-        const at = { el: b, cell: cell, key: key, row: rows.indexOf(row), full: !!why, why: why };
-        if (!sameGroup) return Object.assign(at, { zone: 'replace' });
-        if ((_qpParse(key) || {}).shell) {
-            const lower = y != null && (y - r.top) / r.height >= 0.5;
-            return Object.assign(at, { zone: lower ? 'replace' : 'combine', split: 'replace', full: lower && !!why });
-        }
+        return { zone: 'replace', el: b, cell: cell, key: key, row: rows.indexOf(row), full: !!why, why: why };
     }
     if (zone === 'combine' && (!sameGroup || fromHere)) zone = f < 0.5 ? 'left' : 'right';
     const shown = Array.from(row.querySelectorAll(':scope > .qp-cell:not([hidden])'));
@@ -52305,9 +52384,77 @@ function _qpCombineLabel(main, b, t) {
 }
 // The hint over the card under the pointer: "Drop to Combine" with what it makes,
 // or an edge saying what letting go there does.
+// LIVE PREVIEW (Ethan, 2026-10-25). The hint says in words what a drop does;
+// this shows it: a small map of the page as it would be after letting go,
+// docked beside the corner buttons while something is carried. The card being
+// moved is green, any other card that moves with it amber, so a bump or a
+// re-fit is plain before it happens. Worked out by the drop itself in dry-run
+// (_qpDropAt with dry), so it can never disagree with what the drop does.
+// A card's name AFTER the drop. A card made of tabs (Your Feed, a widget, a
+// split-out card) is named by the tabs it will hold then — not its label now:
+// dragging To Do out of "To Do + News" leaves a card called News (Ethan,
+// 2026-10-25: the preview showed To Do twice). One holding none is not drawn.
+function _qpPreviewName(main, k, next) {
+    const p = _qpParse(k);
+    // (A widget still in the drawer is not built, so it has no tabs to count:
+    // it goes by its name, below.)
+    if (p && QP_FAMILIES[p.fam] && next && main.querySelector('[data-qp-block="' + p.fam + '"]')) {
+        const mine = _qpShownPieces(main, next, k);
+        if (!mine.length) return null;
+        const all = _qpFamPieces(main, p.fam).filter(function (x) { return _qpPieceShown(main, p.fam, x); });
+        if (mine.length === all.length) return QP_FAMILIES[p.fam].label;
+        return mine.map(function (x) { const pc = QP_FAMILIES[p.fam].pieces.find(function (y) { return y.key === x; }); return pc ? pc.label : x; }).join(' + ');
+    }
+    const b = main.querySelector('[data-qp-block="' + k + '"]');
+    if (b && b.getAttribute('data-qp-label')) return b.getAttribute('data-qp-label');
+    const id = _qpWidgetId(k);
+    return (id && QP_WIDGETS[id] && QP_WIDGETS[id].label) || k;
+}
+function _qpPreview(main, t) {
+    let pv = document.getElementById('qpPreview');
+    if (!_qpDrag) { if (pv) pv.remove(); return; }
+    // Between targets it stays up (no flicker crossing a gap) and says so.
+    const sig = !t ? 'none' : [t.zone, t.key, t.row, t.before, t.beforeKey, t.full ? 1 : 0, t.lone ? 1 : 0].join('|');
+    if (pv && pv.getAttribute('data-sig') === sig) return;
+    const drag = _qpDrag.add ? { key: _qpDrag.add } : _qpDrag;
+    const next = !t || t.full || t.lone ? null : _qpDropAt(main, drag, t, true);
+    if (!pv) {
+        pv = document.createElement('div');
+        pv.id = 'qpPreview';
+        pv.className = 'qp-pv';
+        pv.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(pv);
+    }
+    pv.setAttribute('data-sig', sig);
+    if (!next) {
+        pv.innerHTML = '<div class="qp-pv-t">After You Drop</div><div class="qp-pv-no">' + (t ? 'Can\x27t Drop Here' : 'Move Over a Card or a +') + '</div>';
+        return;
+    }
+    const shown = r => r.items.filter(k => _qpKeyShown(main, k));
+    // The card being placed, under the key it lands with (a tab dragged out
+    // becomes a card of its own, "fam:piece").
+    const moving = drag.key || _qpShellKey(drag.fam, [drag.piece]);
+    const mates = {};
+    _qpCurrentRows(main).forEach(function (r) { const v = shown(r); v.forEach(function (k) { mates[k] = v.slice().sort().join(','); }); });
+    const names = {};
+    const rowsHtml = next.map(function (r) {
+        const v = shown(r).filter(function (k) { return (names[k] = _qpPreviewName(main, k, next)) !== null; });
+        if (!v.length) return '';
+        const sum = r.w && r.w.length === r.items.length ? r.items.reduce(function (a, k, i) { return a + (v.indexOf(k) !== -1 ? r.w[i] : 0); }, 0) : 0;
+        const cells = v.map(function (k) {
+            const share = sum ? r.w[r.items.indexOf(k)] / sum : _qpShareIn(v, k);
+            const cls = k === moving ? ' on' : mates[k] !== undefined && mates[k] !== v.slice().sort().join(',') ? ' moved' : '';
+            return '<span class="qp-pv-c' + cls + '" style="flex-grow:' + share.toFixed(3) + '">' + escapeHtml(names[k]) + '</span>';
+        }).join('');
+        return '<div class="qp-pv-r">' + cells + '</div>';
+    }).join('');
+    pv.innerHTML = '<div class="qp-pv-t">After You Drop</div>' + rowsHtml
+        + (rowsHtml.indexOf(' moved"') !== -1 ? '<div class="qp-pv-k"><i class="on"></i>Moving <i class="moved"></i>Moves Too</div>' : '<div class="qp-pv-k"><i class="on"></i>Moving</div>');
+}
 function _qpShowHint(main, t) {
+    _qpPreview(main, t);
     const old = main.querySelector('.qp-ov');
-    const sig = t && t.cell ? t.key + '|' + t.zone + '|' + (t.full ? 1 : 0) + (t.split ? '|' + t.split : '') : '';
+    const sig = t && t.cell ? t.key + '|' + t.zone + '|' + (t.full ? 1 : 0) : '';
     if (old && old.getAttribute('data-sig') === sig) return;
     if (old) old.remove();
     main.querySelectorAll('.qp-drop').forEach(function (b) { b.classList.remove('qp-drop', 'qp-slot-no'); });
@@ -52333,27 +52480,9 @@ function _qpShowHint(main, t) {
             + (t.why ? '<span class="qp-ov-big">Can\'t Replace</span><span class="qp-ov-small">' + escapeHtml(t.why) + '</span>'
                 : '<span class="qp-ov-big">Drop to Replace</span><span class="qp-ov-small">' + escapeHtml(_qpRetireWords(main, b, t.key)) + '</span>');
     };
-    if (t.split === 'replace') {
-        ov.className = 'qp-ov qp-ov-split';
-        ov.innerHTML = '<div class="qp-ov-half qp-ov-combine' + (t.zone === 'combine' ? ' on' : '') + '">'
-            + '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
-            + '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Makes One Card: ' + escapeHtml(_qpCombineLabel(main, b, t)) + '</span></div>'
-            + '<div class="qp-ov-half qp-ov-combine qp-ov-no qp-ov-replace' + (t.zone === 'replace' ? ' on' : '') + (t.why ? ' qp-ov-refused' : '') + '">'
-            + replaceHtml() + '</div>';
-    } else if (t.zone === 'replace') {
+    if (t.zone === 'replace') {
         ov.className = 'qp-ov qp-ov-combine qp-ov-no qp-ov-replace' + (t.why ? ' qp-ov-refused' : '');
         ov.innerHTML = replaceHtml();
-    } else if (t.split) {
-        // Both halves, labelled; the one under the pointer lit.
-        const other = b.getAttribute('data-qp-label') || t.key;
-        ov.className = 'qp-ov qp-ov-split';
-        ov.innerHTML = '<div class="qp-ov-half qp-ov-combine' + (t.zone === 'combine' ? ' on' : '') + '">'
-            + '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
-            + '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Makes One Card: ' + escapeHtml(_qpCombineLabel(main, b, t)) + '</span></div>'
-            + '<div class="qp-ov-half qp-ov-combine qp-ov-swap' + (t.zone === 'swap' ? ' on' : '') + (t.why ? ' qp-ov-no' : '') + '">'
-            + '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></span>'
-            + (t.why ? '<span class="qp-ov-big">Can\'t Swap Here</span><span class="qp-ov-small">' + escapeHtml(t.why) + '</span>'
-                : '<span class="qp-ov-big">Drop to Swap</span><span class="qp-ov-small">Trades Places With ' + escapeHtml(other) + '</span>') + '</div>';
     } else if (t.zone === 'swap') {
         const other = b.getAttribute('data-qp-label') || t.key;
         ov.className = 'qp-ov qp-ov-combine qp-ov-swap' + (t.full ? ' qp-ov-no' : '');
@@ -52552,13 +52681,52 @@ function _qpSetEditing(main, on) {
     // "+" opens the widget drawer — in Customize only, like Reset.
     const add = document.getElementById('qpAddBtn');
     if (add) add.hidden = !_qpEditing;
-    if (!_qpEditing) qpLibraryClose();
+    if (!_qpEditing) { qpLibraryClose(); _qpUndo = []; }
+    _qpUndoSync();
 }
 
 function qpToggleEdit() {
     const main = _qpMain();
     if (main) _qpSetEditing(main, !_qpEditing);
 }
+
+// UNDO (Ethan, 2026-10-25). A drop can move other cards now — one bumped
+// down, a lone one joining a row, at worst the whole page re-fitted — so every
+// change while customizing can be taken back, one step at a time: the corner
+// button (shown once there is something to undo) or Ctrl+Z. Each step is the
+// layout as it was before a change (_qpCommit records it), widgets included:
+// undoing an Add takes the widget off again, undoing a Remove brings it back.
+// Reset is a step too. The history is for this Customize session; Save ends it.
+const QP_UNDO_MAX = 30;
+let _qpUndo = [];
+function _qpUndoPush(rows) {
+    _qpUndo.push(rows.map(function (r) { return { items: r.items.slice(), w: r.w ? r.w.slice() : null }; }));
+    if (_qpUndo.length > QP_UNDO_MAX) _qpUndo.shift();
+    _qpUndoSync();
+}
+function _qpUndoSync() {
+    const btn = document.getElementById('qpUndoBtn');
+    if (btn) btn.hidden = !(_qpEditing && _qpUndo.length);
+}
+function qpUndo() {
+    const main = _qpMain();
+    if (!main || !_qpEditing || !_qpUndo.length) return;
+    const rows = _qpUndo.pop();
+    qpLibraryClose();
+    _qpEnsureWidgets(main, rows);
+    _qpCommit(main, rows, true);
+    _qpUndoSync();
+    if (document.getElementById('qpLibList')) _qpLibraryList('');
+}
+document.addEventListener('keydown', function (e) {
+    if (!_qpEditing || !(e.ctrlKey || e.metaKey) || e.shiftKey || String(e.key).toLowerCase() !== 'z') return;
+    // Typing in a box (the drawer's search) keeps its own undo.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (!_qpUndo.length) return;
+    e.preventDefault();
+    qpUndo();
+});
 
 // Reset to Default asks first (Ethan, 2026-10-22: "give a pop up warning"),
 // because it throws away every move, width and split-out card at once and there
@@ -52573,7 +52741,7 @@ function qpReset() {
     ov.innerHTML = '<div class="qp-ask-card" role="alertdialog" aria-modal="true" aria-labelledby="qpResetAskT" aria-describedby="qpResetAskD">'
         + '<div class="qp-ask-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></div>'
         + '<div class="qp-ask-t" id="qpResetAskT">Reset to Default?</div>'
-        + '<div class="qp-ask-d" id="qpResetAskD">Every card goes back to where it started. Your card widths and any cards you split out will be lost. This can\'t be undone.</div>'
+        + '<div class="qp-ask-d" id="qpResetAskD">Every card goes back to where it started. Your card widths, any cards you split out and any widgets you added will be lost. Undo brings them back until you press Save.</div>'
         + '<div class="qp-ask-btns"><button type="button" class="qp-ask-no" onclick="qpResetClose()">Cancel</button>'
         + '<button type="button" class="qp-ask-yes" onclick="qpResetClose(); _qpResetNow()">Reset Layout</button></div></div>';
     ov.addEventListener('click', function (e) { if (e.target === ov) qpResetClose(); });
@@ -52588,6 +52756,8 @@ function qpResetClose() {
 function _qpResetNow() {
     const main = _qpMain();
     if (!main) return;
+    // A step Undo can take back (until Save).
+    if (main.classList.contains('qp-custom')) _qpUndoPush(_qpCurrentRows(main));
     // The default has no added widgets: they go, not to the bottom of the page.
     _qpEnsureWidgets(main, []);
     _qpSave(null);

@@ -25899,23 +25899,34 @@ a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
 .qp-ov-no .qp-ov-big { color: #9b2c2c; }
 .qp-ov-no .qp-ov-small { color: #c53030; }
 .main-content.qp-editing .qp-cell:has(> .qp-ov-no) > [data-qp-block].qp-drop { outline-color: var(--red-alert); }
-/* SPLIT MIDDLE (same-group cards): two labelled halves over the card — top
-   Combine, bottom Swap — the one under the pointer full strength, the other
-   faded, so both choices are always in view while dragging. Compact (each
-   half is 175px of a 350px card). */
-.qp-ov-split { display: flex; flex-direction: column; gap: 6px; padding: 6px; background: #fff; box-sizing: border-box; }
-.qp-ov-split > .qp-ov-half { flex: 1 1 0; min-height: 0; border-radius: 12px; padding: 10px; gap: 4px; background: #f6f8f7; border-color: #cfd8d3; border-style: dashed; }
-.qp-ov-split > .qp-ov-half:not(.on) > * { opacity: .5; }
-.qp-ov-split > .qp-ov-half.on { background: rgba(232,247,238,.98); border-color: #1f9d57; border-style: solid; }
-.qp-ov-split .qp-ov-ico { width: 34px; height: 34px; border-radius: 10px; }
-.qp-ov-split .qp-ov-ico svg { width: 18px; height: 18px; }
-.qp-ov-split .qp-ov-big { font-size: 15px; }
-.qp-ov-split .qp-ov-small { font-size: 11.5px; }
-.main-content.qp-editing .qp-cell:has(> .qp-ov-split) > [data-qp-block].qp-drop { outline: 2px solid #1f9d57; }
-.main-content.qp-editing .qp-cell:has(> .qp-ov-split .qp-ov-no.on) > [data-qp-block].qp-drop { outline-color: var(--red-alert); }
-.qp-ov-split > .qp-ov-half.qp-ov-no.on { background: rgba(253,236,236,.98); border-color: var(--red-alert); }
+/* (The split-middle overlay — two halves, Combine over Swap — was retired
+   2026-10-25: one action per card middle, see _qpTargetAt.) */
 /* Value and change columns centred in their tracks (Ethan, 2026-10-23). */
 .qp-cw-ln.qp-mb-ln > b, .qp-cw-ln.qp-mb-ln .qp-mb-d { text-align: center; }
 /* REPLACE (10-23): red even when allowed; refused is dashed and says why. */
 .qp-ov-replace.qp-ov-refused { border-style: dashed; }
 .qp-ov-replace.qp-ov-refused .qp-ov-ico { background: #b4b2a9; }
+/* LIVE PREVIEW (_qpPreview, Ethan 2026-10-25): the page as it would be after
+   letting go, docked left of the corner buttons while something is carried —
+   Customize only (it is removed with the drag). The card being moved green,
+   any card that moves with it amber. */
+.qp-pv { position: fixed; right: 60px; bottom: 18px; z-index: 101; width: 300px; box-sizing: border-box; padding: 10px 12px 9px; background: #fff; border: 1px solid #dfe5ea; border-radius: 14px; box-shadow: 0 8px 24px rgba(15,23,42,.14); pointer-events: none; }
+.qp-pv-t { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; margin-bottom: 6px; }
+.qp-pv-r { display: flex; gap: 4px; margin-top: 4px; }
+/* A long name ("Command Center", "To Do + News") wraps onto a second line
+   rather than being cut off; every box in a row grows to match. */
+.qp-pv-c { flex: 1 1 0; min-width: 0; min-height: 28px; display: flex; align-items: center; justify-content: center; padding: 3px 5px; box-sizing: border-box; border-radius: 6px; background: #f1f4f7; color: #5b6b64; font-size: 10px; font-weight: 700; line-height: 1.2; text-align: center; overflow-wrap: break-word; hyphens: none; }
+.qp-pv-c.on { background: #e8f7ee; color: #146c3c; box-shadow: inset 0 0 0 1.5px #1f9d57; }
+.qp-pv-c.moved { background: #fdf3e2; color: #a46412; box-shadow: inset 0 0 0 1.5px #e0a23a; }
+.qp-pv-no { font-size: 12px; font-weight: 700; color: #5b6b64; padding: 6px 0 2px; }
+.qp-pv-k { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+.qp-pv-k i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.qp-pv-k i.on { background: #1f9d57; }
+.qp-pv-k i.moved { background: #e0a23a; margin-left: 8px; }
+/* "New" on a widget added in the last 30 days that this person has not yet
+   seen in the drawer (_qpIsNew, Ethan 2026-10-25). */
+.qp-lib-new { display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 999px; background: #e8f7ee; color: #146c3c; font-size: 10px; font-weight: 800; letter-spacing: .02em; vertical-align: 1px; }
+/* Reset reads as the drastic one (Ethan, 2026-10-25: Undo and Reset looked
+   alike): red, a layout-grid-with-an-X icon, and furthest from Save. */
+.qp-btn.qp-btn-reset { color: #c53030; }
+.qp-btn.qp-btn-reset:hover { background: #fdecec; border-color: #f2c4c4; }

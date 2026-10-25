@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261025f">
+  <link rel="stylesheet" href="styles.css?v=20261025h">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261025f" defer></script>
+  <script src="speeks.js?v=20261025h" defer></script>
 </head>
 
 <body class="preload">
@@ -698,8 +698,12 @@
        this bottom right corner ... change it to an icon ... follow as the user
        scrolls"). Still the first thing in <main>; position: fixed in the CSS. -->
   <div class="qp-bar dynamic-module-flex role-manager" id="qpBar" data-feature="qp-customize" data-mobile="hide" data-tablet="show">
-    <button type="button" class="qp-btn" id="qpResetBtn" hidden onclick="qpReset()" title="Reset to Default" aria-label="Reset to Default"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
+    <!-- Reset (red, the layout grid) sits furthest from Save; Undo (the curved
+         arrow) right above it — Ethan 2026-10-25: the two round-arrow icons
+         were too alike. -->
+    <button type="button" class="qp-btn qp-btn-reset" id="qpResetBtn" hidden onclick="qpReset()" title="Reset Layout to Default" aria-label="Reset Layout to Default"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14.5 14.5l6 6M20.5 14.5l-6 6"/></svg></button>
     <button type="button" class="qp-btn" id="qpAddBtn" hidden onclick="qpLibraryOpen()" title="Add Widget" aria-label="Add Widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button type="button" class="qp-btn" id="qpUndoBtn" hidden onclick="qpUndo()" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
     <button type="button" class="qp-btn qp-btn-main" id="qpEditBtn" aria-pressed="false" onclick="qpToggleEdit()" title="Customize" aria-label="Customize"><svg class="qp-ico-edit" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><svg class="qp-ico-save" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button>
   </div>
 
