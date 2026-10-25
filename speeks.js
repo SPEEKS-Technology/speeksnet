@@ -50511,6 +50511,15 @@ const QP_WIDGETS = {
         // The manager side; the DM version (review queue) comes later.
         avail: function () { return _vrIsManager() && _vrMyStores().length > 0 && _jumpFeatureVisible('widget-variance-replies'); },
     },
+    // The policy library (Ethan, 2026-10-25). Everyone has docs.html — it has
+    // no Feature Access switch — so everyone may add it.
+    docs: {
+        label: 'Processes & Policies',
+        sub: 'Search the library, and your pinned documents',
+        icon: '<svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
+        tone: 'b', section: 'Processes & Policies',
+        avail: function () { return true; },
+    },
 };
 const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WIDGETS[id] ? id : null; };
 // LOCKED SIZES (Ethan, 2026-10-22: a widget stretched across a whole row "feels
@@ -50530,7 +50539,7 @@ const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WID
 // Breakdown lost their full size too — no widget has enough to fill a row).
 // Variance Replies, Store KPIs and Monthly Breakdown are ⅓ only (Ethan, same
 // day): there is a card's worth in each, no more.
-const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3 };
+const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3, docs: 0.5 };
 // Cards that are not widgets can be held under a full row too, by family —
 // the card and every piece split out of it (Ethan, 2026-10-23: "the feed cards
 // should not be allowed to be full size either").
@@ -50827,7 +50836,7 @@ function qpLibraryRemove(id) {
     qpRemoveWidget(id);
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
-const _QP_LIB_SECTIONS = ['Operations', 'Workspace', 'Other'];
+const _QP_LIB_SECTIONS = ['Operations', 'Workspace', 'Processes & Policies', 'Other'];
 function _qpLibraryList(q) {
     const list = document.getElementById('qpLibList');
     const main = _qpMain();
@@ -51011,6 +51020,9 @@ function _qpWidgetCard(el, rows, id) {
         body = '<div class="status-message">' + (st.err ? 'Couldn\'t load. It will try again shortly.' : 'Syncing…') + '</div>';
     } else if (off) {
         body = '<div class="qp-hl-sub" style="margin-top:12px">' + off + '</div>';
+    } else if (spec.card) {
+        // A widget that is not a count (Processes & Policies): it draws its own body.
+        body = spec.card(st.data, key);
     } else {
         const m = {};
         pieces.forEach(p => { m[p] = spec.model(st.data, p); });
@@ -51037,7 +51049,68 @@ function _qpWidgetCard(el, rows, id) {
     if (box._qpHtml !== html) { box.innerHTML = html; box._qpHtml = html; _qpCapLines(box); }
 }
 
+// PROCESSES & POLICIES card helpers. The rows a card shows: with nothing typed,
+// the pinned documents (the library's own "Pinned" group — a category that
+// says pinned); with a search, every document whose title, description or
+// category holds every word typed, as filterDocs matches on the page. Five rows
+// fill a card; past that it says how many more and the link opens the library.
+const _QP_DOC_ROOM = 5;
+function _qpDocRows(docs, q) {
+    const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const cat = d => String(d.category || '').replace(/,?\s*["']?pinned["']?/ig, '').trim();
+    const list = words.length
+        ? docs.filter(d => { const s = (d.title + ' ' + (d.desc || '') + ' ' + cat(d)).toLowerCase(); return words.every(w => s.indexOf(w) !== -1); })
+        : docs.filter(d => /pinned/i.test(d.category || ''));
+    const cap = words.length ? (list.length ? list.length + (list.length === 1 ? ' Match' : ' Matches') : 'No Matches') : 'Pinned';
+    const rows = list.slice(0, _QP_DOC_ROOM).map(function (d) {
+        // Drive links only ever: a link that is not http(s) is not a link.
+        const href = /^https?:\/\//i.test(String(d.link || '')) ? d.link : '#';
+        return '<a class="qp-cw-ln qp-doc" href="' + escapeHtml(href) + '" target="_blank" rel="noopener" onclick="_qpDocOpened()"'
+            + ' title="' + escapeHtml(d.desc || d.title) + '"><span class="qp-doc-ico">' + _docIconSvg(d.icon, cat(d)) + '</span>'
+            + '<span class="qp-cw-lt">' + escapeHtml(d.title) + '</span></a>';
+    }).join('');
+    const more = list.length > _QP_DOC_ROOM ? '<div class="qp-doc-more">+' + (list.length - _QP_DOC_ROOM) + ' More</div>' : '';
+    const none = words.length && !list.length ? '<div class="qp-hl-sub">Try another word, or open the library.</div>'
+        : !words.length && !list.length ? '<div class="qp-hl-sub">Nothing is pinned yet.</div>' : '';
+    return '<div class="qp-hl-cap">' + cap + '</div>' + rows + more + none;
+}
+// Typing swaps only the list under the box, so the box keeps its focus and
+// what was typed (the card's own redraw never touches it — its html is the
+// same string until the library itself changes).
+function _qpDocSearch(input) {
+    const list = input.parentElement && input.parentElement.querySelector('.qp-doc-list');
+    const st = _qpWState('docs');
+    if (list && st.data) list.innerHTML = _qpDocRows(st.data, input.value);
+}
+// A document opened here counts as one opened in the library (doc:open).
+function _qpDocOpened() { try { trackUsage('open', 'doc:open', _usageLabel('doc:open')); } catch (_) {} }
+
 const _QP_WSPEC = {
+    // PROCESSES & POLICIES (Ethan, 2026-10-25: option B without the category
+    // chips — "just have the search bar and the pinned ones"). The library's
+    // own read (DOCS_URL, the list docs.html draws), cached ten minutes: it
+    // changes when someone edits the library. A search box over every document
+    // and the pinned ones under it; each opens in a new tab, as on the page.
+    docs: {
+        when: d => (d && d.length ? d.length + ' Documents' : 'Library'),
+        ttl: 600000,
+        tabs: [['pinned', 'Pinned', 'Processes & Policies']],
+        where: () => 'SPEEKS',
+        load: async function () {
+            const res = await fetch(`${DOCS_URL}?v=${Date.now()}`);
+            const d = await res.json();
+            if (!Array.isArray(d)) throw new Error('docs load failed');
+            try { localStorage.setItem('speeksDocsData', JSON.stringify(d)); } catch (_) {}
+            return d;
+        },
+        off: d => d.length ? '' : 'The library has no documents yet.',
+        card: function (d) {
+            return '<div class="qp-ai-body qp-doc-body">'
+                + '<input type="search" class="qp-doc-q" placeholder="Search ' + d.length + ' Documents" aria-label="Search Processes & Policies" oninput="_qpDocSearch(this)">'
+                + '<div class="qp-doc-list">' + _qpDocRows(d, '') + '</div>'
+                + _qpAiLink('Open Processes &amp; Policies', "location.href='docs.html'") + '</div>';
+        },
+    },
     // CLAIMS & DISPUTES — the store tool's own four tabs, each counting what
     // needs attention by the tool's rules (_HOLD_VIEWS.due, the same count as
     // its red badges), the next ones due by due_on. The tool's own GET and NEVER

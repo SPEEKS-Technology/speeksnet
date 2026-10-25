@@ -221,6 +221,14 @@ designs since have been shown inline in chat.
   the same place from the left it had (`moveTo`) — far-left B2B stays far
   left; a borrowed card goes on the far side of the one waiting.
   `scripts/qp-size-check.js` (13 pass, incl. a 60-page random sweep).
+  **Processes & Policies widget (10-25):** `QP_WIDGETS.docs`, ⅓·½, everyone
+  (docs.html has no Feature Access switch), own drawer section. Ethan picked
+  "search bar and the pinned ones" (no category chips). `_QP_WSPEC.docs.card`
+  — a new hook in `_qpWidgetCard` for a widget that is not a count — draws a
+  search box + `_qpDocRows` (pinned with nothing typed; every-word match over
+  title/desc/category otherwise; 5 rows then "+N More"). `_qpDocSearch` swaps
+  only the list so the box keeps focus; a click counts as `doc:open`. DOCS_URL,
+  10-min cache. `scripts/qp-docs-check.js` (6 pass).
   The Leaderboard card is white on its own (`.ew-perf-lb .ew-standings`).
   **Test login:** SPEEKS
   Connect gets SAMPLE counts when `_speeksTestSession` and no PIN (like

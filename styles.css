@@ -25863,6 +25863,16 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-lib-sec-h span { margin-left: auto; letter-spacing: 0; font-weight: 700; color: #b4bcc6; }
 .qp-lib-sec .qp-lib-row:last-child { border-bottom: none; }
 .qp-lib-ico.b, .qp-cw-ico.b { background: #e8f0fb; color: #2563b8; }
+/* PROCESSES & POLICIES widget: the drawer's search box, a card's width, then
+   the pinned (or matching) documents as the widgets' own lines, each a link. */
+.qp-doc-q { width: 100%; box-sizing: border-box; margin: 0 0 4px; font: inherit; font-size: 13px; padding: 8px 12px; border: 1px solid #d5dce4; border-radius: 10px; outline: none; }
+.qp-doc-q:focus { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
+.qp-doc-list { flex: 1 1 auto; min-height: 0; }
+a.qp-doc { text-decoration: none; color: #1a1c1e; }
+a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
+.qp-doc-ico { flex: none; width: 22px; height: 22px; border-radius: 6px; background: #e8f0fb; color: #2563b8; display: grid; place-items: center; }
+.qp-doc-ico svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-doc-more { padding: 4px 0 0; font-size: 11.5px; font-weight: 700; color: #8a94a3; }
 .qp-cw-due.info { background: #e8f0fb; color: #2563b8; }
 /* Monthly Breakdown's key rows: name, value, change from last month, place. */
 .qp-mb-ln .qp-mb-d { flex: none; min-width: 56px; text-align: right; font-size: 11px; font-weight: 700; }
