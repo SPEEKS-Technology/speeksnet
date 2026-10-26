@@ -44,9 +44,21 @@ const APP_VERSION = '3.9.3';
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
 // its top nav while the app pages have one in the sidebar greeting stack.
+//
+// The tag is also the way into this version's patch notes: clicking it opens the
+// hub on Patch Notes and jumps to the matching release (openVersionPatchNotes).
+// Wired here rather than as onclick= in the six pages, for the same reason the
+// number is stamped here — one place, not six copies.
 function _stampVersion() {
     document.querySelectorAll('.version-tag').forEach(function (el) {
         el.textContent = `v${APP_VERSION}`;
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.title = `What's new in v${APP_VERSION}`;
+        el.onclick = function () { openVersionPatchNotes(); };
+        el.onkeydown = function (e) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openVersionPatchNotes(); }
+        };
     });
 }
 
@@ -20200,6 +20212,11 @@ async function fetchAndRenderEmployeeGoals() {
         window._empGoalToday = todayGoal;
         window._empRoleToday = displayRole;
         window._empResultToday = _todayStats.result || 0;
+        // ...and the QuickPortal's personal Listing Goals card (_qpAiMyListing):
+        // the week so far, day by day, and what today's role means.
+        window._empWeek = { goal: weekGoalTotal, done: Object.values(dailyStats).reduce((a, d) => a + (d.result || 0), 0),
+            days: dailyStats, roleDesc: roleDesc };
+        if (typeof _qpRenderActions === 'function') _qpRenderActions();
         if (typeof samRefreshListing === 'function') samRefreshListing();
 
         let dailyBreakdownHtml = '<div class="emp-pill-container">';
@@ -20370,6 +20387,7 @@ async function fetchAndRenderEmployeeKPIs() {
 
         if (Object.keys(myData).length === 0) {
             container.innerHTML = '<div class="status-message">No KPI data found for your user this week.</div>';
+            if (typeof _qpSetHeadline === 'function') _qpSetHeadline('kpis', { period: pTxt, none: true });
             return;
         }
 
@@ -20406,6 +20424,18 @@ async function fetchAndRenderEmployeeKPIs() {
             <div class="ekpi-rowlab ekpi-rowlab-store"><span class="ekpi-pill st">Store</span><span class="ekpi-rule"></span></div>
             <div class="ekpi-grid">${_storeTiles}</div>
         `;
+        // The QuickPortal headline (_QP_HL_BUILD.kpis): the same figures, judged
+        // by the same checkRule, so the card can never disagree with the tab.
+        if (typeof _qpSetHeadline === 'function') {
+            _qpSetHeadline('kpis', {
+                period: pTxt,
+                metrics: _kpiMetrics.map(m => ({
+                    t: m.t, rule: m.rule, my: _kv(m.my, m.pct), st: _kv(m.st, m.pct),
+                    has: m.my != null && m.my !== '' && m.my !== '-',
+                    bad: m.rule ? checkRule(m.rule, m.my) : false,
+                })),
+            });
+        }
         // Employee widget "Weekly KPIs updated" dot — fires when a new week's numbers land.
         _ccFlagUpdate('kpis', `${pTxt}|${myData.buyVal}|${myData.conversion}|${myData.listed}|${myData.noDeals}`);
     } catch (e) {
@@ -44310,7 +44340,10 @@ const FEATURE_CATALOG = [
     // QuickPortal "Customize" — arrange your own QuickPortal (QUICKPORTAL LAYOUT).
     // Managers only while it is new (Ethan 2026-10-21: start with one role, go
     // slowly); widen it here or per person from Feature Access.
-    { key: 'qp-customize',             label: 'QuickPortal · Customize (arrange)', tab: 'widgets', group: 'Dashboard', def: ['manager'] },
+    // Customize is no longer a switch (Ethan, 2026-10-25: "doesn't need a feature
+    // access thing as this will be for everyone going forward") — it goes by role
+    // on #qpBar in index.html. An old override row for it is simply never read.
+    // { key: 'qp-customize',             label: 'QuickPortal · Customize (arrange)', tab: 'widgets', group: 'Dashboard', def: ['manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
     // now — so the switch is gone too rather than left as a control that does
@@ -44428,7 +44461,7 @@ const FEATURE_CATALOG = [
     // and Listing Health draws No Photos the way it did before the grader (see
     // _pqHtml, _lhHtml and the All Stores card). The function, the data and the
     // nightly (paused anyway) are untouched. Restore by uncommenting this line.
-    // { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     // LENDS the corp hat to someone outside the corp roles. DM, CEO and MOCD have
     // corp powers by role whatever this says (_b2bIsCorp), which is why only the
     // DM column is on and switching CEO/MOCD off does nothing.
@@ -49377,6 +49410,10 @@ const QP_FAMILIES = {
             { key: 'live', label: 'Live Dashboard', ids: ['cc-tab-live', 'cc-sum-live', 'cc-sum-mtd', 'cc-sum-refunds', 'cc-sum-goal', 'cc-sum-reviews', 'cc-strip-live', 'cc-panel-live'] },
             { key: 'ebay', label: 'eBay', ids: ['cc-tab-ebay', 'cc-sum-ebay', 'cc-strip-ebay', 'cc-panel-ebay'] },
             { key: 'score', label: 'Scorecard & Audit', ids: ['cc-tab-scorecard', 'cc-sum-score', 'cc-sum-audit', 'cc-strip-scorecard', 'cc-panel-scorecard'] },
+            // The employee / ASM tab (Feature Access cc-kpis): their own week
+            // against the store's. A piece like the others since 2026-10-25, when
+            // Customize — and with it the headline cards — went to every role.
+            { key: 'kpis', label: 'Weekly KPIs', ids: ['cc-tab-kpis', 'cc-panel-kpis'] },
         ],
     },
     actions: {
@@ -49460,11 +49497,21 @@ function _qpBlocks(main) {
 }
 function _qpKey(b) { return b.getAttribute('data-qp-block'); }
 function _qpStoreKey() {
-    return QP_LAYOUT_KEY + String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase();
+    const store = _qpLayoutStore();
+    return QP_LAYOUT_KEY + String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase() + (store ? '@' + store.toLowerCase() : '');
+}
+// A MULTI-STORE MANAGER keeps a layout per store (Ethan, 2026-10-26: "saved by
+// user, by store"): BAL and MPL each remember their own page. Everyone else has
+// one. A store with nothing saved yet starts from the person's single layout,
+// here (the browser copy) and in qp-layout (the record).
+function _qpLayoutStore() {
+    return typeof isMultiStoreManager === 'function' && isMultiStoreManager()
+        ? String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase() : '';
 }
 function _qpSaved() {
     try {
-        const v = JSON.parse(localStorage.getItem(_qpStoreKey()) || 'null');
+        const own = localStorage.getItem(_qpStoreKey());
+        const v = JSON.parse(own || (_qpLayoutStore() ? localStorage.getItem(QP_LAYOUT_KEY + _qpUser().toLowerCase()) : null) || 'null');
         return v && v.v === 2 && Array.isArray(v.rows) ? v.rows : null;
     } catch (e) { return null; }
 }
@@ -49492,7 +49539,8 @@ const _qpUser = () => String(sessionStorage.getItem('speeksUserName') || '').tri
 function _qpPush(body) {
     const user = _qpUser();
     if (!user || user.toLowerCase() === 'unknown') return Promise.resolve();
-    return fetch(QP_LAYOUT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, body)) })
+    const store = _qpLayoutStore();
+    return fetch(QP_LAYOUT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, store ? { store: store } : {}, body)) })
         .catch(function () {});
 }
 // Once per page load, after the layout is drawn from the browser's copy. The
@@ -49503,7 +49551,8 @@ async function _qpLayoutSync() {
     const main = _qpMain(), user = _qpUser();
     if (!main || !user || (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole())) return;
     let j = null;
-    try { j = await fetch(QP_LAYOUT_URL + '?user=' + encodeURIComponent(user) + '&v=' + Date.now()).then(function (r) { return r.json(); }); } catch (e) { return; }
+    const store = _qpLayoutStore();
+    try { j = await fetch(QP_LAYOUT_URL + '?user=' + encodeURIComponent(user) + (store ? '&store=' + store : '') + '&v=' + Date.now()).then(function (r) { return r.json(); }); } catch (e) { return; }
     if (!j || !j.success) return;
     _qpSeenLocal(Array.isArray(j.seen) ? j.seen : []);
     const local = _qpSaved();
@@ -49831,7 +49880,7 @@ function _qpDefaults(keys) { return _qpResolve(QP_DEFAULT_ROWS, keys, null); }
 // Center) would leave half a row empty, so it goes through the same no-gap
 // pass a saved layout does. Re-run on every _qpApplyLayout, so it follows
 // visibility that lands late (feature overrides).
-function _qpDefaultRows(main, keys) { return _qpPairWidgets(main, _qpDefaults(keys)); }
+function _qpDefaultRows(main, keys) { return _qpSettle(main, _qpDefaults(keys)); }
 
 function _qpVisible(b) {
     if (b.hidden) return false;
@@ -49923,7 +49972,7 @@ function _qpLayout(main) {
     _qpEnsureWidgets(main, saved);
     _qpDiscover(main);
     const keys = _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell'); }).map(_qpKey);
-    return saved ? _qpPairWidgets(main, _qpResolve(saved, keys, main)) : _qpDefaultRows(main, keys);
+    return saved ? _qpSettle(main, _qpResolve(saved, keys, main)) : _qpDefaultRows(main, keys);
 }
 
 // The tab a Command Center card has open (openOnly), or the one it opens on: its
@@ -50046,7 +50095,52 @@ function _qpHLBox(k, v, sub, cls) {
     return '<div class="qp-hl-box"><div class="qp-hl-k">' + k + '</div><div class="qp-hl-bv ' + (cls || '') + '">' + v + '</div>'
         + (sub ? '<div class="qp-hl-bs">' + sub + '</div>' : '') + '</div>';
 }
+// The Weekly KPIs goals, in words, beside a miss — the same marks checkRule
+// tests (margin 51, conversion 85, no deals 7, variance 0, time 13).
+// [word, figure] — drawn as a tag of its own beside the store's (Ethan,
+// 2026-10-26: goal and store in one grey run read as cramped).
+const _QP_KPI_GOAL = { margin: ['Goal', '51%'], conversion: ['Goal', '85%'], nodeals: ['Max', '7'], variance: ['Goal', '0%+'], time: ['Max', '13 Min'] };
+function _qpKpiTag(word, fig, cls) {
+    return '<span class="qp-kpi-tag' + (cls ? ' ' + cls : '') + '">' + escapeHtml(word) + ' <b>' + escapeHtml(fig) + '</b></span>';
+}
+const _QP_KPI_NAME = { 'Trans. Time': 'Transaction Time', 'Listed Dev.': 'Listed' };
 const _QP_HL_BUILD = {
+    // WEEKLY KPIs (Ethan, 2026-10-25: option A — "on target, and what missed").
+    // How many of the judged KPIs are on target, then only the misses, each with
+    // its goal and the store's figure, and the ones on target on one line. The
+    // two with no goal (Buying Value, Listed) stay in the full tab — they would
+    // push the card past 350px. The card opens nothing, like eBay and Scorecard.
+    kpis: function (h) {
+        const period = h.period ? escapeHtml(String(h.period).replace(/^Week ending/i, 'Week Ending')) : 'This Week';
+        if (h.none) {
+            return '<div class="qp-hl-k">' + period + '</div><div class="qp-hl-big">—<small>no KPIs for you yet</small></div>'
+                + '<div class="qp-hl-sub">They show here once this week\'s KPIs are entered.</div>';
+        }
+        const name = t => _QP_KPI_NAME[t] || t;
+        const judged = h.metrics.filter(m => m.rule && m.has);
+        const misses = judged.filter(m => m.bad), hits = judged.filter(m => !m.bad);
+        let html = '<div class="qp-hl-k">' + period + '</div>'
+            + '<div class="qp-hl-big ' + (misses.length ? '' : 'good') + '">' + hits.length + '<small>of ' + judged.length + ' on target</small></div>'
+            + '<div class="qp-hl-sub">' + (misses.length
+                ? '<span class="bad">' + misses.length + ' to work on this week</span>'
+                : '<span class="good">Every KPI on target</span>') + '</div>';
+        if (misses.length) {
+            html += '<div class="qp-hl-cap">To Work On</div><div class="qp-hl-lines">'
+                + misses.map(function (m) {
+                    const g = _QP_KPI_GOAL[m.rule];
+                    return _qpHLLine(escapeHtml(name(m.t)), '<span class="qp-kpi-v"><b class="bad">' + escapeHtml(m.my) + '</b>'
+                        + (g ? _qpKpiTag(g[0], g[1]) : '') + (h.compact ? '' : _qpKpiTag('Store', m.st, 'st')) + '</span>');
+                }).join('')
+                + '</div>';
+        }
+        // In a card with tabs (h.compact) there is no room for a caption of its
+        // own: the on-target ones are one line, labelled on the line.
+        if (hits.length) {
+            html += (h.compact ? '<div class="qp-hl-lines">' + _qpHLLine('<span class="good">On Target</span>', escapeHtml(hits.map(m => name(m.t)).join(' · ')))
+                : '<div class="qp-hl-cap">On Target</div><div class="qp-hl-lines">' + _qpHLLine(escapeHtml(hits.map(m => name(m.t)).join(' · ')), '<span class="good">✓</span>')) + '</div>';
+        }
+        return html;
+    },
     // The card shows the day, where the month lands, and the latest order, with
     // its own Today / Yesterday / Month switch; the rest of Live — the store
     // table, Recent Activity in full — will not fit in a card, so one link opens
@@ -50237,6 +50331,12 @@ function _qpRenderHeadlinesNow(main, rows) {
         let hl = w.querySelector(':scope > .qp-hl');
         const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
         const single = card.hasAttribute('data-qp-single');
+        // Four tabs showing (an assistant manager's Live, eBay, Scorecard and
+        // Weekly KPIs) do not fit a third of a row by their full names: the
+        // short ones (.cc-ts) take over, with the full name as the tooltip.
+        const tabs = Array.from(w.querySelectorAll('.cc-tabbar .cc-seg .toggle-btn')).filter(function (b) { return getComputedStyle(b).display !== 'none'; });
+        w.classList.toggle('qp-many-tabs', tabs.length >= 4 && !compact && _qpHeadlinesOn());
+        tabs.forEach(function (b) { const full = b.querySelector('.cc-tl'); if (full && !b.title) b.title = full.textContent; });
         // A phone keeps the full tab panels, as before: no headlines there —
         // and so does anyone without Customize (_qpHeadlinesOn).
         if (compact || !_qpHeadlinesOn()) {
@@ -50421,6 +50521,34 @@ function _qpAiListing(room) {
             + _qpAiLink('Open Listing Goals', 'openListingGoals()'),
     };
 }
+// MY Listing Goals — an assistant manager's or employee's own (Ethan,
+// 2026-10-26: their split-out Action Items stayed lists). The team roster is the
+// manager's; theirs is today's role and goal, and their own week against the
+// sum of their daily goals — what the rail row and the My Listing Goals modal
+// already show (fetchAndRenderEmployeeGoals sets window._empWeek).
+function _qpAiMyListing(room) {
+    const w = window._empWeek;
+    if (!w) return { count: '', body: '<div class="status-message">Syncing…</div>' };
+    const goal = window._empGoalToday, role = window._empRoleToday || '';
+    const today = goal != null && goal !== '' ? Number(goal) : null;
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const left = Math.max(0, w.goal - w.done);
+    const week = days.filter(function (d) { return w.days[d] && (w.days[d].goal || w.days[d].result); }).slice(-room).map(function (d) {
+        const s = w.days[d], g = s.goal || 0, r = s.result || 0;
+        const pct = g ? Math.min(100, r / g * 100) : (r ? 100 : 0);
+        return '<div class="qp-ai-pp"><span class="qp-ai-pn">' + d + '</span>' + _qpHLBar(pct, [], r >= g ? '' : 'warn') + '<b>' + r + '/' + g + '</b></div>';
+    }).join('');
+    return {
+        count: today == null ? '—' : String(today),
+        body: '<div class="qp-ai-top"><div class="qp-hl-big">' + (today == null ? '—' : today) + '<small>to list today</small></div>'
+            + '<span class="qp-hl-sub">' + (role ? '<span class="qp-ai-role">' + escapeHtml(role) + '</span>' : 'No role today') + '</span></div>'
+            + '<div class="qp-hl-cap">This Week <span class="qp-ai-capnote">· ' + w.done + ' of ' + w.goal + ' listed'
+            + (w.goal ? (left ? ' · ' + left + ' to go' : ' · goal hit') : '') + '</span></div>'
+            + _qpHLBar(w.goal ? w.done / w.goal * 100 : 0, [], '')
+            + (week || '<div class="qp-hl-sub">No goals set for you this week yet</div>')
+            + _qpAiLink('Open My Listing Goals', 'openListingGoals()'),
+    };
+}
 // Goals & Initiatives: this month's team goals and the store's initiatives,
 // as the Goals & Initiatives panel keeps them.
 function _qpAiGoals(room) {
@@ -50451,7 +50579,7 @@ function _qpAiBuild(piece, room, key) {
         return _qpAiChecklist((auditDataCache[per.on[0]] && auditDataCache[per.on[0]].items) || [], room,
             "switchAuditTab('" + per.on[0] + "'); toggleAuditPanel(event); loadAudit();", 'Cleaning', key, 'cleaning', per);
     }
-    if (piece === 'listing') return _qpAiListing(room);
+    if (piece === 'listing') return _isPersonalGoalsUser() ? _qpAiMyListing(room) : _qpAiListing(room);
     if (piece === 'goals') return _qpAiGoals(room);
     return null;
 }
@@ -50459,8 +50587,9 @@ function _qpRenderActions(rows) {
     const main = _qpMain();
     if (!main) return;
     rows = rows || _qpCurrentRows(main);
-    const on = !(typeof _isMobileLayout === 'function' && _isMobileLayout()) && _qpHeadlinesOn()
-        && !(typeof _isPersonalGoalsUser === 'function' && _isPersonalGoalsUser());
+    // Every role with Customize gets the cards — an assistant manager's or
+    // employee's Listing Goals is their own (_qpAiMyListing), not the roster.
+    const on = !(typeof _isMobileLayout === 'function' && _isMobileLayout()) && _qpHeadlinesOn();
     const store = sessionStorage.getItem('speeksUserStore') || '';
     main.querySelectorAll('[data-qp-family="actions"]').forEach(function (card) {
         const frame = card.querySelector('.sam-rail > .sam-card');
@@ -50808,6 +50937,20 @@ function _qpPairWidgets(main, rows) {
         moveTo(rows[lone], rows[best], key);
     }
     return rows.filter(r => r.items.length);
+}
+// Pair, then SAFETY NET (2026-10-25): pairing can leave a row breaking a size
+// rule when nothing nearby can take the card it moves out (the chart in a row
+// of three with every other row full — a saved layout from another computer
+// can be like that). A layout that breaks the rules is never built: the whole
+// page is re-fitted in its order instead (_qpRepack). Every layout goes
+// through here — a commit and a load alike.
+function _qpSettle(main, rows) {
+    rows = _qpPairWidgets(main, rows);
+    if (rows.some(function (r) { return _qpRowWhyNot(main, r.items, r.w); })) {
+        const packed = _qpRepack(main, [].concat.apply([], rows.map(function (r) { return r.items; })));
+        if (packed) return packed;
+    }
+    return rows;
 }
 function _qpWidgetOk(id) {
     const w = QP_WIDGETS[id];
@@ -51805,7 +51948,7 @@ function _qpOriginalKeys(main) {
 // and redraw the handles for where everything now sits.
 function _qpCommit(main, rows, noUndo) {
     const before = _qpCurrentRows(main);
-    rows = _qpPairWidgets(main, rows.filter(function (r) { return r.items.length; }));
+    rows = _qpSettle(main, rows.filter(function (r) { return r.items.length; }));
     if (!noUndo && _qpSig(before) !== _qpSig(rows)) _qpUndoPush(before);
     _qpKeepScroll(function () {
         _qpBuild(main, rows);
@@ -54592,6 +54735,34 @@ function openHubToPatch() {
     if (modal && !modal.classList.contains('show')) toggleModal('notifDropdown', 'notifBadge');
     renderHubFeed();
     if (typeof loadPatchNotes === 'function') loadPatchNotes();
+}
+
+// Clicking the version tag: open the hub on Patch Notes and land on the release
+// for the version this page is running (APP_VERSION). Release titles are typed
+// by hand ("v3.9.3", sometimes with words after), so match the number itself
+// rather than the exact string — and not as a prefix, or 3.9.3 would claim
+// 3.9.30. When this version has no notes posted yet, the hub still opens on
+// Patch Notes, which is the honest answer: here is what there is.
+function _patchHubIdForVersion(version) {
+    const data = window._hubPatchData;
+    if (!data || !data.entries || !data.entries.length) return null;
+    const num = String(version).replace(/^v/i, '').trim().replace(/\./g, '\\.');
+    const re = new RegExp('(^|[^\\d.])' + num + '(?!\\.?\\d)');
+    // buildPatchGroups is newest-first, so a re-posted version lands on the latest.
+    const g = buildPatchGroups(data.entries).find(g => re.test(String(g.title || '')));
+    return g ? 'patch-' + g.title : null;
+}
+
+async function openVersionPatchNotes() {
+    openHubTo(null, 'patch');
+    trackUsage('open', 'patchNotesModal', _usageLabel('patchNotesModal'));
+    // Already fetched this page-load: jump now. Either way, jump again once the
+    // fresh fetch lands — toggleNotifs re-fetches, and a first open has nothing yet.
+    let id = _patchHubIdForVersion(APP_VERSION);
+    if (id) openHubTo(id);
+    try { await loadPatchNotes(); } catch (_) {}
+    id = _patchHubIdForVersion(APP_VERSION);
+    if (id) openHubTo(id);
 }
 
 // Record the latest patch version as seen (clears the "new patch" row + badge).

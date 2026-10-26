@@ -5666,10 +5666,15 @@ button.dc-audit:hover { background: #fff; }
     transition: opacity 0.3s ease, color 0.3s ease;
 }
 
-.version-tag:hover {
+/* Clickable: opens this version's patch notes (openVersionPatchNotes). */
+.version-tag { cursor: pointer; border-radius: 4px; }
+
+.version-tag:hover,
+.version-tag:focus-visible {
     opacity: 1;
     color: var(--sage-professional);
 }
+.version-tag:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: 2px; }
 
 .top-nav .version-tag { color: rgba(255,255,255,0.45); }
 .top-nav .version-tag:hover { color: var(--sage-professional); opacity: 1; }
@@ -25930,3 +25935,29 @@ a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
    alike): red, a layout-grid-with-an-X icon, and furthest from Save. */
 .qp-btn.qp-btn-reset { color: #c53030; }
 .qp-btn.qp-btn-reset:hover { background: #fdecec; border-color: #f2c4c4; }
+/* Weekly KPIs headline: a miss's goal and the store's figure, quiet beside the
+   red value (_QP_HL_BUILD.kpis). */
+.qp-hl-ln .qp-hl-goal { margin-left: 6px; font-size: 11px; font-weight: 600; color: #8a94a3; }
+/* FOUR TABS IN A THIRD OF A ROW (an assistant manager's Command Center: Live,
+   eBay, Scorecard, Weekly KPIs — 2026-10-25): the long labels were cut off, so
+   a card with four tabs showing uses the short ones. _qpRenderHeadlinesNow sets
+   .qp-many-tabs; the full name stays in the tooltip. */
+.cc-tabbar .toggle-btn .cc-ts { display: none; }
+.cc-widget.qp-many-tabs .cc-tabbar .toggle-btn .cc-tl { display: none; }
+.cc-widget.qp-many-tabs .cc-tabbar .toggle-btn .cc-ts { display: inline; }
+/* SCROLL BARS INSIDE THE CARD (Ethan, 2026-10-26: Your Feed's bottom arrow was
+   cut off). A card clips to its 18px rounded corners, and the feed list ran to
+   1px from the bottom edge, so its scroll bar's lower end went into the curve.
+   The list stops a corner's height short; the card's own background shows below. */
+/* The feed and every feed tab split out into a card of its own (.sam-feed). */
+.qp-cell .sam-card > #samFeed, .qp-cell .sam-card > .sam-feed { margin-bottom: 14px; }
+/* Weekly KPIs miss line (Ethan, 2026-10-26: "the goal and store number seems
+   pretty cramped"): the red figure, then the goal and the store each as a tag
+   of its own — the goal tinted, the store outlined — instead of one grey run. */
+.qp-kpi-v { display: inline-flex; align-items: center; gap: 6px; }
+.qp-kpi-v > b { font-weight: 800; margin-right: 2px; }
+.qp-kpi-tag { display: inline-flex; align-items: baseline; gap: 3px; padding: 2px 8px; border-radius: 999px; background: #f1f4f7; color: #647082; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.qp-kpi-tag b { color: #1a1c1e; font-weight: 800; }
+.qp-kpi-tag.st { background: #fff; box-shadow: inset 0 0 0 1px #dfe5ea; }
+/* An assistant manager's / employee's role today, on My Listing Goals. */
+.qp-ai-role { display: inline-block; padding: 2px 9px; border-radius: 999px; background: #e8f7ee; color: #146c3c; font-size: 11.5px; font-weight: 800; }

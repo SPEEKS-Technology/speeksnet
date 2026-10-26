@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261026a">
+  <link rel="stylesheet" href="styles.css?v=20261026d">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261026a" defer></script>
+  <script src="speeks.js?v=20261026d" defer></script>
 </head>
 
 <body class="preload">
@@ -691,13 +691,16 @@
        deliberately NOT blocks, so they stay on top whatever the layout. It sits
        ABOVE High Priority (Ethan, 2026-10-21: under the banner it looked odd), so
        the page opens with the controls and the banner leads into the cards.
-       Managers only for now (qp-customize in FEATURE_CATALOG) — widen it from
-       Feature Access. -->
+       Who gets it: see the note on #qpBar below (by role, not Feature Access). -->
   <!-- Since 2026-10-22 the bar is a pair of round icon buttons pinned to the
        bottom-right corner of the window (Ethan: "move the customize button to
        this bottom right corner ... change it to an icon ... follow as the user
        scrolls"). Still the first thing in <main>; position: fixed in the CSS. -->
-  <div class="qp-bar dynamic-module-flex role-manager" id="qpBar" data-feature="qp-customize" data-mobile="hide" data-tablet="show">
+  <!-- Customize is for every role from manager down, with no Feature Access
+       switch (Ethan, 2026-10-25: "for everyone going forward"). The store
+       board never gets it (a board is opt-in); DM, CEO and MOCD get it when their
+       cards are converted. -->
+  <div class="qp-bar dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-employee" id="qpBar" data-mobile="hide" data-tablet="show">
     <!-- Reset (red, the layout grid) sits furthest from Save; Undo (the curved
          arrow) right above it — Ethan 2026-10-25: the two round-arrow icons
          were too alike. -->
@@ -1005,10 +1008,10 @@
                      duplicated there, and the four month-end projections that were not
                      became its "Tracking to month-end" strip. One fewer tab, one fewer
                      Feature Access switch, and no figure lost. -->
-                <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
+                <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live"><span class="cc-tl">Live Dashboard</span><span class="cc-ts">Live</span></button>
                 <button id="cc-tab-ebay" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('ebay')" data-mobile="hide" data-tablet="show" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
-                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
-                <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-mobile="hide" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
+                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard"><span class="cc-tl">Scorecard</span><span class="cc-ts">Score</span><span class="cc-updot" id="cc-updot-scorecard"></span></button>
+                <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-mobile="hide" data-feature="cc-kpis"><span class="cc-tl">Weekly KPIs</span><span class="cc-ts">KPIs</span><span class="cc-updot" id="cc-updot-kpis"></span></button>
             </div>
             <div class="cc-tabbar-right">
                 <!-- Starts HIDDEN, like its sibling below. This holds the audit

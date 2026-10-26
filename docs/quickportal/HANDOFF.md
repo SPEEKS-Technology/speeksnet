@@ -258,7 +258,20 @@ designs since have been shown inline in chat.
     login blocks the POST, like every write.
   - **New mark:** `_QP_WIDGET_ADDED` dates; `_qpIsNew` = added ≤30 days and not
     in `seen`; opening the drawer marks what it lists as seen (`_qpLibSeen`).
-  `scripts/qp-customize-check.js` (6 pass). A test row `zz-claude-test` may
+  `scripts/qp-customize-check.js` (6 pass).
+  **Every role from manager down (10-26):** Customize is on by role, not
+  Feature Access — `#qpBar` carries role-manager/owner-manager/assistant-
+  manager/employee and no data-feature; the `qp-customize` catalog line is
+  commented out. Store (board) and Training are left alone; DM/CEO/MOCD come
+  with their own conversion. With Customize, `_qpHeadlinesOn` turns the
+  headline cards on for those roles too. **Weekly KPIs** (the employee/ASM
+  Command Center tab, cc-kpis) is now a piece (`kpis`) with a headline
+  (`_QP_HL_BUILD.kpis`, Ethan's option A: "N of M on target", the misses with
+  goal + store, on target on one line), fed by `fetchAndRenderEmployeeKPIs`
+  through the same `checkRule`. Four tabs in a ⅓ card use short labels
+  (`.qp-many-tabs`, `.cc-tl`/`.cc-ts`). `_qpSettle` = pairing + a re-fit
+  (`_qpRepack`) whenever a row still breaks a size rule — commit, load and
+  default all go through it. Checks: 15 pass in qp-customize-check.js. A test row `zz-claude-test` may
   still be in qp_layouts (its delete was declined).
   The Leaderboard card is white on its own (`.ew-perf-lb .ew-standings`).
   **Test login:** SPEEKS
