@@ -43907,25 +43907,14 @@ const EMAIL_LIST_GROUPS = [
             { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
               desc: 'A pickup has been priced and a quote is waiting on approval. '
                   + 'Leave this empty and it falls back to the single address in CRM Settings.' },
-            // Refund mismatch: a per-store list because the fix belongs to that
-            // store's manager, plus the leadership digest. The digest's key says
-            // "escalation" -- a fossil of the first design (see 0089); the label
-            // says what it is now.
-            { key: 'refund_mismatch_escalation', label: 'Refund Mismatch — Leadership',
-              desc: '8:20am, only on mornings a manager was mailed: every open order, and how many '
-                  + 'times its manager has been told.' },
-            ...EMAIL_LIST_STORES.map(s => ({ key: `refund_mismatch_${s}`, label: `Refund Mismatch — ${s}`,
-              desc: '8:20am. Refunded on eBay but not Shopify, or the reverse, for 3 days '
-                  + '(1 day at month end). On every morning\'s mail until fixed. Left empty, it '
-                  + `goes to the ${s} Manager Report list instead. `
-                  + 'Being retired: Claims & Disputes below covers mismatches too.' })),
-            // Claims & Disputes. These take over from the two refund-mismatch
-            // lists above — a mismatch is one of four kinds of held money, and
-            // splitting them across two mails meant a manager could clear one
-            // inbox and still be losing a chargeback. Both sets are live until
-            // the refund-mismatch crons are switched off, so a manager on both
-            // gets two mails for a few mornings; that is deliberate, and better
-            // than a gap.
+            // Claims & Disputes. These took over from the refund-mismatch lists
+            // (refund_mismatch_<STORE> + refund_mismatch_escalation) — a mismatch
+            // is one of four kinds of held money, and splitting them across two
+            // mails meant a manager could clear one inbox and still be losing a
+            // chargeback. refund-mismatch has run with mail=0 since 2026-09-23 and
+            // only detects now; its six lists were removed here and their rows
+            // deleted 2026-10-26 (Ethan). Turning its mail back on means putting
+            // them back first, or every send falls through to its fallback list.
             { key: 'claims_disputes_dm', label: 'Claims & Disputes — District Manager',
               desc: '8:20am, a count per store of what still needs a person, plus missed reply '
                   + 'windows (said once) and anyone who marked something resolved that the site '
