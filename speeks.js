@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.10.1';
+const APP_VERSION = '3.10.2';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -28492,9 +28492,9 @@ let _b2bReviewFull = false;
 function b2bReviewFull(on) { _b2bReviewFull = !!on; b2bOpenDeal('quote', _b2bModalDeal.id); }
 
 // Where a sent quote stands, in one line: how long the client has had it, how
-// many times it went, what we offered, and who priced it. The send control
-// stays here (Copy Quote is the whole send route), so a resend is where the
-// "sent" facts are. Days are the stores' days (Central), like every other age.
+// many times it went, what we offered, and who priced it. Copy Quote stays
+// here for a resend, so the "sent" facts sit next to it. Days are the stores'
+// days (Central), like every other age.
 //
 // On the workspace (2026-10) these facts are the panel's status line, and Copy
 // Quote is one of the panel's buttons; `urgent` tints the line after a week.
@@ -28669,12 +28669,11 @@ function _b2bStageReview(deal) {
     // and the send is finally the screen's primary: Copy Quote was styled as a
     // secondary here, so the one thing an approver comes to do looked optional.
     //
-    // Copy Quote is the whole send route. It puts the quote on the clipboard AND
-    // records the send, so Mark Accepted becomes available without a mail draft
-    // or a second button. Open In Email and Sent By Hand both went on 2026-09-10
-    // -- the first opened a BLANK draft you had to paste into anyway, and the
-    // second recorded a send made outside the tool, which Nick says does not
-    // happen. The address field went with them.
+    // Copy Quote and Mark Sent are separate buttons (2026-10-27, see
+    // b2bCopyQuote): copying is optional, and the green Mark Sent is what moves
+    // the deal on. Open In Email and Sent By Hand both went on 2026-09-10 -- the
+    // first opened a BLANK draft you had to paste into anyway, and the second
+    // recorded a send made outside the tool. The address field went with them.
     _b2bShowDeal({
         ws: true,
         deal,
@@ -28687,9 +28686,12 @@ function _b2bStageReview(deal) {
         saved: true,
         next: {
             line: _b2bListsAt(deal),
-            primary: canAccept ? { label: 'Copy Quote & Mark Sent', onclick: 'b2bCopyQuote()',
-                                   title: 'Copies the quote and records it as sent. Paste it into Gmail, Outlook or anywhere else.' } : null,
-            secondary: canAccept ? [{ label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` }] : [],
+            primary: canAccept ? { label: 'Mark Sent', onclick: 'b2bMarkSent(this)',
+                                   title: 'Records the quote as sent to the client and moves it to Out For Quote' } : null,
+            secondary: canAccept ? [
+                { label: 'Copy Quote', onclick: 'b2bCopyQuote()', title: 'Copies the quote to paste into Gmail, Outlook or anywhere else' },
+                { label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` },
+            ] : [],
             why: canAccept ? '' : 'A CEO, MOCD or DM sends it',
         },
         main: `
@@ -28746,7 +28748,7 @@ function _b2bStageQuote(deal) {
                 line: `${_b2bQuoteFactsHtml(deal)}<div>${_b2bListsAt(deal)}</div>`,
                 primary: canAccept ? { label: 'Mark Accepted', onclick: `b2bAcceptQuote('${deal.id}',this)` } : null,
                 secondary: canAccept ? [
-                    { label: 'Copy Quote', onclick: 'b2bCopyQuote()', title: 'Copies the quote again and records the resend' },
+                    { label: 'Copy Quote', onclick: 'b2bCopyQuote()', title: 'Copies the quote again' },
                     { label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` },
                 ] : [],
                 why: canAccept ? '' : 'Only a CEO, MOCD or DM can accept',
@@ -28784,12 +28786,10 @@ function _b2bStageQuote(deal) {
         next: {
             line: unsent ? _b2bListsAt(deal) : `${_b2bQuoteFactsHtml(deal)}<div>${_b2bListsAt(deal)}</div>`,
             primary: !canAccept ? null : unsent
-                ? { label: 'Copy Quote & Mark Sent', onclick: 'b2bCopyQuote()',
-                    title: 'Copies the quote and records it as sent. Paste it into Gmail, Outlook or anywhere else.' }
+                ? { label: 'Mark Sent', onclick: 'b2bMarkSent(this)',
+                    title: 'Records the quote as sent to the client and moves it to Out For Quote' }
                 : { label: 'Mark Accepted', onclick: `b2bAcceptQuote('${deal.id}',this)` },
-            secondary: !canAccept ? [] : unsent
-                ? [{ label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` }]
-                : [{ label: 'Copy Quote', onclick: 'b2bCopyQuote()' }, { label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` }],
+            secondary: !canAccept ? [] : [{ label: 'Copy Quote', onclick: 'b2bCopyQuote()' }, { label: 'Send Back', onclick: `b2bSendBack('${deal.id}')` }],
             why: canAccept ? '' : unsent ? 'A CEO, MOCD or DM sends it' : 'Only a CEO, MOCD or DM can accept',
         },
         main: `
@@ -28807,7 +28807,7 @@ function _b2bStageQuote(deal) {
             // approver put the send step in front of you once. It went with the
             // mail draft it existed to launch (Nick, 2026-09-10) -- a popup
             // whose only action was "Open Email Draft" has nothing to offer once
-            // that route is gone, and Copy Quote records the send on its own.
+            // that route is gone, and Mark Sent records the send on its own.
         },
     });
 }
@@ -29186,26 +29186,18 @@ function _b2bQuoteText(deal, items) {
     ].filter(l => l !== null).join('\n');
 }
 
-// Copy is a COMPLETE way to send a quote, not a fallback for the mailto.
+// Copy and send are TWO BUTTONS again (Nick, 2026-10-27: "There should be a
+// copy quote button that doesnt NEED to be clicked but then the green button
+// should be marked as sent. That is what should progress to the next step.").
 //
-// Nick, 2026-09-08: "I do not like the current work flow of it forcing you to
-// open your email. Need to make it so that way you just select copy, and in
-// that state you automatically have the ability to mark it as accepted."
-//
-// He is right that it was forced. Accepting requires stage `quote`, and the
-// ONLY route from `review` to `quote` was b2bOpenDraft -- which fires a mailto:
-// first. So anyone who preferred to paste into a webmail tab, or whose machine
-// has no mail client registered, had to trigger a draft they did not want
-// before the deal would let them accept.
-//
-// So a copy off the review screen records the send itself. The stage moves, the
-// Accept button appears, and the person pastes wherever they like.
-//
-// Recording is deliberately limited to leaving `review`. On a deal already at
-// `quote` there is nothing to unlock -- accept is available and the client has
-// had it -- and bumping quote_send_count for somebody copying the quote to
-// re-read it would corrupt the one honest record of how many times it actually
-// went out.
+// From 3.8.1 a copy off the review screen recorded the send itself -- Nick,
+// 2026-09-08, wanted out of the forced mail draft, and folding the record into
+// the copy was the shortest way there. But it tied the stage to the clipboard:
+// a quote that went out some other way could only move by copying it again, and
+// a copy taken just to re-read it moved the deal. So Copy Quote now only copies,
+// on every screen, and Mark Sent (b2bMarkSent, below) is the green primary that
+// records the send and moves the deal to Out For Quote. Copying first is the
+// usual order, not a gate.
 async function b2bCopyQuote() {
     const deal = _b2bModalDeal;
     if (!deal) return;
@@ -29222,11 +29214,8 @@ async function b2bCopyQuote() {
     } catch (_) {
         try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
     }
-    // Neither of the routes this used to point at still exists -- the mail draft
-    // and Sent By Hand both went on 2026-09-10 -- so it has to be actionable on
-    // its own. The quote document is rendered on the screen behind this message,
-    // so selecting it by hand is the way through, and pressing Copy Quote again
-    // is what records the send once the clipboard behaves.
+    // The quote document is rendered on the screen behind this message, so
+    // selecting it by hand is the way through when the clipboard is blocked.
     if (!copied) {
         // On Out For Quote the client's copy is folded away; open it and bring it
         // into view so "below" points at something.
@@ -29234,26 +29223,28 @@ async function b2bCopyQuote() {
         const fold = doc && doc.closest('details');
         if (fold) fold.open = true;
         doc?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        return _b2bSay('Your browser blocked the clipboard. Select the quote below and copy it '
-            + 'by hand, then press Copy Quote again to record the send.', true);
+        return _b2bSay('Your browser blocked the clipboard. Select the quote below and copy it by hand.', true);
     }
+    _b2bSay(_b2bAwaitingApproval(deal) && _b2bCanAccept()
+        ? 'Quote copied — paste it into Gmail or Outlook, then press Mark Sent.'
+        : 'Quote copied — paste it into Gmail or Outlook.');
+}
 
-    // Nothing to record: already sent, or this person may not approve. Copying
-    // still works, it just doesn't move the deal.
-    if (!_b2bAwaitingApproval(deal) || !_b2bCanAccept()) {
-        return _b2bSay('Quote copied — paste it into Gmail or Outlook.');
-    }
-
+// The send, recorded on its own. Only from `review`: on a deal already at
+// `quote` there is nothing to unlock, and bumping quote_send_count for nothing
+// would corrupt the one honest record of how many times it actually went out.
+async function b2bMarkSent(btn) {
+    const deal = _b2bModalDeal;
+    if (!deal || !_b2bAwaitingApproval(deal) || !_b2bCanAccept()) return;
     try {
-        await _b2bSend({ action: 'send_quote', id: deal.id, to: '' });
+        await _b2bBusy(btn, 'Marking…', () => _b2bSend({ action: 'send_quote', id: deal.id, to: '' }));
     } catch (e) {
-        // The copy succeeded, so say so rather than implying it failed.
-        return _b2bSay(`Quote copied, but it couldn't be recorded as sent: ${e.message}`, true);
+        return _b2bSay(`Couldn't mark it as sent: ${e.message}`, true);
     }
     await b2bRefresh();
     const next = _b2bDealById(deal.id);
     if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
-    _b2bSay('Quote copied and recorded as sent — paste it, then Mark Accepted once they agree.');
+    _b2bSay('Marked as sent — Mark Accepted once they agree.');
 }
 
 // Smart punctuation survives a clipboard paste but mangles in a mailto body,
@@ -29292,8 +29283,8 @@ function _b2bQuoteSubject(deal) {
 //
 // All of it removed rather than left unreachable. The mailto never carried the
 // quote -- a draft opened blank and you pasted into it -- so it was always
-// Copy Quote plus a dialog, and Copy Quote already records the send on its own
-// (3.8.1, "Copy Quote is a complete way to send one"). Keeping dead code around
+// Copy Quote plus a dialog. (Since 2026-10-27 the send is recorded by its own
+// Mark Sent button -- see b2bCopyQuote.) Keeping dead code around
 // for a route nobody can reach is how the next person ends up reading it to
 // work out which of two paths is live.
 //
