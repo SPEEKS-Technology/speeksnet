@@ -375,3 +375,12 @@ designs since have been shown inline in chat.
   alerts widget, usage-based suggestions, Gmail connector, Ask/report widgets.
 - A real test account for other people needs a "test" marker that every
   backend skips (`store-targets`, `kpi-manage`, `usage-report`, `notify`).
+  **10-26 later:** ASM/employee Action Items get their cards too (the
+  `_isPersonalGoalsUser` gate in `_qpRenderActions` is gone); their Listing
+  Goals card is their own (`_qpAiMyListing` — today's role + goal, the week day
+  by day, from `window._empWeek` set in the employee goals loader). Weekly KPIs
+  misses show Goal and Store as separate tags (`_qpKpiTag`). **Multi-store
+  managers keep a layout per store**: `_qpLayoutStore()`; local key
+  `…<name>@<store>`, qp-layout takes `store=` (row `<name>@<store>`, falls back
+  to the plain row until that store has its own; `seen` stays on the plain row).
+  qp-layout redeployed 10-26. Feed lists stop 14px above the card corner.

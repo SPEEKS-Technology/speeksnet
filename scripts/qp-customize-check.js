@@ -172,7 +172,7 @@ t('Weekly KPIs: a miss shows its goal and the store as separate tags', function 
 });
 
 // An assistant manager's / employee's own Listing Goals card (2026-10-26).
-t('My Listing Goals: today\'s goal and role, the week day by day', function () {
+t('My Listing Goals: today\'s goal and role, the week as a seven-day strip', function () {
     var was = [window._empWeek, window._empGoalToday, window._empRoleToday];
     window._empWeek = { goal: 30, done: 18, roleDesc: '', days: { Mon: { goal: 6, result: 8 }, Tue: { goal: 6, result: 4 }, Wed: { goal: 6, result: 6 } } };
     window._empGoalToday = 6; window._empRoleToday = 'Lister 1';
@@ -181,7 +181,11 @@ t('My Listing Goals: today\'s goal and role, the week day by day', function () {
     var s = d.textContent.replace(/\s+/g, ' ').trim();
     window._empWeek = was[0]; window._empGoalToday = was[1]; window._empRoleToday = was[2];
     if (b.count !== '6') return 'count ' + b.count;
-    return /^6 ?to list today Lister 1 This Week · 18 of 30 listed · 12 to go Mon 8\/6 Tue 4\/6 Wed 6\/6 Open My Listing Goals/.test(s) ? true : s;
+    if (!/^6 ?to list today Lister 1 This Week · 18 of 30 listed · 12 to go 8 Mon 4 Tue 6 Wed – Thu – Fri – Sat – Sun Open My Listing Goals/.test(s)) return s;
+    // Seven days; Tue missed its goal (4 of 6) so it is amber, Mon and Wed green.
+    d.innerHTML = b.body;
+    var cols = Array.from(d.querySelectorAll('.qp-ai-col')).map(function (c) { return c.classList.contains('warn') ? 'w' : 'g'; }).join('');
+    return d.querySelectorAll('.qp-ai-day').length === 7 && cols.slice(0, 3) === 'gwg' ? true : 'columns ' + cols;
 });
 
 // A multi-store manager's layout is kept per store (2026-10-26).
@@ -197,4 +201,100 @@ t('a multi-store manager saves a layout per store; everyone else one', function 
     Object.keys(keep).forEach(function (k) { if (keep[k] === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, keep[k]); });
     return one === QP_LAYOUT_KEY + 'pat example' && mpl === QP_LAYOUT_KEY + 'pat example@mpl' && bal === QP_LAYOUT_KEY + 'pat example@bal'
         ? true : [one, mpl, bal].join(' / ');
+});
+
+// 2026-10-26 (Ethan, from a multi-store manager's real login):
+// 1. A save is pinned to the store it was made on — switching BAL → MPL inside
+//    the half-second debounce used to save BAL's layout as MPL's.
+t('a waiting save goes out as the store it was made on', function () {
+    var keep = {}; ['speeksUserName', 'speeksUserStore', 'speeksMultiStore', 'speeksTestSession'].forEach(function (k) { keep[k] = sessionStorage.getItem(k); });
+    var sent = [], realFetch = window.fetch;
+    window.fetch = function (url, init) { if (String(url).indexOf('qp-layout') !== -1) sent.push(JSON.parse(init.body)); return Promise.resolve({ json: function () { return {}; } }); };
+    try {
+        sessionStorage.setItem('speeksUserName', 'Pat Example'); sessionStorage.setItem('speeksMultiStore', 'true');
+        sessionStorage.setItem('speeksUserStore', 'BAL');
+        _qpSave([{ items: ['feed', 'actions'], w: null }]);
+        sessionStorage.setItem('speeksUserStore', 'MPL');      // the switch, before the debounce fires
+        _qpFlushSave();
+    } finally {
+        window.fetch = realFetch;
+        Object.keys(keep).forEach(function (k) { if (keep[k] === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, keep[k]); });
+        try { localStorage.removeItem(QP_LAYOUT_KEY + 'pat example@bal'); } catch (_) {}
+    }
+    if (sent.length !== 1) return sent.length + ' saves sent';
+    return sent[0].store === 'BAL' && sent[0].user === 'Pat Example' ? true : 'sent as ' + sent[0].store;
+});
+
+// 2. A tab's label stays put when its count gets shorter ("0/15" → "0/2"):
+//    a checklist tab reserves its longest period's count (_qpAiCntRoom).
+t('an Action Items tab label does not move when its count changes length', function () {
+    var host = document.createElement('div');
+    host.style.cssText = 'width:420px';
+    var tabs = function (cnt) {
+        return '<div data-qp-block="actions"><div class="qp-ai-tabs ew-seg">'
+            + '<button type="button" class="toggle-btn active"><span class="lab">Manager</span> <span class="qp-ai-cnt" style="min-width:4ch">' + cnt + '</span></button>'
+            + '<button type="button" class="toggle-btn">Cleaning <span class="qp-ai-cnt">0/16</span></button>'
+            + '<button type="button" class="toggle-btn">Goals <span class="qp-ai-cnt">4</span></button></div></div>';
+    };
+    document.body.appendChild(host);
+    host.innerHTML = tabs('0/15');
+    var a = host.querySelector('.lab').getBoundingClientRect().left;
+    host.innerHTML = tabs('0/2');
+    var b = host.querySelector('.lab').getBoundingClientRect().left;
+    host.remove();
+    return Math.abs(a - b) < 0.5 ? true : '"Manager" moved ' + (b - a).toFixed(1) + 'px';
+});
+
+// 3. Every miss line's Goal and Store tags are the same widths, lined up.
+t('Weekly KPIs tags are even: same widths, lined up', function () {
+    var host = document.createElement('div');
+    host.style.cssText = 'width:560px';
+    host.innerHTML = '<div class="qp-hl">' + _QP_HL_BUILD.kpis({ period: 'Week ending Oct 25, 2026', metrics: [
+        { t: 'Conversion', rule: 'conversion', my: '82.0%', st: '79.0%', has: true, bad: true },
+        { t: 'Variance', rule: 'variance', my: '-1.16%', st: '-0.96%', has: true, bad: true },
+        { t: 'Margin', rule: 'margin', my: '55.0%', st: '54.0%', has: true, bad: false },
+    ] }) + '</div>';
+    document.body.appendChild(host);
+    var rows = Array.from(host.querySelectorAll('.qp-kpi-v')).map(function (v) {
+        return Array.from(v.querySelectorAll('.qp-kpi-tag')).map(function (x) { var r = x.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; });
+    });
+    host.remove();
+    if (rows.length !== 2) return rows.length + ' miss lines';
+    var same = rows[0].every(function (p, i) { return Math.abs(p[0] - rows[1][i][0]) <= 1 && Math.abs(p[1] - rows[1][i][1]) <= 1; });
+    return same ? true : JSON.stringify(rows);
+});
+
+// EVERY TAB CENTRED (Ethan, 2026-10-26: "make sure all tabs have their text
+// centered for all widgets and all roles"). Measured with the real styles.css:
+// the label + count sits in the middle of its button, within a pixel, in each
+// kind of tab bar a card or widget uses.
+t('every tab bar centres its text', function () {
+    var host = document.createElement('div');
+    host.style.cssText = 'width:440px';
+    var bars = {
+        'Action Items': '<div data-qp-block="actions"><div class="qp-ai-tabs ew-seg"><button class="toggle-btn active">Manager <span class="qp-ai-cnt">1/15</span></button><button class="toggle-btn">Cleaning <span class="qp-ai-cnt">0/16</span></button><button class="toggle-btn">Goals <span class="qp-ai-cnt">0</span></button></div></div>',
+        'Your Feed': '<div data-qp-block="feed"><div class="sam-ftabs ew-seg"><button class="toggle-btn active">All <span class="qp-ai-cnt">3</span></button><button class="toggle-btn">Due <span class="qp-ai-cnt">0</span></button><button class="toggle-btn">To Do <span class="qp-ai-cnt">2</span></button><button class="toggle-btn">News <span class="qp-ai-cnt">1</span></button></div></div>',
+        'Widget': '<div data-qp-block="stats"><div class="qp-ai-tabs ew-seg"><button class="toggle-btn active">Champions</button><button class="toggle-btn">Awards</button><button class="toggle-btn">Records</button></div></div>',
+        'Command Center': '<div data-qp-block="command"><div class="cc-widget"><div class="cc-tabbar"><div class="ew-seg cc-seg"><button class="toggle-btn active"><span class="cc-tl">Live Dashboard</span><span class="cc-ts">Live</span></button><button class="toggle-btn">eBay</button><button class="toggle-btn"><span class="cc-tl">Scorecard</span><span class="cc-ts">Score</span></button></div></div></div></div>',
+        'Command Center, four tabs': '<div data-qp-block="command"><div class="cc-widget qp-many-tabs"><div class="cc-tabbar"><div class="ew-seg cc-seg"><button class="toggle-btn active"><span class="cc-tl">Live Dashboard</span><span class="cc-ts">Live</span></button><button class="toggle-btn">eBay</button><button class="toggle-btn"><span class="cc-tl">Scorecard</span><span class="cc-ts">Score</span></button><button class="toggle-btn"><span class="cc-tl">Weekly KPIs</span><span class="cc-ts">KPIs</span></button></div></div></div></div>',
+        'Period switch': '<div data-qp-block="actions"><span class="qp-hl-switch"><button class="on">Daily</button><button>Weekly</button><button>Monthly</button></span></div>',
+    };
+    var off = [];
+    document.body.appendChild(host);
+    Object.keys(bars).forEach(function (name) {
+        host.innerHTML = bars[name];
+        Array.from(host.querySelectorAll('button')).forEach(function (b) {
+            var r = document.createRange();
+            r.selectNodeContents(b);
+            var parts = Array.from(r.getClientRects()).filter(function (x) { return x.width > 0; });
+            if (!parts.length) return;
+            var left = Math.min.apply(null, parts.map(function (x) { return x.left; }));
+            var right = Math.max.apply(null, parts.map(function (x) { return x.right; }));
+            var br = b.getBoundingClientRect();
+            var d = (left + right) / 2 - (br.left + br.right) / 2;
+            if (Math.abs(d) > 1) off.push(name + ' "' + b.textContent.trim() + '" ' + d.toFixed(1) + 'px');
+        });
+    });
+    host.remove();
+    return off.length ? 'off centre: ' + off.join('; ') : true;
 });

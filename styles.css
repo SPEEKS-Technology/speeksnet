@@ -25961,3 +25961,37 @@ a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
 .qp-kpi-tag.st { background: #fff; box-shadow: inset 0 0 0 1px #dfe5ea; }
 /* An assistant manager's / employee's role today, on My Listing Goals. */
 .qp-ai-role { display: inline-block; padding: 2px 9px; border-radius: 999px; background: #e8f7ee; color: #146c3c; font-size: 11.5px; font-weight: 800; }
+/* Tab counts in same-width digits. Labels + counts are centred (Ethan,
+   2026-10-26); a checklist tab, whose count changes length with the period,
+   reserves its longest count's room inline (_qpAiCntRoom) so it stays still. */
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn .qp-ai-cnt {
+    display: inline-block; text-align: left; font-variant-numeric: tabular-nums;
+}
+/* Even tags (Ethan, 2026-10-26: "align the pills so they are even sized"): the
+   red figure, the Goal tag and the Store tag each take a set width, so every
+   miss line's three line up under the one above. Same-width digits. */
+.qp-kpi-v { font-variant-numeric: tabular-nums; }
+.qp-kpi-v > b { display: inline-block; min-width: 6ch; text-align: right; }
+.qp-kpi-tag { min-width: 66px; justify-content: center; box-sizing: border-box; }
+.qp-kpi-tag.st { min-width: 92px; }
+/* THE LIVE CARD'S BOTTOM ROW STAYS PUT (Ethan, 2026-10-26: Open Full Dashboard,
+   Daily Breakdown and the sound button moved between Today, Yesterday and
+   Month). The headline was only as tall as what each view had in it, and the
+   row rode up under it. The card cannot be made a flex column — applyRoleBasedUI
+   writes display: block !important onto #ccWidget inline — so the row is pinned
+   to the card's bottom edge instead, with its height kept free above it. */
+[data-qp-block] .cc-widget:has(> .qp-hl) { position: relative; }
+[data-qp-block] .cc-widget:has(> .qp-hl) > .qp-hl:has(.qp-hl-footrow) { padding-bottom: 55px; }
+[data-qp-block] .cc-widget:has(> .qp-hl) > .qp-hl .qp-hl-footrow { position: absolute; left: 20px; right: 20px; bottom: 12px; margin: 0; }
+/* My Listing Goals week strip (_qpAiMyListing, Ethan 2026-10-26): seven
+   columns, each filled to that day's share of its goal — green hit, amber
+   short — the count under it, today outlined. */
+.qp-ai-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.qp-ai-day { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.qp-ai-col { width: 100%; height: 54px; border-radius: 6px; background: #f1f4f7; display: flex; align-items: flex-end; overflow: hidden; }
+.qp-ai-col > i { display: block; width: 100%; background: #1f9d57; border-radius: 6px 6px 0 0; }
+.qp-ai-col.warn > i { background: #e0a23a; }
+.qp-ai-day.today .qp-ai-col { box-shadow: inset 0 0 0 1.5px #1f9d57; }
+.qp-ai-day > b { font-size: 12px; font-weight: 800; color: #1a1c1e; font-variant-numeric: tabular-nums; }
+.qp-ai-day > span { font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+.qp-ai-day.today > span { color: #146c3c; }

@@ -33211,6 +33211,9 @@ function setMultiStore(store) {
     const next = String(store || '').toUpperCase();
     if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
     if (next === (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()) return;
+    // A QuickPortal layout change still waiting to be saved goes now, as the
+    // store it was made on — not after the switch, as the next one.
+    if (typeof _qpFlushSave === 'function') _qpFlushSave();
     sessionStorage.setItem('speeksUserStore', next);
     location.reload();
 }
@@ -49523,11 +49526,24 @@ function _qpSaved() {
 // layout saved before this up the first time. Writes are debounced: a drag
 // session of several drops is one save. On the localhost test login the write
 // is blocked like every other write, so the test page keeps its browser copy.
+// The save is pinned to WHO and WHICH STORE it was made on, when it is made —
+// not when the debounce fires (Ethan, 2026-10-26: a multi-store manager edited
+// BAL, switched to MPL inside the half-second, and the BAL layout was saved as
+// MPL's too). Switching stores also sends a waiting save at once (_qpFlushSave).
+let _qpPending = null;
 function _qpSave(rows) {
     _qpSaveLocal(rows);
     clearTimeout(_qpSaveTimer);
-    _qpSaveTimer = setTimeout(function () { _qpPush({ rows: rows || null }); }, 600);
+    _qpPending = { body: { rows: rows || null }, who: _qpWho() };
+    _qpSaveTimer = setTimeout(_qpFlushSave, 600);
 }
+function _qpFlushSave() {
+    clearTimeout(_qpSaveTimer);
+    const p = _qpPending;
+    _qpPending = null;
+    if (p) _qpPush(p.body, p.who);
+}
+function _qpWho() { return { user: _qpUser(), store: _qpLayoutStore() }; }
 function _qpSaveLocal(rows) {
     try {
         if (rows) localStorage.setItem(_qpStoreKey(), JSON.stringify({ v: 2, rows: rows }));
@@ -49536,11 +49552,12 @@ function _qpSaveLocal(rows) {
 }
 let _qpSaveTimer = null;
 const _qpUser = () => String(sessionStorage.getItem('speeksUserName') || '').trim();
-function _qpPush(body) {
-    const user = _qpUser();
+function _qpPush(body, who) {
+    who = who || _qpWho();
+    const user = who.user, store = who.store;
     if (!user || user.toLowerCase() === 'unknown') return Promise.resolve();
-    const store = _qpLayoutStore();
-    return fetch(QP_LAYOUT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, store ? { store: store } : {}, body)) })
+    // keepalive: a save sent as the page reloads (a store switch) still lands.
+    return fetch(QP_LAYOUT_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, store ? { store: store } : {}, body)) })
         .catch(function () {});
 }
 // Once per page load, after the layout is drawn from the browser's copy. The
@@ -50452,6 +50469,20 @@ function _qpAiPeriodsOf(piece, key) {
     const on = list.find(function (p) { return p[0] === want; }) || list[0];
     return { list: list, on: on };
 }
+// CENTRED, AND STILL (Ethan, 2026-10-26): every tab's label + count is centred,
+// and a checklist tab — whose count changes length as its card switches
+// Daily / Weekly / Monthly ("0/15" → "0/2") — keeps room for its LONGEST
+// period's count, so the word does not jump. Other tabs reserve nothing: an
+// extra slot pushed short labels like "All 3" off centre.
+function _qpAiCntRoom(piece, key, now) {
+    if (piece !== 'checklist' && piece !== 'cleaning') return '';
+    const per = _qpAiPeriodsOf(piece, key);
+    const len = per.list.reduce(function (n, p) {
+        const items = piece === 'cleaning' ? ((auditDataCache[p[0]] && auditDataCache[p[0]].items) || []) : (checklistDataCache[p[0]] || []);
+        return Math.max(n, (items.filter(function (i) { return i.checked; }).length + '/' + items.length).length);
+    }, String(now).length);
+    return len > String(now).length ? ' style="min-width:' + len + 'ch"' : '';
+}
 function _qpAiChecklist(items, room, open, name, key, piece, per) {
     const total = items.length, done = items.filter(function (i) { return i.checked; }).length;
     const when = per.on[2].toLowerCase();
@@ -50533,11 +50564,19 @@ function _qpAiMyListing(room) {
     const today = goal != null && goal !== '' ? Number(goal) : null;
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const left = Math.max(0, w.goal - w.done);
-    const week = days.filter(function (d) { return w.days[d] && (w.days[d].goal || w.days[d].result); }).slice(-room).map(function (d) {
-        const s = w.days[d], g = s.goal || 0, r = s.result || 0;
+    // THE WEEK AS A STRIP (Ethan, 2026-10-26): a column a day, Monday to Sunday,
+    // filled to that day's share of its goal — green when it was hit, amber when
+    // not — with the count under it and today outlined. Rows only had room for
+    // the last three days in a tabbed card; seven columns fit any card.
+    const todayIdx = (new Date().getDay() + 6) % 7;
+    const set = days.some(function (d) { return w.days[d] && (w.days[d].goal || w.days[d].result); });
+    const week = !set ? '' : '<div class="qp-ai-week">' + days.map(function (d, i) {
+        const s = w.days[d] || {}, g = s.goal || 0, r = s.result || 0, any = !!(g || r);
         const pct = g ? Math.min(100, r / g * 100) : (r ? 100 : 0);
-        return '<div class="qp-ai-pp"><span class="qp-ai-pn">' + d + '</span>' + _qpHLBar(pct, [], r >= g ? '' : 'warn') + '<b>' + r + '/' + g + '</b></div>';
-    }).join('');
+        return '<div class="qp-ai-day' + (i === todayIdx ? ' today' : '') + '" title="' + d + (any ? ' · ' + r + ' of ' + g : '') + '">'
+            + '<div class="qp-ai-col' + (any && r < g ? ' warn' : '') + '"><i style="height:' + Math.round(pct) + '%"></i></div>'
+            + '<b>' + (any ? r : '–') + '</b><span>' + d + '</span></div>';
+    }).join('') + '</div>';
     return {
         count: today == null ? '—' : String(today),
         body: '<div class="qp-ai-top"><div class="qp-hl-big">' + (today == null ? '—' : today) + '<small>to list today</small></div>'
@@ -50626,7 +50665,7 @@ function _qpRenderActions(rows) {
             + (multi ? '<div class="qp-ai-tabs ew-seg">' + pieces.map(function (p) {
                 return '<button type="button" class="toggle-btn' + (p === tab ? ' active' : '') + (_qpEditing ? ' qp-piece-drag" draggable="true" title="Drag out to give it its own card' : '')
                     + '" data-qp-drag-piece="actions/' + p + '" onclick="qpAiTab(\'' + key + '\', \'' + p + '\')">'
-                    + _QP_AI_PIECES[p].short + (built[p].count ? ' <span class="qp-ai-cnt">' + built[p].count + '</span>' : '') + '</button>';
+                    + _QP_AI_PIECES[p].short + (built[p].count ? ' <span class="qp-ai-cnt"' + _qpAiCntRoom(p, key, built[p].count) + '>' + built[p].count + '</span>' : '') + '</button>';
             }).join('') + '</div>' : '')
             + '<div class="qp-ai-body">' + built[tab].body + '</div>';
         // Redrawn every few seconds by samRefreshListing: only touch the DOM when
@@ -51286,7 +51325,9 @@ function _qpWidgetCard(el, rows, id) {
                 + '" data-qp-drag-piece="' + id + '/' + t[0] + '" title="' + escapeHtml(_qpEditing ? 'Drag out to give it its own card' : t[2])
                 + '" onclick="qpWTab(\'' + id + '\', \'' + key + '\', \'' + t[0] + '\')">'
                 // badge: a model may say "Due" / "✓" instead of a count.
-                + escapeHtml(t[1]) + ' <span class="qp-ai-cnt">' + escapeHtml(String(m[t[0]].badge != null ? m[t[0]].badge : m[t[0]].n)) + '</span></button>';
+                // No count at all when it is blank (Stats & Awards): an empty one
+                // left a space that pushed the name off centre.
+                + escapeHtml(t[1]) + (function (c) { return c === '' ? '' : ' <span class="qp-ai-cnt">' + escapeHtml(c) + '</span>'; })(String(m[t[0]].badge != null ? m[t[0]].badge : m[t[0]].n)) + '</button>';
         }).join('') + '</div>';
         // A card with no tabs has room for one more line. A tab with no big
         // number (big: null — Stats & Awards) says how many lines it fits.
