@@ -6,6 +6,9 @@
 // search bar and the pinned ones". _qpDocRows draws what sits under the box.
 
 _b2bSend = function () { return Promise.resolve({}); };
+// A Customize page: only those are held to half a row (_qpMaxW, 2026-10-26),
+// and this page has no Customize bar to look at.
+_qpHeadlinesOn = function () { return true; };
 
 var DOCS = [
     { category: 'Store Operations, Pinned', icon: '⚠️', title: 'Secret Shop Audit Checklist', desc: 'Grade a buyer against the 80% line', link: 'https://drive.google.com/a' },

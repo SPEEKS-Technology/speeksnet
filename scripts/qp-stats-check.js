@@ -7,6 +7,9 @@
 // recordsCache), so these feed it that shape and read the lines it draws.
 
 _b2bSend = function () { return Promise.resolve({}); };
+// A Customize page: only those are held to half a row (_qpMaxW, 2026-10-26),
+// and this page has no Customize bar to look at.
+_qpHeadlinesOn = function () { return true; };
 _claimStores = function () { return ['OVL']; };
 
 var D = {

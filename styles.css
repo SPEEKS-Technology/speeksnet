@@ -25565,6 +25565,9 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 /* Live's one Recent Activity order: the label on the same line, ahead of it. */
 .qp-hl-ord1 { margin-top: 8px; border-top: none; align-items: baseline; }
 .qp-hl-ord1 .qp-hl-capin { margin: 0 4px 0 0; flex: none; }
+/* Recent Activity's item name stops at ~30 characters, wide card or not (Ethan, 2026-10-26). */
+.qp-hl-ord1 .qp-hl-ot { max-width: 30ch; }
+.qp-hl-ord1 .qp-hl-om { flex: none; color: #8a94a3; font-weight: 600; font-size: inherit; }
 .qp-hl-ord .lv-ago { flex: none; color: #8a94a3; }
 .qp-hl-link { margin-top: auto; align-self: flex-start; padding: 4px 0 0; border: none; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #1f9d57; cursor: pointer; }
 .qp-hl-link:hover { text-decoration: underline; }
@@ -25618,6 +25621,12 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-ai-pn { flex: none; width: 78px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-ai-pp .qp-hl-bar { flex: 1 1 auto; margin: 0; }
 .qp-ai-pp b { flex: none; min-width: 46px; text-align: right; font-weight: 800; }
+/* District Team Goals: a Set / Not Set pill a store, all five (Ethan, 2026-10-26). */
+/* 1px, not 3px: five rows under the tab bar of a combined card had to fit 350. */
+.qp-ai-pillrow { justify-content: space-between; padding: 1px 0; }
+.qp-ai-pill { flex: none; min-width: 64px; box-sizing: border-box; text-align: center; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.qp-ai-pill.good { background: #e7f6ee; color: #1a7f4b; }
+.qp-ai-pill.bad { background: #fdecec; color: #b42318; }
 .qp-ai-capnote { text-transform: none; letter-spacing: 0; font-weight: 700; }
 .qp-ai .qp-hl-link { margin-top: auto; padding-top: 8px; }
 .qp-ai .good { color: #1f9d57; }

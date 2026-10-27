@@ -12,6 +12,9 @@
 // rows and whether a block is shown, never what is in it.
 
 _b2bSend = function () { return Promise.resolve({}); };
+// A Customize page: only those are held to half a row (_qpMaxW, 2026-10-26),
+// and this page has no Customize bar to look at.
+_qpHeadlinesOn = function () { return true; };
 
 function page(rows) {
     var old = document.getElementById('qp-host');

@@ -50203,9 +50203,12 @@ const _QP_HL_BUILD = {
             // pinned to the far edge; only the title trims if the card is narrow.
             // One order, so its label shares the line (the 16px a label line of
             // its own took is what the footer's breathing room cost).
+            // SHORT TITLE (Ethan, 2026-10-26: "cut off the item's name way
+            // earlier"): .qp-hl-ord1 .qp-hl-ot is capped at ~30 characters, the
+            // full name on hover; "+2 more" sits outside it so it is never cut.
             html += h.recent.map(function (o) {
-                return '<div class="qp-hl-ord qp-hl-ord1"><span class="qp-hl-cap qp-hl-capin">Recent Activity</span><span class="qp-hl-ot">' + escapeHtml(o.title)
-                    + (o.more > 0 ? ' <small>+' + o.more + ' more</small>' : '') + '</span>'
+                return '<div class="qp-hl-ord qp-hl-ord1"><span class="qp-hl-cap qp-hl-capin">Recent Activity</span><span class="qp-hl-ot" title="' + escapeHtml(o.title) + '">' + escapeHtml(o.title) + '</span>'
+                    + (o.more > 0 ? '<small class="qp-hl-om">+' + o.more + ' more</small>' : '')
                     + '<span class="qp-hl-oa">· ' + _qpHLK(o.amount) + ' ·</span>'
                     + '<span class="lv-ago" data-at="' + escapeHtml(o.at) + '">' + _lvAgo(o.at) + '</span></div>';
             }).join('');
@@ -50427,12 +50430,16 @@ function _qpSetHeadline(piece, h) {
 // reads a row's computed display to know which pieces a card holds, and in
 // Customize mode the rows come back, because a row is what you drag a piece out
 // by. Phones, and anyone without Customize (_qpHeadlinesOn), keep the rows.
-// Manager pieces only — a card holding a DM/CEO piece keeps its rows for now.
+// The DM / CEO pieces joined them on 2026-10-26 (Ethan picked option B of the
+// DM design): the same card, read across the five stores (_qpAiDm*).
 const _QP_AI_PIECES = {
     checklist: { short: 'Manager', when: 'Today' },
     cleaning: { short: 'Cleaning', when: 'Today' },
     listing: { short: 'Listing', when: 'This Week' },
     goals: { short: 'Goals', when: '' },
+    dmcleaning: { short: 'Cleaning', when: 'Today', district: true },
+    dmgoals: { short: 'Goals', when: '', district: true },
+    dmlisting: { short: 'Listing', when: 'This Week', district: true },
 };
 const _qpAiTab = {};
 function qpAiTab(key, piece) {
@@ -50606,7 +50613,107 @@ function _qpAiGoals(room) {
         body: body + _qpAiLink('Open Goals & Initiatives', 'toggleGoalsPanel(event)'),
     };
 }
+// --- THE DISTRICT PIECES (DM / CEO; Ethan, 2026-10-26, option B) ---
+// The rail rows they replace open a five-store popup; the card answers the
+// question that decides whether to open it — which stores are behind — from
+// the same reads the popups use (_dmxAuditStore, _dmxGoalsStore,
+// _dmxListingStore), so a card and its popup can never disagree. A row a
+// store, worst first, so the one to chase is always on top.
+function _qpAiStoreRow(store, pct, fig, cls) {
+    return '<div class="qp-ai-pp"><span class="qp-ai-pn">' + escapeHtml(store) + '</span>'
+        + _qpHLBar(pct, [], cls) + '<b>' + fig + '</b></div>';
+}
+// Cleaning: stores fully done, then each store's done / total. Daily / Weekly,
+// the two lists the district popup has; the card's own switch, so flipping it
+// does not move the popup's tab.
+function _qpAiDmCleaning(room, key) {
+    if (typeof dmAuditData === 'undefined' || !Object.keys(dmAuditData).length) return { count: '', body: '<div class="status-message">Syncing the district…</div>' };
+    const list = [['daily', 'Daily', 'Today'], ['weekly', 'Weekly', 'This Week']];
+    const on = list.find(function (p) { return p[0] === _qpAiPeriod[key + '|dmcleaning']; }) || list[0];
+    const all = _DMX_STORES.map(function (s) { return _dmxAuditStore(s, on[0]); }).filter(function (s) { return s.total; });
+    const sw = '<span class="qp-hl-switch" role="group" aria-label="Cleaning period">' + list.map(function (p) {
+        return '<button type="button" class="' + (p === on ? 'on' : '') + '" aria-pressed="' + (p === on)
+            + '" onclick="qpAiPeriod(\'' + key + '\', \'dmcleaning\', \'' + p[0] + '\')">' + p[1] + '</button>';
+    }).join('') + '</span>';
+    const when = on[2].toLowerCase();
+    if (!all.length) return { count: '', body: '<div class="qp-ai-top"><div class="qp-hl-big">0<small>stores with a list ' + when + '</small></div>' + sw + '</div>'
+        + _qpAiLink('Open Cleaning', 'openDmCleaning()') };
+    const done = all.reduce(function (a, s) { return a + s.completed; }, 0);
+    const total = all.reduce(function (a, s) { return a + s.total; }, 0);
+    const full = all.filter(function (s) { return s.completed >= s.total; }).length;
+    all.sort(function (a, b) { return a.pct - b.pct; });
+    return {
+        count: full + '/' + all.length,
+        body: '<div class="qp-ai-top"><div class="qp-hl-big">' + full + '<small>of ' + all.length + ' stores done</small></div>' + sw + '</div>'
+            + _qpHLBar(total ? done / total * 100 : 0, [], '')
+            + '<div class="qp-hl-cap">By Store <span class="qp-ai-capnote">· ' + done + ' of ' + total + ' tasks ' + when + '</span></div>'
+            + all.slice(0, room + 1).map(function (s) {
+                return _qpAiStoreRow(s.store, s.pct, s.completed + '/' + s.total, s.pct >= 80 ? '' : (s.pct >= 50 ? 'warn' : 'bad'));
+            }).join('')
+            + _qpAiLink('Open Cleaning', 'openDmCleaning()'),
+    };
+}
+// Monthly Team Goals: stores that have set this month's goals; a store with
+// none comes first. A PILL A STORE, not a bar (Ethan, 2026-10-26: "move the
+// goals one to pills, but show all 5 stores either not set or set") — set or
+// not is the whole question; how many of the six is in the popup.
+function _qpAiDmGoals(room) {
+    const all = _DMX_STORES.map(_dmxGoalsStore);
+    const set = all.filter(function (s) { return s.goals.length; }).length;
+    all.sort(function (a, b) { return a.goals.length - b.goals.length; });
+    const month = typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() : 'this month';
+    return {
+        count: set + '/' + all.length,
+        body: '<div class="qp-ai-top"><div class="qp-hl-big">' + set + '<small>of ' + all.length + ' stores set</small></div>'
+            + '<span class="qp-hl-sub">' + (set < all.length ? '<span class="warn">' + (all.length - set) + ' not set yet</span>' : '<span class="good">Every store set</span>') + '</span></div>'
+            + _qpHLBar(set / all.length * 100, [], '')
+            + '<div class="qp-hl-cap">By Store <span class="qp-ai-capnote">· ' + escapeHtml(month) + '</span></div>'
+            + all.map(function (s) {
+                const n = s.goals.length;
+                return '<div class="qp-ai-pp qp-ai-pillrow"><span class="qp-ai-pn">' + escapeHtml(s.store) + '</span>'
+                    + '<span class="qp-ai-pill ' + (n ? 'good' : 'bad') + '">' + (n ? 'Set' : 'Not Set') + '</span></div>';
+            }).join('')
+            + _qpAiLink('Open Team Goals', 'openDmMonthlyGoals()'),
+    };
+}
+// Listing Goals: listed (each person's RESULT, as the manager card counts it)
+// against the store's weekly target; a store whose goal is not set this week
+// says so instead of a figure — that is the DM's Monday job.
+function _qpAiDmListing(room) {
+    if (typeof _dmxGoalsLoaded === 'undefined' || !_dmxGoalsLoaded) return { count: '', body: '<div class="status-message">Syncing the district…</div>' };
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    start.setHours(0, 0, 0, 0);
+    const all = _DMX_STORES.map(function (s) {
+        const done = allDistrictGoalsData.filter(function (r) { return r.store === s && goalDateObj(r.date) >= start; })
+            .reduce(function (a, r) { return a + (parseInt(r.result) || 0); }, 0);
+        const target = targetFor(s) || 0;
+        return { store: s, done: done, target: target, isSet: goalIsSetThisWeek(s), pct: target ? done / target * 100 : 0 };
+    });
+    const listed = all.reduce(function (a, s) { return a + s.done; }, 0);
+    const target = all.reduce(function (a, s) { return a + s.target; }, 0);
+    const unset = all.filter(function (s) { return !s.isSet; }).length;
+    const left = Math.max(0, target - listed);
+    const daysLeft = (7 - ((now.getDay() + 6) % 7)) - 1;
+    all.sort(function (a, b) { return (a.isSet - b.isSet) || (a.pct - b.pct); });
+    return {
+        count: listed + '/' + target,
+        body: '<div class="qp-ai-top"><div class="qp-hl-big">' + listed + '<small>of ' + target + ' listed</small></div>'
+            + '<span class="qp-hl-sub">' + (left ? '<span class="warn">' + left + ' to go</span> · ' + daysLeft + (daysLeft === 1 ? ' day' : ' days') + ' left' : '<span class="good">District goal hit</span>') + '</span></div>'
+            + _qpHLBar(target ? listed / target * 100 : 0, [], '')
+            + '<div class="qp-hl-cap">By Store' + (unset ? ' <span class="qp-ai-capnote">· ' + unset + (unset === 1 ? ' store needs' : ' stores need') + ' this week’s goal</span>' : '') + '</div>'
+            + all.slice(0, room + 1).map(function (s) {
+                return _qpAiStoreRow(s.store, s.isSet ? Math.min(100, s.pct) : 0, s.isSet ? s.done + '/' + s.target : 'Not Set',
+                    !s.isSet ? 'bad' : (s.done >= s.target ? '' : 'warn'));
+            }).join('')
+            + _qpAiLink('Open Listing Goals', 'openDmListingGoals()'),
+    };
+}
 function _qpAiBuild(piece, room, key) {
+    if (piece === 'dmcleaning') return _qpAiDmCleaning(room, key);
+    if (piece === 'dmgoals') return _qpAiDmGoals(room);
+    if (piece === 'dmlisting') return _qpAiDmListing(room);
     // "Open Checklist" opens the panel on the period the card is showing.
     if (piece === 'checklist') {
         const per = _qpAiPeriodsOf('checklist', key);
@@ -50654,8 +50761,11 @@ function _qpRenderActions(rows) {
         const label = row && row.querySelector('.sam-m-t') ? row.querySelector('.sam-m-t').textContent : '';
         // A checklist's eyebrow follows its period switch ("OVL · This Week").
         const when = (tab === 'checklist' || tab === 'cleaning') ? _qpAiPeriodsOf(tab, key).on[2]
-            : (_QP_AI_PIECES[tab].when || (tab === 'goals' ? new Date().toLocaleDateString('en-US', { month: 'long' }) : ''));
-        const eyebrow = escapeHtml(store && store !== 'ALL' ? store + (when ? ' · ' + when : '') : when);
+            : tab === 'dmcleaning' ? (_qpAiPeriod[key + '|dmcleaning'] === 'weekly' ? 'This Week' : 'Today')
+            : (_QP_AI_PIECES[tab].when || (tab === 'goals' || tab === 'dmgoals' ? new Date().toLocaleDateString('en-US', { month: 'long' }) : ''));
+        // A district piece is all five stores, whatever store the DM signed in at.
+        const where = _QP_AI_PIECES[tab].district ? 'District' : (store && store !== 'ALL' ? store : '');
+        const eyebrow = escapeHtml(where ? where + (when ? ' · ' + when : '') : when);
         // Combined: the card is "Action Items" and its tabs say which, with counts.
         const html = '<div class="qp-ai-head">' + (multi ? '' : icon) + '<div><div class="ew-eyebrow">' + eyebrow + '</div>'
             + '<div class="qp-ai-title">' + escapeHtml(multi ? 'Action Items' : label) + '</div></div></div>'
@@ -50829,7 +50939,19 @@ const _QP_DEFAULT_MAXW = 0.5;
 // list of dates). A card holding several pieces takes the widest of theirs,
 // so Due Dates combined with News is a half again.
 const _QP_PIECE_MAXW = { 'feed/due': 1 / 3 };
+// THE DISTRICT COMMAND CENTER KEEPS A FULL ROW (2026-10-26) until it gets the
+// headline cards the store one has (part A of the DM design): its panels are
+// five-store tables, and at half a row the Live one scrolls sideways. Never
+// under half either (_QP_MIN_W).
+const _QP_BLOCK_MAXW = { district: 1 };
 function _qpMaxW(key) {
+    // ONLY CUSTOMIZE PAGES ARE HELD TO HALF A ROW (Ethan, 2026-10-26). The rule
+    // came with the headline cards, which are made to fit half a row; a page
+    // without Customize keeps the full panels — the store board's one Live card
+    // sat at half the screen with nothing beside it, and a full Live table
+    // squeezed into half scrolled sideways. So without Customize nothing is held.
+    if (!_qpHeadlinesOn()) return 1;
+    if (_QP_BLOCK_MAXW[key]) return _QP_BLOCK_MAXW[key];
     const id = _qpWidgetId(key || '');
     if (id) return _QP_WIDGET_MAXW[id] || _QP_DEFAULT_MAXW;
     const p = _qpParse(String(key || ''));
@@ -50845,7 +50967,7 @@ function _qpNeedsPartner(key) { const m = _qpMaxW(key); return !!m && m < 1; }
 // 1/3 size"). The least of a row a card may have; a row holding one can take
 // only as many cards as leave it that much (_qpRowLimit), and no Card Widths
 // choice may squeeze it below it.
-const _QP_MIN_W = { chart: 0.5 };
+const _QP_MIN_W = { chart: 0.5, district: 0.5 };
 function _qpMinW(key) { return _QP_MIN_W[key] || 0; }
 function _qpRowLimit(keys) {
     return keys.reduce(function (n, k) { const m = _qpMinW(k); return m ? Math.min(n, Math.floor(1 / m + 1e-9)) : n; }, QP_MAX_PER_ROW);
@@ -53230,7 +53352,8 @@ function _samPaintFeedCard(c, ctx) {
 
     if (!items.length && !showPatch) {
         const one = tab !== 'all' ? tab : (c.kinds.length === 1 ? c.kinds[0] : '');
-        const none = { due: 'Nothing due.', todo: 'Nothing to do.', news: 'No news.' }[one] || 'You\'re all caught up.';
+        // Title Case, no full stop (Ethan, 2026-10-26: "Nothing Due").
+        const none = { due: 'Nothing Due', todo: 'Nothing To Do', news: 'No News' }[one] || 'You\'re All Caught Up';
         _samReconcileFeed(feed, [{ key: 'empty', html: '<div class="sam-empty">' + none + '</div>' }]);
         return;
     }
@@ -56395,6 +56518,8 @@ function _dmxSyncRail() {
     set('samDmGoalsSub', unset
         ? unset + ' store' + (unset === 1 ? '' : 's') + ' with nothing set'
         : 'Team goals & initiatives');
+    // The QuickPortal's district Action Items cards read the same data.
+    if (typeof _qpRenderActions === 'function') _qpRenderActions();
 }
 
 // ============================================================================
@@ -66117,3 +66242,79 @@ function _ddWatch() {
         }
     }).observe(document.body, { childList: true, subtree: true });
 }
+
+// ============================================================================
+// EVEN TABS — every button in a tab bar or switch is as wide as its widest
+// ============================================================================
+// Ethan, 2026-10-26: "make sure all tab buttons everywhere on the site are at
+// least the same size relative to the tabs it's next to" — Daily / Weekly /
+// Monthly / Quarterly sat at four different widths. Sizes still differ BETWEEN
+// bars (a card's small switch stays small); only the buttons within one bar
+// match.
+//
+// Done here, not in CSS, because the bars are built thirty different ways —
+// inline-flex switches sized to their words, full-width flex strips, wrapping
+// rows — and the one CSS answer (a grid of equal columns) would change how each
+// one sits on its row. A min-width of the widest button's width changes nothing
+// else, and a bar whose buttons are already even (flex: 1 1 0 strips) is left
+// alone.
+//
+// It backs off when it does not fit: if evening the buttons would push the bar
+// past its own box or its parent's (a ⅓ card with Daily…Quarterly beside the
+// big number), the bar keeps its natural widths. A card's height is worth more
+// than an even switch.
+//
+// Re-run when anything that could change a width does: buttons added (a
+// renderer's innerHTML), text changed (a count), a class change (the bold
+// active tab is wider), a style change (a modal or a hidden bar shown). Its
+// own writes are dropped (takeRecords at the end of a run), or a bar that backs
+// off — set, then cleared — would run it again forever.
+const _EQ_TAB_GROUPS = [
+    '.notif-tabs', '.cc-seg', '.ew-seg', '.qp-hl-switch', '.timeframe-toggle', '.mb-view-toggle',
+    '.lgpw-seg', '.crm-tabs', '.ann-docs-tabs', '.stats-subnav', '.qp-ai-tabs', '.sam-ftabs',
+].join(', ');
+function _eqTabsRun() {
+    document.querySelectorAll(_EQ_TAB_GROUPS).forEach(function (g) {
+        const btns = Array.from(g.children).filter(function (b) {
+            return (b.tagName === 'BUTTON' || b.classList.contains('tab-btn') || b.classList.contains('toggle-btn'))
+                && b.getClientRects().length && getComputedStyle(b).display !== 'none';
+        });
+        const was = Array.from(g.querySelectorAll(':scope > [data-eq-tab]'));
+        was.forEach(function (b) { b.style.minWidth = ''; b.removeAttribute('data-eq-tab'); });
+        if (btns.length < 2) return;
+        // offsetWidth, not the bounding box: a closed modal sits scaled down (its
+        // open animation), and a scaled width set as a min-width came out short.
+        const ws = btns.map(function (b) { return b.offsetWidth; });
+        const max = Math.max.apply(null, ws), min = Math.min.apply(null, ws);
+        if (max - min < 1) return;
+        const par = g.parentElement;
+        const room = function () {
+            return g.scrollWidth <= g.clientWidth + 1 && (!par || par.scrollWidth <= par.clientWidth + 1);
+        };
+        if (!room()) return;   // already tight: leave it as it is
+        btns.forEach(function (b) {
+            const cs = getComputedStyle(b);
+            const box = cs.boxSizing === 'border-box' ? 0
+                : parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+            b.setAttribute('data-eq-tab', '');
+            b.style.minWidth = (max - box) + 'px';
+        });
+        if (!room()) btns.forEach(function (b) { b.style.minWidth = ''; b.removeAttribute('data-eq-tab'); });
+    });
+    if (_eqTabsObs) _eqTabsObs.takeRecords();
+}
+let _eqTabsObs = null;
+let _eqTabsTimer = 0;
+function _eqTabsQueue() {
+    if (_eqTabsTimer) return;
+    _eqTabsTimer = setTimeout(function () { _eqTabsTimer = 0; _eqTabsRun(); }, 60);
+}
+function _eqTabsWatch() {
+    _eqTabsObs = new MutationObserver(_eqTabsQueue);
+    _eqTabsObs.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    _eqTabsRun();
+    window.addEventListener('resize', _eqTabsQueue);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(_eqTabsQueue);
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _eqTabsWatch);
+else _eqTabsWatch();

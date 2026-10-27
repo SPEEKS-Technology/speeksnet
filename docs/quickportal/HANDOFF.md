@@ -365,7 +365,14 @@ designs since have been shown inline in chat.
 
 ## Not done / next steps
 
-- DM/CEO Action Items pieces (dmcleaning, dmgoals, dmlisting) still show as rows.
+- DM design (shown inline 10-26): A = District Command Center pieces with
+  headlines (Live, Matrix, Store Breakdown, eBay, Scorecard); B = DM Action
+  Items cards — DONE 10-26; C = district versions of drawer widgets (Variance
+  review queue, Claims by store, Store KPIs by store; later B2B, Call Backs,
+  Connect Titles). Ethan: B first, then A, then C one widget at a time.
+- CEO: on live Feature Access the CEO has no Action Items rows, so Your Feed's
+  only partner is the District card, at ½ (408px, its panels overflow). Part A
+  (district headlines that fit ½) is the fix.
 - When it ships, bump the cache-buster (`?v=`) in all five HTML pages
   (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
 - **Save layouts to the database** so they follow a person across devices
@@ -384,3 +391,21 @@ designs since have been shown inline in chat.
   `…<name>@<store>`, qp-layout takes `store=` (row `<name>@<store>`, falls back
   to the plain row until that store has its own; `seen` stays on the plain row).
   qp-layout redeployed 10-26. Feed lists stop 14px above the card corner.
+  **10-26, DM/CEO/MOCD:** Customize for DM, CEO and MOCD (`#qpBar` role
+  classes). **District Action Items cards** (`_qpAiDmCleaning` / `_qpAiDmGoals`
+  / `_qpAiDmListing`, `district: true` in `_QP_AI_PIECES`): five stores worst
+  first, from the popups' own reads; Cleaning has Daily / Weekly; Listing counts
+  RESULTS like the manager card (the popup's "listed" is assigned goals); a
+  store with no goal this week says Not Set. Eyebrow "District · …".
+  `_dmxSyncRail` redraws them. **Only Customize pages are held to ½**:
+  `_qpMaxW` returns 1 when `!_qpHeadlinesOn()` — the store board's one Live
+  card is full width again, and anyone without Customize keeps full panels.
+  The size/docs/stats checks stub `_qpHeadlinesOn` true for that reason.
+  **District card keeps a full row** (`_QP_BLOCK_MAXW`, min ½) until part A.
+  **10-26, even tabs, site-wide:** every button in a tab bar or switch is
+  as wide as its widest (`_eqTabsRun`, EVEN TABS at the end of speeks.js:
+  inline min-width from offsetWidth, re-run by a MutationObserver, backs off
+  if the bar would overflow). Groups are listed in `_EQ_TAB_GROUPS` — a new
+  kind of tab bar has to be added there. Team Goals (district) rows are
+  Set / Not Set pills now, all five stores. Feed empty lines Title Case.
+  Recent Activity title capped at 30ch.

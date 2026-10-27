@@ -298,3 +298,75 @@ t('every tab bar centres its text', function () {
     host.remove();
     return off.length ? 'off centre: ' + off.join('; ') : true;
 });
+
+// ONLY CUSTOMIZE PAGES ARE HELD TO HALF A ROW (Ethan, 2026-10-26: the store
+// board's one Live card sat at half the screen; MOCD's full Live table was
+// squeezed into half). The District Command Center keeps a full row until it
+// has headline cards of its own.
+t('without Customize nothing is held under a full row; the District card never is', function () {
+    var real = _qpHeadlinesOn;
+    try {
+        _qpHeadlinesOn = function () { return false; };
+        var off = [_qpMaxW('command'), _qpMaxW('feed'), _qpMaxW('claims'), _qpNeedsPartner('command')];
+        _qpHeadlinesOn = function () { return true; };
+        var on = [_qpMaxW('command'), _qpMaxW('feed'), _qpMaxW('district'), _qpNeedsPartner('district')];
+        var got = off.join(',') + ' / ' + on.join(',');
+        return got === '1,1,1,false / 0.5,0.5,1,false' ? true : got;
+    } finally { _qpHeadlinesOn = real; }
+});
+
+// THE DISTRICT ACTION ITEMS CARDS (Ethan, 2026-10-26, option B): the five
+// stores, worst first, from the same reads as the district popups.
+function textOf(b) {
+    var d = document.createElement('div');
+    d.innerHTML = b.body.replace(/></g, '> <');
+    return d.textContent.replace(/\s+/g, ' ').trim();
+}
+t('District Cleaning: stores fully done, then each store worst first', function () {
+    var was = dmAuditData;
+    var day = function (done, total) { return { daily: { items: [], total: total, completed: done }, weekly: { items: [], total: 4, completed: 4 } }; };
+    dmAuditData = { OVL: day(16, 16), LEE: day(12, 16), WSP: day(3, 16), MPL: day(16, 16), BAL: day(8, 16) };
+    try {
+        var b = _qpAiDmCleaning(4, 'actions'), s = textOf(b);
+        if (b.count !== '2/5') return 'count ' + b.count;
+        if (!/^2 ?of 5 stores done/.test(s)) return s;
+        var order = (s.match(/\b(OVL|LEE|WSP|MPL|BAL)\b/g) || []).join(',');
+        if (order !== 'WSP,BAL,LEE,OVL,MPL') return 'order ' + order;
+        _qpAiPeriod['actions|dmcleaning'] = 'weekly';
+        var w = _qpAiDmCleaning(4, 'actions');
+        delete _qpAiPeriod['actions|dmcleaning'];
+        return w.count === '5/5' ? true : 'weekly count ' + w.count;
+    } finally { dmAuditData = was; }
+});
+t('District Team Goals: stores with nothing set come first', function () {
+    var g = getMonthlyGoals, i = getStoreInitiatives;
+    var n = { OVL: 4, LEE: 0, WSP: 6, MPL: 2, BAL: 0 };
+    getMonthlyGoals = function (st) { return { goals: new Array(n[st]).fill({ title: 'x' }) }; };
+    getStoreInitiatives = function () { return { initiatives: [] }; };
+    try {
+        var b = _qpAiDmGoals(4), s = textOf(b);
+        if (b.count !== '3/5') return 'count ' + b.count;
+        var order = (s.match(/\b(OVL|LEE|WSP|MPL|BAL)\b/g) || []).join(',');
+        // All five, each Set or Not Set (pills, 2026-10-26).
+        return order === 'LEE,BAL,MPL,OVL,WSP' && /LEE Not Set BAL Not Set MPL Set OVL Set WSP Set/.test(s) ? true : order + ' :: ' + s;
+    } finally { getMonthlyGoals = g; getStoreInitiatives = i; }
+});
+t('District Listing Goals: listed is results, a store with no goal says Not Set', function () {
+    var was = [allDistrictGoalsData, _dmxGoalsLoaded, targetFor, goalIsSetThisWeek];
+    var today = new Date(); today.setHours(12, 0, 0, 0);
+    var iso = today.toISOString().slice(0, 10);
+    allDistrictGoalsData = [
+        { store: 'OVL', date: iso, employee: 'A', goal: 40, result: 30 },
+        { store: 'OVL', date: iso, employee: 'B', goal: 20, result: 20 },
+        { store: 'LEE', date: iso, employee: 'C', goal: 50, result: 10 },
+    ];
+    _dmxGoalsLoaded = true;
+    targetFor = function (st) { return st === 'OVL' ? 100 : 80; };
+    goalIsSetThisWeek = function (st) { return st !== 'BAL'; };
+    try {
+        var b = _qpAiDmListing(4), s = textOf(b);
+        if (b.count !== '60/420') return 'count ' + b.count + ' :: ' + s;
+        if (!/BAL Not Set/.test(s) || s.indexOf('BAL') > s.indexOf('LEE')) return 'BAL first, Not Set :: ' + s;
+        return /OVL 50\/100/.test(s) && /LEE 10\/80/.test(s) ? true : s;
+    } finally { allDistrictGoalsData = was[0]; _dmxGoalsLoaded = was[1]; targetFor = was[2]; goalIsSetThisWeek = was[3]; }
+});
