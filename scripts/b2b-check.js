@@ -818,11 +818,24 @@ t('3.8.1 the delegation flag reaches the server', function () {
         || 'corp_delegated is not sent with requests';
 });
 
-t('3.8.1 copying an unsent quote records the send', function () {
-    var src = b2bCopyQuote.toString();
-    if (src.indexOf("'send_quote'") === -1) return 'copy never records a send';
+// Nick, 2026-10-27: copy is optional, and the green Mark Sent is what moves the
+// deal on. So the send record moved out of b2bCopyQuote into b2bMarkSent.
+t('copying a quote never records the send', function () {
+    return b2bCopyQuote.toString().indexOf("'send_quote'") === -1
+        || 'Copy Quote still moves the deal on its own';
+});
+t('Mark Sent records the send, only for an unsent quote and an approver', function () {
+    var src = b2bMarkSent.toString();
+    if (src.indexOf("'send_quote'") === -1) return 'Mark Sent never records a send';
     if (src.indexOf('_b2bAwaitingApproval') === -1) return 'does not check the deal is unsent';
     return src.indexOf('_b2bCanAccept') > -1 || 'does not check the person may approve';
+});
+t('the unsent quote screens offer Copy Quote beside a Mark Sent primary', function () {
+    var rv = _b2bStageReview.toString(), q = _b2bStageQuote.toString();
+    if (/Copy Quote & Mark Sent/.test(rv + q)) return 'the combined button is still rendered';
+    if (!/primary: canAccept \? \{ label: 'Mark Sent', onclick: 'b2bMarkSent\(this\)'/.test(rv)) return 'Mark Sent is not the review primary';
+    if (rv.indexOf('b2bCopyQuote()') === -1) return 'Copy Quote is missing from the review screen';
+    return /\? \{ label: 'Mark Sent', onclick: 'b2bMarkSent\(this\)'/.test(q) || 'Mark Sent is not the full-sheet primary';
 });
 t('3.8.1 copying an already-sent quote does not bump the send count', function () {
     // quote_send_count is the only honest record of how many times a quote
