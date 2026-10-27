@@ -11046,12 +11046,14 @@ body.sam-active .hotbar-btn:hover {
    kept the old round grey X (Ethan, 2026-10-25: "the same style as the rest of
    the site"). */
 .modal-menu.manage-menu .modal-close-btn,
-.modal-menu.settings-menu .modal-close-btn {
+.modal-menu.settings-menu .modal-close-btn,
+.qp-lib .modal-close-btn {
     width: 32px; height: 32px; border-radius: 9px;
     background: #f1f5f9; color: #647082; font-size: 14px; flex: 0 0 auto;
 }
 .modal-menu.manage-menu .modal-close-btn:hover,
-.modal-menu.settings-menu .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
+.modal-menu.settings-menu .modal-close-btn:hover,
+.qp-lib .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
 
 /* Reusable calm tool header: icon tile + eyebrow + title + subtitle */
 .tool-head .tool-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
@@ -25747,9 +25749,6 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 @keyframes qpLibIn { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .qp-lib-head { display: flex; align-items: center; justify-content: space-between; }
 .qp-lib-t { font-size: 16px; font-weight: 800; color: var(--slate-charcoal); }
-.qp-lib-x { width: 30px; height: 30px; border-radius: 50%; border: 1px solid #d5dce4; background: #fff; display: grid; place-items: center; cursor: pointer; color: #647082; }
-.qp-lib-x:hover { background: #f1f4f7; }
-.qp-lib-x svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .qp-lib-search { margin: 14px 0 6px; font: inherit; font-size: 13px; padding: 9px 12px; border: 1px solid #d5dce4; border-radius: 10px; outline: none; }
 .qp-lib-search:focus { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
 .qp-lib-list { flex: 1 1 auto; overflow-y: auto; }
@@ -25760,6 +25759,10 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-lib-body { flex: 1; min-width: 0; }
 .qp-lib-name { font-size: 13px; font-weight: 750; color: #1a1c1e; }
 .qp-lib-sub { font-size: 11.5px; color: #647082; margin-top: 1px; }
+/* EVERY ROW THE SAME HEIGHT (Ethan, 2026-10-26): the description always takes
+   two lines' room, and never more — a one-line description no longer makes a
+   shorter row, and a long one ends in "…" instead of a taller one. */
+.qp-lib-sub { line-height: 1.45; min-height: 2.9em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .qp-lib-add { font: inherit; font-size: 12px; font-weight: 750; padding: 6px 14px; border-radius: 8px; border: 1px solid #1f9d57; background: #1f9d57; color: #fff; cursor: pointer; }
 .qp-lib-add:hover { background: #178048; }
 .qp-lib-none { padding: 24px 4px; text-align: center; font-size: 12.5px; color: #8a94a3; }
@@ -25771,6 +25774,16 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-widget .qp-ai-tabs .toggle-btn { padding-left: 3px !important; padding-right: 3px !important; font-size: 10.5px !important; }
 .qp-cw-ln { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid #eef1f4; font-size: 12.5px; font-weight: 600; color: #1a1c1e; min-width: 0; }
 .qp-hl-cap + .qp-cw-ln { border-top: none; }
+/* Five lines under a tab bar (the district widgets, a line a store): 2px, not
+   4px, so the card stays 350. */
+.qp-ai-dense .qp-cw-ln { padding-top: 2px; padding-bottom: 2px; }
+/* ...on one grid: pill · text · figure columns shared by every line (subgrid),
+   so the pills are one width and the names line up. */
+.qp-cw-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; column-gap: 8px; }
+.qp-cw-grid > .qp-cw-ln { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.qp-cw-grid .qp-cw-due { justify-self: stretch; text-align: center; }
+/* The store code's own slot (_qpWLineS): one width, so the words after it line up. */
+.qp-cw-st { display: inline-block; min-width: 3.3em; font-weight: 800; color: #1a1c1e; }
 .qp-cw-lt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-cw-ln b { flex: none; font-weight: 750; color: #3c4654; }
 .qp-cw-due { flex: none; font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 6px; }
@@ -25783,6 +25796,9 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
    slides away and lets every pointer event through to the page's drop targets. */
 .qp-lib-hint { font-size: 11.5px; color: #8a94a3; margin: 2px 0 4px; }
 .qp-lib-row.qp-lib-drag { cursor: grab; border-radius: 10px; }
+/* Room inside the hover background (Ethan, 2026-10-26: the Add / Remove button
+   hugged its right edge). Every row, hovered or not, so nothing shifts. */
+.qp-lib-row { padding-left: 10px; padding-right: 10px; }
 .qp-lib-row.qp-lib-drag:hover { background: #f6f9f7; }
 .qp-lib-row.qp-lib-drag:active { cursor: grabbing; }
 .qp-lib.qp-lib-carrying { background: transparent; pointer-events: none; }
@@ -26004,3 +26020,118 @@ a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
 .qp-ai-day > b { font-size: 12px; font-weight: 800; color: #1a1c1e; font-variant-numeric: tabular-nums; }
 .qp-ai-day > span { font-size: 10.5px; font-weight: 700; color: #8a94a3; }
 .qp-ai-day.today > span { color: #146c3c; }
+
+/* STATS & AWARDS ON THEIR OWN (Ethan, 2026-10-26: "make them more full and
+   cooler" — the design he picked). A card holding only Champions or only Awards
+   (_QP_WSPEC.stats.solo). Gold for the winners; a store's own tile or month in
+   green. A container query, because a card can be ⅓ or ½ of a row. */
+.qp-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; flex: none; }
+.qp-solo { container-type: inline-size; }
+.qp-pods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 2px; }
+.qp-pod { border: 1px solid #f1d9a6; background: #fffaf0; border-radius: 14px; padding: 11px 12px 9px; min-width: 0; }
+.qp-pod.mine { border-color: #9fd8b6; background: #f3fbf6; }
+.qp-pod-k { display: flex; align-items: center; justify-content: space-between; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #7a8794; }
+.qp-medal { width: 20px; height: 20px; border-radius: 50%; background: #f4c64e; color: #7a4b00; display: grid; place-items: center; font-size: 10.5px; font-weight: 900; letter-spacing: 0; }
+.qp-pod-n { font-size: 15px; font-weight: 800; color: #1a1c1e; margin-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-pod-s { font-size: 12px; font-weight: 650; color: #647082; margin-top: 1px; }
+.qp-pod-v { font-size: 23px; font-weight: 900; color: #146c3c; margin-top: 5px; line-height: 1; }
+.qp-pod-v small { font-size: 11px; font-weight: 700; color: #8a94a3; margin-left: 4px; }
+.qp-pod-none { font-size: 12px; color: #8a94a3; margin-top: 10px; }
+/* Runners-up on a grid: name · store · figure, so a long name never pushes the
+   store into the number ("MPL133"). */
+.qp-pod-ru { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 6px; row-gap: 3px; align-items: center;
+    margin-top: 8px; border-top: 1px dashed #e8dcc0; padding-top: 7px; font-size: 11px; font-weight: 650; color: #5b6b64; }
+.qp-pod-rn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-pod-rs { white-space: nowrap; }
+.qp-pod-ru b { color: #3c4654; text-align: right; min-width: 22px; }
+.qp-hero { display: flex; gap: 14px; align-items: center; border: 1px solid #f1d9a6; background: #fffaf0; border-radius: 16px; padding: 13px 16px; margin-top: 2px; }
+.qp-trophy { width: 52px; height: 52px; border-radius: 14px; background: #f4c64e; color: #7a4b00; display: grid; place-items: center; flex: none; }
+.qp-trophy svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-hero-t { min-width: 0; flex: 1; }
+.qp-hero-m { font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #a46412; }
+.qp-hero-n { font-size: 14px; font-weight: 800; color: #1a1c1e; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hero-w { font-size: 26px; font-weight: 900; color: #1a1c1e; line-height: 1.1; margin-top: 1px; }
+.qp-hero-w .qp-dot { width: 11px; height: 11px; vertical-align: 3px; }
+.qp-hero-also { font-size: 11px; font-weight: 650; color: #647082; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hero-sep { display: inline-block; width: 10px; }
+.qp-hero-vid { flex: none; font-size: 11.5px; font-weight: 750; color: #146c3c; background: #e8f7ee; border: 1px solid #bfe6cf; border-radius: 999px; padding: 5px 11px; text-decoration: none; white-space: nowrap; }
+.qp-hero-vid:hover { background: #d9f1e3; }
+.qp-hero-vid.off { color: #8a94a3; background: #f1f4f7; border-color: #e3e8ee; }
+.qp-pasts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.qp-past { border: 1px solid #e6ece8; border-radius: 11px; padding: 7px 10px; min-width: 0; }
+.qp-past.mine { border-color: #9fd8b6; background: #f3fbf6; }
+.qp-past-m { font-size: 10.5px; font-weight: 700; color: #8a94a3; white-space: nowrap; }
+.qp-past-w { font-size: 13.5px; font-weight: 850; color: #1a1c1e; margin-top: 1px; }
+.qp-tally { margin-top: 8px; font-size: 11.5px; font-weight: 650; color: #5b6b64; }
+.qp-tally b { color: #1a1c1e; }
+/* A third of a row: smaller type; the video button drops under the winner. */
+@container (max-width: 470px) {
+    .qp-pods { gap: 7px; }
+    .qp-pod { padding: 9px 9px 8px; }
+    .qp-pod-n { font-size: 13.5px; }
+    .qp-pod-v { font-size: 20px; }
+    .qp-pod-v small { display: block; margin: 2px 0 0; }
+    .qp-pod-ru { grid-template-columns: minmax(0, 1fr) auto; font-size: 10.5px; }
+    .qp-pod-rs { display: none; }
+    .qp-hero { flex-wrap: wrap; padding: 11px 13px; gap: 10px 12px; }
+    .qp-trophy { width: 44px; height: 44px; }
+    .qp-hero-w { font-size: 22px; }
+    .qp-hero-vid { order: 3; }
+    .qp-pasts { gap: 6px; }
+    .qp-past { padding: 6px 7px; }
+}
+
+/* WIDGET ENHANCEMENTS (Ethan, 2026-10-26: ideas 1, 2, 3, 4 and 6 of the six he
+   was shown; 5, clickable lines, was left out). Every card stays 350. */
+/* 1 · store dots: the store slot makes room for the dot. */
+.qp-cw-st { min-width: 4.4em; white-space: nowrap; }
+.qp-ai-pn .qp-dot { margin-right: 4px; }
+/* 6 · "Updated 2m ago" — the card's top corner; a click reads it again. */
+.qp-ai-head { position: relative; }
+.qp-upd { margin-left: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: none; cursor: pointer;
+    font: inherit; font-size: 10.5px; font-weight: 700; color: #8a94a3; background: #f6f8fa; border-radius: 999px; padding: 3px 8px; white-space: nowrap; }
+.qp-upd:hover { background: #e8f7ee; color: #146c3c; }
+.qp-upd svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+/* 2 · all clear: a check in a soft ring, centred, in place of a bare 0. */
+.qp-ai-body.qp-clear { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.qp-clear-ck { width: 54px; height: 54px; border-radius: 50%; background: #e8f7ee; box-shadow: 0 0 0 7px #f3fbf6; display: grid; place-items: center; color: #1f9d57; margin-top: 16px; flex: none; }
+.qp-clear-ck svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.qp-clear-t { font-size: 16px; font-weight: 850; color: #1a1c1e; margin-top: 13px; }
+.qp-clear-s { font-size: 12px; font-weight: 600; color: #647082; margin-top: 2px; max-width: 92%; }
+.qp-clear-l { font-size: 10.5px; font-weight: 650; color: #8a94a3; margin-top: 9px; background: #f6f8fa; border-radius: 999px; padding: 3px 10px; }
+.qp-ai-body.qp-clear .qp-hl-link { align-self: flex-start; }
+/* 3 · trend vs last week. */
+.qp-trend { flex: none; font-size: 10.5px; font-weight: 800; border-radius: 999px; padding: 2px 8px; white-space: nowrap; letter-spacing: 0; text-transform: none; }
+.qp-trend.up { background: #e8f7ee; color: #146c3c; }
+.qp-trend.down { background: #fdecec; color: #c53030; }
+.qp-trend.flat { background: #f1f4f7; color: #5b6b64; }
+.qp-hl-cap.qp-cap-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.qp-hl-cap.qp-cap-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qp-mini { flex: none; width: 12px; text-align: center; font-size: 9.5px; font-weight: 900; }
+.qp-mini.up { color: #1f9d57; } .qp-mini.down { color: #c53030; } .qp-mini.flat { color: #8a94a3; }
+.qp-cw-ln b.qp-mini { font-size: 10px; }
+/* 4 · progress ring on the checklists. */
+.qp-ringrow { display: flex; gap: 14px; align-items: center; margin-top: 2px; }
+.qp-ring { --p: 0; width: 78px; height: 78px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    background: conic-gradient(#1f9d57 calc(var(--p) * 1%), #e8eef0 0); }
+.qp-ring.done { background: #1f9d57; }
+.qp-ring-in { width: 62px; height: 62px; border-radius: 50%; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; }
+.qp-ring-in b { font-size: 22px; font-weight: 900; color: #1a1c1e; }
+.qp-ring-in span { font-size: 10px; font-weight: 700; color: #8a94a3; margin-top: 2px; }
+.qp-ring-side { min-width: 0; flex: 1; }
+.qp-ring-t { font-size: 14.5px; font-weight: 850; color: #1a1c1e; }
+.qp-ring-s { font-size: 11.5px; font-weight: 600; color: #647082; margin: 1px 0 7px; }
+.qp-ring-side .qp-hl-switch { flex-wrap: wrap; max-width: 100%; }
+/* ...and under the Stats & Awards tab bar (qp-solo-tabbed): the same views a
+   little tighter, so the card stays 350 with the tabs above them. */
+.qp-solo-tabbed > .qp-hl-cap:first-child { margin-top: 0 !important; }
+.qp-solo-tabbed .qp-pod { padding: 8px 10px 7px; }
+.qp-solo-tabbed .qp-pod-n { margin-top: 4px; font-size: 14px; }
+.qp-solo-tabbed .qp-pod-v { font-size: 20px; margin-top: 3px; }
+.qp-solo-tabbed .qp-pod-ru { margin-top: 6px; padding-top: 5px; row-gap: 2px; }
+.qp-solo-tabbed .qp-hero { padding: 9px 13px; }
+.qp-solo-tabbed .qp-trophy { width: 44px; height: 44px; border-radius: 12px; }
+.qp-solo-tabbed .qp-trophy svg { width: 23px; height: 23px; }
+.qp-solo-tabbed .qp-hero-w { font-size: 22px; }
+.qp-solo-tabbed .qp-past { padding: 5px 8px; }
+.qp-solo-tabbed .qp-tally { margin-top: 6px; }

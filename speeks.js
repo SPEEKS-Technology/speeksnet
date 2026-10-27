@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.3';
+const APP_VERSION = '3.11.0';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -13833,10 +13833,11 @@ function _lvAgo(iso, now) {
     const t = Date.parse(iso);
     if (!isFinite(t)) return '';
     const m = Math.floor(((now || Date.now()) - t) / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return m + 'm ago';
+    // Title Case, like every other label (Ethan, 2026-10-26: "Just Now").
+    if (m < 1) return 'Just Now';
+    if (m < 60) return m + 'm Ago';
     const h = Math.floor(m / 60);
-    return h >= 10 ? h + 'h ago' : h + 'h ' + (m % 60) + 'm ago';
+    return h >= 10 ? h + 'h Ago' : h + 'h ' + (m % 60) + 'm Ago';
 }
 
 // Cards are never re-rendered once placed (see _lvSyncActivity), so their "ago"
@@ -47250,6 +47251,57 @@ function _vrMarkReviewed() {
 }
 window._vrMarkReviewed = _vrMarkReviewed;
 
+// THE DM'S VARIANCE TRIAGE — which periods are ready for review, which have a
+// closed reply window to wrap up, and which stores are still writing. Lifted
+// out of checkVarianceDmReminders on 2026-10-26 so the QuickPortal's district
+// Variance Review widget reads the same rule instead of a copy of it.
+function _vrDmTriage(data) {
+    const now = Date.now();
+    const cutoff = now - 45 * 86400000;
+    data = data || [];
+    // Skip stores the DM has marked "in the clear" — no review nudges for them —
+    // and periods the DM has ENDED. Before End existed the only way out of the
+    // "ready for review" card was writing DM notes, so a store that never
+    // replied nagged forever (Ethan, 2026-10-12).
+    const periods = data.filter(p =>
+        new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear && !p.ended_at);
+    // State-based, like the manager side: persists until the DM acts, then
+    // clears — no one-shot localStorage that vanished on navigation.
+    // Track WHICH stores need the DM's eyes, so clicking the alert lands on one
+    // that actually needs review (not a default/empty store). Stores where a
+    // manager has replied to a flagged note sort first — that's the "see the
+    // manager's replies" case the DM cares about.
+    const ready = []; // managers done / deadline passed, no DM notes yet
+    const closed = []; // reply window fully closed → final review
+    const waiting = []; // managers still writing, deadline not passed
+    const repliedClosed = new Set(); // closed stores where a mgr reply came in
+    for (const p of periods) {
+        if (!p.items) continue;
+        const store = (p.store || '').toUpperCase();
+        if (!p.dm_notes_at) {
+            const allDone = p.answered >= p.items;
+            // Same day-based deadline the managers see, so the DM is told a
+            // store is ready to review on the same day the managers are told
+            // they are late — not at whatever minute the file was uploaded.
+            const duePassed = _vrDayPast(new Date(p.manager_due_at).getTime());
+            if (allDone || duePassed) ready.push(p);
+            else waiting.push(p);
+        } else {
+            const replyClosed = _vrDayPast(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()), 2);
+            // A period the DM has already looked at since the last manager
+            // reply is done with — dm_reviewed_at is cleared server-side the
+            // moment a newer reply lands, so this cannot hide fresh news.
+            if (replyClosed && !p.dm_reviewed_at) {
+                closed.push(p);
+                // A flagged note the manager HAS answered (mgr_replied, from the
+                // edge fn) means there's a reply here for the DM to read.
+                if (p.mgr_replied > 0) repliedClosed.add(store);
+            }
+        }
+    }
+    return { ready, closed, waiting, replied: repliedClosed };
+}
+
 async function checkVarianceDmReminders() {
     if (!_vrIsDM()) return;
     if (!_vrDmRemindersStarted) {
@@ -47260,48 +47312,12 @@ async function checkVarianceDmReminders() {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
         const json = await res.json();
         if (!json || json.success === false) return;
-        const now = Date.now();
-        const cutoff = now - 45 * 86400000;
-        // Skip stores the DM has marked "in the clear" — no review nudges for them —
-        // and periods the DM has ENDED. Before End existed the only way out of the
-        // "ready for review" card was writing DM notes, so a store that never
-        // replied nagged forever (Ethan, 2026-10-12).
-        const periods = (json.data || []).filter(p =>
-            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear && !p.ended_at);
-        // State-based, like the manager side: persists until the DM acts, then
-        // clears — no one-shot localStorage that vanished on navigation.
-        // Track WHICH stores need the DM's eyes, so clicking the alert lands on one
-        // that actually needs review (not a default/empty store). Stores where a
-        // manager has replied to a flagged note sort first — that's the "see the
-        // manager's replies" case the DM cares about.
+        const t = _vrDmTriage(json.data || []);
         _vrClosedIds.length = 0;   // rebuilt every pass; see _vrMarkReviewed
-        const readyStores = []; // managers done / deadline passed, no DM notes yet
-        const closedStores = []; // reply window fully closed → final review
-        const repliedClosed = new Set(); // closed stores where a mgr reply came in
-        for (const p of periods) {
-            if (!p.items) continue;
-            const store = (p.store || '').toUpperCase();
-            if (!p.dm_notes_at) {
-                const allDone = p.answered >= p.items;
-                // Same day-based deadline the managers see, so the DM is told a
-                // store is ready to review on the same day the managers are told
-                // they are late — not at whatever minute the file was uploaded.
-                const duePassed = _vrDayPast(new Date(p.manager_due_at).getTime());
-                if (allDone || duePassed) readyStores.push(store);
-            } else {
-                const replyClosed = _vrDayPast(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()), 2);
-                // A period the DM has already looked at since the last manager
-                // reply is done with — dm_reviewed_at is cleared server-side the
-                // moment a newer reply lands, so this cannot hide fresh news.
-                if (replyClosed && !p.dm_reviewed_at) {
-                    closedStores.push(store);
-                    _vrClosedIds.push(p.id);
-                    // A flagged note the manager HAS answered (mgr_replied, from the
-                    // edge fn) means there's a reply here for the DM to read.
-                    if (p.mgr_replied > 0) repliedClosed.add(store);
-                }
-            }
-        }
+        t.closed.forEach(p => _vrClosedIds.push(p.id));
+        const readyStores = t.ready.map(p => (p.store || '').toUpperCase());
+        const closedStores = t.closed.map(p => (p.store || '').toUpperCase());
+        const repliedClosed = t.replied;
         // Put stores with actual manager replies first so the click lands there.
         const closedOrdered = [...closedStores].sort((a, b) => (repliedClosed.has(b) ? 1 : 0) - (repliedClosed.has(a) ? 1 : 0));
         const readyForReview = readyStores.length > 0;
@@ -49460,6 +49476,24 @@ const QP_FAMILIES = {
         label: 'Variance Replies', kind: 'widget',
         pieces: [{ key: 'explain', label: 'Lines To Explain' }, { key: 'dm', label: 'DM Notes' }],
     },
+    // The district versions (part C of the DM design, 2026-10-26): the same
+    // tools read across all five stores, for the DM / CEO.
+    dvariance: {
+        label: 'Variance Review', kind: 'widget',
+        pieces: [{ key: 'review', label: 'To Review' }, { key: 'stores', label: 'Waiting On Stores' }],
+    },
+    dclaims: {
+        label: 'Claims & Disputes', kind: 'widget',
+        pieces: [{ key: 'mismatch', label: 'Mismatches' }, { key: 'returns', label: 'Returns' }, { key: 'cases', label: 'Cases & Disputes' }, { key: 'payments', label: 'Payments' }],
+    },
+    dkpis: {
+        label: 'Store KPIs', kind: 'widget',
+        pieces: [{ key: 'weekly', label: 'Weekly KPIs' }, { key: 'monthly', label: 'Monthly KPIs' }],
+    },
+    dconnect: {
+        label: 'SPEEKS Connect', kind: 'widget',
+        pieces: [{ key: 'photos', label: 'No Pictures' }, { key: 'category', label: 'Categories To Sort' }, { key: 'titles', label: 'Titles To Check' }],
+    },
     stats: {
         label: 'Stats & Awards', kind: 'widget',
         pieces: [{ key: 'champions', label: 'Champions' }, { key: 'awards', label: 'Awards' }, { key: 'records', label: 'Records' }],
@@ -50503,12 +50537,18 @@ function _qpAiChecklist(items, room, open, name, key, piece, per) {
     if (!total) return { count: '', body: '<div class="qp-ai-top"><div class="qp-hl-big">0<small>tasks ' + when + '</small></div>' + sw + '</div>'
         + _qpAiLink('Open ' + name, open) };
     const left = items.filter(function (i) { return !i.checked; }).map(function (i) { return String(i.text || ''); });
+    // A PROGRESS RING (Ethan, 2026-10-26: idea 4) in place of the big number
+    // and its bar: done of total in the ring, what is left beside it with the
+    // period switch under. It is taller than the bar it replaces, so Next Up
+    // shows one line fewer — the card stays 350.
+    const pct = Math.round(done / total * 100);
     return {
         count: done + '/' + total,
-        body: '<div class="qp-ai-top"><div class="qp-hl-big">' + done + '<small>of ' + total + ' done</small></div>' + sw + '</div>'
-            + _qpHLBar(done / total * 100, [], '')
-            + (left.length ? '<div class="qp-hl-cap">Next Up <span class="qp-ai-capnote">· ' + left.length + ' left ' + when + '</span></div>' + _qpAiNext(left, room)
-                : '<div class="qp-hl-sub"><span class="good">All done ' + when + '</span></div>')
+        body: '<div class="qp-ringrow"><div class="qp-ring' + (left.length ? '' : ' done') + '" style="--p:' + pct + '" role="img" aria-label="' + done + ' of ' + total + ' done">'
+            + '<div class="qp-ring-in"><b>' + done + '</b><span>of ' + total + '</span></div></div>'
+            + '<div class="qp-ring-side"><div class="qp-ring-t">' + (left.length ? left.length + ' left ' + when : 'All done ' + when) + '</div>'
+            + '<div class="qp-ring-s">' + pct + '% done</div>' + sw + '</div></div>'
+            + (left.length ? '<div class="qp-hl-cap">Next Up</div>' + _qpAiNext(left, Math.max(1, room - 1)) : '')
             // Just the link — no "+ 9 more" (Ethan, 2026-10-22).
             + _qpAiLink('Open ' + name, open),
     };
@@ -50517,6 +50557,41 @@ function _qpAiChecklist(items, room, open, name, key, piece, per) {
 // uses. "Listed" is each person's RESULT; their goal is what they were assigned.
 // The rail row's "200/292" is goals assigned against the weekly target — not
 // listings — so this card names both.
+// TREND VS LAST WEEK (Ethan, 2026-10-26: idea 3). Listed results on the days
+// of this week already over (Monday to yesterday) against the same days last
+// week — not today, whose results are still coming in. keyFn groups the rows
+// (a person, a store); null when there is nothing to compare yet (Monday).
+function _qpWeekTrend(rows, keyFn) {
+    const now = new Date();
+    const mon = new Date(now);
+    mon.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    mon.setHours(0, 0, 0, 0);
+    const today = new Date(now); today.setHours(0, 0, 0, 0);
+    if (today <= mon) return null;
+    const pMon = new Date(mon); pMon.setDate(mon.getDate() - 7);
+    const pEnd = new Date(today); pEnd.setDate(today.getDate() - 7);
+    const out = { now: {}, prev: {}, all: { now: 0, prev: 0 } };
+    (rows || []).forEach(function (r) {
+        const d = typeof goalDateObj === 'function' ? goalDateObj(r.date) : new Date(r.date);
+        const k = keyFn(r), n = parseInt(r.result) || 0;
+        if (d >= mon && d < today) { out.now[k] = (out.now[k] || 0) + n; out.all.now += n; }
+        else if (d >= pMon && d < pEnd) { out.prev[k] = (out.prev[k] || 0) + n; out.all.prev += n; }
+    });
+    return out.all.prev ? out : null;
+}
+// "▲ 18% vs last week" — green up, red down, grey level.
+function _qpTrendPill(now, prev, what) {
+    if (!prev) return '';
+    const pct = Math.round((now - prev) / prev * 100);
+    const dir = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+    return '<span class="qp-trend ' + dir + '" title="' + (what || 'Monday to yesterday, against the same days last week') + '">'
+        + (dir === 'up' ? '▲ ' : dir === 'down' ? '▼ ' : '') + (dir === 'flat' ? 'Level' : Math.abs(pct) + '%') + ' vs last week</span>';
+}
+function _qpTrendMini(now, prev) {
+    if (prev == null) return '<span class="qp-mini"></span>';
+    return now > prev ? '<span class="qp-mini up" title="Ahead of last week">▲</span>'
+        : now < prev ? '<span class="qp-mini down" title="Behind last week">▼</span>' : '<span class="qp-mini flat" title="Level with last week">–</span>';
+}
 function _qpAiListing(room) {
     if (typeof liveGoalsData === 'undefined' || !Array.isArray(liveGoalsData)) return { count: '', body: '<div class="status-message">Syncing…</div>' };
     const now = new Date();
@@ -50545,16 +50620,19 @@ function _qpAiListing(room) {
     };
     const left = Math.max(0, target - listed);
     const daysLeft = (7 - ((now.getDay() + 6) % 7)) - 1;
+    const tr = _qpWeekTrend(liveGoalsData, function (r) { return String(r.employee || '').trim(); });
     return {
         count: listed + '/' + target,
         body: '<div class="qp-ai-top"><div class="qp-hl-big">' + listed + '<small>of ' + target + ' listed</small></div>'
             + '<span class="qp-hl-sub">' + (left ? '<span class="warn">' + left + ' to go</span> · ' + daysLeft + (daysLeft === 1 ? ' day' : ' days') + ' left' : '<span class="good">Weekly goal hit</span>') + '</span></div>'
             + _qpHLBar(target ? listed / target * 100 : 0, [], '')
-            + '<div class="qp-hl-cap">By Person <span class="qp-ai-capnote">· ' + assigned + ' assigned so far</span></div>'
+            + '<div class="qp-hl-cap qp-cap-row"><span>By Person <span class="qp-ai-capnote">· ' + assigned + ' assigned so far</span></span>'
+            + (tr ? _qpTrendPill(tr.all.now, tr.all.prev) : '') + '</div>'
             + people.slice(0, room).map(function (p) {
                 const pct = p.goal ? Math.min(100, p.done / p.goal * 100) : (p.done ? 100 : 0);
                 return '<div class="qp-ai-pp"><span class="qp-ai-pn">' + escapeHtml(short(p.name)) + '</span>'
-                    + _qpHLBar(pct, [], p.done >= p.goal ? '' : 'warn') + '<b>' + p.done + '/' + p.goal + '</b></div>';
+                    + _qpHLBar(pct, [], p.done >= p.goal ? '' : 'warn') + '<b>' + p.done + '/' + p.goal + '</b>'
+                    + (tr ? _qpTrendMini(tr.now[p.name] || 0, tr.prev[p.name] == null ? null : tr.prev[p.name]) : '') + '</div>';
             }).join('')
             + _qpAiLink('Open Listing Goals', 'openListingGoals()'),
     };
@@ -50619,9 +50697,9 @@ function _qpAiGoals(room) {
 // the same reads the popups use (_dmxAuditStore, _dmxGoalsStore,
 // _dmxListingStore), so a card and its popup can never disagree. A row a
 // store, worst first, so the one to chase is always on top.
-function _qpAiStoreRow(store, pct, fig, cls) {
-    return '<div class="qp-ai-pp"><span class="qp-ai-pn">' + escapeHtml(store) + '</span>'
-        + _qpHLBar(pct, [], cls) + '<b>' + fig + '</b></div>';
+function _qpAiStoreRow(store, pct, fig, cls, after) {
+    return '<div class="qp-ai-pp"><span class="qp-ai-pn">' + _qpDot(store) + escapeHtml(store) + '</span>'
+        + _qpHLBar(pct, [], cls) + '<b>' + fig + '</b>' + (after || '') + '</div>';
 }
 // Cleaning: stores fully done, then each store's done / total. Daily / Weekly,
 // the two lists the district popup has; the card's own switch, so flipping it
@@ -50697,15 +50775,17 @@ function _qpAiDmListing(room) {
     const left = Math.max(0, target - listed);
     const daysLeft = (7 - ((now.getDay() + 6) % 7)) - 1;
     all.sort(function (a, b) { return (a.isSet - b.isSet) || (a.pct - b.pct); });
+    const tr = _qpWeekTrend(allDistrictGoalsData, function (r) { return r.store; });
     return {
         count: listed + '/' + target,
         body: '<div class="qp-ai-top"><div class="qp-hl-big">' + listed + '<small>of ' + target + ' listed</small></div>'
             + '<span class="qp-hl-sub">' + (left ? '<span class="warn">' + left + ' to go</span> · ' + daysLeft + (daysLeft === 1 ? ' day' : ' days') + ' left' : '<span class="good">District goal hit</span>') + '</span></div>'
             + _qpHLBar(target ? listed / target * 100 : 0, [], '')
-            + '<div class="qp-hl-cap">By Store' + (unset ? ' <span class="qp-ai-capnote">· ' + unset + (unset === 1 ? ' store needs' : ' stores need') + ' this week’s goal</span>' : '') + '</div>'
+            + '<div class="qp-hl-cap qp-cap-row"><span>By Store' + (unset ? ' <span class="qp-ai-capnote">· ' + unset + (unset === 1 ? ' store needs' : ' stores need') + ' this week’s goal</span>' : '') + '</span>'
+            + (tr ? _qpTrendPill(tr.all.now, tr.all.prev) : '') + '</div>'
             + all.slice(0, room + 1).map(function (s) {
                 return _qpAiStoreRow(s.store, s.isSet ? Math.min(100, s.pct) : 0, s.isSet ? s.done + '/' + s.target : 'Not Set',
-                    !s.isSet ? 'bad' : (s.done >= s.target ? '' : 'warn'));
+                    !s.isSet ? 'bad' : (s.done >= s.target ? '' : 'warn'), tr ? _qpTrendMini(tr.now[s.store] || 0, tr.prev[s.store] == null ? null : tr.prev[s.store]) : '');
             }).join('')
             + _qpAiLink('Open Listing Goals', 'openDmListingGoals()'),
     };
@@ -50876,8 +50956,42 @@ const QP_WIDGETS = {
         sub: 'Lines to explain, DM notes, and the deadline',
         icon: '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 7h18M6 7l-3 7h6l-3-7zM18 7l-3 7h6l-3-7z"/></svg>',
         tone: 'a', section: 'Workspace',
-        // The manager side; the DM version (review queue) comes later.
+        // The manager side; the DM's is Variance Review (dvariance) below.
         avail: function () { return _vrIsManager() && _vrMyStores().length > 0 && _jumpFeatureVisible('widget-variance-replies'); },
+    },
+    // THE DISTRICT WIDGETS (part C of the DM design, Ethan 2026-10-26). Each is
+    // the DM's side of a tool above, all five stores in one card, gated like
+    // the tool's own DM view — never shown to a store's own manager, who has
+    // the store version.
+    dvariance: {
+        label: 'Variance Review',
+        sub: 'Replies ready for your notes, and stores still writing',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 7h18M6 7l-3 7h6l-3-7zM18 7l-3 7h6l-3-7z"/></svg>',
+        tone: 'a', section: 'Workspace',
+        avail: function () { return _vrIsDM() && _jumpFeatureVisible('widget-variance-replies'); },
+    },
+    dclaims: {
+        label: 'Claims & Disputes',
+        sub: 'Every store: what needs attention, and what is overdue',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M12 8v5M12 16h.01"/></svg>',
+        tone: 'r', section: 'Workspace',
+        avail: function () { return _claimsIsOversight() && _jumpFeatureVisible('tool-claims-oversight'); },
+    },
+    dkpis: {
+        label: 'Store KPIs',
+        sub: 'Which stores have entered their KPIs, and which are in the green',
+        icon: '<svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+        tone: 'g', section: 'Workspace',
+        // No store of their own: the people with the Workspace tab's store picker.
+        avail: function () { return _kpiMyStores().length === 0 && _dmxIsDistrict() && _jumpFeatureVisible('widget-ws-weekly-kpis'); },
+    },
+    dconnect: {
+        label: 'SPEEKS Connect',
+        sub: 'Listing health in every store: no pictures, categories, titles',
+        icon: '<svg viewBox="0 0 24 24"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/></svg>',
+        tone: 'g', section: 'Operations',
+        // The DM / CEO, with any of the three halves (the store card's own keys).
+        avail: function () { return _dmxIsDistrict() && ['photos', 'category', 'titles'].some(_QP_WSPEC.dconnect.has); },
     },
     // The policy library (Ethan, 2026-10-25). Everyone has docs.html — it has
     // no Feature Access switch — so everyone may add it.
@@ -50904,6 +51018,7 @@ const _QP_WIDGET_ADDED = {
     claims: '2026-10-22', callbacks: '2026-10-22', b2b: '2026-10-22', connect: '2026-10-22',
     monthly: '2026-10-23', kpis: '2026-10-23', variance: '2026-10-23',
     docs: '2026-10-25', stats: '2026-10-25',
+    dvariance: '2026-10-26', dclaims: '2026-10-26', dkpis: '2026-10-26', dconnect: '2026-10-26',
 };
 Object.keys(_QP_WIDGET_ADDED).forEach(function (id) { if (QP_WIDGETS[id]) QP_WIDGETS[id].added = _QP_WIDGET_ADDED[id]; });
 const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WIDGETS[id] ? id : null; };
@@ -50924,7 +51039,8 @@ const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WID
 // Breakdown lost their full size too — no widget has enough to fill a row).
 // Variance Replies, Store KPIs and Monthly Breakdown are ⅓ only (Ethan, same
 // day): there is a card's worth in each, no more.
-const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3, docs: 0.5, stats: 0.5 };
+const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3, docs: 0.5, stats: 0.5,
+    dvariance: 1 / 3, dclaims: 0.5, dkpis: 1 / 3, dconnect: 1 / 3 };
 // Cards that are not widgets can be held under a full row too, by family —
 // the card and every piece split out of it (Ethan, 2026-10-23: "the feed cards
 // should not be allowed to be full size either").
@@ -50942,7 +51058,7 @@ const _QP_PIECE_MAXW = { 'feed/due': 1 / 3 };
 // THE DISTRICT COMMAND CENTER KEEPS A FULL ROW (2026-10-26) until it gets the
 // headline cards the store one has (part A of the DM design): its panels are
 // five-store tables, and at half a row the Live one scrolls sideways. Never
-// under half either (_QP_MIN_W).
+// shares its row either (_QP_MIN_W).
 const _QP_BLOCK_MAXW = { district: 1 };
 function _qpMaxW(key) {
     // ONLY CUSTOMIZE PAGES ARE HELD TO HALF A ROW (Ethan, 2026-10-26). The rule
@@ -50967,7 +51083,11 @@ function _qpNeedsPartner(key) { const m = _qpMaxW(key); return !!m && m < 1; }
 // 1/3 size"). The least of a row a card may have; a row holding one can take
 // only as many cards as leave it that much (_qpRowLimit), and no Card Widths
 // choice may squeeze it below it.
-const _QP_MIN_W = { chart: 0.5, district: 0.5 };
+// The District Command Center: a full row, alone (2026-10-26). At ½ beside the
+// feed its five-store tables ran past the card, and a widget added beside it
+// made that row 900px tall. Until part A gives it headline cards it shares
+// with nothing.
+const _QP_MIN_W = { chart: 0.5, district: 1 };
 function _qpMinW(key) { return _QP_MIN_W[key] || 0; }
 function _qpRowLimit(keys) {
     return keys.reduce(function (n, k) { const m = _qpMinW(k); return m ? Math.min(n, Math.floor(1 / m + 1e-9)) : n; }, QP_MAX_PER_ROW);
@@ -51218,7 +51338,9 @@ function qpLibraryOpen() {
     ov.className = 'qp-lib';
     ov.innerHTML = '<aside class="qp-lib-panel" role="dialog" aria-modal="true" aria-labelledby="qpLibT">'
         + '<div class="qp-lib-head"><span class="qp-lib-t" id="qpLibT">Add a Widget</span>'
-        + '<button type="button" class="qp-lib-x" aria-label="Close" onclick="qpLibraryClose()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>'
+        // The site's own X (.modal-close-btn, the grey rounded square of the tool
+        // windows and Settings) — Ethan, 2026-10-26.
+        + '<button type="button" class="modal-close-btn" aria-label="Close" title="Close" onclick="qpLibraryClose()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>'
         + '<input type="search" class="qp-lib-search" placeholder="Search widgets" aria-label="Search widgets" oninput="_qpLibraryList(this.value)">'
         + '<div class="qp-lib-hint">Click Add, or drag a widget onto the page.</div>'
         + '<div class="qp-lib-list" id="qpLibList"></div></aside>';
@@ -51345,11 +51467,11 @@ async function _qpWLoad(id, force) {
 function _qpWReload(id) {
     if (document.querySelector('[data-qp-widget="' + id + '"]')) return _qpWLoad(id, true);
 }
-function _qpClaimsReload() { return _qpWReload('claims'); }
+function _qpClaimsReload() { _qpWReload('dclaims'); return _qpWReload('claims'); }
 function _qpWReloadB2b() { return _qpWReload('b2b'); }
 function _qpWReloadCallbacks() { return _qpWReload('callbacks'); }
-function _qpWReloadKpis() { return _qpWReload('kpis'); }
-function _qpWReloadVariance() { return _qpWReload('variance'); }
+function _qpWReloadKpis() { _qpWReload('dkpis'); return _qpWReload('kpis'); }
+function _qpWReloadVariance() { _qpWReload('dvariance'); return _qpWReload('variance'); }
 // The test login's made-up variance (see the variance widget's load). Same
 // shape as variance-replies' list + period reads; every name and number is made up.
 function _qpVarianceSample() {
@@ -51387,6 +51509,17 @@ function _qpWDue(day, today) {
     if (d === today) return '<span class="qp-cw-due bad">Today</span>';
     return '<span class="qp-cw-due warn">' + escapeHtml(_samShortDate(Date.parse(d + 'T12:00:00'))) + '</span>';
 }
+// A store's colour dot (STORE_TINTS, the Live table's dots).
+function _qpDot(store) { return '<i class="qp-dot" style="background:' + (STORE_TINTS[store] || '#8a94a3') + '"></i>'; }
+// A district line: the store code in a slot of its own width, so whatever
+// follows it lines up down the card ("MPL" is wider than "LEE" — Ethan,
+// 2026-10-26: "the store KPI's text is still uneven").
+function _qpWLineS(chip, store, text, right, rightCls) {
+    // With the store's colour dot (Ethan, 2026-10-26: idea 1, "store colour
+    // dots on every store code").
+    return '<div class="qp-cw-ln">' + (chip || '') + '<span class="qp-cw-lt"><span class="qp-cw-st">' + _qpDot(store) + escapeHtml(store) + '</span>' + escapeHtml(text) + '</span>'
+        + (right ? '<b' + (rightCls ? ' class="' + rightCls + '"' : '') + '>' + escapeHtml(right) + '</b>' : '') + '</div>';
+}
 function _qpWChip(text, cls) { return '<span class="qp-cw-due ' + (cls || 'grey') + '">' + escapeHtml(text) + '</span>'; }
 function _qpWLine(chip, text, right) {
     return '<div class="qp-cw-ln">' + (chip || '') + '<span class="qp-cw-lt">' + escapeHtml(text) + '</span>'
@@ -51407,6 +51540,7 @@ function _qpClaimsText(s) {
 }
 
 // One widget card — the widget's own, or a piece split out of it.
+let _qpAgoTimer = 0;
 function _qpWidgetCard(el, rows, id) {
     const spec = _QP_WSPEC[id], w = QP_WIDGETS[id];
     const box = el.querySelector('.qp-ai');
@@ -51426,7 +51560,23 @@ function _qpWidgetCard(el, rows, id) {
         // says when, not its own name a second time.
         + '<div class="ew-eyebrow">' + escapeHtml(where + ' · ' + (one && spec.tabs.length > 1 ? w.label
             : (typeof spec.when === 'function' ? spec.when(st.data) : spec.when))) + '</div>'
-        + '<div class="qp-ai-title">' + escapeHtml(one ? one[2] : w.label) + '</div></div></div>';
+        + '<div class="qp-ai-title">' + escapeHtml(one ? one[2] : w.label) + '</div></div>'
+        // SYNCED … AGO (Ethan, 2026-10-26: idea 6, then "only SPEEKS Connect and
+        // Claims & Disputes need it" — the two whose numbers come from eBay and
+        // Shopify). spec.synced: those widgets only. Where the read says when its
+        // eBay / Shopify syncs last ran (Claims), that time, the OLDEST store's —
+        // never fresher than the stalest store; otherwise when the card read it.
+        // A click re-reads SPEEKSNET's copy; it never starts a sync (that costs
+        // eBay calls). Kept current by _lvRefreshAgo.
+        + (st.data && st.at && spec.synced ? (function () {
+            const at = (spec.syncedAt && spec.syncedAt(st.data)) || new Date(st.at).toISOString();
+            const fromSync = !!(spec.syncedAt && spec.syncedAt(st.data));
+            return '<button type="button" class="qp-upd" title="' + (fromSync ? 'Last synced with eBay and Shopify — click to re-read' : 'Last read — click to re-read') + '" onclick="event.stopPropagation(); _qpWLoad(\'' + id + '\', true)">'
+                + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>' + (fromSync ? 'Synced ' : '')
+                + '<span class="lv-ago" data-at="' + at + '">' + _lvAgo(at) + '</span></button>';
+        })() : '')
+        + '</div>';
+    if (!_qpAgoTimer) _qpAgoTimer = setInterval(_lvRefreshAgo, 30000);
     let body;
     const off = st.data && spec.off ? spec.off(st.data) : '';
     if (!st.data) {
@@ -51436,6 +51586,11 @@ function _qpWidgetCard(el, rows, id) {
     } else if (spec.card) {
         // A widget that is not a count (Processes & Policies): it draws its own body.
         body = spec.card(st.data, key);
+    } else if (one && spec.solo && spec.solo[one[0]]) {
+        // A tab on a card of its own may draw a fuller body than its tab view
+        // (Stats & Awards' Champions and Awards — Ethan, 2026-10-26: "make them
+        // more full and cooler").
+        body = spec.solo[one[0]](st.data);
     } else {
         const m = {};
         pieces.forEach(p => { m[p] = spec.model(st.data, p); });
@@ -51454,11 +51609,33 @@ function _qpWidgetCard(el, rows, id) {
         // A card with no tabs has room for one more line. A tab with no big
         // number (big: null — Stats & Awards) says how many lines it fits.
         const room = it.room || (one ? 4 : 3);
-        body = tabs + '<div class="qp-ai-body">'
+        // ALL CLEAR (Ethan, 2026-10-26: idea 2): a tab with nothing on it says
+        // so with a check, not a bare 0 over empty space. A model opts in with
+        // clear: [title, line, optional "last" note].
+        // The fuller Champions / Awards views under the tabs too (Ethan,
+        // 2026-10-26: "still not seeing the new awards and champions design" —
+        // it drew only on a card of their own). qp-solo-tabbed trims them to
+        // fit under a tab bar.
+        if (spec.solo && spec.solo[tab]) {
+            body = tabs + spec.solo[tab](st.data).replace('qp-ai-body qp-solo', 'qp-ai-body qp-solo qp-solo-tabbed');
+        } else if (it.clear) {
+            body = tabs + '<div class="qp-ai-body qp-clear"><div class="qp-clear-ck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>'
+                + '<div class="qp-clear-t">' + escapeHtml(it.clear[0]) + '</div><div class="qp-clear-s">' + escapeHtml(it.clear[1]) + '</div>'
+                + (it.clear[2] ? '<div class="qp-clear-l">' + escapeHtml(it.clear[2]) + '</div>' : '')
+                + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
+        } else
+        // dense: a line a store, five of them under the tabs (the district
+        // widgets) — tighter lines so the card stays 350.
+        body = tabs + '<div class="qp-ai-body' + (it.room === 5 ? ' qp-ai-dense' : '') + '">'
             + (it.big == null ? '' : '<div class="qp-ai-top"><div class="qp-hl-big">' + it.big + '<small>' + escapeHtml(it.small) + '</small></div>'
-            + (it.aside ? '<span class="qp-hl-sub">' + escapeHtml(it.aside) + '</span>' : '') + '</div>')
+            + (it.trend ? '<span class="qp-trend ' + it.trend.dir + '">' + escapeHtml(it.trend.text) + '</span>'
+                : it.aside ? '<span class="qp-hl-sub">' + escapeHtml(it.aside) + '</span>' : '') + '</div>')
             + (it.sub ? '<div class="qp-hl-sub">' + it.sub + '</div>' : '')
-            + (it.lines && it.lines.length ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '') + it.lines.slice(0, room).join('') : '')
+            // A line a store (dense): the lines share one grid, so every pill is
+            // the widest one's width and every name starts at the same place
+            // (Ethan, 2026-10-26: "align the text and pills").
+            + (it.lines && it.lines.length ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '')
+                + (it.room === 5 ? '<div class="qp-cw-grid">' + it.lines.slice(0, room).join('') + '</div>' : it.lines.slice(0, room).join('')) : '')
             + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
     }
     const html = head + body;
@@ -51540,10 +51717,68 @@ const _QP_WSPEC = {
     // out for the ticker), the awards and records from fetchAwardsData /
     // fetchRecordsData. No big number: each tab is a short list.
     stats: {
-        when: 'Company-Wide',
+        // Without a store of their own (DM, CEO, MOCD) "Company · Company-Wide"
+        // said the same thing twice.
+        when: () => _claimStores()[0] ? 'Company-Wide' : 'All Stores',
         ttl: 600000,
         tabs: [['champions', 'Champions', 'Champions'], ['awards', 'Awards', 'Monthly Awards'], ['records', 'Records', 'Records']],
-        where: () => _claimStores()[0] || 'SPEEKS',
+        where: () => _claimStores()[0] || 'Company',
+        // ON THEIR OWN (Ethan, 2026-10-26, from the design he picked): a card
+        // holding only Champions, or only Awards, draws this instead of lines.
+        solo: {
+            // A tile a board: the leader large, 2nd and 3rd under a rule.
+            champions: function (d) {
+                const c = d.champ, mine = _claimStores()[0] || '';
+                const boards = [['lister', 'Top Lister', e => e.listed, 'items'], ['review', 'Top Reviews', e => e.reviews, 'reviews'],
+                    ['buyer', 'Top Buyer', e => Math.round(e.score / 100), 'score']];
+                const pods = boards.map(function (b) {
+                    const list = c[b[0]] || [], e = list[0];
+                    if (!e) return '<div class="qp-pod"><div class="qp-pod-k">' + b[1] + '</div><div class="qp-pod-none">No one yet this week</div></div>';
+                    return '<div class="qp-pod' + (e.store === mine ? ' mine' : '') + '"><div class="qp-pod-k">' + b[1] + '<span class="qp-medal">1</span></div>'
+                        + '<div class="qp-pod-n" title="' + escapeHtml(e.name) + '">' + escapeHtml(_qpWWho(e.name)) + '</div>'
+                        + '<div class="qp-pod-s">' + _qpDot(e.store) + escapeHtml(e.store) + '</div>'
+                        + '<div class="qp-pod-v">' + b[2](e).toLocaleString('en-US') + '<small>' + b[3] + '</small></div>'
+                        + (list.length > 1 ? '<div class="qp-pod-ru">' + list.slice(1, 3).map(function (r, i) {
+                            return '<span class="qp-pod-rn" title="' + escapeHtml(r.name) + '">' + (i + 2) + ' · ' + escapeHtml(_qpWWho(r.name)) + '</span>'
+                                + '<span class="qp-pod-rs">' + _qpDot(r.store) + escapeHtml(r.store) + '</span><b>' + b[2](r).toLocaleString('en-US') + '</b>';
+                        }).join('') + '</div>' : '') + '</div>';
+                }).join('');
+                return '<div class="qp-ai-body qp-solo"><div class="qp-hl-cap" style="margin-top:2px">' + escapeHtml(c.week.replace(/, \d{4}$/, '')) + '</div>'
+                    + '<div class="qp-pods">' + pods + '</div>' + _qpAiLink('Open Champions', "_qpStatsOpen('champions')") + '</div>';
+            },
+            // The latest month's main award large, any others it gave under it,
+            // the four months before it, and every store's awards this year.
+            awards: function (d) {
+                const list = d.awards || [], a = list[list.length - 1], mine = _claimStores()[0] || '';
+                if (!a) return '<div class="qp-ai-body"><div class="qp-hl-sub"><span class="warn">No awards yet</span></div>'
+                    + _qpAiLink('Open Awards', "_qpStatsOpen('awards')") + '</div>';
+                const short = n => n.replace(/^The /, '').replace(/ Award$/, '');
+                const video = /^https?:\/\//i.test(String(a.videoUrl || ''))
+                    ? '<a class="qp-hero-vid" href="' + escapeHtml(a.videoUrl) + '" target="_blank" rel="noopener">▶ Watch the Video</a>'
+                    : '<span class="qp-hero-vid off">No video yet</span>';
+                const also = [[a.winner2, AWARD_NAMES[1]], [a.winner3, AWARD_NAMES[2]]].filter(x => x[0])
+                    .map(x => short(x[1]) + ' · ' + _qpDot(x[0]) + escapeHtml(x[0])).join('<span class="qp-hero-sep"></span>');
+                const hero = '<div class="qp-hero"><div class="qp-trophy"><svg viewBox="0 0 24 24"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg></div>'
+                    + '<div class="qp-hero-t"><div class="qp-hero-m">' + escapeHtml(a.month) + '</div><div class="qp-hero-n">' + escapeHtml(short(AWARD_NAMES[0])) + '</div>'
+                    + '<div class="qp-hero-w">' + (a.winner1 ? _qpDot(a.winner1) + escapeHtml(a.winner1) : 'Not Set Yet') + '</div>'
+                    + (also ? '<div class="qp-hero-also">' + also + '</div>' : '') + '</div>' + video + '</div>';
+                const past = list.slice(0, -1).slice(-4).reverse().map(function (p) {
+                    const w = p.winner1;
+                    return '<div class="qp-past' + (w && w === mine ? ' mine' : '') + '"><div class="qp-past-m">' + escapeHtml(p.month.replace(/ \d{4}$/, ''))
+                        + (p.videoUrl ? ' <span title="Has a video">▶</span>' : '') + '</div><div class="qp-past-w">' + (w ? _qpDot(w) + escapeHtml(w) : '—') + '</div></div>';
+                }).join('');
+                // Every award this year, all three, by store.
+                const yr = (a.month.match(/\d{4}$/) || [''])[0], won = {};
+                list.filter(p => p.month.slice(-4) === yr).forEach(p => [p.winner1, p.winner2, p.winner3].forEach(w => { if (w) won[w] = (won[w] || 0) + 1; }));
+                const top = Math.max.apply(null, Object.values(won).concat([0]));
+                const tally = Object.keys(won).sort((x, y) => won[y] - won[x] || x.localeCompare(y))
+                    .map(s => (won[s] === top ? '<b>' + s + ' ' + won[s] + '</b>' : s + ' ' + won[s])).join(' · ');
+                return '<div class="qp-ai-body qp-solo">' + hero
+                    + (past ? '<div class="qp-hl-cap">Past Winners</div><div class="qp-pasts">' + past + '</div>' : '')
+                    + (tally ? '<div class="qp-tally">Awards won in ' + yr + ': ' + tally + '</div>' : '')
+                    + _qpAiLink('Open Awards', "_qpStatsOpen('awards')") + '</div>';
+            },
+        },
         load: async function () {
             await Promise.all([_champLast ? null : _champData(), fetchAwardsData(), fetchRecordsData()]);
             if (!_champLast) throw new Error('champions load failed');
@@ -51595,6 +51830,22 @@ const _QP_WSPEC = {
             // a screen), and so is a person-held record (Google Reviews) —
             // its place is a person's, not the store's.
             const rows = d.records.filter(r => !r.person && STORE_CODES.indexOf(String(r.section).toUpperCase()) !== -1);
+            // Dollars to the whole dollar ("$15,996", not "$15,995.81").
+            const money = v => /^\$/.test(String(v || '')) ? '$' + Math.round(parseNum(v)).toLocaleString('en-US') : String(v || '');
+            // NO STORE OF YOUR OWN (DM, CEO, MOCD — Ethan, 2026-10-26: the card
+            // was empty for them, every record filtered to a store they don't
+            // have): who holds each record, and with what.
+            if (!mine) {
+                const top = RECORD_CARD_ORDER.filter(l => !/Gross Profit/.test(l) && rows.some(r => r.label === l)).map(l => {
+                    const best = rows.filter(r => r.label === l).sort((a, b) => parseNum(b.value) - parseNum(a.value))[0];
+                    return _qpWLineS('', String(best.section).toUpperCase(), l.replace(/ Record$/, ''), money(best.value));
+                });
+                return {
+                    n: 0, badge: '', big: null, room: 6, sub: top.length ? '' : '<span class="warn">No records yet</span>',
+                    cap: top.length ? 'Who Holds Each Record' : '', lines: top,
+                    link: ['Open Records'].concat(link('records')),
+                };
+            }
             const labels = RECORD_CARD_ORDER.filter(l => !/Gross Profit/.test(l) && rows.some(r => r.label === l && r.section === mine));
             let held = 0;
             const lines = labels.map(l => {
@@ -51603,10 +51854,7 @@ const _QP_WSPEC = {
                 const place = all.filter(r => parseNum(r.value) > parseNum(me.value)).length + 1;
                 if (place === 1) held++;
                 const chip = place === 1 ? _qpWChip('1st', 'good') : _qpWChip(['', '1st', '2nd', '3rd'][place] || place + 'th', 'grey');
-                // Dollars to the whole dollar ("$15,996", not "$15,995.81").
-                const v = String(me.value || '');
-                const shown = /^\$/.test(v) ? '$' + Math.round(parseNum(v)).toLocaleString('en-US') : v;
-                return _qpWLine(chip, l.replace(/ Record$/, ''), shown);
+                return _qpWLine(chip, l.replace(/ Record$/, ''), money(me.value));
             });
             // Six records fill the card, so how many it holds rides in the cap.
             return {
@@ -51626,7 +51874,7 @@ const _QP_WSPEC = {
     // no room for "Cases & Disputes 2" (it was cut off at 104px), so the full
     // name rides in the tooltip — and is the title of a Cases card on its own.
     claims: {
-        when: 'Right Now',
+        when: 'Right Now', synced: true, syncedAt: d => _qpClaimsSyncedAt(d),
         tabs: [['mismatch', 'Mismatches', 'Mismatches'], ['returns', 'Returns', 'Returns'], ['cases', 'Cases', 'Cases & Disputes'], ['payments', 'Payments', 'Payments']],
         where: () => (typeof _claimsDueScope === 'function' ? _claimsDueScope() : []).join(' · '),
         load: async function () {
@@ -51645,6 +51893,7 @@ const _QP_WSPEC = {
             const open = it.due.reduce((a, e) => a + (Number(e.x.amount || e.x.outstanding || e.x.total) || 0), 0);
             const late = it.due.filter(e => e.x.due_on && String(e.x.due_on).slice(0, 10) < today).length;
             return {
+                ...(it.due.length ? {} : { clear: ['All Clear', 'Nothing needs your attention' + (it.waiting ? ' · ' + it.waiting + ' waiting on someone else' : '')] }),
                 n: it.due.length, big: it.due.length, small: 'need attention',
                 aside: open ? _qpHLK(open) + ' on them' : '',
                 sub: (late ? '<span class="bad">' + late + ' overdue</span>' : (it.due.length ? '<span class="good">Nothing overdue</span>' : '<span class="good">All clear</span>'))
@@ -51789,7 +52038,14 @@ const _QP_WSPEC = {
                 .sort((a, b) => (a.cls === 'kpi-cell-red' ? 0 : 1) - (b.cls === 'kpi-cell-red' ? 0 : 1));
             const at = (p.entries || []).map(e => e.updated_at || e.created_at).filter(Boolean).sort().pop();
             const openNotDue = !weekly && openEnd && openEnd !== p.period_end_date;
+            // Against the period before (idea 3): how many were green then.
+            const saved = (d[tab][stores[0]] || []).filter(x => (x.saved_count || 0) > 0);
+            const prevP = saved[saved.indexOf(p) + 1];
+            const greenOf = q => { const t = _kpiStoreTotals(q.entries || []); return _QP_KPI_JUDGED.filter(f => t[f[0]] != null && !isNaN(Number(t[f[0]])) && _kpiThresholdCls(f[0], t[f[0]], true) === 'kpi-cell-green').length; };
+            const pg = prevP ? greenOf(prevP) : null;
             return {
+                trend: pg == null ? null : { dir: green > pg ? 'up' : green < pg ? 'down' : 'flat',
+                    text: (green > pg ? '▲ ' + (green - pg) : green < pg ? '▼ ' + (pg - green) : 'Level') + ' vs last ' + (weekly ? 'week' : 'month') },
                 n: 0, badge: '✓', big: green, small: 'of ' + judged.length + ' in the green · ' + label(p.period_end_date),
                 sub: openNotDue ? '<span class="warn">' + label(openEnd) + ' is due ' + day(dueOn) + ' by 8:30am</span>'
                     : (at ? '<span class="good">Entered ' + new Date(at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + '</span>' : ''),
@@ -51857,6 +52113,8 @@ const _QP_WSPEC = {
                 const cleared = d.periods.find(p => p.all_clear && new Date(p.uploaded_at).getTime() > (seen[p.id] || 0));
                 const waiting = d.periods.find(p => !p.all_clear && p.items && p.answered >= p.items && !p.dm_notes_at);
                 return {
+                    clear: ["You're Caught Up", cleared ? "New report — you're in the clear. Have a read of it."
+                        : waiting ? "All replied — waiting on the DM's review" : 'Nothing to explain right now'],
                     n: 0, big: 0, small: 'lines to explain',
                     sub: cleared ? '<span class="good">New report — you\'re in the clear. Have a read of it.</span>'
                         : waiting ? '<span class="good">All replied — waiting on the DM\'s review</span>'
@@ -51880,9 +52138,171 @@ const _QP_WSPEC = {
             }
             const reviewed = d.periods.find(p => p.dm_notes_at && new Date(p.dm_notes_at).getTime() > (seen[p.id] || 0));
             return {
+                clear: [reviewed ? 'Replies Reviewed' : 'No DM Notes', reviewed ? 'The DM reviewed your replies — have a look' : 'Nothing waiting on you'],
                 n: 0, big: 0, small: 'DM notes to answer',
                 sub: reviewed ? '<span class="good">The DM reviewed your replies — have a look</span>' : '<span class="good">No DM notes waiting on you</span>',
                 cap: '', lines: [], link,
+            };
+        },
+    },
+    // --- THE DISTRICT WIDGETS (part C of the DM design, Ethan 2026-10-26) ---
+    // Each is the DM's side of a tool, all five stores at once, a line a store.
+    //
+    // VARIANCE REVIEW: the DM's reminder's own triage (_vrDmTriage) — periods
+    // ready for DM notes (every line answered, or the deadline passed), reply
+    // windows that have closed for a final look, and stores still writing.
+    dvariance: {
+        when: 'Right Now',
+        tabs: [['review', 'To Review', 'Ready For Your Review'], ['stores', 'Stores', 'Waiting On Stores']],
+        where: () => 'District',
+        load: async function () {
+            const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
+            const j = await res.json();
+            if (!j || j.success === false) throw new Error('load failed');
+            return { data: j.data || [] };
+        },
+        model: function (d, tab) {
+            const link = ['Open Variance Replies', "window.location.href='workspace.html#vreplies'"];
+            const t = _vrDmTriage(d.data);
+            const range = p => {
+                const f = s => new Date(String(s).slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                return p.date_from && p.date_to ? f(p.date_from) + ' – ' + f(p.date_to) : '';
+            };
+            const st = p => (p.store || '').toUpperCase();
+            if (tab === 'review') {
+                // Ready (every line answered) or Late (the deadline passed with
+                // lines still blank) — both are the DM's turn; then closed reply
+                // windows, Replied first when a manager answered a flagged note.
+                const rows = t.ready.map(p => ({ chip: p.answered >= p.items ? _qpWChip('Ready', 'good') : _qpWChip('Late', 'bad'),
+                    s: st(p), text: p.answered + ' of ' + p.items + ' replied' + (range(p) ? ' · ' + range(p) : '') }))
+                    .concat(t.closed.slice().sort((a, b) => (t.replied.has(st(b)) ? 1 : 0) - (t.replied.has(st(a)) ? 1 : 0))
+                        .map(p => ({ chip: t.replied.has(st(p)) ? _qpWChip('Replied', 'warn') : _qpWChip('Wrap Up', 'grey'),
+                            s: st(p), text: 'Reply window closed' + (range(p) ? ' · ' + range(p) : '') })));
+                const n = rows.length;
+                // When it is all done: the last report the DM looked at, and where.
+                const last = d.data.filter(p => p.dm_reviewed_at || p.dm_notes_at)
+                    .sort((a, b) => new Date(b.dm_reviewed_at || b.dm_notes_at) - new Date(a.dm_reviewed_at || a.dm_notes_at))[0];
+                return {
+                    ...(n ? {} : { clear: ["You're Caught Up", 'No reports waiting on your notes', last ? 'Last report reviewed '
+                        + new Date(last.dm_reviewed_at || last.dm_notes_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' + st(last) : ''] }),
+                    n, big: n, small: n === 1 ? 'report to review' : 'reports to review',
+                    sub: n ? (t.ready.length ? '<span class="warn">' + t.ready.length + ' ready for your notes</span>' : '')
+                        + (t.ready.length && t.closed.length ? ' · ' : '') + (t.closed.length ? t.closed.length + ' to wrap up' : '')
+                        : '<span class="good">Nothing waiting on you</span>',
+                    room: 5, cap: n ? 'By Store' : '', lines: rows.map(r => _qpWLineS(r.chip, r.s, r.text, '')), link: n ? ['Review Replies', link[1]] : link,
+                };
+            }
+            const w = t.waiting.slice().sort((a, b) => new Date(a.manager_due_at) - new Date(b.manager_due_at));
+            const today = _qpWToday();
+            const dueDay = p => new Date(p.manager_due_at).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+            return {
+                ...(w.length ? {} : { clear: ['Every Store Has Replied', 'No lines left to explain in any store'] }),
+                n: w.length, big: w.length, small: w.length === 1 ? 'store still writing' : 'stores still writing',
+                sub: w.length ? '<span class="warn">' + w.reduce((a, p) => a + (p.items - p.answered), 0) + ' lines still to explain</span>'
+                    : '<span class="good">Every store has replied</span>',
+                room: 5, cap: w.length ? 'Due' : '',
+                lines: w.map(p => _qpWLineS(_qpWDue(dueDay(p), today), st(p), p.answered + ' of ' + p.items + ' replied', '')),
+                link,
+            };
+        },
+    },
+    // CLAIMS & DISPUTES, DISTRICT: the oversight tool's read (every rolled-out
+    // store), the same four tabs and the same "needs attention" rule as the
+    // store card (_qpClaimsSplit), counted a store a line, overdue first.
+    dclaims: {
+        when: 'Right Now', synced: true, syncedAt: d => _qpClaimsSyncedAt(d),
+        tabs: [['mismatch', 'Mismatches', 'Mismatches'], ['returns', 'Returns', 'Returns'], ['cases', 'Cases', 'Cases & Disputes'], ['payments', 'Payments', 'Payments']],
+        where: () => 'District',
+        load: async function () {
+            const res = await fetch(`${CLAIMS_DISPUTES_URL}?stores=${encodeURIComponent(_CLAIMS_OVERSIGHT_STORES.join(','))}&v=${Date.now()}`);
+            const j = await res.json();
+            if (!j || !j.success) throw new Error((j && j.error) || 'load failed');
+            return j;
+        },
+        model: function (d, tab) {
+            if (!d._split) d._split = _qpClaimsSplit(d);
+            const it = d._split[tab];
+            const today = String(d.today || '').slice(0, 10);
+            const amt = e => Number(e.x.amount || e.x.outstanding || e.x.total) || 0;
+            const by = {};
+            it.due.forEach(e => {
+                const s = e.x.store_code || '?';
+                const b = by[s] || (by[s] = { s, n: 0, late: 0, next: '', amt: 0 });
+                b.n++; b.amt += amt(e);
+                const due = String(e.x.due_on || '').slice(0, 10);
+                if (due && due < today) b.late++;
+                if (due && (!b.next || due < b.next)) b.next = due;
+            });
+            const rows = Object.values(by).sort((a, b) => (b.late - a.late) || String(a.next || '9').localeCompare(String(b.next || '9')) || (b.n - a.n));
+            const late = rows.reduce((a, r) => a + r.late, 0);
+            const total = rows.reduce((a, r) => a + r.amt, 0);
+            return {
+                ...(it.due.length ? {} : { clear: ['All Clear', 'Nothing needs attention in any store'] }),
+                n: it.due.length, big: it.due.length, small: 'need attention',
+                aside: total ? _qpHLK(total) + ' on them' : '',
+                sub: late ? '<span class="bad">' + late + ' overdue</span>'
+                    : (it.due.length ? '<span class="good">Nothing overdue</span>' : '<span class="good">All clear in every store</span>'),
+                room: 5, cap: rows.length ? 'By Store' : '',
+                lines: rows.map(r => _qpWLineS(r.late ? _qpWChip(r.late + ' Overdue', 'bad') : (_qpWDue(r.next, today) || _qpWChip('Open', 'grey')),
+                    r.s, r.n + ' open', r.amt ? _qpHLK(r.amt) : '')),
+                link: ['Open Claims & Disputes', "openClaimsTool('" + tab + "')"],
+            };
+        },
+    },
+    // STORE KPIs, DISTRICT: each store's open period by the reminder's due
+    // rules (entered? due? overdue?) and, once entered, how many of the judged
+    // KPIs its Store Total has in the green — the same calls the store card
+    // makes (_kpiPastDeadline, _kpiStoreTotals, _kpiThresholdCls). Ten GETs,
+    // cached ten minutes.
+    dkpis: {
+        when: 'Right Now', ttl: 600000,
+        tabs: [['weekly', 'Weekly', 'Weekly KPIs'], ['monthly', 'Monthly', 'Monthly KPIs']],
+        where: () => 'District',
+        load: async function () {
+            const get = (s, t) => fetch(`${KPI_MANAGE_URL}?store=${s}&period_type=${t}&v=${Date.now()}`).then(r => r.json()).catch(() => null);
+            const out = { weekly: {}, monthly: {} };
+            await Promise.all(_DMX_STORES.flatMap(s => ['weekly', 'monthly'].map(t => get(s, t).then(j => { out[t][s] = (j && j.periods) || []; }))));
+            return out;
+        },
+        model: function (d, tab) {
+            const parts = _kpiCentralParts();
+            const weekly = tab === 'weekly';
+            const link = [weekly ? 'Open Weekly KPIs' : 'Open Monthly KPIs',
+                "sessionStorage.setItem('speeksKpiTab','" + tab + "'); window.location.href='workspace.html#kpis'"];
+            // rank: 0 overdue, 1 due, 2 red / nothing yet, 3 close, 4 all green.
+            const rows = _DMX_STORES.map(s => {
+                const open = (d[tab][s] || []).find(x => x.is_editable);
+                if (open && (open.saved_count || 0) === 0) {
+                    const sun = weekly ? open.period_end_date : _kpiFirstSundayAfter(open.period_end_date);
+                    if (weekly || parts.date >= sun) {
+                        const over = _kpiPastDeadline(sun, parts);
+                        return { s, rank: over ? 0 : 1, chip: over ? _qpWChip('Overdue', 'bad') : _qpWChip('Due', 'warn'), text: 'Not entered yet' };
+                    }
+                }
+                const p = (d[tab][s] || []).find(x => (x.saved_count || 0) > 0);
+                if (!p) return { s, rank: 2, chip: _qpWChip('None', 'grey'), text: 'Nothing entered yet' };
+                const judgedOf = q => { const t = _kpiStoreTotals(q.entries || []); return _QP_KPI_JUDGED.filter(f => t[f[0]] != null && !isNaN(Number(t[f[0]])))
+                    .map(f => _kpiThresholdCls(f[0], t[f[0]], true)); };
+                const judged = judgedOf(p);
+                const green = judged.filter(c => c === 'kpi-cell-green').length, red = judged.filter(c => c === 'kpi-cell-red').length;
+                const saved = (d[tab][s] || []).filter(x => (x.saved_count || 0) > 0), prevP = saved[saved.indexOf(p) + 1];
+                const pg = prevP ? judgedOf(prevP).filter(c => c === 'kpi-cell-green').length : null;
+                return {
+                    s, rank: red ? 2 : (green < judged.length ? 3 : 4),
+                    mini: pg == null ? '' : green > pg ? '▲' : green < pg ? '▼' : '–', miniCls: pg == null ? '' : green > pg ? 'up' : green < pg ? 'down' : 'flat',
+                    chip: _qpWChip(green + ' Of ' + judged.length, red ? 'bad' : (green < judged.length ? 'warn' : 'good')),
+                    text: red ? red + ' in the red' : (green < judged.length ? (judged.length - green) + ' close' : 'All in the green'),
+                };
+            }).sort((a, b) => a.rank - b.rank);
+            const pending = rows.filter(r => r.rank < 2).length, late = rows.filter(r => r.rank === 0).length;
+            const allGreen = rows.filter(r => r.rank === 4).length;
+            return {
+                n: pending, badge: pending ? String(pending) : '✓', big: allGreen, small: 'of ' + rows.length + ' stores all in the green',
+                sub: late ? '<span class="bad">' + late + (late === 1 ? ' store is' : ' stores are') + ' overdue entering them</span>'
+                    : pending ? '<span class="warn">' + pending + (pending === 1 ? ' store still to enter' : ' stores still to enter') + '</span>'
+                    : '<span class="good">Every store has entered them</span>',
+                // All five stores, not the usual three lines (Ethan, 2026-10-26).
+                room: 5, cap: 'By Store', lines: rows.map(r => _qpWLineS(r.chip, r.s, r.text, r.mini || '', r.miniCls ? 'qp-mini ' + r.miniCls : '')), link,
             };
         },
     },
@@ -51903,6 +52323,7 @@ const _QP_WSPEC = {
                 const hits = live.map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
                     .filter(h => h.m.length).sort((a, b) => String(a.e.date_of_call).localeCompare(String(b.e.date_of_call)));
                 return {
+                    ...(hits.length ? {} : { clear: ['Nothing To Call About', 'Nothing a customer asked for is on your shelf yet'] }),
                     n: hits.length, big: hits.length, small: hits.length === 1 ? 'call to make' : 'calls to make',
                     sub: hits.length ? 'Something a customer asked for is on your shelf' : '<span class="good">Nothing to call about yet</span>',
                     cap: 'Call Next', link,
@@ -51914,6 +52335,7 @@ const _QP_WSPEC = {
             const list = live.filter(e => scope.includes(e.store) && e.status === tab)
                 .sort((a, b) => String(a.date_of_call).localeCompare(String(b.date_of_call)));
             return {
+                ...(list.length ? {} : { clear: [tab === 'open' ? 'No Open Call Backs' : 'Nobody Waiting', tab === 'open' ? 'Nothing customers are waiting on' : 'No calls waiting on an answer'] }),
                 n: list.length, big: list.length, small: tab === 'open' ? 'open' : 'contacted',
                 sub: tab === 'open' ? 'Waiting for the item to come in' : 'Called — waiting to hear back',
                 cap: tab === 'open' ? 'Oldest First' : 'Called', link,
@@ -51946,6 +52368,7 @@ const _QP_WSPEC = {
                     .sort((a, b) => a.due.left - b.due.left);
                 const late = list.filter(e => e.due.late).length;
                 return {
+                    ...(list.length ? {} : { clear: ['All Priced', 'No deals waiting to be priced'] }),
                     n: list.length, big: list.length, small: list.length === 1 ? 'deal to price' : 'deals to price',
                     sub: late ? '<span class="bad">' + late + ' overdue</span>' : (list.length ? '<span class="good">Nothing overdue</span>' : '<span class="good">All clear</span>'),
                     cap: 'Due Next', link,
@@ -51958,6 +52381,7 @@ const _QP_WSPEC = {
                 const list = d.deals.filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor)
                     .sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
                 return {
+                    ...(list.length ? {} : { clear: ["You're Caught Up", 'No deals waiting on you'] }),
                     n: list.length, big: list.length, small: list.length === 1 ? 'deal needs you' : 'deals need you',
                     sub: list.length ? 'Oldest has been ' + _b2bDaysIn(list[0]) + ' days at its stage' : '<span class="good">Nothing waiting on you</span>',
                     cap: 'Oldest First', link,
@@ -51982,7 +52406,7 @@ const _QP_WSPEC = {
     // (?view=counts: per-store counts only, the light payload that runs on a
     // timer anyway), so the lines are a breakdown, not a list of listings.
     connect: {
-        when: 'Listing Health',
+        when: 'Listing Health', synced: true,
         ttl: 300000,
         // Titles (Ethan, 2026-10-22: "why is titles not showing up"): the
         // Titles tool's own ?view=counts — open title suggestions per store,
@@ -52017,6 +52441,7 @@ const _QP_WSPEC = {
             if (tab === 'photos') {
                 const n = sum('photos');
                 return {
+                    ...(n ? {} : { clear: ['All Clear', 'Every live listing has a picture'] }),
                     n, big: n, small: n === 1 ? 'listing with no pictures' : 'listings with no pictures',
                     sub: n ? '<span class="bad">Live on the online store — a shopper sees an empty box</span>' : '<span class="good">Every live listing has a picture</span>',
                     cap: stores.length > 1 ? 'By Store' : '',
@@ -52027,6 +52452,7 @@ const _QP_WSPEC = {
             if (tab === 'titles') {
                 const n = stores.reduce((t, s) => t + (Number(d.lt && d.lt.titles && d.lt.titles[s]) || 0), 0);
                 return {
+                    ...(n ? {} : { clear: ['All Clear', 'No title fixes waiting'] }),
                     n, big: n, small: n === 1 ? 'title to check' : 'titles to check',
                     sub: n ? 'Suggested fixes waiting for someone to read them' : '<span class="good">No title fixes waiting</span>',
                     cap: stores.length > 1 ? 'By Store' : '',
@@ -52041,6 +52467,7 @@ const _QP_WSPEC = {
             if (unm) lines.push(_qpWLine(_qpWChip(String(unm), 'warn'), 'In “Other” — nothing matched, pick one', ''));
             if (mis) lines.push(_qpWLine(_qpWChip(String(mis), 'bad'), 'In the wrong category', ''));
             return {
+                ...(n ? {} : { clear: ['All Clear', 'Every listing is on its shelf'] }),
                 n, big: n, small: n === 1 ? 'listing to sort' : 'listings to sort',
                 sub: n ? 'Filed where a shopper will not look for them' : '<span class="good">Every listing is on its shelf</span>',
                 cap: 'What Is Waiting', lines,
@@ -52048,7 +52475,71 @@ const _QP_WSPEC = {
             };
         },
     },
+    // SPEEKS CONNECT, DISTRICT — "all store listing health" (Ethan, 2026-10-26).
+    // The same two light reads as the store card (shopify-recat and
+    // listing-titles ?view=counts); for a DM / CEO they come back corp-scoped,
+    // every store in scope.stores, which the store card refuses on purpose.
+    // A line a store, most first; the tabs are the halves this person holds.
+    dconnect: {
+        when: 'Listing Health', synced: true,
+        ttl: 300000,
+        tabs: [['photos', 'Pictures', 'No Pictures'], ['category', 'Categories', 'Categories To Sort'], ['titles', 'Titles', 'Titles To Check']],
+        has: t => _jumpFeatureVisible(t === 'titles' ? 'ec-view-titles' : t === 'photos' ? 'ec-view-photos' : 'ec-view-categories'),
+        where: () => 'District',
+        load: async function () {
+            // The test login has no PIN, so — as the store card — made-up counts.
+            if (window._speeksTestSession && !sessionStorage.getItem('speeksUserPin')) {
+                const by = (a) => ({ OVL: a[0], LEE: a[1], WSP: a[2], MPL: a[3], BAL: a[4] });
+                return { scope: { stores: _DMX_STORES.slice() }, photos: by([3, 0, 7, 1, 2]), other: by([9, 4, 12, 0, 6]),
+                    unmatched: by([2, 1, 0, 3, 0]), misfiled: by([1, 0, 2, 0, 1]), lt: { titles: by([5, 11, 2, 0, 8]) }, sample: true };
+            }
+            const has = _QP_WSPEC.dconnect.has;
+            const [d, lt] = await Promise.all([
+                has('photos') || has('category') ? _rcFetch('?view=counts') : Promise.resolve({ scope: { stores: _DMX_STORES.slice() } }),
+                has('titles') ? _ltFetch('?view=counts').catch(() => null) : Promise.resolve(null),
+            ]);
+            if (!d) throw new Error('no counts');
+            d.lt = lt;
+            return d;
+        },
+        model: function (d, tab) {
+            const stores = (d.scope && d.scope.stores && d.scope.stores.length) ? d.scope.stores : _DMX_STORES;
+            const num = (o, s) => Number(o && o[s]) || 0;
+            const per = tab === 'photos' ? s => num(d.photos, s)
+                : tab === 'titles' ? s => num(d.lt && d.lt.titles, s)
+                : s => num(d.other, s) + num(d.unmatched, s) + num(d.misfiled, s);
+            const rows = stores.map(s => ({ s, n: per(s) })).sort((a, b) => b.n - a.n);
+            const n = rows.reduce((t, r) => t + r.n, 0);
+            const word = { photos: ['listing with no pictures', 'listings with no pictures', 'with no pictures'],
+                category: ['listing to sort', 'listings to sort', 'to sort'], titles: ['title to check', 'titles to check', 'to check'] }[tab];
+            const link = { photos: ['Open Pictures', "window.location.href='operations.html#photos'"],
+                category: ['Open Categories', "window.location.href='operations.html#categories'"],
+                titles: ['Open Titles', "window.location.href='operations.html#titles'"] }[tab];
+            return {
+                ...(n ? {} : { clear: ['All Clear', { photos: 'Every live listing has a picture', category: 'Every listing is on its shelf', titles: 'No title fixes waiting' }[tab] + ', in every store'] }),
+                n, big: n, small: n === 1 ? word[0] : word[1],
+                sub: n ? (rows.filter(r => r.n).length + ' of ' + rows.length + ' stores have some') : '<span class="good">All clear in every store</span>',
+                room: 5, cap: 'By Store',
+                lines: rows.map(r => _qpWLineS(_qpWChip(String(r.n), r.n ? (tab === 'photos' ? 'bad' : 'warn') : 'good'), r.s, r.n ? word[2] : 'all clear', '')),
+                link,
+            };
+        },
+    },
 };
+// When Claims & Disputes' eBay and Shopify syncs last ran: the latest good run
+// a store a sync (eBay cases, payment disputes, unpaid orders), and of those the
+// OLDEST — the card is only as fresh as its stalest store. Null when the read
+// carries none.
+function _qpClaimsSyncedAt(d) {
+    const latest = {};
+    [].concat(d.sync || [], d.disputeSync || [], d.paymentSync || []).forEach(function (r, i) {
+        if (!r || !r.synced_at || r.ok === false) return;
+        const k = (r.store_code || '') + '|' + (r.source || '') + '|' + (d.sync && d.sync.indexOf(r) !== -1 ? 'c' : d.disputeSync && d.disputeSync.indexOf(r) !== -1 ? 'd' : 'p');
+        if (!latest[k] || r.synced_at > latest[k]) latest[k] = r.synced_at;
+    });
+    const all = Object.values(latest).sort();
+    return all.length ? new Date(all[0]).toISOString() : null;
+}
 function _qpClaimsSplit(d) {
     const need = x => _HOLD_VIEWS.due.states.includes(x.state);
     const wait = x => _HOLD_VIEWS.waiting.states.includes(x.state) && !_HOLD_DONE.includes(x.state);
@@ -57199,11 +57690,12 @@ function _siRelTime(iso) {
     const t = Date.parse(iso);
     if (!t) return '';
     const mins = Math.round((Date.now() - t) / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
+    // Title Case (Ethan, 2026-10-26), as _lvAgo.
+    if (mins < 1) return 'Just Now';
+    if (mins < 60) return `${mins}m Ago`;
     const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.round(hrs / 24)}d ago`;
+    if (hrs < 24) return `${hrs}h Ago`;
+    return `${Math.round(hrs / 24)}d Ago`;
 }
 
 // The compact chip on the Command Center's header line.
@@ -59864,12 +60356,13 @@ function _ecAgo(iso) {
     const ms = Date.now() - Date.parse(iso);
     if (!isFinite(ms)) return '—';
     const mins = Math.round(ms / 60000);
-    if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins} min ago`;
+    // Title Case (Ethan, 2026-10-26), as _lvAgo.
+    if (mins < 1) return 'Just Now';
+    if (mins < 60) return `${mins} Min Ago`;
     const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+    if (hrs < 24) return `${hrs} Hr${hrs === 1 ? '' : 's'} Ago`;
     const days = Math.round(hrs / 24);
-    if (days <= 14) return `${days} day${days === 1 ? '' : 's'} ago`;
+    if (days <= 14) return `${days} Day${days === 1 ? '' : 's'} Ago`;
     return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 

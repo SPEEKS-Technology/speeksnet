@@ -370,3 +370,30 @@ t('District Listing Goals: listed is results, a store with no goal says Not Set'
         return /OVL 50\/100/.test(s) && /LEE 10\/80/.test(s) ? true : s;
     } finally { allDistrictGoalsData = was[0]; _dmxGoalsLoaded = was[1]; targetFor = was[2]; goalIsSetThisWeek = was[3]; }
 });
+
+// THE DISTRICT WIDGETS (part C, 2026-10-26): the DM's side of each tool.
+t('District Variance Review: ready, late and closed windows to review; stores still writing', function () {
+    var day = 86400000, now = Date.now(), iso = function (ms) { return new Date(ms).toISOString(); };
+    var data = [
+        { id: 1, store: 'OVL', uploaded_at: iso(now - 2 * day), manager_due_at: iso(now + 5 * day), items: 4, answered: 4, all_clear: false, ended_at: null, dm_notes_at: null },
+        { id: 2, store: 'LEE', uploaded_at: iso(now - 2 * day), manager_due_at: iso(now + 5 * day), items: 6, answered: 2, all_clear: false, ended_at: null, dm_notes_at: null },
+        { id: 3, store: 'WSP', uploaded_at: iso(now - 12 * day), manager_due_at: iso(now - 5 * day), items: 3, answered: 1, all_clear: false, ended_at: null, dm_notes_at: null },
+        { id: 4, store: 'MPL', uploaded_at: iso(now - 12 * day), manager_due_at: iso(now - 5 * day), items: 3, answered: 3, all_clear: false, ended_at: null, dm_notes_at: iso(now - 4 * day), dm_reviewed_at: null, mgr_replied: 1 },
+        { id: 5, store: 'BAL', uploaded_at: iso(now - 2 * day), manager_due_at: iso(now + 5 * day), items: 0, answered: 0, all_clear: true, ended_at: null, dm_notes_at: null },
+    ];
+    var rv = _QP_WSPEC.dvariance.model({ data: data }, 'review'), ws = _QP_WSPEC.dvariance.model({ data: data }, 'stores');
+    var txt = function (m) { var d = document.createElement('div'); d.innerHTML = m.lines.join('').replace(/></g, '> <').replace(/<\/span>/g, '</span> '); return d.textContent.replace(/\s+/g, ' ').trim(); };
+    if (rv.n !== 3) return 'review n ' + rv.n + ' :: ' + txt(rv);
+    if (!/^Ready OVL 4 of 4 replied.*Late WSP 1 of 3 replied.*Replied MPL Reply window closed/.test(txt(rv))) return txt(rv);
+    return ws.n === 1 && /LEE 2 of 6 replied/.test(txt(ws)) ? true : 'stores ' + ws.n + ' :: ' + txt(ws);
+});
+t('District Claims: a line a store, overdue first, with the amount', function () {
+    var today = '2026-10-26';
+    var mm = function (store, due, amount) { return { store_code: store, state: _HOLD_VIEWS.due.states[0], due_on: due, amount: amount }; };
+    var d = { today: today, mismatches: [mm('OVL', '2026-10-30', 100), mm('MPL', '2026-10-20', 50), mm('MPL', '2026-10-21', 25), mm('LEE', '2026-10-26', 10)], cases: [], disputes: [], payments: [] };
+    var m = _QP_WSPEC.dclaims.model(d, 'mismatch');
+    var el = document.createElement('div'); el.innerHTML = m.lines.join('').replace(/></g, '> <').replace(/<\/span>/g, '</span> ');
+    var s = el.textContent.replace(/\s+/g, ' ').trim();
+    if (m.n !== 4) return 'n ' + m.n;
+    return /^2 Overdue MPL 2 open \$75 Today LEE 1 open \$10 .*OVL 1 open \$100$/.test(s) ? true : s;
+});

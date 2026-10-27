@@ -409,3 +409,41 @@ designs since have been shown inline in chat.
   kind of tab bar has to be added there. Team Goals (district) rows are
   Set / Not Set pills now, all five stores. Feed empty lines Title Case.
   Recent Activity title capped at 30ch.
+  **10-26, part C (district widgets):** three drawer widgets for DM/CEO —
+  `dvariance` Variance Review (To Review / Stores, from `_vrDmTriage`, lifted
+  out of checkVarianceDmReminders so both read one rule; DM only),
+  `dclaims` Claims & Disputes (oversight read, `_qpClaimsSplit`, a line a
+  store, overdue first; gate tool-claims-oversight), `dkpis` Store KPIs
+  (Due / Overdue / N Of M green a store, 10 GETs cached 10 min). Realtime via
+  the existing _qpClaimsReload / _qpWReloadKpis / _qpWReloadVariance.
+  **District card never shares its row** now (`_QP_MIN_W.district = 1`):
+  a widget added beside it made the row 900px. So the CEO's feed sits alone
+  at ½ until something is added beside it (dclaims/dkpis fill it).
+  Not built yet from part C: B2B pricing, Call Backs by store, Connect Titles.
+  APP_VERSION 3.11.0 (main is 3.10.1; patch notes for v3.11.0 still to
+  write), cache-buster 20261026i.
+  **10-26 late:** `dconnect` (district SPEEKS Connect: Pictures / Categories /
+  Titles a line a store; same ?view=counts reads, corp-scoped for DM/CEO).
+  District cards show all five stores (`room: 5` → `.qp-ai-dense` and a
+  `.qp-cw-grid` subgrid so pills are one width). Records with no store (DM/
+  CEO/MOCD) shows who holds each record. Stats & Awards on its own: a card
+  holding only Champions or only Awards draws `_QP_WSPEC.stats.solo[tab]`
+  (podium tiles; award hero + past winners + year tally; container query at
+  ⅓). Drawer X = .modal-close-btn, rows 10px side padding, two-line subs.
+  B2B already covers DM/CEO (All Stores) — not a part C item.
+  **10-26, widget enhancements (ideas 1, 2, 3, 4, 6; 5 = clickable lines left
+  out):** store dots in `_qpWLineS` / `_qpAiStoreRow` / Records; all-clear
+  state (`clear: [title, line, last?]` on a model → `.qp-clear`); trend vs
+  last week (`_qpWeekTrend` Mon–yesterday vs same days, so none on a Monday;
+  KPIs `trend` vs the period before); checklist progress ring
+  (`_qpAiChecklist`, Next Up one line shorter); "Updated … ago" + refresh
+  (`.qp-upd`, lv-ago, `_qpAgoTimer`). Height sweep: every widget, every tab,
+  every piece split out, six roles at 1440 + manager at 1280 — all 350.
+  **10-26 (later):** time-ago text is Title Case everywhere it is generated
+  (`_lvAgo`, `_siRelTime`, `_ecAgo`: "Just Now", "4m Ago"). The refresh pill
+  is ONLY on Claims (store + district) and SPEEKS Connect (store + district)
+  (`spec.synced`); Claims shows "Synced N Ago" from the read's sync /
+  disputeSync / paymentSync `synced_at`, the OLDEST store's (`_qpClaimsSyncedAt`);
+  Connect has no sync time in its counts, so it shows when the card read it.
+  The Champions / Awards views also draw under the Stats & Awards tabs
+  (`qp-solo-tabbed`), for every role; no-store eyebrow is "Company · All Stores".
