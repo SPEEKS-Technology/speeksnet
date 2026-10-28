@@ -195,6 +195,31 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
+      // ---- Store ticks "Recycled in POS" on an approved line (0159), or unticks
+      //      it. Stamps who did it so the manager and ASM can see whether one of
+      //      them already has. Only a For/Against verdict can carry the tick — a
+      //      pending, denied or ignored line has nothing to recycle yet. No
+      //      notification: it's the store telling itself, not news upstream. ----
+      if (action === "set_pos_done") {
+        const id = String(body.id || "");
+        if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        const done = !!body.done;
+        const by = body.by ? String(body.by).trim() : null;
+        const { data: cur, error: selErr } = await supabase.from("recycle_requests")
+          .select("review_verdict").eq("id", id).single();
+        if (selErr) return jsonResponse({ success: false, error: selErr.message }, 500);
+        if (done && !["for", "against"].includes(cur?.review_verdict)) {
+          return jsonResponse({ success: false, error: "The DM hasn't approved this line For or Against store yet" }, 400);
+        }
+        const patch = done
+          ? { pos_done_at: new Date().toISOString(), pos_done_by: by }
+          : { pos_done_at: null, pos_done_by: null };
+        const { error } = await supabase.from("recycle_requests").update(patch).eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
+        return jsonResponse({ success: true, data: patch });
+      }
+
       // ---- DM note on a line (empty note clears it). The note timestamp also
       //      drives the manager-side "new activity" alert. ----
       if (action === "save_dm_note") {

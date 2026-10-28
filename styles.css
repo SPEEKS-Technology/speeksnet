@@ -6949,6 +6949,26 @@ input.vr-up-input[type="file"] {
   vertical-align: 1px;
 }
 
+/* "Recycled in POS" tick under the manager's Approved chip (0159). Sits on its
+   own line below the chip; the who/when stamp under it is what tells the
+   manager and ASM which of them already did it. Grey until ticked, green after. */
+.recycle-pos-box {
+  display: flex; align-items: center; gap: 5px; margin-top: 6px;
+  font-size: 10.5px; font-weight: 800; color: #64748b; cursor: pointer;
+}
+.recycle-pos-box input { margin: 0; width: 14px; height: 14px; cursor: pointer; accent-color: #059669; }
+.recycle-pos-box.is-done { color: #166534; }
+/* width:0 + min-width:100% = fill the cell but contribute NOTHING to its width.
+   The cell is nowrap and the column sizes to its widest line, so a stamp longer
+   than "Recycled in POS" ("Jurell Guild · Oct 28") widened the Status column the
+   moment the box was ticked and shoved every column to its right over. Now it
+   wraps inside the width the chip and the box already claim. Indent is padding,
+   not margin, so the min-width:100% box can't overrun the cell by 19px. */
+.recycle-pos-by {
+  font-size: 10px; font-weight: 600; color: #94a3b8; margin-top: 2px; padding-left: 19px;
+  box-sizing: border-box; width: 0; min-width: 100%; white-space: normal; overflow-wrap: anywhere;
+}
+
 .recycle-new-dot {
     position: relative;
     display: inline-block;

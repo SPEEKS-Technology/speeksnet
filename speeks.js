@@ -43266,7 +43266,20 @@ function renderMyRecycleTable() {
                 : verdict
                 ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:3px 10px; white-space:nowrap;">✓ Approved</span>`
                 : `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">⏳ Pending</span>`;
-            firstCell = td('<span class="recycle-review-cell">' + (lineIsNew ? NEW_DOT : '') + chip + '</span>', 'white-space:nowrap;', 'Status');
+            // "Recycled in POS" (0159) — only once the DM has ruled For or Against,
+            // since that's the point the store is cleared to take it out of the
+            // POS. Stamped with who ticked it so the manager and ASM can see
+            // whether one of them already has, or neither. Hidden, not cleared,
+            // if the verdict later changes — see the migration header.
+            let posBox = '';
+            if (verdict === 'for' || verdict === 'against') {
+                const done = !!r.pos_done_at;
+                posBox = `<label class="recycle-pos-box${done ? ' is-done' : ''}" title="${done ? 'Untick if this was ticked by mistake' : 'Tick once you have recycled this out of the POS'}">
+                    <input type="checkbox" ${done ? 'checked' : ''} ${delPending ? 'disabled' : ''} onchange="setRecyclePosDone('${r.id}', this.checked, this)">
+                    <span>Recycled in POS</span>
+                </label>${done ? `<div class="recycle-pos-by">${escapeHtml(r.pos_done_by || 'Unknown')} · ${fmtDate(r.pos_done_at)}</div>` : ''}`;
+            }
+            firstCell = td('<span class="recycle-review-cell">' + (lineIsNew ? NEW_DOT : '') + chip + '</span>' + posBox, 'white-space:nowrap;', 'Status');
         }
         const struck = verdict === 'ignore' || verdict === 'denied';
         const struckTitle = verdict === 'ignore' ? 'Not counted — cost was moved into another SKU' : 'Not counted — the request was denied, item stays in inventory';
@@ -43395,6 +43408,28 @@ function _recycleDeleteReqPanel(canReview) {
         </div>`).join('') +
         `</div></div>`;
 }
+
+// Manager-side: tick / untick "Recycled in POS" on an approved line. Stamped
+// server-side with who and when; the row is patched in place on success so the
+// table doesn't flash a reload. On failure the box snaps back.
+async function setRecyclePosDone(id, done, box) {
+    if (box) box.disabled = true;
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'set_pos_done', id, done: !!done, by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        const row = _recycleMine.find(r => r.id === id);
+        if (row) Object.assign(row, json.data || {});
+        renderMyRecycleTable();
+    } catch (e) {
+        if (box) { box.checked = !done; box.disabled = false; }
+        alert('Could not save: ' + (e.message || e));
+    }
+}
+window.setRecyclePosDone = setRecyclePosDone;
 
 // Manager-side: request removal. Recycle lines are never deleted directly by a
 // manager — a DM/CEO must approve, so nothing quietly disappears.
@@ -66211,8 +66246,18 @@ function _ddFit(host) {
     // collapse the control instead of clamping it. If you are unsure which kind
     // you have, measure it; getting this wrong is a vanishing control, not a
     // cosmetic slip.
+    //
+    // .tbl-stack td qualifies ONLY while it is stacked. Below the breakpoint the
+    // row is a card and the cell a block or grid item with a real width; above
+    // it, the same td is an ordinary table-cell, which is content-sized — the
+    // indefinite case. There min(…, 100%) dropped the floor entirely, so every
+    // Recycle review dropdown shrank to its own label: "Against Store" wide,
+    // "Ignore" narrow, a ragged column (Ethan, 2026-10-28). A table column
+    // already grows to its widest cell, so the plain floor is safe there.
     const _DD_CLAMPED_SLOTS = '.b2b-pcell, .exp-add-grid label, .tbl-stack td';
-    host.style.minWidth = host.closest(_DD_CLAMPED_SLOTS)
+    const slot = host.closest(_DD_CLAMPED_SLOTS);
+    const clamp = slot && !(slot.matches('.tbl-stack td') && getComputedStyle(slot).display === 'table-cell');
+    host.style.minWidth = clamp
         ? 'min(' + want + 'px, 100%)'
         : want + 'px';
 }
