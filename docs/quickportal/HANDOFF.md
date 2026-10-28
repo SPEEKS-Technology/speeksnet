@@ -457,3 +457,32 @@ designs since have been shown inline in chat.
   at ⅓ of 1280 was 351 → 53px foot room. Sweep: manager/DM/ASM/employee/CEO/
   MOCD at 1280 + manager 1440 all 350 (one MOCD run showed 353 once, did not
   repeat twice).
+  **10-28 later:** Claims & Disputes timeline strip (`_qpClaimsBuckets` /
+  `_qpClaimsStrip`: Overdue / Today / This Week = next 6 days / Later; lines
+  under it are overdue + today, room 2; one-line strip on the district card).
+  Leaderboard podium (`drawLeaderboard`: steps by place, not scaled). Every
+  widget may be ½ now (`_QP_WIDGET_MAXW` all 0.5; qp-size-check pins kpis to ⅓
+  for its ⅓-rule tests). Sweep at 1280: manager 524, DM 342, CEO 168, ASM 305.
+  Round-2 ideas still open: Goals & Initiatives (initiatives are only Current /
+  Upcoming — no done state), Variance severity, Connect store tiles, B2B age
+  bars (B2B_PRICING_DUE_DAYS is the only stage deadline), Call Backs Open /
+  Contacted. eBay and Scorecard stay as they are (Ethan).
+  **10-28, round 2 built:** Goals & Initiatives (goal tiles, Current /
+  Upcoming pills — the tool has no done state), Variance severity bars +
+  countdown pill (`_qpCountdown`) and DM Notes quoted with Reply Needed /
+  Replied, district Variance sample data on the test login, SPEEKS Connect
+  store tiles (`spec.combined`, each tile opens its section; tiles are the
+  drag handles in Customize), B2B Waiting On You age bars on `_b2bAgeTone`
+  (4 amber / 7 red, fills over 7 days), Call Backs Open / Contacted what /
+  who / when (Contacted uses updated_at + status_by). Live B2B Need You and
+  Call Backs were empty, so their filled heights were measured with stubbed
+  rows in the real markup.
+  **10-28, role gallery:** a CDP capture script (scratchpad gallery.mjs, not in
+  the repo) signs into the test login as manager / ASM / employee / DM / CEO /
+  MOCD, stubs empty widget loads with sample data in that browser only, adds
+  every widget and captures combined + every-tab-split layouts at 1280. Fixes
+  it found: SPEEKS Connect tiles got a What Is Waiting breakdown; Live card
+  foot room 52px + ord1/lines margins 5px (MOCD one-tab Live was 353 at ½);
+  narrow-card fixes (Champions labels, Awards video pill, Monthly switch
+  1.25fr first column + 3px padding — `[data-qp-block] .qp-hl-switch` outranks
+  plain .qp-mb-sw rules). All roles 350 in both layouts.

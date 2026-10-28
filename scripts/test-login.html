@@ -15,6 +15,16 @@
   speeksTestSession, which makes speeks.js refuse every write (see TEST SESSION
   near the top of speeks.js). Reads are live: it is the real QuickPortal.
 
+  ONE A ROLE (Ethan, 2026-10-28: "make a test account for each role … I want
+  to verify myself each of these looks good in the role it's for"; he chose
+  local-only over real accounts). Each button writes what checkPIN() writes for
+  that role — including a Multi-Store Manager, who logs in as role "manager"
+  with speeksMultiStore set and BAL as the first store, exactly as the real
+  login does. DM and CEO are separate: the DM sees more (Variance Review,
+  district SPEEKS Connect, Monthly Team Goals, the Manager Checklist). Owner
+  (Manager) has the manager's QuickPortal but more in Tools (Announcements, User
+  Permissions, Preferred approvals), so it has its own button too.
+
   Works on localhost only. On speeksnet.com this page does nothing, and even if
   it did it would only write the visitor's own sessionStorage, which anyone can
   already do from the console.
@@ -22,14 +32,17 @@
 <style>
   body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
          background: #f4f7f9; color: #1a1c1e; font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif; }
-  .box { background: #fff; border: 1px solid #e3e8ee; border-radius: 14px; padding: 28px; width: min(420px, calc(100vw - 32px));
-         box-sizing: border-box; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+  .box { background: #fff; border: 1px solid #e3e8ee; border-radius: 14px; padding: 28px; width: min(560px, calc(100vw - 32px));
+         box-sizing: border-box; box-shadow: 0 1px 2px rgba(16,24,40,.06); margin: 24px 0; }
   h1 { margin: 0 0 6px; font-size: 20px; }
   p { margin: 0 0 18px; font-size: 14px; color: #647082; line-height: 1.5; }
-  button { font: inherit; font-size: 14px; font-weight: 600; width: 100%; min-height: 44px; border-radius: 10px; cursor: pointer;
-           border: 1px solid #1f9d57; background: #1f9d57; color: #fff; margin-bottom: 10px; }
+  .grp { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; margin: 14px 0 8px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button { font: inherit; font-size: 14px; font-weight: 600; width: 100%; min-height: 52px; border-radius: 10px; cursor: pointer;
+           border: 1px solid #1f9d57; background: #1f9d57; color: #fff; text-align: left; padding: 8px 14px; }
+  button small { display: block; font-size: 11.5px; font-weight: 500; opacity: .85; margin-top: 1px; }
   button:hover { background: #178048; }
-  button.plain { background: #fff; color: #1a1c1e; border-color: #d5dce4; }
+  button.plain { background: #fff; color: #1a1c1e; border-color: #d5dce4; text-align: center; margin-top: 16px; }
   button.plain:hover { background: #f1f4f7; }
   .warn { color: #b42318; font-weight: 600; }
 </style>
@@ -37,8 +50,26 @@
 <body>
 <div class="box" id="box">
   <h1>Test login</h1>
-  <p>Opens the real QuickPortal as a test user. Live data is read; nothing can be saved.</p>
-  <button type="button" onclick="signIn('Test Manager OVL', 'manager', 'OVL')">Sign in as OVL Manager (test)</button>
+  <p>Opens the real QuickPortal as a test user of that role. Live data is read; nothing can be saved.</p>
+  <div class="grp">Company</div>
+  <div class="grid">
+    <button type="button" onclick="signIn('Test CEO', 'ceo', 'ALL')">CEO<small>All stores</small></button>
+    <button type="button" onclick="signIn('Test DM', 'district manager', 'ALL')">District Manager<small>All stores</small></button>
+    <button type="button" onclick="signIn('Test MOCD', 'mocd', 'OVL')">MOCD<small>Homed at OVL</small></button>
+  </div>
+  <div class="grp">Store Management</div>
+  <div class="grid">
+    <button type="button" onclick="signIn('Test Manager OVL', 'manager', 'OVL')">Store Manager<small>OVL</small></button>
+    <button type="button" onclick="signIn('Test Owner Manager LEE', 'owner (manager)', 'LEE')">Owner (Manager)<small>LEE</small></button>
+    <button type="button" onclick="signIn('Test MSM BAL MPL', 'manager', 'BAL', true)">Multi-Store Manager<small>BAL &amp; MPL</small></button>
+    <button type="button" onclick="signIn('Test ASM WSP', 'assistant manager', 'WSP')">Assistant Manager<small>WSP</small></button>
+  </div>
+  <div class="grp">Store Team</div>
+  <div class="grid">
+    <button type="button" onclick="signIn('Test Employee OVL', 'employee', 'OVL')">Employee<small>OVL</small></button>
+    <button type="button" onclick="signIn('Test Training OVL', 'training', 'OVL')">Training<small>OVL</small></button>
+    <button type="button" onclick="signIn('Test Store OVL', 'store', 'OVL')">Store Board<small>OVL wall TV</small></button>
+  </div>
   <button type="button" class="plain" onclick="signOut()">Sign out of the test session</button>
 </div>
 <script>
@@ -46,7 +77,7 @@
   if (!LOCAL) {
     document.getElementById('box').innerHTML = '<h1>Test login</h1><p class="warn">Only available on a local server.</p>';
   }
-  function signIn(name, role, store) {
+  function signIn(name, role, store, multi) {
     if (!LOCAL) return;
     sessionStorage.clear();
     sessionStorage.setItem('speeksTestSession', '1');
@@ -56,6 +87,9 @@
     sessionStorage.setItem('speeksUserStore', store);
     sessionStorage.setItem('speeksUserPin', '');
     sessionStorage.setItem('speeksUserOnboardedAt', '');
+    // A Multi-Store Manager, as checkPIN() writes one: role manager, the flag
+    // that drives the store switcher, the first managed store.
+    if (multi) sessionStorage.setItem('speeksMultiStore', 'true');
     // A copy for speeks.js to restore from when the Claude browser pane re-opens
     // the tab with an empty sessionStorage (TEST SESSION, top of speeks.js).
     var keep = {};

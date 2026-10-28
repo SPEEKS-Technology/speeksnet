@@ -25585,7 +25585,9 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-hl-ot small { color: #8a94a3; font-weight: 600; }
 .qp-hl-oa { flex: none; }
 /* Live's one Recent Activity order: the label on the same line, ahead of it. */
-.qp-hl-ord1 { margin-top: 8px; border-top: none; align-items: baseline; }
+/* 5, not 8 (2026-10-28): the one-tab Live card's Yesterday / Month views were
+   351 at half a row. */
+.qp-hl-ord1 { margin-top: 5px; border-top: none; align-items: baseline; }
 .qp-hl-ord1 .qp-hl-capin { margin: 0 4px 0 0; flex: none; }
 /* Recent Activity's item name stops at ~30 characters, wide card or not (Ethan, 2026-10-26). */
 .qp-hl-ord1 .qp-hl-ot { max-width: 30ch; }
@@ -25669,7 +25671,8 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-hl-seg > i.good { background: #1f9d57; }
 .qp-hl-seg > i.warn { background: var(--idea-gold); }
 .qp-hl-seg > i.bad { background: var(--red-alert); }
-.qp-hl-lines { margin-top: 8px; }
+/* 5, not 8 (2026-10-28): Live's Yesterday / Month views were 351 at half a row. */
+.qp-hl-lines { margin-top: 5px; }
 .qp-hl-ln { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid #eef1f4; font-size: 13px; font-weight: 600; color: #1a1c1e; }
 .qp-hl-ln > span:first-child { color: #647082; font-weight: 600; }
 .qp-hl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
@@ -26026,7 +26029,9 @@ a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
    writes display: block !important onto #ccWidget inline — so the row is pinned
    to the card's bottom edge instead, with its height kept free above it. */
 [data-qp-block] .cc-widget:has(> .qp-hl) { position: relative; }
-[data-qp-block] .cc-widget:has(> .qp-hl) > .qp-hl:has(.qp-hl-footrow) { padding-bottom: 55px; }
+/* 52, not 55 (2026-10-28): the one-tab Live card at half a row was 353. The
+   foot row is 31 tall at 12 from the bottom, so 52 still leaves it 9 clear. */
+[data-qp-block] .cc-widget:has(> .qp-hl) > .qp-hl:has(.qp-hl-footrow) { padding-bottom: 52px; }
 [data-qp-block] .cc-widget:has(> .qp-hl) > .qp-hl .qp-hl-footrow { position: absolute; left: 20px; right: 20px; bottom: 12px; margin: 0; }
 /* My Listing Goals week strip (_qpAiMyListing, Ethan 2026-10-26): seven
    columns, each filled to that day's share of its goal — green hit, amber
@@ -26213,8 +26218,8 @@ a.qp-doc.qp-doc-tile:hover { border-color: #9fd8b6; background: #f3fbf6; }
 /* Five equal columns across the card: five buttons evened to the widest do not
    fit a third of a row, so the even-tabs helper backed off and the buttons
    shifted as the bold one moved (2026-10-28). A grid holds them still. */
-.qp-mb-sw { display: grid !important; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
-.qp-mb-sw button { min-width: 0 !important; padding-left: 2px !important; padding-right: 2px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-mb-sw { display: grid !important; grid-template-columns: minmax(0, 1.25fr) repeat(4, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
+.qp-mb-sw button { min-width: 0 !important; padding-left: 1px !important; padding-right: 1px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-mbars { display: grid; gap: 5px; margin-top: 8px; }
 .qp-mbar { display: grid; grid-template-columns: 50px minmax(0, 1fr) 58px; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 700; color: #5b6b64; }
 .qp-mbar.me { color: #1a1c1e; }
@@ -26222,15 +26227,92 @@ a.qp-doc.qp-doc-tile:hover { border-color: #9fd8b6; background: #f3fbf6; }
 .qp-mbar.me b { color: #146c3c; }
 .qp-mbar-t { height: 9px; border-radius: 6px; background: #eef2f4; overflow: hidden; }
 .qp-mbar-t i { display: block; height: 100%; border-radius: 6px; background: #c9d3dd; }
-/* A Command Center with tabs at a third of a 1280 window was 351 (2026-10-28,
-   the height sweep): its Live headline needs 2px less room kept for the foot
-   row. The one-tab card (data-qp-single) keeps 55. */
-[data-qp-block] .cc-widget[data-qp-hl]:has(> .qp-hl) > .qp-hl:has(.qp-hl-footrow),
-[data-qp-block][data-qp-hl] .cc-widget:has(> .qp-hl) > .qp-hl:has(.qp-hl-footrow) { padding-bottom: 53px; }
 /* Pinned tiles in a third of a row: with the icon beside it a name had ~60px and
    ran past two lines, so there the icon goes and the name takes the tile. */
 .qp-doc-tiles { container-type: inline-size; }
 @container (max-width: 380px) {
     a.qp-doc.qp-doc-tile { grid-template-columns: minmax(0, 1fr); padding: 6px 8px; }
     .qp-doc-tile .qp-doc-ico { display: none; }
+}
+
+/* CLAIMS & DISPUTES — the timeline strip (2026-10-28): what needs attention by
+   when it is due, red to grey; a zero is faded, not hidden, so the four always
+   line up. */
+.qp-tls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin-top: 2px; }
+.qp-tl { border-radius: 9px; padding: 4px 6px; text-align: center; min-width: 0; }
+.qp-tl b { display: block; font-size: 15px; font-weight: 900; line-height: 1.15; }
+.qp-tl span { display: block; font-size: 9.5px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-tl.r { background: #fdecec; color: #b42318; }
+.qp-tl.a { background: #fdf3e1; color: #8a5a0b; }
+.qp-tl.y { background: #f1f5f2; color: #3c4654; }
+.qp-tl.n { background: #f6f8fa; color: #8a94a3; }
+.qp-tl.zero { opacity: .45; }
+/* LEADERBOARD — a podium for the top three (2026-10-28). The steps are set by
+   place, not scaled to the money. */
+.lbp { display: flex; align-items: flex-end; justify-content: center; gap: 10px; margin: 4px 0 8px; }
+.lbp-pod { flex: 0 1 108px; min-width: 0; text-align: center; }
+.lbp-v { font-size: 13.5px; font-weight: 900; color: #1a1c1e; white-space: nowrap; }
+.lbp-s { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 11.5px; font-weight: 750; color: #647082; margin: 1px 0 5px; }
+.lbp-s .lbs-dot { flex: none; }
+.lbp-step { border-radius: 10px 10px 4px 4px; display: flex; justify-content: center; padding-top: 6px; box-sizing: border-box; }
+.lbp-step b { font-size: 15px; font-weight: 900; }
+.lbp-pod.p1 .lbp-step { height: 64px; background: #f4c64e; color: #7a4b00; }
+.lbp-pod.p2 .lbp-step { height: 46px; background: #d5dce4; color: #3c4654; }
+.lbp-pod.p3 .lbp-step { height: 32px; background: #e6c39f; color: #6b3f12; }
+.lbp-pod.me .lbp-s { color: #146c3c; }
+.lbp-pod.me .lbp-step { box-shadow: inset 0 0 0 2px rgba(31, 157, 87, .55); }
+/* On a card with a line a store (district Claims, room 5) the strip is one line
+   — "3 Overdue" — so five stores still fit 350 at a third of a row. */
+.qp-ai-dense .qp-tls { margin-top: 0; }
+.qp-ai-dense .qp-tl { display: flex; align-items: baseline; justify-content: center; gap: 4px; padding: 1px 4px; line-height: 1.2; }
+.qp-ai-dense .qp-tl b { display: inline; font-size: 12.5px; line-height: 1.2; }
+.qp-ai-dense .qp-tl span { display: inline; line-height: 1.2; }
+
+/* ROUND 2 OF THE WIDGET REDESIGNS (Ethan, 2026-10-28). */
+.qp-pill { flex: none; font-size: 10px; font-weight: 800; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.qp-pill.g { background: #e8f7ee; color: #146c3c; }
+.qp-pill.r { background: #fdecec; color: #b42318; }
+.qp-pill.n { background: #f1f4f7; color: #5b6b64; }
+/* Goals & Initiatives — goal tiles one size, the label pinned to the bottom. */
+.qp-goals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.qp-goal { height: 58px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid #f1d9a6; background: #fffaf0; border-radius: 10px; padding: 6px 8px; min-width: 0; }
+.qp-goal b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 11.5px; font-weight: 850; color: #1a1c1e; line-height: 1.25; }
+.qp-goal span { font-size: 9.5px; font-weight: 750; color: #a46412; }
+.qp-ini { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid #eef1f4; padding: 4px 0; font-size: 12px; font-weight: 650; color: #1a1c1e; min-width: 0; }
+.qp-hl-cap + .qp-ini { border-top: none; }
+.qp-ini > span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Variance — a severity bar a line; DM Notes — the note quoted. */
+.qp-sev, .qp-dmn, .qp-age { border-top: 1px solid #eef1f4; padding: 4px 0; min-width: 0; }
+.qp-hl-cap + .qp-sev, .qp-hl-cap + .qp-dmn, .qp-hl-cap + .qp-age { border-top: none; }
+.qp-sev-t, .qp-dmn-t, .qp-age-t { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: #1a1c1e; }
+.qp-sev-t span, .qp-dmn-t span:first-child, .qp-age-t span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-sev-t b { flex: none; color: #c53030; font-weight: 850; }
+.qp-sev-bar, .qp-age-bar { height: 6px; border-radius: 4px; background: #f6e3e3; margin-top: 3px; overflow: hidden; }
+.qp-sev-bar i, .qp-age-bar i { display: block; height: 100%; border-radius: 4px; background: #e05252; }
+.qp-sev-w, .qp-age-d { font-size: 10.5px; font-weight: 600; color: #8a94a3; margin-top: 2px; }
+.qp-dmn-q { font-size: 11px; font-weight: 600; color: #5b6b64; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-style: italic; }
+/* B2B — an age bar on the tool's own 4 / 7 day rule. */
+.qp-age-bar { background: #eef2f4; }
+.qp-age-bar.g i { background: #1f9d57; }
+.qp-age-bar.w i { background: #f0a92b; }
+.qp-age-bar.r i { background: #e05252; }
+/* SPEEKS Connect — tiles you can click; two or three across. */
+a.qp-tile.qp-tile-link { display: block; text-decoration: none; cursor: pointer; height: 62px; }
+a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
+.qp-tiles.qp-tiles-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Call Backs — when they asked, or when they were called. */
+.qp-cb-when { flex: none; color: #a46412; font-weight: 750; }
+.qp-sev-t em { font-style: normal; font-weight: 600; color: #8a94a3; }
+.qp-age-row { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.qp-age-row .qp-age-bar { flex: 1 1 auto; margin-top: 0; }
+.qp-age-row .qp-age-d { flex: none; margin-top: 0; font-weight: 750; color: #5b6b64; }
+/* Narrow-card fixes from the role gallery (2026-10-28), a third of a row:
+   Monthly Breakdown's switch read "Net P…"; "Top Reviews" wrapped and broke the
+   Champions row; the video pill cut "Beyond The Benchmark". */
+[data-qp-block] .qp-hl-switch.qp-mb-sw button { font-size: 10px !important; letter-spacing: -.01em; padding-left: 3px !important; padding-right: 3px !important; }
+@container (max-width: 470px) {
+    .qp-pod-k { letter-spacing: .03em; font-size: 9.5px; white-space: nowrap; }
+    .qp-medal { width: 17px; height: 17px; font-size: 9.5px; }
+    .qp-hero-t { flex: 1 1 calc(100% - 60px); }
+    .qp-hero-vid { margin-left: 56px; }
 }

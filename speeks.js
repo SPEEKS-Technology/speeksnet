@@ -34241,7 +34241,11 @@ function drawLeaderboard() {
     // was a third encoding of what two columns had said, and the one that took the
     // most room. (It also lost the .lbs-info wrapper, which existed only to stack
     // the name over its bar.)
-    wrapper.innerHTML = rows.map((r, i) => `
+    // A PODIUM FOR THE TOP THREE (Ethan, 2026-10-28): gold in the middle,
+    // silver left, bronze right, each with its figure and store; 4th and 5th
+    // stay rows under it. The steps are fixed heights by PLACE, not scaled to
+    // the money — still no bar encoding the size (see above).
+    const row = (r, i) => `
         <div class="lbs-row${r.store === myStore ? ' me' : ''}">
             <span class="lbs-rank${i === 0 ? ' g' : ''}">${i + 1}</span>
             <span class="lbs-store">
@@ -34249,7 +34253,16 @@ function drawLeaderboard() {
                 <span class="lbs-nm">${r.store}</span>
             </span>
             <span class="lbs-val">${fmt(r.val)}</span>
-        </div>`).join('');
+        </div>`;
+    if (rows.length < 3) { wrapper.innerHTML = rows.map(row).join(''); return; }
+    const step = (r, place) => `
+        <div class="lbp-pod p${place}${r.store === myStore ? ' me' : ''}">
+            <div class="lbp-v">${fmt(r.val)}</div>
+            <div class="lbp-s"><span class="lbs-dot" style="background:${colors[r.store] || '#94a3b8'}"></span>${r.store}</div>
+            <div class="lbp-step"><b>${place}</b></div>
+        </div>`;
+    wrapper.innerHTML = '<div class="lbp">' + step(rows[1], 2) + step(rows[0], 1) + step(rows[2], 3) + '</div>'
+        + rows.slice(3).map((r, i) => row(r, i + 3)).join('');
 }
 
 // --- MODAL: MANAGE ANNOUNCEMENTS ---
@@ -50716,11 +50729,23 @@ function _qpAiGoals(room) {
     const ini = (typeof getStoreInitiatives === 'function' && getStoreInitiatives(store)) || {};
     const goals = (g.goals || []).map(function (x) { return String(x.title || ''); }).filter(Boolean);
     const inits = (ini.initiatives || []).map(function (x) { return String(x.title || ''); }).filter(Boolean);
-    const gRoom = inits.length ? Math.max(1, room - 2) : room;
-    let body = '<div class="qp-hl-cap" style="margin-top:0">Team Goals'
-        + (g.setBy ? ' <span class="qp-ai-capnote">· set by ' + escapeHtml(g.setBy) + '</span>' : '') + '</div>'
-        + (goals.length ? _qpAiNext(goals, gRoom) : '<div class="qp-hl-sub">No goals set for this month yet</div>');
-    if (inits.length) body += '<div class="qp-hl-cap">Initiatives</div>' + _qpAiNext(inits, room - gRoom);
+    // GOAL TILES AND STATUS PILLS (Ethan, 2026-10-28). The month's team goals as
+    // tiles — one fixed size, the label pinned to the bottom so it lines up
+    // whether the goal takes one line or two — three to a row; then each
+    // initiative with the tool's own status, Current or Upcoming (it has no
+    // done state, so nothing here pretends to count one).
+    const list = (ini.initiatives || []).filter(x => String(x.title || '').trim());
+    const shown = goals.slice(0, 3);
+    let body = '<div class="qp-hl-cap qp-cap-row" style="margin-top:0"><span>Team Goals'
+        + (g.setBy ? ' <span class="qp-ai-capnote">· set by ' + escapeHtml(g.setBy) + '</span>' : '') + '</span>'
+        + (goals.length > 3 ? '<span class="qp-ai-capnote">+' + (goals.length - 3) + ' more</span>' : '') + '</div>'
+        + (goals.length ? '<div class="qp-goals">' + shown.map(t => '<div class="qp-goal" title="' + escapeHtml(t) + '"><b>' + escapeHtml(t) + '</b><span>Team Goal</span></div>').join('') + '</div>'
+            : '<div class="qp-hl-sub">No goals set for this month yet</div>');
+    if (list.length) {
+        const order = list.slice().sort((a, b) => (a.status === 'upcoming') - (b.status === 'upcoming'));
+        body += '<div class="qp-hl-cap">Initiatives</div>' + order.slice(0, Math.max(1, room - 1)).map(x => '<div class="qp-ini"><span>' + escapeHtml(x.title) + '</span>'
+            + '<span class="qp-pill ' + (x.status === 'upcoming' ? 'n' : 'g') + '">' + (x.status === 'upcoming' ? 'Upcoming' : 'Current') + '</span></div>').join('');
+    }
     return {
         count: String(goals.length + inits.length),
         body: body + _qpAiLink('Open Goals & Initiatives', 'toggleGoalsPanel(event)'),
@@ -51074,8 +51099,12 @@ const _qpWidgetId = key => { const id = String(key).split(':')[0]; return QP_WID
 // Breakdown lost their full size too — no widget has enough to fill a row).
 // Variance Replies, Store KPIs and Monthly Breakdown are ⅓ only (Ethan, same
 // day): there is a card's worth in each, no more.
-const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 1 / 3, kpis: 1 / 3, variance: 1 / 3, docs: 0.5, stats: 0.5,
-    dvariance: 1 / 3, dclaims: 0.5, dkpis: 1 / 3, dconnect: 1 / 3 };
+// ½ FOR ALL OF THEM NOW (Ethan, 2026-10-28: "we only need to keep a widget to
+// 33% size if it doesn't look good stretched to 50%"). Monthly Breakdown, Store
+// KPIs, Variance and the district Variance / KPIs / Connect were ⅓-only while
+// they were short lists; as tiles, bars and a line a store they read at ½.
+const _QP_WIDGET_MAXW = { claims: 0.5, callbacks: 0.5, b2b: 0.5, connect: 0.5, monthly: 0.5, kpis: 0.5, variance: 0.5, docs: 0.5, stats: 0.5,
+    dvariance: 0.5, dclaims: 0.5, dkpis: 0.5, dconnect: 0.5 };
 // Cards that are not widgets can be held under a full row too, by family —
 // the card and every piece split out of it (Ethan, 2026-10-23: "the feed cards
 // should not be allowed to be full size either").
@@ -51516,14 +51545,16 @@ function _qpVarianceSample() {
         { id: 'sample-new', store: s, uploaded_at: iso(now - day), manager_due_at: iso(now + 6 * day), items: 4, answered: 1,
           awaiting_reply: 0, mgr_replied: 0, all_clear: false, ended_at: null, dm_notes_at: null, uploaded_by: 'Ethan Kushnir' },
         { id: 'sample-old', store: s, uploaded_at: iso(now - 9 * day), manager_due_at: iso(now - 2 * day), items: 3, answered: 3,
-          awaiting_reply: 1, mgr_replied: 0, all_clear: false, ended_at: null, dm_notes_at: iso(now - 3600000), uploaded_by: 'Ethan Kushnir' },
+          awaiting_reply: 1, mgr_replied: 1, all_clear: false, ended_at: null, dm_notes_at: iso(now - 3600000), uploaded_by: 'Ethan Kushnir' },
     ];
     const line = (title, buyer, pct, note) => ({ item_title: title, buyer_name: buyer, variance_pct: pct, needs_reply: true, gm_note: note || null });
     return { periods, items: {
         'sample-new': [line('PS5 Slim Digital Edition 1TB', 'Nathan Zuklin', -38), line('iPhone 13 128GB Midnight Unlocked', 'Colin Davis', -22),
             line('AirPods Pro 2nd Gen USB-C', 'Dan Ohanesian', -14), line('Nintendo Switch OLED White', 'Kaden Fry', -11, 'Priced to the market that week')],
         'sample-old': [Object.assign(line('MacBook Air M1 8GB 256GB', 'Colin Davis', -27, 'Screen had a pressure mark we missed'),
-            { dm_note: 'Who checked the screen at intake?', dm_reply_requested: true, mgr_reply: null })],
+            { dm_note: 'Who checked the screen at intake?', dm_reply_requested: true, mgr_reply: null }),
+            Object.assign(line('Galaxy S22 Ultra 256GB', 'Kaden Fry', -19, 'Battery health was 81%'),
+            { dm_note: 'Did we test the battery before quoting?', dm_reply_requested: true, mgr_reply: 'Yes — 81%, priced for it' })],
     } };
 }
 // "September" from "2026-09-30" (Monthly Breakdown's period end dates).
@@ -51560,6 +51591,17 @@ function _qpWLineS(chip, store, text, right, rightCls) {
 // tab choice; resets on reload).
 const _qpMbMetric = { k: '' };
 function qpMbMetric(k) { _qpMbMetric.k = k; _qpRenderWidgets(); }
+// "2 Days Left" / "Due Today" / "Overdue" to a Central-time day (round 2 of the
+// widget redesigns, Ethan 2026-10-28 — the countdown pill).
+function _qpCountdown(dueIso) {
+    const ct = t => new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    const a = Date.parse(ct(Date.now()) + 'T12:00:00'), b = Date.parse(ct(dueIso) + 'T12:00:00');
+    const n = Math.round((b - a) / 86400000);
+    return n < 0 ? { dir: 'down', text: 'Overdue' } : n === 0 ? { dir: 'down', text: 'Due Today' }
+        : { dir: n <= 2 ? 'down' : 'flat', text: n + (n === 1 ? ' Day Left' : ' Days Left') };
+}
+// "9 Days Ago" / "Today" / "Yesterday" — Title Case for a label.
+function _qpTitleAgo(t) { return String(t || '').replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase()); }
 function _qpDaysAgo(day) {
     const t = Date.parse(String(day || '').slice(0, 10) + 'T12:00:00');
     if (!isFinite(t)) return '';
@@ -51632,6 +51674,10 @@ function _qpWidgetCard(el, rows, id) {
     } else if (spec.card) {
         // A widget that is not a count (Processes & Policies): it draws its own body.
         body = spec.card(st.data, key);
+    } else if (!one && spec.combined) {
+        // A card that holds more than one piece and draws them together
+        // (SPEEKS Connect's tiles) rather than as tabs.
+        body = spec.combined(st.data, pieces);
     } else if (one && spec.solo && spec.solo[one[0]]) {
         // A tab on a card of its own may draw a fuller body than its tab view
         // (Stats & Awards' Champions and Awards — Ethan, 2026-10-26: "make them
@@ -51989,9 +52035,12 @@ const _QP_WSPEC = {
                 ...(it.due.length ? {} : { clear: ['All Clear', 'Nothing needs your attention' + (it.waiting ? ' · ' + it.waiting + ' waiting on someone else' : '')] }),
                 n: it.due.length, big: it.due.length, small: 'need attention',
                 aside: open ? _qpHLK(open) + ' on them' : '',
-                sub: (late ? '<span class="bad">' + late + ' overdue</span>' : (it.due.length ? '<span class="good">Nothing overdue</span>' : '<span class="good">All clear</span>'))
-                    + (it.waiting ? ' · ' + it.waiting + ' waiting on someone else' : ''),
-                cap: 'Due Next', lines: it.due.map(e => _qpClaimsLine(e, today)),
+                // The strip in place of the "N overdue" line; under it the
+                // overdue and due-today items, or the next due when none are.
+                sub: it.due.length ? _qpClaimsStrip(_qpClaimsBuckets(it.due, today)) : '',
+                cap: (function () { const now = it.due.filter(e => { const x = String(e.x.due_on || '').slice(0, 10); return x && x <= today; }); return now.length ? 'Overdue & Today' : 'Due Next'; })(),
+                lines: (function () { const now = it.due.filter(e => { const x = String(e.x.due_on || '').slice(0, 10); return x && x <= today; }); return (now.length ? now : it.due).map(e => _qpClaimsLine(e, today)); })(),
+                room: 2,
                 link: ['Open Claims & Disputes', "openClaimsTool('" + tab + "')"],
             };
         },
@@ -52217,11 +52266,17 @@ const _QP_WSPEC = {
                     const due = new Date(first.manager_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
                     const lines = open.flatMap(p => (d.items[p.id] || []).filter(x => x.needs_reply && !x.gm_note))
                         .sort((a, b) => Number(a.variance_pct) - Number(b.variance_pct));
+                    // SEVERITY BARS AND A COUNTDOWN (Ethan, 2026-10-28): each line
+                    // with a red bar sized to how far under it went (−50% fills it),
+                    // who bought it under; the deadline as a pill by the number.
                     return {
                         n, big: n, small: n === 1 ? 'line to explain' : 'lines to explain',
-                        sub: over ? '<span class="bad">Overdue — were due ' + due + '</span>'
-                            : today ? '<span class="bad">Due today</span>' : '<span class="warn">Due ' + due + '</span>',
-                        cap: 'Worst First', link: ['Write Replies', link[1]],
+                        trend: _qpCountdown(first.manager_due_at),
+                        sub: '', cap: 'Worst First', link: ['Write Replies', link[1]],
+                        // Who bought it rides on the title line: three under the tabs fit 350.
+                        block: lines.slice(0, 3).map(x => '<div class="qp-sev"><div class="qp-sev-t"><span>' + escapeHtml(_qpClaimsText(x.item_title))
+                            + (x.buyer_name ? ' <em>· ' + escapeHtml(short(x.buyer_name)) + '</em>' : '') + '</span><b>'
+                            + Math.round(Number(x.variance_pct)) + '%</b></div><div class="qp-sev-bar"><i style="width:' + Math.min(100, Math.abs(Number(x.variance_pct)) * 2) + '%"></i></div></div>').join(''),
                         lines: lines.map(x => _qpWLine(pctChip(x.variance_pct), _qpClaimsText(x.item_title) + (x.buyer_name ? ' · ' + short(x.buyer_name) : ''), '')),
                     };
                 }
@@ -52244,11 +52299,20 @@ const _QP_WSPEC = {
                 const p0 = asked[0];
                 const over = asked.some(p => _vrDayPast(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()), 2));
                 const lines = asked.flatMap(p => (d.items[p.id] || []).filter(x => x.dm_note && x.dm_reply_requested && !x.mgr_reply));
+                // EACH NOTE QUOTED (Ethan, 2026-10-28): the line, the DM's note
+                // under it, Reply Needed or Replied; the two days to answer as the
+                // countdown pill.
+                const notes = asked.flatMap(p => (d.items[p.id] || []).filter(x => x.dm_note && x.dm_reply_requested))
+                    .sort((a, b) => (a.mgr_reply ? 1 : 0) - (b.mgr_reply ? 1 : 0));
+                const dueAt = new Date(Math.max(new Date(p0.manager_due_at).getTime(), new Date(p0.dm_notes_at).getTime()) + 2 * 86400000).toISOString();
                 return {
                     n, big: n, small: n === 1 ? 'DM note to answer' : 'DM notes to answer',
-                    sub: over ? '<span class="bad">Overdue — two days to answer have passed</span>'
-                        : '<span class="warn">' + escapeHtml(_qpWWho(p0.uploaded_by) || 'The DM') + ' asked for a reply · two days to answer</span>',
+                    trend: over ? { dir: 'down', text: 'Overdue' } : _qpCountdown(dueAt),
+                    sub: '<span class="warn">' + escapeHtml(_qpWWho(p0.uploaded_by) || 'The DM') + ' asked for a reply</span>',
                     cap: 'From the DM', link: ['Reply', link[1]],
+                    block: notes.slice(0, 3).map(x => '<div class="qp-dmn"><div class="qp-dmn-t"><span>' + escapeHtml(_qpClaimsText(x.item_title)) + '</span>'
+                        + '<span class="qp-pill ' + (x.mgr_reply ? 'g' : 'r') + '">' + (x.mgr_reply ? 'Replied' : 'Reply Needed') + '</span></div>'
+                        + '<div class="qp-dmn-q">“' + escapeHtml(String(x.dm_note).replace(/\s+/g, ' ')) + '”</div></div>').join(''),
                     lines: lines.map(x => _qpWLine(_qpWChip('Reply', 'info'), _qpClaimsText(x.item_title) + ' — “' + String(x.dm_note).replace(/\s+/g, ' ') + '”', '')),
                 };
             }
@@ -52272,6 +52336,18 @@ const _QP_WSPEC = {
         tabs: [['review', 'To Review', 'Ready For Your Review'], ['stores', 'Stores', 'Waiting On Stores']],
         where: () => 'District',
         load: async function () {
+            // SAMPLE REPORTS for the localhost test login (Ethan, 2026-10-28:
+            // "dummy data for dm variance version"), as the store card's: one
+            // store ready, one late, one closed with a reply, one still writing,
+            // one in the clear. Never reached on a real login.
+            if (window._speeksTestSession) {
+                const day = 86400000, now = Date.now(), iso = ms => new Date(ms).toISOString();
+                const per = (store, upAgo, dueIn, items, answered, extra) => Object.assign({ id: 'dv-' + store, store, uploaded_at: iso(now - upAgo * day),
+                    manager_due_at: iso(now + dueIn * day), items, answered, awaiting_reply: 0, mgr_replied: 0, all_clear: false, ended_at: null, dm_notes_at: null,
+                    date_from: iso(now - (upAgo + 9) * day).slice(0, 10), date_to: iso(now - (upAgo + 3) * day).slice(0, 10) }, extra || {});
+                return { data: [per('OVL', 3, 4, 4, 4), per('WSP', 9, -2, 5, 2), per('MPL', 12, -5, 3, 3, { dm_notes_at: iso(now - 4 * day), mgr_replied: 1 }),
+                    per('LEE', 2, 5, 6, 2), per('BAL', 2, 5, 0, 0, { all_clear: true })] };
+            }
             const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
             const j = await res.json();
             if (!j || j.success === false) throw new Error('load failed');
@@ -52356,8 +52432,7 @@ const _QP_WSPEC = {
                 ...(it.due.length ? {} : { clear: ['All Clear', 'Nothing needs attention in any store'] }),
                 n: it.due.length, big: it.due.length, small: 'need attention',
                 aside: total ? _qpHLK(total) + ' on them' : '',
-                sub: late ? '<span class="bad">' + late + ' overdue</span>'
-                    : (it.due.length ? '<span class="good">Nothing overdue</span>' : '<span class="good">All clear in every store</span>'),
+                sub: it.due.length ? _qpClaimsStrip(_qpClaimsBuckets(it.due, today)) : '',
                 room: 5, cap: rows.length ? 'By Store' : '',
                 lines: rows.map(r => _qpWLineS(r.late ? _qpWChip(r.late + ' Overdue', 'bad') : (_qpWDue(r.next, today) || _qpWChip('Open', 'grey')),
                     r.s, r.n + ' open', r.amt ? _qpHLK(r.amt) : '')),
@@ -52462,8 +52537,15 @@ const _QP_WSPEC = {
                 n: list.length, big: list.length, small: tab === 'open' ? 'open' : 'contacted',
                 sub: tab === 'open' ? 'Waiting for the item to come in' : 'Called — waiting to hear back',
                 cap: tab === 'open' ? 'Oldest First' : 'Called', link,
-                lines: list.map(e => _qpWLine(_qpWChip(_samShortDate(Date.parse(String(e.date_of_call).slice(0, 10) + 'T12:00:00')) || '—'),
-                    e.item + ' — ' + _qpWWho(e.customer_name), '')),
+                // WHAT, WHO, WHEN (Ethan, 2026-10-28), as In Stock: the item, who
+                // asked, and when they asked — or, once called, when and by whom.
+                room: 3, sub: '',
+                aside: tab === 'open' ? 'Waiting for the item to come in' : 'Waiting to hear back',
+                lines: list.map(e => '<div class="qp-cb"><div class="qp-cb-i"><span>' + escapeHtml(e.item) + '</span></div><div class="qp-cb-m"><span>'
+                    + escapeHtml(_qpWWho(e.customer_name) || 'A customer') + ' asked</span><span class="qp-cb-when">'
+                    + (tab === 'open' ? 'Asked ' + _qpTitleAgo(_qpDaysAgo(e.date_of_call))
+                        : 'Called ' + _qpTitleAgo(_qpDaysAgo(e.updated_at)) + (e.status_by ? ' · ' + escapeHtml(_qpWWho(e.status_by)) : ''))
+                    + '</span></div></div>'),
             };
         },
     },
@@ -52503,11 +52585,20 @@ const _QP_WSPEC = {
             if (tab === 'need') {
                 const list = d.deals.filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor)
                     .sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
+                // AN AGE BAR A DEAL (Ethan, 2026-10-28), on the tool's own aging
+                // rule (_b2bAgeTone: 4 days at a stage is amber, 7 is red): the
+                // bar fills over those 7 days, so a full red bar is a stale deal.
+                const tone = { ok: 'g', warn: 'w', crit: 'r' };
                 return {
                     ...(list.length ? {} : { clear: ["You're Caught Up", 'No deals waiting on you'] }),
                     n: list.length, big: list.length, small: list.length === 1 ? 'deal needs you' : 'deals need you',
-                    sub: list.length ? 'Oldest has been ' + _b2bDaysIn(list[0]) + ' days at its stage' : '<span class="good">Nothing waiting on you</span>',
-                    cap: 'Oldest First', link,
+                    sub: '', cap: 'Oldest First', link,
+                    block: list.slice(0, 3).map(x => { const days = _b2bDaysIn(x);
+                        return '<div class="qp-age"><div class="qp-age-t"><span>' + escapeHtml(x.ref + (x.company ? ' · ' + x.company : '')) + '</span>'
+                            + '<span class="qp-pill n">' + escapeHtml((B2B_STAGE[x.stage] || {}).label || x.stage) + '</span></div>'
+                            // The days ride beside the bar: three under the tabs fit 350.
+                            + '<div class="qp-age-row"><div class="qp-age-bar ' + tone[_b2bAgeTone(days)] + '"><i style="width:' + Math.max(4, Math.min(100, Math.round(days / 7 * 100))) + '%"></i></div>'
+                            + '<span class="qp-age-d" title="Days at this stage">' + days + (days === 1 ? ' Day' : ' Days') + '</span></div></div>'; }).join(''),
                     lines: list.map(x => _qpWLine(_qpWChip((B2B_STAGE[x.stage] || {}).label || x.stage, 'warn'),
                         x.ref + (x.company ? ' · ' + x.company : ''), _b2bDaysIn(x) + 'd')),
                 };
@@ -52565,6 +52656,39 @@ const _QP_WSPEC = {
             if (d) d.lt = lt;
             if (!d || (d.scope && d.scope.corp)) throw new Error('no store counts');
             return d;
+        },
+        // THREE TILES (Ethan, 2026-10-28): a card holding more than one of the
+        // three shows each as a tile — its count, green when clear — and a click
+        // on a tile opens that section. In Customize a tile is what you drag out,
+        // as a tab is elsewhere. On its own a piece keeps its own card (model).
+        combined: function (d, pieces) {
+            pieces = pieces.filter(p => _QP_WSPEC.connect.has(p));   // only the halves this person holds
+            const stores = (d.scope && d.scope.stores) || [];
+            const sum = k => stores.reduce((t, s) => t + (Number(d[k] && d[k][s]) || 0), 0);
+            const n = { photos: sum('photos'), category: sum('other') + sum('unmatched') + sum('misfiled'),
+                titles: stores.reduce((t, s) => t + (Number(d.lt && d.lt.titles && d.lt.titles[s]) || 0), 0) };
+            const meta = { photos: ['No Pictures', 'photos', 'r'], category: ['Categories To Sort', 'categories', 'w'], titles: ['Titles To Check', 'titles', 'w'] };
+            const total = pieces.reduce((a, p) => a + (n[p] || 0), 0);
+            const tiles = pieces.map(p => '<a class="qp-tile qp-tile-link ' + (n[p] ? meta[p][2] : 'g') + (_qpEditing ? ' qp-piece-drag" draggable="true' : '') + '" data-qp-drag-piece="connect/' + p + '"'
+                + ' href="operations.html#' + meta[p][1] + '" title="Open ' + meta[p][0] + '"><i class="qp-tile-dot"></i><b>' + (n[p] || 0) + '</b><span>' + meta[p][0] + '</span></a>').join('');
+            return '<div class="qp-ai-body"><div class="qp-ai-top"><div class="qp-hl-big">' + total + '<small>' + (total === 1 ? 'listing needs' : 'listings need') + ' a fix</small></div></div>'
+                + '<div class="qp-tiles qp-tiles-' + pieces.length + '">' + tiles + '</div>'
+                // WHAT IS WAITING under the tiles (Ethan, 2026-10-28: "isn't there
+                // supposed to be stuff below the boxes?") — the breakdown the old
+                // Categories tab gave, plus the other two: what each count is made
+                // of, the ones a shopper sees first.
+                + (function () {
+                    const has = p => pieces.indexOf(p) !== -1;
+                    const ln = [];
+                    if (has('photos') && n.photos) ln.push(_qpWLine(_qpWChip(String(n.photos), 'bad'), 'Live with no pictures — a shopper sees an empty box', ''));
+                    if (has('category') && sum('misfiled')) ln.push(_qpWLine(_qpWChip(String(sum('misfiled')), 'bad'), 'In the wrong category', ''));
+                    if (has('category') && sum('other')) ln.push(_qpWLine(_qpWChip(String(sum('other')), 'warn'), 'In “Other” — a shelf is suggested', ''));
+                    if (has('category') && sum('unmatched')) ln.push(_qpWLine(_qpWChip(String(sum('unmatched')), 'warn'), 'In “Other” — nothing matched, pick one', ''));
+                    if (has('titles') && n.titles) ln.push(_qpWLine(_qpWChip(String(n.titles), 'warn'), 'Titles with a suggested fix to read', ''));
+                    return ln.length ? '<div class="qp-hl-cap">What Is Waiting</div>' + ln.slice(0, 3).join('')
+                        : '<div class="qp-hl-sub" style="margin-top:8px"><span class="good">Every listing is in order</span></div>';
+                })()
+                + _qpAiLink('Open SPEEKS Connect', "window.location.href='operations.html#" + meta[pieces[0]][1] + "'") + '</div>';
         },
         model: function (d, tab) {
             const stores = (d.scope && d.scope.stores) || [];
@@ -52682,6 +52806,29 @@ function _qpClaimsSyncedAt(d) {
     });
     const all = Object.values(latest).sort();
     return all.length ? new Date(all[0]).toISOString() : null;
+}
+// THE TIMELINE STRIP (Ethan, 2026-10-28: idea 1 of the second round). What
+// needs attention, counted by when it is due: Overdue, Today, This Week (the
+// next six days), Later (after that, or no due date). Red to grey, so how
+// urgent the tab is reads before any line does. Counts only — the lines under
+// it are the overdue and due-today ones.
+function _qpClaimsBuckets(due, today) {
+    const wk = new Date(today + 'T12:00:00'); wk.setDate(wk.getDate() + 6);
+    const week = wk.toLocaleDateString('en-CA');
+    const b = { late: 0, today: 0, week: 0, later: 0 };
+    due.forEach(function (e) {
+        const d = String(e.x.due_on || '').slice(0, 10);
+        if (!d) b.later++;
+        else if (d < today) b.late++;
+        else if (d === today) b.today++;
+        else if (d <= week) b.week++;
+        else b.later++;
+    });
+    return b;
+}
+function _qpClaimsStrip(b) {
+    const cell = (cls, n, l) => '<div class="qp-tl ' + cls + (n ? '' : ' zero') + '"><b>' + n + '</b><span>' + l + '</span></div>';
+    return '<div class="qp-tls">' + cell('r', b.late, 'Overdue') + cell('a', b.today, 'Today') + cell('y', b.week, 'This Week') + cell('n', b.later, 'Later') + '</div>';
 }
 function _qpClaimsSplit(d) {
     const need = x => _HOLD_VIEWS.due.states.includes(x.state);

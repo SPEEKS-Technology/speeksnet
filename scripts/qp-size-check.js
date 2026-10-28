@@ -15,6 +15,9 @@ _b2bSend = function () { return Promise.resolve({}); };
 // A Customize page: only those are held to half a row (_qpMaxW, 2026-10-26),
 // and this page has no Customize bar to look at.
 _qpHeadlinesOn = function () { return true; };
+// Store KPIs may be ½ since 2026-10-28; these checks are about the ⅓-only
+// rules, which still exist (Due Dates), so they keep it ⅓ as their example.
+_QP_WIDGET_MAXW.kpis = 1 / 3;
 
 function page(rows) {
     var old = document.getElementById('qp-host');
