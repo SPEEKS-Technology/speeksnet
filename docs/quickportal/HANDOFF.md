@@ -447,3 +447,13 @@ designs since have been shown inline in chat.
   Connect has no sync time in its counts, so it shows when the card read it.
   The Champions / Awards views also draw under the Stats & Awards tabs
   (`qp-solo-tabbed`), for every role; no-store eyebrow is "Company · All Stores".
+  **10-28, six redesigns:** Records trophy shelf (`stats.solo.records`, badge
+  floats in the name; no-store = who holds it), Store KPIs six tiles
+  (`_qpKpiTiles`, `block` on a model), Processes & Policies pinned as six tiles
+  (`_QP_DOC_TILES`; a search still lists five), B2B Unlisted split bar,
+  Call Backs In Stock what/who/where (`room: 3`), Monthly Breakdown metric
+  switch over the stores' bars (`qpMbMetric`; Net Margin replaces the GP row).
+  Tiles are one fixed size with a two-line name slot. A tabbed Command Center
+  at ⅓ of 1280 was 351 → 53px foot room. Sweep: manager/DM/ASM/employee/CEO/
+  MOCD at 1280 + manager 1440 all 350 (one MOCD run showed 353 once, did not
+  repeat twice).

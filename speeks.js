@@ -51555,6 +51555,17 @@ function _qpWLineS(chip, store, text, right, rightCls) {
     return '<div class="qp-cw-ln">' + (chip || '') + '<span class="qp-cw-lt"><span class="qp-cw-st">' + _qpDot(store) + escapeHtml(store) + '</span>' + escapeHtml(text) + '</span>'
         + (right ? '<b' + (rightCls ? ' class="' + rightCls + '"' : '') + '>' + escapeHtml(right) + '</b>' : '') + '</div>';
 }
+// "9 days ago" from a call's date.
+// Which Monthly Breakdown row the store bars rank (one for every card, like a
+// tab choice; resets on reload).
+const _qpMbMetric = { k: '' };
+function qpMbMetric(k) { _qpMbMetric.k = k; _qpRenderWidgets(); }
+function _qpDaysAgo(day) {
+    const t = Date.parse(String(day || '').slice(0, 10) + 'T12:00:00');
+    if (!isFinite(t)) return '';
+    const n = Math.max(0, Math.round((Date.now() - t) / 86400000));
+    return n === 0 ? 'today' : n === 1 ? 'yesterday' : n + ' days ago';
+}
 function _qpWChip(text, cls) { return '<span class="qp-cw-due ' + (cls || 'grey') + '">' + escapeHtml(text) + '</span>'; }
 function _qpWLine(chip, text, right) {
     return '<div class="qp-cw-ln">' + (chip || '') + '<span class="qp-cw-lt">' + escapeHtml(text) + '</span>'
@@ -51669,7 +51680,10 @@ function _qpWidgetCard(el, rows, id) {
             // A line a store (dense): the lines share one grid, so every pill is
             // the widest one's width and every name starts at the same place
             // (Ethan, 2026-10-26: "align the text and pills").
-            + (it.lines && it.lines.length ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '')
+            // block: a tab that draws its own layout under the cap instead of
+            // lines (Store KPIs' tiles, Monthly Breakdown's bars — 2026-10-28).
+            + (it.block ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '') + it.block
+                : it.lines && it.lines.length ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '')
                 + (it.room === 5 ? '<div class="qp-cw-grid">' + it.lines.slice(0, room).join('') + '</div>' : it.lines.slice(0, room).join('')) : '')
             + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
     }
@@ -51683,6 +51697,7 @@ function _qpWidgetCard(el, rows, id) {
 // category holds every word typed, as filterDocs matches on the page. Five rows
 // fill a card; past that it says how many more and the link opens the library.
 const _QP_DOC_ROOM = 5;
+const _QP_DOC_TILES = 6;
 function _qpDocRows(docs, q) {
     const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
     const cat = d => String(d.category || '').replace(/,?\s*["']?pinned["']?/ig, '').trim();
@@ -51690,6 +51705,18 @@ function _qpDocRows(docs, q) {
         ? docs.filter(d => { const s = (d.title + ' ' + (d.desc || '') + ' ' + cat(d)).toLowerCase(); return words.every(w => s.indexOf(w) !== -1); })
         : docs.filter(d => /pinned/i.test(d.category || ''));
     const cap = words.length ? (list.length ? list.length + (list.length === 1 ? ' Match' : ' Matches') : 'No Matches') : 'Pinned';
+    // PINNED AS TILES (Ethan, 2026-10-28): nothing typed shows the pinned
+    // documents as a grid of six; a search still lists its matches.
+    if (!words.length && list.length) {
+        const tiles = list.slice(0, _QP_DOC_TILES).map(function (d) {
+            const href = /^https?:\/\//i.test(String(d.link || '')) ? d.link : '#';
+            return '<a class="qp-doc qp-doc-tile" href="' + escapeHtml(href) + '" target="_blank" rel="noopener" onclick="_qpDocOpened()"'
+                + ' title="' + escapeHtml(d.desc || d.title) + '"><span class="qp-doc-ico">' + _docIconSvg(d.icon, cat(d)) + '</span>'
+                + '<span class="qp-cw-lt">' + escapeHtml(d.title) + '</span></a>';
+        }).join('');
+        const moreT = list.length > _QP_DOC_TILES ? '<div class="qp-doc-more">+' + (list.length - _QP_DOC_TILES) + ' More</div>' : '';
+        return '<div class="qp-hl-cap">' + cap + '</div><div class="qp-doc-tiles">' + tiles + '</div>' + moreT;
+    }
     const rows = list.slice(0, _QP_DOC_ROOM).map(function (d) {
         // Drive links only ever: a link that is not http(s) is not a link.
         const href = /^https?:\/\//i.test(String(d.link || '')) ? d.link : '#';
@@ -51761,6 +51788,37 @@ const _QP_WSPEC = {
         // ON THEIR OWN (Ethan, 2026-10-26, from the design he picked): a card
         // holding only Champions, or only Awards, draws this instead of lines.
         solo: {
+            // RECORDS AS A TROPHY SHELF (2026-10-28): a tile a record, all one
+            // size. With a store: its figure and its place (gold / silver /
+            // bronze, then a plain place). Without one (DM, CEO, MOCD): who
+            // holds the record, and with what.
+            records: function (d) {
+                const mine = _claimStores()[0] || '';
+                const rows = (d.records || []).filter(r => !r.person && STORE_CODES.indexOf(String(r.section).toUpperCase()) !== -1);
+                const money = v => /^\$/.test(String(v || '')) ? '$' + Math.round(parseNum(v)).toLocaleString('en-US') : String(v || '');
+                const labels = RECORD_CARD_ORDER.filter(l => !/Gross Profit/.test(l) && rows.some(r => r.label === l && (!mine || r.section === mine)));
+                const ord = ['', '1st', '2nd', '3rd', '4th', '5th'];
+                let held = 0;
+                const tiles = labels.map(function (l) {
+                    const all = rows.filter(r => r.label === l);
+                    const name = escapeHtml(l.replace(/ Record$/, ''));
+                    if (!mine) {
+                        const best = all.slice().sort((a, b) => parseNum(b.value) - parseNum(a.value))[0];
+                        const st = String(best.section).toUpperCase();
+                        return '<div class="qp-rec g1" title="' + name + '"><div class="qp-rec-l"><span class="qp-rec-who">' + _qpDot(st) + escapeHtml(st) + '</span>' + name
+                            + '</div><div class="qp-rec-v">' + escapeHtml(money(best.value)) + '</div></div>';
+                    }
+                    const me = all.find(r => r.section === mine);
+                    const place = all.filter(r => parseNum(r.value) > parseNum(me.value)).length + 1;
+                    if (place === 1) held++;
+                    return '<div class="qp-rec ' + (place <= 3 ? 'g' + place : 'g0') + '" title="' + name + '"><div class="qp-rec-l"><span class="qp-rec-med">' + (ord[place] || place + 'th') + '</span>'
+                        + name + '</div><div class="qp-rec-v">' + escapeHtml(money(me.value)) + '</div></div>';
+                }).join('');
+                const cap = !labels.length ? '' : mine ? mine + ' Holds ' + held + ' of ' + labels.length + ' Records' : 'Who Holds Each Record';
+                return '<div class="qp-ai-body qp-solo">' + (cap ? '<div class="qp-hl-cap" style="margin-top:0">' + escapeHtml(cap) + '</div>' : '')
+                    + (tiles ? '<div class="qp-shelf">' + tiles + '</div>' : '<div class="qp-hl-sub"><span class="warn">No records yet</span></div>')
+                    + _qpAiLink('Open Records', "_qpStatsOpen('records')") + '</div>';
+            },
             // A tile a board: the leader large, 2nd and 3rd under a rule.
             champions: function (d) {
                 const c = d.champ, mine = _claimStores()[0] || '';
@@ -52002,12 +52060,32 @@ const _QP_WSPEC = {
             // then four rows a store acts on. Any the tool does not carry are skipped.
             const rows = ['net_sales', 'gross_profit_pct', 'return_rate', 'google_reviews'].filter(metric);
             const np = rank('net_profit');
+            // THE STORES ON ONE ROW, BY A SWITCH (Ethan, 2026-10-28: Net Profit
+            // by store, and "what about the other stuff on monthly breakdown"):
+            // the same key rows as before, Net Margin in place of the GP one (no
+            // GP on screen), each a switch button; the bars rank the five stores
+            // on the one picked, this store in its colour. Net Profit's change
+            // vs the month before stays under the big number.
+            const opts = [['net_profit', 'Net Profit'], ['net_sales', 'Sales'], ['net_profit_pct', 'Margin'], ['return_rate', 'Returns'], ['google_reviews', 'Reviews']]
+                .filter(o => o[0] === 'net_profit_pct' || metric(o[0]));
+            const key = _qpMbMetric.k && opts.some(o => o[0] === _qpMbMetric.k) ? _qpMbMetric.k : 'net_profit';
+            const lower = !!(metric(key) || {}).lower_is_better;
+            const fmtK = v => key === 'net_profit_pct' ? (v == null ? '—' : (Math.round(v * 10) / 10) + '%') : fmt(key, v);
+            const bars = STORE_CODES.map(s => ({ s, v: val(s, d.month, key) })).filter(b => b.v != null)
+                .sort((a, b) => lower ? a.v - b.v : b.v - a.v);
+            const top = Math.max.apply(null, bars.map(b => Math.abs(b.v)).concat([1]));
+            const block = '<div class="qp-mb-top"><span class="qp-hl-switch qp-mb-sw" role="group" aria-label="Rank the stores on">'
+                + opts.map(o => '<button type="button" class="' + (o[0] === key ? 'on' : '') + '" aria-pressed="' + (o[0] === key) + '" onclick="qpMbMetric(\'' + o[0] + '\')">' + o[1] + '</button>').join('')
+                + '</span></div><div class="qp-mbars">' + bars.map(b => '<div class="qp-mbar' + (b.s === d.mine ? ' me' : '') + '"><span>' + _qpDot(b.s) + b.s + '</span>'
+                    + '<div class="qp-mbar-t"><i style="width:' + Math.max(3, Math.round(Math.abs(b.v) / top * 100)) + '%;' + (b.s === d.mine ? 'background:' + (STORE_TINTS[b.s] || '#1f9d57') : '') + '"></i></div>'
+                    + '<b>' + fmtK(b.v) + '</b></div>').join('') + '</div>';
             return {
+                block: bars.length ? block : '',
                 n: 0, big: fmt('net_profit', val(d.mine, d.month, 'net_profit')), small: 'Net Profit' + (np ? ' · ' + ord(np.place) + ' of ' + np.of : ''),
                 // Only when last month HAS a Net Profit to compare with (August
                 // has none — NP rows began with the NP switch), never "no change".
                 sub: d.prev && delta('net_profit') ? 'vs ' + _qpMbMonth(d.prev) + ' ' + delta('net_profit') : '',
-                cap: 'Key Rows · Place Among Stores',
+                cap: '',
                 lines: rows.map(k => '<div class="qp-cw-ln qp-mb-ln"><span class="qp-cw-lt">' + escapeHtml((metric(k) || {}).label || k)
                     + '</span><b>' + fmt(k, val(d.mine, d.month, k)) + '</b><span class="qp-mb-d">' + delta(k) + '</span>' + chip(rank(k)) + '</div>'),
                 link: ['Open Monthly Breakdown', "window.location.href='workspace.html#brief'"],
@@ -52084,7 +52162,10 @@ const _QP_WSPEC = {
                 n: 0, badge: '✓', big: green, small: 'of ' + judged.length + ' in the green · ' + label(p.period_end_date),
                 sub: openNotDue ? '<span class="warn">' + label(openEnd) + ' is due ' + day(dueOn) + ' by 8:30am</span>'
                     : (at ? '<span class="good">Entered ' + new Date(at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + '</span>' : ''),
-                cap: notGreen.length ? 'Not in the Green' : '',
+                // SIX TILES, ONE A KPI (Ethan, 2026-10-28, from the redesign he
+                // picked): every judged KPI, green / close / red, the same size
+                // whatever its name (_qpKpiTiles), in place of the misses list.
+                cap: '', block: _qpKpiTiles(judged.map(j => [_QP_KPI_SHORT[j.f[1]] || j.f[1], _kpiFormatComputed(j.f[0], j.v), j.cls])),
                 lines: notGreen.map(j => _qpWLine(_qpWChip(j.cls === 'kpi-cell-red' ? 'Red' : 'Close', j.cls === 'kpi-cell-red' ? 'bad' : 'warn'),
                     j.f[1], _kpiFormatComputed(j.f[0], j.v))),
                 link,
@@ -52361,10 +52442,17 @@ const _QP_WSPEC = {
                     ...(hits.length ? {} : { clear: ['Nothing To Call About', 'Nothing a customer asked for is on your shelf yet'] }),
                     n: hits.length, big: hits.length, small: hits.length === 1 ? 'call to make' : 'calls to make',
                     sub: hits.length ? 'Something a customer asked for is on your shelf' : '<span class="good">Nothing to call about yet</span>',
-                    cap: 'Call Next', link,
-                    lines: hits.map(h => _qpWLine(_qpWChip('In Stock', 'good'),
-                        h.e.item + ' — ' + _qpWWho(h.e.customer_name) + (scope.includes(h.e.store) ? '' : ' (' + h.e.store + ')'),
-                        h.m[0].price ? _qpHLK(h.m[0].price) : '')),
+                    cap: 'Call Them', link,
+                    // WHAT, WHO, WHERE (Ethan, 2026-10-28): the item on one line,
+                    // who asked and the store it is in stock at under it. Two-line
+                    // rows, so three to a card (room) — it stays 350.
+                    room: 3, sub: '',
+                    aside: hits.length ? 'Oldest asked ' + _qpDaysAgo(hits[0].e.date_of_call) : '',
+                    lines: hits.map(h => '<div class="qp-cb"><div class="qp-cb-i"><span>' + escapeHtml(h.e.item) + '</span>'
+                        + (h.m[0].price ? '<b>' + escapeHtml(_qpHLK(h.m[0].price)) + '</b>' : '') + '</div>'
+                        + '<div class="qp-cb-m"><span>' + escapeHtml(_qpWWho(h.e.customer_name) || 'A customer') + ' asked'
+                        + (scope.includes(h.e.store) ? '' : ' at ' + escapeHtml(h.e.store)) + '</span>'
+                        + '<span class="qp-cb-at">' + _qpDot(h.m[0].store_code) + 'In Stock at ' + escapeHtml(h.m[0].store_code) + '</span></div></div>'),
                 };
             }
             const list = live.filter(e => scope.includes(e.store) && e.status === tab)
@@ -52428,12 +52516,20 @@ const _QP_WSPEC = {
                 .sort((a, b) => (Number(b.unlisted_value) || 0) - (Number(a.unlisted_value) || 0));
             const total = list.reduce((a, r) => a + (Number(r.unlisted_value) || 0), 0);
             const units = list.reduce((a, r) => a + (Number(r.unlisted_units) || 0), 0);
+            // ONE BAR SPLIT BY DEAL (Ethan, 2026-10-28): the three largest in
+            // three greens, the rest as one pale "Other" — so the deals worth
+            // listing first stand out. A swatch on each line says which part.
+            const sw = ['#1f9d57', '#5fbf8a', '#9fd8b6'], other = '#d5e9dc';
+            const top3 = list.slice(0, 3), rest = list.slice(3).reduce((a, r) => a + (Number(r.unlisted_value) || 0), 0);
+            const bar = total ? '<div class="qp-split">' + top3.map((r, i) => '<i style="width:' + ((Number(r.unlisted_value) || 0) / total * 100).toFixed(1) + '%;background:' + sw[i] + '"></i>').join('')
+                + (rest ? '<i style="width:' + (rest / total * 100).toFixed(1) + '%;background:' + other + '"></i>' : '') + '</div>' : '';
             return {
-                n: list.length, big: _qpHLK(total), small: 'unlisted',
-                sub: list.length ? units + ' unit' + (units === 1 ? '' : 's') + ' on ' + list.length + ' deal' + (list.length === 1 ? '' : 's') : '<span class="good">Everything is listed</span>',
+                ...(list.length ? {} : { clear: ['Everything Is Listed', 'No unlisted value on any deal'] }),
+                n: list.length, big: _qpHLK(total), small: 'unlisted' + (list.length ? ' · ' + units + ' unit' + (units === 1 ? '' : 's') + ' on ' + list.length + ' deal' + (list.length === 1 ? '' : 's') : ''),
+                sub: bar,
                 cap: 'Largest First', link,
-                lines: list.map(r => _qpWLine(_qpWChip(r.unlisted_units + (Number(r.unlisted_units) === 1 ? ' unit' : ' units')),
-                    r.ref + (r.company ? ' · ' + r.company : '') + (_b2bIsCorp() && r.store ? ' (' + r.store + ')' : ''), _qpHLK(r.unlisted_value))),
+                lines: list.map((r, i) => '<div class="qp-cw-ln"><i class="qp-sw" style="background:' + (sw[i] || other) + '"></i><span class="qp-cw-lt">'
+                    + escapeHtml(r.ref + (r.company ? ' · ' + r.company : '') + (_b2bIsCorp() && r.store ? ' (' + r.store + ')' : '')) + '</span><b>' + escapeHtml(_qpHLK(r.unlisted_value)) + '</b></div>'),
             };
         },
     },
@@ -52561,6 +52657,18 @@ const _QP_WSPEC = {
         },
     },
 };
+// --- THE REDESIGNED WIDGET BODIES (Ethan, 2026-10-28: "I like all of them as
+// long as records and KPIs bubbles are all the same size") ---
+// A tile grid three across. Every tile is one fixed height with a two-line
+// name slot, so a long name ("Monthly Customer Conversion") never makes its
+// tile — or its row — taller than the rest.
+function _qpKpiTiles(rows) {
+    const tone = c => c === 'kpi-cell-green' ? 'g' : c === 'kpi-cell-red' ? 'r' : 'w';
+    return '<div class="qp-tiles">' + rows.map(r => '<div class="qp-tile ' + tone(r[2]) + '" title="' + escapeHtml(r[0]) + '"><i class="qp-tile-dot"></i>'
+        + '<b>' + escapeHtml(r[1]) + '</b><span>' + escapeHtml(r[0]) + '</span></div>').join('') + '</div>';
+}
+// Short names for the six KPIs on a tile.
+const _QP_KPI_SHORT = { 'Average Transaction Time': 'Transaction Time' };
 // When Claims & Disputes' eBay and Shopify syncs last ran: the latest good run
 // a store a sync (eBay cases, payment disputes, unpaid orders), and of those the
 // OLDEST — the card is only as fresh as its stalest store. Null when the read
@@ -66843,9 +66951,12 @@ function _eqTabsRun() {
 }
 let _eqTabsObs = null;
 let _eqTabsTimer = 0;
+// Before the next paint, not after a delay (2026-10-28: a card that redraws its
+// switch on a click — Monthly Breakdown's — showed one frame of uneven buttons,
+// then jumped). requestAnimationFrame still batches a burst of mutations.
 function _eqTabsQueue() {
     if (_eqTabsTimer) return;
-    _eqTabsTimer = setTimeout(function () { _eqTabsTimer = 0; _eqTabsRun(); }, 60);
+    _eqTabsTimer = requestAnimationFrame(function () { _eqTabsTimer = 0; _eqTabsRun(); });
 }
 function _eqTabsWatch() {
     _eqTabsObs = new MutationObserver(_eqTabsQueue);

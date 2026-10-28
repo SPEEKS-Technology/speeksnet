@@ -52,11 +52,16 @@ t('the cap counts matches, and says so when there are none', function () {
 t('past five rows it says how many more', function () {
     var many = [];
     for (var i = 0; i < 8; i++) many.push({ category: 'Store Operations, Pinned', title: 'Doc ' + i, link: 'https://x/' + i });
+    // A search lists five; nothing typed shows the pinned as six tiles
+    // (2026-10-28).
     var el = document.createElement('div');
-    el.innerHTML = _qpDocRows(many, '');
+    el.innerHTML = _qpDocRows(many, 'doc');
     var n = el.querySelectorAll('a.qp-doc').length;
     var more = el.querySelector('.qp-doc-more');
-    return n === 5 && more && more.textContent === '+3 More' ? true : n + ' rows, more: ' + (more && more.textContent);
+    if (!(n === 5 && more && more.textContent === '+3 More')) return n + ' rows, more: ' + (more && more.textContent);
+    el.innerHTML = _qpDocRows(many, '');
+    var t = el.querySelectorAll('a.qp-doc-tile').length, m2 = el.querySelector('.qp-doc-more');
+    return t === 6 && m2 && m2.textContent === '+2 More' ? true : t + ' tiles, more: ' + (m2 && m2.textContent);
 });
 
 t('titles are escaped and only http(s) links are followed', function () {
