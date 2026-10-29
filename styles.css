@@ -25548,8 +25548,34 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
        headline shows its own week): at 1280px it wrapped the title to a second
        line and took the card past 350. */
     .cc-widget[data-qp-hl] .ew-title .ew-date { display: none; }
-    .cc-widget[data-qp-hl] :is(#sh-tab-action, #cc-collapse) { display: none !important; }
+    .cc-widget[data-qp-hl] :is(#sh-tab-action, #cc-collapse, #dc-collapse) { display: none !important; }
+    /* THE DISTRICT CARD (part A, 2026-10-29) is a .cc-widget too, so every rule
+       above already covers it. Its scope line goes on a one-tab card, as the
+       store card's week does. */
+    .cc-widget[data-qp-single] #dc-scope { display: none; }
 }
+/* A split-out district card shows one panel at a time, as #dcWidget does
+   (its panels differ in height by hundreds of pixels). */
+.cc-widget.qp-shell[data-qp-family="district"] .cc-panel:not(.cc-active) { display: none; }
+
+/* #dcWidget itself is a block (applyRoleBasedUI writes display:block !important
+   on it inline), so its headline's 12px bottom padding cannot give way the way a
+   split-out card's does in its flex column: the same content made it 359px
+   beside three 350s. 3px is the room a split card ends up leaving. */
+.qp-cell > #dcWidget > .qp-hl { padding-bottom: 3px; }
+
+/* DISTRICT HEADLINES (_QP_DHL_BUILD). Live's five store boxes, one column each. */
+.qp-hl-boxes.qp-hl-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.qp-hl-boxes.qp-hl-5 .qp-hl-box { padding: 4px 8px; }
+.qp-hl-boxes.qp-hl-5 .qp-hl-k .qp-dot { margin-right: 4px; }
+/* Matrix's Watch state is blue, never a paler amber (see _DCW_SEV). */
+.qp-hl-seg > i.info { background: #2563b8; }
+/* Scorecard: each store's scorecard beside its audit bar. */
+.qp-dhl-tag { flex: none; min-width: 26px; text-align: right; font-weight: 800; }
+/* Store Breakdown's lines: the % to goal on the right edge. */
+.qp-dhl-rows .qp-cw-ln b { margin-left: auto; }
+/* "Open Full …" (openDistrictFull): the real panel, in Live's full-window view. */
+.dc-fs-card > .cc-panel { display: block !important; opacity: 1; pointer-events: auto; }
 
 /* ONE CARD HEIGHT (Ethan, 2026-10-21: "every widget the same height"). Every
    card in a QuickPortal row is 350px, so every row is too — 350 being the

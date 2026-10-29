@@ -301,9 +301,10 @@ t('every tab bar centres its text', function () {
 
 // ONLY CUSTOMIZE PAGES ARE HELD TO HALF A ROW (Ethan, 2026-10-26: the store
 // board's one Live card sat at half the screen; MOCD's full Live table was
-// squeezed into half). The District Command Center keeps a full row until it
-// has headline cards of its own.
-t('without Customize nothing is held under a full row; the District card never is', function () {
+// squeezed into half). The District Command Center kept a full row until it
+// had headline cards of its own; since part A (2026-10-29) it is held to half
+// like the store one (qp-district-check.js holds the rest of its rules).
+t('without Customize nothing is held under a full row; with it the District card is too', function () {
     var real = _qpHeadlinesOn;
     try {
         _qpHeadlinesOn = function () { return false; };
@@ -311,7 +312,7 @@ t('without Customize nothing is held under a full row; the District card never i
         _qpHeadlinesOn = function () { return true; };
         var on = [_qpMaxW('command'), _qpMaxW('feed'), _qpMaxW('district'), _qpNeedsPartner('district')];
         var got = off.join(',') + ' / ' + on.join(',');
-        return got === '1,1,1,false / 0.5,0.5,1,false' ? true : got;
+        return got === '1,1,1,false / 0.5,0.5,0.5,true' ? true : got;
     } finally { _qpHeadlinesOn = real; }
 });
 

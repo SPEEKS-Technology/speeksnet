@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261029a">
+  <link rel="stylesheet" href="styles.css?v=20261029b">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261029a" defer></script>
+  <script src="speeks.js?v=20261029b" defer></script>
 </head>
 
 <body class="preload">
@@ -1133,13 +1133,13 @@
               <span class="ew-eyebrow">District</span>
               <!-- Same scope line the login screen prints on its rail (Stores 5 /
                    Markets KC · STL), said as one phrase. -->
-              <span class="ew-title">Command Center <span class="ew-date" id="dc-scope">5 Stores &middot; 2 Markets &middot; KC &amp; STL</span></span>
+              <span class="ew-title">Command Center<span class="qp-cc-piece"></span> <span class="ew-date" id="dc-scope">5 Stores &middot; 2 Markets &middot; KC &amp; STL</span></span>
           </div>
       </div>
 
       <div class="cc-tabbar">
           <div class="ew-seg cc-seg">
-              <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
+              <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live" title="Live Dashboard"><span class="cc-tl">Live Dashboard</span><span class="cc-ts">Live</span></button>
               <!-- Matrix sits right after Live because it answers the question the
                    card gets opened with: who needs me today. Hidden on a phone like
                    the other three data tabs — the row carries three metrics, two
@@ -1154,9 +1154,9 @@
                    was left deliberately: every id, key and function stays `watch`,
                    every label a person sees says Matrix. -->
               <button id="dc-tab-watch" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('watch')" data-feature="widget-district-watch">Matrix</button>
-              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
+              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('stores')" title="Store Breakdown"><span class="cc-tl">Store Breakdown</span><span class="cc-ts">Stores</span></button>
               <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
-              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
+              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('scorecard')" title="Scorecard"><span class="cc-tl">Scorecard</span><span class="cc-ts">Score</span></button>
           </div>
           <div class="cc-tabbar-right">
               <button id="dc-collapse" class="cc-collapse" type="button" onclick="collapseDistrict()" style="display:none;">&#9650; Summary</button>

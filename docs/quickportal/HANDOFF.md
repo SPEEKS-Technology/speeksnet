@@ -378,9 +378,30 @@ designs since have been shown inline in chat.
   Items cards — DONE 10-26; C = district versions of drawer widgets (Variance
   review queue, Claims by store, Store KPIs by store; later B2B, Call Backs,
   Connect Titles). Ethan: B first, then A, then C one widget at a time.
-- CEO: on live Feature Access the CEO has no Action Items rows, so Your Feed's
-  only partner is the District card, at ½ (408px, its panels overflow). Part A
-  (district headlines that fit ½) is the fix.
+- **Part A DONE 10-29** (picked from real renderings in
+  `prototypes/district-headlines.html`; Ethan: "look relatively like the same
+  style as the other role versions ... not have every widget look exactly the
+  same"; "if it's not going to look good at 33% it can be designed for just
+  50%"). `QP_FAMILIES.district` (kind `cc`, pieces live / watch / stores /
+  ebay / score on the dc-* ids) — the district board splits and combines like
+  the store one; `_qpRenderHeadlinesNow` draws both families, district via
+  `_qpDistrictHL` (reads `_lvData`, `_dcWatch`, `_dccRows` at draw time, no
+  fetch) and `_QP_DHL_BUILD`. Live = the store Live card's layout with five
+  store boxes (own Today / Yesterday / Month, `qpDLiveMode`); Matrix = status
+  bar + Critical/Warning/Watch/On Target lines; Stores = NP tracking + the
+  rail's own line a store; eBay = status bar + In Danger/At Risk/Clear lines
+  (category chips became a count: they wrapped to 382px); Scorecard = audit
+  bars like the district Action Items. Every non-Live card has "Open Full …"
+  (`openDistrictFull`: MOVES the real panel into Live's full-window view and
+  back, so its rail and drill-downs still work). Sizes: held to ½ like
+  everything; `_qpMinW` keeps any card holding Live at ½, the rest may take ⅓
+  (the original card counts as holding Live unless the SAVED layout has it
+  split out — never ask the page mid-rebuild). Combined cards (h.compact) move
+  the link up beside the label and drop bars; ⅓ (h.narrow) says less again.
+  District tabs are selectors when headlines are on (no collapse). Phones keep
+  the full panels. Swept DM at 1280 + 1440, every tab, every Live mode, split /
+  combined / ⅓ / ½: all 350; CEO's card now sits at ½ beside the feed.
+  `scripts/qp-district-check.js` (9 checks, also covers the feed due dates).
 - When it ships, bump the cache-buster (`?v=`) in all five HTML pages
   (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
 - **Save layouts to the database** so they follow a person across devices

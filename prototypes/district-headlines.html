@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>District Headlines</title>
+<!-- Part A of the DM design (2026-10-29): the District Command Center's five
+     tabs as headline cards, in the two styles Ethan is choosing between.
+     The site's own styles.css and the classes the store Command Center and the
+     district widgets already use, at the real ½-row width and 350px height.
+     Figures are the Test DM's on 2026-10-29. Not linked from the app. -->
+<link rel="stylesheet" href="../styles.css?v=20261029a">
+<style>
+  body { background: #f4f6f8; }
+  .pv-lab { font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; margin: 26px 0 10px; }
+  .pv-lab:first-child { margin-top: 6px; }
+  .pv-lab small { font-weight: 600; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+  .main-content { padding-top: 24px !important; height: auto !important; overflow: visible !important; }
+  html, body { height: auto !important; overflow: auto !important; }
+</style>
+</head>
+<body class="is-authenticated">
+<main class="main-content" id="pv"></main>
+<script>
+// Build-time only: writes static markup with the site's classes.
+const DOT = { OVL: '#7c6fd6', LEE: '#4e90cf', WSP: '#2ea36a', MPL: '#d99f43', BAL: '#d9776a' };
+const dot = s => '<i class="qp-dot" style="background:' + DOT[s] + '"></i>';
+const bar = (pct, cls, ticks) => '<div class="qp-hl-bar ' + (cls || '') + '"><i style="width:' + Math.min(100, pct) + '%"></i>'
+  + (ticks || []).map(t => '<b style="left:' + t + '%"></b>').join('') + '</div>';
+const band = p => p >= 90 ? 'good' : p >= 80 ? 'warn' : 'bad';
+const row = (s, pct, fig, cls, after) => '<div class="qp-ai-pp"><span class="qp-ai-pn">' + dot(s) + s + '</span>' + bar(pct, cls) + '<b>' + fig + '</b>' + (after || '') + '</div>';
+const ln = (chip, s, text, right, rc) => '<div class="qp-cw-ln">' + (chip ? '<span class="qp-cw-due ' + chip[1] + '">' + chip[0] + '</span>' : '')
+  + '<span class="qp-cw-lt"><span class="qp-cw-st">' + dot(s) + s + '</span>' + text + '</span>' + (right ? '<b' + (rc ? ' class="' + rc + '"' : '') + '>' + right + '</b>' : '') + '</div>';
+const tile = (tone, big, name) => '<div class="qp-tile ' + tone + '"><i class="qp-tile-dot"></i><b>' + big + '</b><span>' + name + '</span></div>';
+const tileS = (tone, s, big, sub) => tile(tone, big, dot(s) + s + ' · ' + sub);
+const sw = on => '<span class="qp-hl-switch" role="group">' + ['Today', 'Yesterday', 'Month'].map(o => '<button type="button" class="' + (o === on ? 'on' : '') + '">' + o + '</button>').join('') + '</span>';
+const foot = (link, tools) => '<div class="qp-hl-footrow"><button type="button" class="qp-hl-link">' + link + ' →</button>' + (tools ? '<span class="qp-hl-tools">' + tools + '</span>' : '') + '</div>';
+const card = (eyebrow, piece, body) => '<div class="qp-cell" style="flex-grow:1;max-width:calc(50% - 10px)">'
+  + '<div class="card ew-airy cc-widget cc-expanded" data-qp-block="district" data-qp-hl="" style="height:350px;box-sizing:border-box">'
+  + '<div class="ew-head"><div class="ew-titles"><span class="ew-eyebrow">' + eyebrow + '</span>'
+  + '<span class="ew-title">Command Center<span class="qp-cc-piece"> · ' + piece + '</span></span></div></div>'
+  + '<div class="qp-hl">' + body + '</div></div></div>';
+const rowOf = (...cards) => '<div class="qp-row">' + cards.join('') + '</div>';
+const lab = (t, s) => '<div class="pv-lab">' + t + (s ? '<small>' + s + '</small>' : '') + '</div>';
+
+// ---- STYLE A · STORE LINES ----
+const aLive = card('District · This Month', 'Live',
+  '<div class="qp-hl-top"><div class="qp-hl-k">Net Profit · Month to Oct 28</div>' + sw('Month') + '</div>'
+  + '<div class="qp-hl-big">$43,334<small>Of $54,400 NP goal</small></div>'
+  + '<div class="qp-hl-sub qp-hl-track"><span class="warn">Tracking to 88% of goal</span> · Day 29 of 31</div>'
+  + row('OVL', 95, '$12,408', 'good', ' <span class="good">95%</span>')
+  + row('LEE', 91, '$10,017', 'good', ' <span class="good">91%</span>')
+  + row('BAL', 87, '$6,466', 'warn', ' <span class="warn">87%</span>')
+  + row('WSP', 84, '$7,862', 'warn', ' <span class="warn">84%</span>')
+  + row('MPL', 79, '$6,581', 'bad', ' <span class="bad">79%</span>')
+  + foot('Open Full Dashboard', '<button type="button" class="bd-open">Daily Breakdown</button>'));
+const aMatrix = card('District · Through Wed, Oct 28', 'Matrix',
+  '<div class="qp-hl-k">Conversion · Buy Margin · Listing</div>'
+  + '<div class="qp-hl-big"><span class="bad">4</span><small>Of 5 stores need attention</small></div>'
+  + '<div class="qp-hl-seg"><i class="bad" style="flex:2"></i><i class="warn" style="flex:2"></i><i class="good" style="flex:1"></i></div>'
+  + '<div class="qp-hl-sub">2 critical · 2 warning · 1 on target</div>'
+  + '<div class="qp-cw-grid">'
+  + ln(['Critical', 'bad'], 'LEE', 'Buy margin 48.9% · missed 12 days in a row')
+  + ln(['Critical', 'bad'], 'MPL', 'Listing 23% of goal · missed 21 days in a row')
+  + ln(['Warning', 'warn'], 'OVL', 'Listing 59% of goal · missed 3 days in a row')
+  + ln(['Warning', 'warn'], 'WSP', 'Conversion 77.8% · missed yesterday')
+  + ln(['On Target', 'good'], 'BAL', 'All three on target')
+  + '</div>' + foot('Open Matrix'));
+const aStores = card('District · October', 'Store Breakdown',
+  '<div class="qp-hl-k">Net Profit Tracking</div>'
+  + '<div class="qp-hl-big">$47,978<small>Of $54,400 NP goal</small></div>'
+  + bar(88, 'warn') + '<div class="qp-hl-sub"><span class="warn">88% to goal</span> · worst store first</div>'
+  + ln(null, 'MPL', 'eBay health failing on 3 of 4', '79.2%', 'bad')
+  + ln(null, 'WSP', '1 eBay category failing', '83.7%', 'warn')
+  + ln(null, 'BAL', 'eBay health over on 2 measures', '87.3%', 'warn')
+  + ln(null, 'LEE', 'eBay health over on 2 measures', '90.9%', 'good')
+  + ln(null, 'OVL', 'eBay tracking 96.01%', '95.4%', 'good')
+  + foot('Open Store Breakdown'));
+const aEbay = card('District · 5 Accounts', 'eBay',
+  '<div class="qp-hl-k">Account Status</div>'
+  + '<div class="qp-hl-big"><span class="bad">3</span><small>Stores at eBay\'s limit</small></div>'
+  + '<div class="qp-hl-seg"><i class="bad" style="flex:3"></i><i class="warn" style="flex:1"></i><i class="good" style="flex:1"></i></div>'
+  + '<div class="qp-cw-grid">'
+  + ln(['At Limit', 'bad'], 'MPL', 'Tracking 86.41% · Late shipment 4.16%', '3 of 4', 'bad')
+  + ln(['At Limit', 'bad'], 'LEE', 'Defect rate 0.47% · Cases closed', '2 of 4', 'bad')
+  + ln(['At Limit', 'bad'], 'BAL', 'Defect rate 0.44% · Cases closed 0.44%', '2 of 4', 'bad')
+  + ln(['Nearing', 'warn'], 'OVL', 'Tracking 96.01% (over 96%)', '1 of 4', 'warn')
+  + ln(['Clear', 'good'], 'WSP', 'All four clear', '0 of 4', 'good')
+  + '</div><div class="qp-hl-chips"><span class="sh-badge crit">WSP · Consumer Electronics</span><span class="sh-badge crit">MPL · Computers</span><span class="sh-badge crit">BAL · Video Games</span></div>');
+const aScore = card('District · Week of Oct 26', 'Scorecard',
+  '<div class="qp-hl-k">SPEEKS Audit · District Average</div>'
+  + '<div class="qp-hl-big warn">87.3%<small>PayMore audit 98.5% · Scorecard 6.3 / 10</small></div>'
+  + bar(87.3, 'warn', [80, 90]) + '<div class="qp-hl-sub">Pass 80 · Target 90</div>'
+  + '<div class="qp-hl-cap">SPEEKS Audit · Scorecard</div>'
+  + row('MPL', 69.7, '69.7%', 'bad', ' <span class="bad">4.7</span>')
+  + row('BAL', 83.6, '83.6%', 'warn', ' <span class="warn">6.7</span>')
+  + row('LEE', 91.5, '91.5%', 'good', ' <span class="warn">6.7</span>')
+  + row('OVL', 95.2, '95.2%', 'good', ' <span class="warn">6.7</span>')
+  + row('WSP', 96.4, '96.4%', 'good', ' <span class="warn">6.7</span>'));
+
+// ---- STYLE B · STORE TILES (five stores + the district) ----
+const bLive = card('District · This Month', 'Live',
+  '<div class="qp-hl-top"><div class="qp-hl-k">Net Profit · Month to Oct 28</div>' + sw('Month') + '</div>'
+  + '<div class="qp-hl-big">$43,334<small>Of $54,400 NP goal</small></div>'
+  + '<div class="qp-hl-sub qp-hl-track"><span class="warn">Tracking to 88% of goal</span> · Day 29 of 31</div>'
+  + '<div class="qp-tiles">' + tileS('g', 'OVL', '95%', '$12.4k') + tileS('g', 'LEE', '91%', '$10.0k') + tileS('w', 'BAL', '87%', '$6.5k')
+  + tileS('w', 'WSP', '84%', '$7.9k') + tileS('r', 'MPL', '79%', '$6.6k') + tile('w', '$240.7k', 'Revenue · Month to Date') + '</div>'
+  + foot('Open Full Dashboard', '<button type="button" class="bd-open">Daily Breakdown</button>'));
+const bMatrix = card('District · Through Wed, Oct 28', 'Matrix',
+  '<div class="qp-hl-k">Conversion · Buy Margin · Listing</div>'
+  + '<div class="qp-hl-big"><span class="bad">4</span><small>Of 5 stores need attention</small></div>'
+  + '<div class="qp-hl-sub">2 critical · 2 warning · 1 on target</div>'
+  + '<div class="qp-tiles">' + tileS('r', 'LEE', 'Critical', 'Margin 48.9%') + tileS('r', 'MPL', 'Critical', 'Listing 23%')
+  + tileS('w', 'OVL', 'Warning', 'Listing 59%') + tileS('w', 'WSP', 'Warning', 'Conversion 77.8%')
+  + tileS('g', 'BAL', 'On Target', 'All three') + tile('r', '4 of 5', 'Stores need attention') + '</div>'
+  + foot('Open Matrix'));
+const bStores = card('District · October', 'Store Breakdown',
+  '<div class="qp-hl-k">Net Profit Tracking</div>'
+  + '<div class="qp-hl-big">$47,978<small>Of $54,400 NP goal</small></div>'
+  + '<div class="qp-hl-sub"><span class="warn">88% to goal</span> · worst store first</div>'
+  + '<div class="qp-tiles">' + tileS('r', 'MPL', '79.2%', 'eBay failing 3 of 4') + tileS('w', 'WSP', '83.7%', '1 category failing')
+  + tileS('w', 'BAL', '87.3%', 'eBay over on 2') + tileS('g', 'LEE', '90.9%', 'eBay over on 2')
+  + tileS('g', 'OVL', '95.4%', 'Tracking 96.01%') + tile('w', '88%', 'District to goal') + '</div>'
+  + foot('Open Store Breakdown'));
+const bEbay = card('District · 5 Accounts', 'eBay',
+  '<div class="qp-hl-k">Account Status</div>'
+  + '<div class="qp-hl-big"><span class="bad">3</span><small>Stores at eBay\'s limit</small></div>'
+  + '<div class="qp-hl-sub">3 at limit · 1 nearing · 1 clear</div>'
+  + '<div class="qp-tiles">' + tileS('r', 'MPL', '3 of 4', 'At limit') + tileS('r', 'LEE', '2 of 4', 'At limit') + tileS('r', 'BAL', '2 of 4', 'At limit')
+  + tileS('w', 'OVL', '1 of 4', 'Nearing') + tileS('g', 'WSP', 'Clear', 'All four') + tile('r', '3', 'Categories at risk') + '</div>');
+const bScore = card('District · Week of Oct 26', 'Scorecard',
+  '<div class="qp-hl-k">SPEEKS Audit · District Average</div>'
+  + '<div class="qp-hl-big warn">87.3%<small>PayMore audit 98.5% · Scorecard 6.3 / 10</small></div>'
+  + '<div class="qp-hl-sub">Pass 80 · Target 90</div>'
+  + '<div class="qp-tiles">' + tileS('r', 'MPL', '69.7%', 'Score 4.7') + tileS('w', 'BAL', '83.6%', 'Score 6.7') + tileS('g', 'LEE', '91.5%', 'Score 6.7')
+  + tileS('g', 'OVL', '95.2%', 'Score 6.7') + tileS('g', 'WSP', '96.4%', 'Score 6.7') + tile('g', '98.5%', 'PayMore audit average') + '</div>');
+
+// ---- ROUND 2 (Ethan, 2026-10-29): "make the widgets look relatively like the
+// same style as the other role versions" — Live as the store Live card is,
+// with all five stores; and which cards still hold up at ⅓. ----
+// The store manager's real Live card (copied from the page, OVL, this morning).
+const storeLive = '<div class="qp-cell" style="flex-grow:1;max-width:calc(50% - 10px)"><div class="card ew-airy cc-widget cc-expanded" data-qp-block="command" data-qp-hl="" style="height:350px;box-sizing:border-box">'
+  + '<div class="ew-head"><div class="ew-titles"><span class="ew-eyebrow">OVL · This Month</span><span class="ew-title">OVL Command Center<span class="qp-cc-piece"> · Live</span></span></div></div>'
+  + '<div class="qp-hl"><div class="qp-hl-top"><div class="qp-hl-k">Net Sales Today <span class="qp-hl-asof">· 9:11 am</span></div>' + sw('Today') + '</div>'
+  + '<div class="qp-hl-big">$0<small>0 Orders</small></div><div class="qp-hl-sub qp-hl-track"><span class="warn">Tracking to 95% of goal</span> · of $14.4k</div>'
+  + '<div class="qp-hl-cap">Projected Month-End</div><div class="qp-hl-boxes">' + box('Revenue', '$76.3k') + box('Net Profit', '$13.7k') + box('Buying', '$155.4k') + '</div>'
+  + '<div class="qp-hl-ord qp-hl-ord1"><span class="qp-hl-cap qp-hl-capin">Recent Activity</span><span class="qp-hl-ot">Apple iPad Air 5th Gen 64GB Wi-Fi</span><span class="qp-hl-oa">· $289 ·</span><span class="lv-ago">14h Ago</span></div>'
+  + foot('Open Full Dashboard', '<button type="button" class="bd-open">Daily Breakdown</button>') + '</div></div></div>';
+function box(k, v, sub, cls) { return '<div class="qp-hl-box"><div class="qp-hl-k">' + k + '</div><div class="qp-hl-bv ' + (cls || '') + '">' + v + '</div>' + (sub ? '<div class="qp-hl-bs">' + sub + '</div>' : '') + '</div>'; }
+const sbox = (s, v, sub, cls) => box(dot(s) + s, v, sub, cls);
+const cardW = (w, eyebrow, piece, body) => card(eyebrow, piece, body).replace('max-width:calc(50% - 10px)', 'max-width:' + w);
+// Yesterday (Oct 28) from daily_np: sales / NP a store.
+const Y = { OVL: [5994.66, 2226.38], LEE: [2851.66, 1181.32], WSP: [1232.89, 746.37], MPL: [2079.89, 996.44], BAL: [5738.35, 2146.96] };
+const k = n => '$' + (n >= 10000 ? (n / 1000).toFixed(1) + 'k' : Math.round(n).toLocaleString('en-US'));
+const yBoxes = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'].map(s => sbox(s, k(Y[s][0]), 'NP ' + k(Y[s][1]))).join('');
+// L1 · the store card's own layout, the five stores as its grey boxes.
+const live1 = w => cardW(w, 'District · This Month', 'Live',
+  '<div class="qp-hl-top"><div class="qp-hl-k">Net Sales · Wed, Oct 28</div>' + sw('Yesterday') + '</div>'
+  + '<div class="qp-hl-big">$17,897<small>5 stores</small></div>'
+  + '<div class="qp-hl-sub qp-hl-track"><span class="warn">Tracking to 88% of goal</span> · of $54.4k</div>'
+  + '<div class="qp-hl-lines">' + _ln('Net Profit', '$7,297 · 40.8%') + '</div>'
+  + '<div class="qp-hl-cap">By Store</div><div class="qp-hl-boxes" style="grid-template-columns:repeat(5,minmax(0,1fr))">' + yBoxes + '</div>'
+  + foot('Open Full Dashboard', '<button type="button" class="bd-open">Daily Breakdown</button>'));
+// L1 on Today: projections stay where the store card has them, stores below.
+const live1t = w => cardW(w, 'District · This Month', 'Live',
+  '<div class="qp-hl-top"><div class="qp-hl-k">Net Sales Today <span class="qp-hl-asof">· 9:11 am</span></div>' + sw('Today') + '</div>'
+  + '<div class="qp-hl-big">$0<small>0 Orders</small></div>'
+  + '<div class="qp-hl-sub qp-hl-track"><span class="warn">Tracking to 88% of goal</span> · of $54.4k</div>'
+  + '<div class="qp-hl-lines">' + _ln('Projected Month-End', 'Revenue $266.5k · Net Profit $48.0k') + '</div>'
+  + '<div class="qp-hl-cap">Today By Store</div><div class="qp-hl-boxes" style="grid-template-columns:repeat(5,minmax(0,1fr))">'
+  + ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'].map(s => sbox(s, '$0', { OVL: '95%', LEE: '91%', WSP: '84%', MPL: '79%', BAL: '87%' }[s] + ' of goal')).join('') + '</div>'
+  + foot('Open Full Dashboard', '<button type="button" class="bd-open">Daily Breakdown</button>'));
+function _ln(a, b) { return '<div class="qp-hl-ln"><span>' + a + '</span><span>' + b + '</span></div>'; }
+// L2 · the store card's top, the stores as Action Items-style lines.
+const live2 = w => cardW(w, 'District · This Month', 'Live',
+  '<div class="qp-hl-top"><div class="qp-hl-k">Net Sales · Wed, Oct 28</div>' + sw('Yesterday') + '</div>'
+  + '<div class="qp-hl-big">$17,897<small>NP $7,297 · 40.8%</small></div>'
+  + '<div class="qp-hl-sub qp-hl-track"><span class="warn">Tracking to 88% of goal</span> · of $54.4k</div>'
+  + ['OVL', 'BAL', 'LEE', 'MPL', 'WSP'].map(s => row(s, Y[s][0] / 6000 * 100, k(Y[s][0]), '', ' <span style="color:#8a94a3;font-weight:700;min-width:62px;text-align:right">NP ' + k(Y[s][1]) + '</span>')).join('')
+  + foot('Open Full Dashboard', '<button type="button" class="bd-open">Daily Breakdown</button>'));
+const third = 'calc(33.333% - 14px)';
+const at3 = c => c.replace('max-width:calc(50% - 10px)', 'max-width:' + third);
+
+document.getElementById('pv').innerHTML =
+  lab('Round 2 · Live', 'the store card as it is today, then the district in its layout')
+  + rowOf(storeLive, live1('calc(50% - 10px)'))
+  + rowOf(live1t('calc(50% - 10px)'), live2('calc(50% - 10px)'))
+  + lab('Round 2 · Style A at ⅓', 'which of them still read at a third of a row')
+  + rowOf(live1(third), at3(aScore), at3(aEbay))
+  + rowOf(at3(aMatrix), at3(aStores))
+  + lab('Round 1');
+document.getElementById('pv').innerHTML +=
+  lab('Style A · Store Lines', 'one line a store, worst first, under the district figure')
+  + rowOf(aLive, aMatrix) + rowOf(aStores, aEbay) + rowOf(aScore)
+  + lab('Style B · Store Tiles', 'a tile a store plus one for the district, coloured by status')
+  + rowOf(bLive, bMatrix) + rowOf(bStores, bEbay) + rowOf(bScore);
+</script>
+</body>
+</html>

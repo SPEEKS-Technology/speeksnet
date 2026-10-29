@@ -13015,8 +13015,11 @@ function _tabSwitch(cfg, tab) {
     // The Command Center has no summary to close to any more, at any width
     // (Ethan, 2026-10-21: "get rid of the summary part … default into live
     // dashboard"), so its tabs are selectors everywhere, as they always were on
-    // a phone. The district board keeps its toggle.
-    const collapse = cfg !== _CC_BOARD && !compact && !!btn && btn.classList.contains('active');
+    // a phone. The district board keeps its toggle — except on a QuickPortal
+    // with Customize, where its cards show headlines like the store one's and
+    // have no summary to close to either (part A, 2026-10-29).
+    const hlOn = typeof _qpHeadlinesOn === 'function' && _qpHeadlinesOn();
+    const collapse = cfg !== _CC_BOARD && !hlOn && !compact && !!btn && btn.classList.contains('active');
 
     cfg.tabs().forEach(t => {
         const on = !collapse && t === tab;
@@ -13040,7 +13043,7 @@ function _tabSwitch(cfg, tab) {
     // Show the explicit "back to summary" control while a tab is open — never on
     // the Command Center, which has no summary to go back to (see above).
     const coll = document.getElementById(p + '-collapse');
-    if (mine(coll)) coll.style.display = (collapse || cfg === _CC_BOARD) ? 'none' : '';
+    if (mine(coll)) coll.style.display = (collapse || cfg === _CC_BOARD || hlOn) ? 'none' : '';
     return collapse;
 }
 
@@ -17481,6 +17484,8 @@ function renderLiveDashboard() {
                     : '<div class="lv-note">This was the last day of the previous month, so '
                       + 'month-to-date and pace are not shown against it.</div>')
                 + _lvBuyBlock(d, dViews);
+            // The QuickPortal district Live card reads this same payload.
+            if (typeof _qpRenderHeadlines === 'function') _qpRenderHeadlines();
         } else {
             // Only reachable if a district card is on screen for a non-district role,
             // which the role classes should already prevent. Say nothing rather than
@@ -49587,6 +49592,20 @@ const QP_FAMILIES = {
             { key: 'kpis', label: 'Weekly KPIs', ids: ['cc-tab-kpis', 'cc-panel-kpis'] },
         ],
     },
+    // THE DISTRICT COMMAND CENTER (part A of the DM design, Ethan 2026-10-29):
+    // the same tabbed board on _DC_BOARD, so it splits and combines exactly as
+    // the store one does, and a card holding one tab shows its headline
+    // (_QP_DHL_BUILD). No strips: the district board never had any.
+    district: {
+        label: 'District Command Center', kind: 'cc',
+        pieces: [
+            { key: 'live', label: 'Live Dashboard', ids: ['dc-tab-live', 'dc-sum-live', 'dc-sum-mtd', 'dc-sum-refunds', 'dc-sum-goal', 'dc-sum-reviews', 'dc-panel-live'] },
+            { key: 'watch', label: 'Matrix', ids: ['dc-tab-watch', 'dc-panel-watch'] },
+            { key: 'stores', label: 'Store Breakdown', ids: ['dc-tab-stores', 'dc-panel-stores'] },
+            { key: 'ebay', label: 'eBay', ids: ['dc-tab-ebay', 'dc-sum-ebay', 'dc-panel-ebay'] },
+            { key: 'score', label: 'Scorecard', ids: ['dc-tab-scorecard', 'dc-sum-score', 'dc-sum-audit', 'dc-panel-scorecard'] },
+        ],
+    },
     actions: {
         label: 'Action Items', kind: 'rail',
         pieces: [
@@ -49892,9 +49911,13 @@ function _qpMakeShell(main, key) {
         // the one the original card already uses.
         el.className = 'card employee-widget-card ew-airy cc-widget qp-shell';
         const store = sessionStorage.getItem('speeksUserStore') || '';
+        // A district card's eyebrow is the district's, whoever is signed in; the
+        // headline then says which day or week it is about.
+        const brow = k.fam === 'district' ? 'District'
+            : (store && store !== 'ALL' ? store + ' · This Month' : 'This Month');
         el.innerHTML =
             '<div class="ew-head"><div class="ew-titles">'
-            + '<span class="ew-eyebrow">' + escapeHtml(store && store !== 'ALL' ? store + ' · This Month' : 'This Month') + '</span>'
+            + '<span class="ew-eyebrow">' + escapeHtml(brow) + '</span>'
             + '<span class="ew-title qp-shell-title"></span></div></div>'
             // No "▴ Summary": a Command Center card has no summary view to go
             // back to (Ethan, 2026-10-21) — see _tabSwitch.
@@ -50010,7 +50033,9 @@ function _qpDistribute(main, rows) {
                 const shown = _qpShownPieces(main, rows, _qpKey(card));
                 const one = shown.length === 1 ? QP_FAMILIES[fam].pieces.find(function (p) { return p.key === shown[0]; }) : null;
                 const piece = one ? ' · ' + one.label : '';
-                if (t) t.textContent = _qpStoreLabel() + 'Command Center' + piece;
+                // The district card is "Command Center" under its District
+                // eyebrow, as #dcWidget is — no store in front of it.
+                if (t) t.textContent = (fam === 'district' ? '' : _qpStoreLabel()) + 'Command Center' + piece;
                 const suf = card.querySelector('.qp-cc-piece');
                 if (suf) suf.textContent = piece;
             } else if (t) t.textContent = n.name;
@@ -50185,12 +50210,22 @@ function _qpLayout(main) {
 // KPIs for employees), hidden but present.
 function _qpCardTab(w, openOnly) {
     if (!w) return null;
+    const board = _qpBoardOf(w);
     const shown = function (b) { return !!b && w.contains(b) && getComputedStyle(b).display !== 'none'; };
-    const tab = CC_TABS.find(function (t) {
-        const b = document.getElementById('cc-tab-' + t);
+    const tab = board.tabs().find(function (t) {
+        const b = document.getElementById(board.prefix + '-tab-' + t);
         return shown(b) && (!openOnly || b.classList.contains('active'));
     });
     return tab || null;
+}
+// Which tabbed board a Command Center card belongs to — the store one or the
+// district one (QP_FAMILIES.district) — and the switch that opens its tabs.
+function _qpBoardOf(w) {
+    const fam = w && (w.closest('[data-qp-family]') || w).getAttribute('data-qp-family');
+    return fam === 'district' ? _DC_BOARD : _CC_BOARD;
+}
+function _qpSwitchTab(w, tab) {
+    if (_qpBoardOf(w) === _DC_BOARD) switchDistrictTab(tab); else switchCommandTab(tab);
 }
 // Shut a card without _tabSwitch, which never closes a Command Center tab now:
 // used only when a card is left holding one tab, whose shut state is its
@@ -50531,9 +50566,10 @@ function _qpHeadlinesOn() {
     return !!bar && getComputedStyle(bar).display !== 'none';
 }
 function _qpRenderHeadlinesNow(main, rows) {
-    main.querySelectorAll('[data-qp-family="command"]').forEach(function (card) {
+    main.querySelectorAll('[data-qp-family="command"], [data-qp-family="district"]').forEach(function (card) {
         const w = card.classList.contains('cc-widget') ? card : card.querySelector('.cc-widget');
         if (!w) return;
+        const district = card.getAttribute('data-qp-family') === 'district';
         let hl = w.querySelector(':scope > .qp-hl');
         const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
         const single = card.hasAttribute('data-qp-single');
@@ -50548,7 +50584,8 @@ function _qpRenderHeadlinesNow(main, rows) {
         if (compact || !_qpHeadlinesOn()) {
             if (hl) hl.remove();
             w.removeAttribute('data-qp-hl');
-            if (!w.classList.contains('cc-expanded')) {
+            // The district board keeps its one-line summary there, as before.
+            if (!district && !w.classList.contains('cc-expanded')) {
                 const first = _qpCardTab(w, false);
                 if (first) switchCommandTab(first);
             }
@@ -50571,7 +50608,7 @@ function _qpRenderHeadlinesNow(main, rows) {
             // is one click away through Live's "Open Full Dashboard".
             if (!w.classList.contains('cc-expanded')) {
                 const first = _qpCardTab(w, false);
-                if (first) switchCommandTab(first);
+                if (first) _qpSwitchTab(w, first);
             }
             w.setAttribute('data-qp-hl', '');
             const tab = _qpCardTab(w, true);
@@ -50587,6 +50624,16 @@ function _qpRenderHeadlinesNow(main, rows) {
         // drops its least-needed lines (h.compact): Live its latest order and
         // "so far" figures, Scorecard its note and the pass/target caption, eBay
         // the "2 at limit · 3 nearing" line its coloured bar already shows.
+        if (district) {
+            // Read at draw time from what the district board already holds
+            // (_qpDistrictHL), so there is no second fetch. narrow: a third of a
+            // row, where Scorecard and eBay say less beside their big figure.
+            const dh = _qpDistrictHL(piece);
+            const opts = { compact: !single, narrow: w.getBoundingClientRect().width < 520 };
+            hl.innerHTML = dh && _QP_DHL_BUILD[piece] ? _QP_DHL_BUILD[piece](Object.assign(dh, opts)) : '<div class="status-message">Syncing the district…</div>';
+            _qpCapLines(hl);
+            return;
+        }
         const h = _qpHL[piece] && !single ? Object.assign({}, _qpHL[piece], { compact: true }) : _qpHL[piece];
         // A headline opens nothing (Ethan, 2026-10-21): eBay and Scorecard show
         // everything their panel did, and Live has its own "Open Full
@@ -50599,6 +50646,326 @@ function _qpSetHeadline(piece, h) {
     _qpHL[piece] = h;
     try { _qpRenderHeadlines(); } catch (e) { console.error('QuickPortal headline:', e); }
 }
+
+// --- DISTRICT HEADLINES (part A of the DM design, Ethan 2026-10-29) ---
+// The District Command Center's five tabs as cards, like the store one's. Ethan
+// picked them from renderings (prototypes/district-headlines.html): "make the
+// widgets look relatively like the same style as the other role versions where
+// possible ... I would ideally like to not have every widget look exactly the
+// same". So:
+//   Live      the store Live card's own layout — label and Today / Yesterday /
+//             Month switch, big figure, tracking line — with the five stores as
+//             its grey boxes. Half a row only: at a third the boxes cut their
+//             figures off (_qpMinW).
+//   Matrix    the coloured status bar and a line a store with its state tag.
+//   Stores    district NP tracking, a bar, then each store's % to goal and the
+//             one line the Store Breakdown rail already writes for it.
+//   eBay      the store eBay card's status bar, then a line a store.
+//   Scorecard district audit average, a bar with Pass and Target, then the
+//             stores as bars like the district Action Items cards.
+// Nothing is fetched here: each reads what its tab already loaded (_lvData,
+// _dcWatch, _dccRows) when the card is drawn, and the tab's own renderer
+// redraws the cards when that data lands. Every card but Live opens its full
+// table over the page (openDistrictFull), because a headline card never grows.
+let _qpDLiveMode = 'today';
+function qpDLiveMode(mode) {
+    _qpDLiveMode = mode;
+    _qpRenderHeadlines();
+}
+const _QP_D_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+const _qpBand = p => p == null ? '' : (p >= 100 ? 'good' : (p >= 80 ? 'warn' : 'bad'));
+function _qpDistrictHL(piece) {
+    try {
+        if (piece === 'live') return _qpDLive();
+        if (piece === 'watch') return _qpDWatch();
+        if (piece === 'stores') return _qpDStores();
+        if (piece === 'ebay') return _qpDEbay();
+        if (piece === 'score') return _qpDScore();
+    } catch (e) { console.error('District headline:', e); }
+    return null;
+}
+// Today from the live feed; Yesterday and Month from each row's closed-out day,
+// the same reads the store card's switch makes (_qpLivePrev).
+function _qpDLive() {
+    const d = typeof _lvData !== 'undefined' ? _lvData : null;
+    if (!d || !d.district) return null;
+    const rows = (d.stores || []).filter(m => !m.error);
+    const by = {};
+    rows.forEach(m => { by[String(m.code).toUpperCase()] = m; });
+    const views = rows.map(_lvView);
+    const fc = _lvFcSum(views);
+    let proj = null;
+    if (fc) {
+        const npOn = _lvNpKind() && fc.trackNp !== null;
+        proj = { rev: fc.trackRev, net: npOn ? fc.trackNp : ((fc.trackGp > 0 && fc.trackRev > 0) ? fc.trackGp - fc.trackRev * BD_NET_GP_RATE : null) };
+    }
+    const stores = _QP_D_STORES.filter(s => by[s]).map(s => {
+        const m = by[s], f = _lvFcSum([_lvView(m)]);
+        return { code: s, net: Number(m.netToday) || 0, pct: f && f.pct !== null ? f.pct : null,
+                 prev: _qpLivePrev(m, d, 'day'), month: _qpLivePrev(m, d, 'month') };
+    });
+    // The district's closed-out day, from its own row when it has one, else the
+    // stores' added up (no % of goal then — that is not a sum).
+    const add = span => {
+        const own = _qpLivePrev(d.district, d, span);
+        if (own) return own;
+        const ps = stores.map(s => s[span === 'day' ? 'prev' : 'month']).filter(Boolean);
+        if (!ps.length) return null;
+        const sum = k => ps.reduce((a, p) => a + (Number(p[k]) || 0), 0);
+        return { date: ps[0].date, net: sum('net'), orders: sum('orders'), refunds: sum('refunds'),
+                 np: ps.every(p => p.np != null) ? sum('np') : null, pct: null, dayOf: ps[0].dayOf, days: ps[0].days };
+    };
+    return {
+        asOf: d.asOfCentral ? _lvClock(d.asOfCentral) : '',
+        net: Number(d.district.netToday) || 0, orders: Number(d.district.ordersToday) || 0,
+        pct: fc && fc.pct !== null ? fc.pct : null, goal: fc && fc.goal ? fc.goal : 0,
+        proj, stores, prev: add('day'), month: add('month'),
+    };
+}
+// The nightly district-watch verdicts: each store's worst metric, and why.
+function _qpDWatch() {
+    const d = typeof _dcWatch !== 'undefined' ? _dcWatch : null;
+    if (!d) return null;
+    const by = {};
+    (d.flags || []).forEach(f => { (by[f.store] = by[f.store] || {})[f.metric] = f; });
+    const rank = { critical: 0, warn: 1, watch: 2, ok: 3 };
+    const name = { conversion: 'Conversion', margin: 'Buy margin', listing: 'Listing' };
+    const rows = Object.keys(by).map(s => {
+        let k = null;
+        ['conversion', 'margin', 'listing'].forEach(m => {
+            const f = by[s][m];
+            if (f && rank[f.state] != null && (k === null || rank[f.state] < rank[by[s][k].state])) k = m;
+        });
+        const f = k ? by[s][k] : null;
+        const state = f ? f.state : 'ok';
+        let text = 'All three on target';
+        if (f && state !== 'ok') {
+            const v = f.value == null ? '' : (k === 'listing' ? Math.round(Number(f.value)) + '% of goal' : Number(f.value).toFixed(1) + '%');
+            const n = Number(f.miss_run) || 0;
+            text = name[k] + (v ? ' ' + v : '') + (n > 1 ? ' · missed ' + n + ' days in a row' : n === 1 ? ' · missed 1 day' : '');
+        }
+        return { store: s, state, text, title: f && f.sentence ? f.sentence : '' };
+    }).sort((a, b) => rank[a.state] - rank[b.state] || a.store.localeCompare(b.store));
+    const n = st => rows.filter(r => r.state === st).length;
+    let asOf = '';
+    if (d.day) asOf = _qpDayLabel(d.day);
+    return { rows, asOf, crit: n('critical'), warn: n('warn'), watch: n('watch'), ok: n('ok') };
+}
+// Store Breakdown: the district's NP tracking and the rail's own line per store.
+function _qpDStores() {
+    if (typeof _dccRows === 'undefined' || !_dccRows.length) return null;
+    _dccApplyNp();
+    const npAll = _dccRows.every(r => r.npKind);
+    const track = _dccRows.reduce((a, r) => a + (npAll ? r.npTrack : r.gpTrack), 0);
+    const goal = _dccRows.reduce((a, r) => a + r.goal, 0);
+    const rows = _dccRows.slice().sort((a, b) => (isFinite(a.salesPct) ? a.salesPct : -1) - (isFinite(b.salesPct) ? b.salesPct : -1))
+        .map(r => ({ store: r.store, pct: isFinite(r.salesPct) ? r.salesPct : null, line: _dccLine(r), band: _dccBand(r) }));
+    return { npAll, track, goal, pct: goal > 0 ? track / goal * 100 : null, rows };
+}
+// eBay: the four account checks a store, as the district table judges them.
+const _QP_D_EBAY = [['track', 'Tracking'], ['defect', 'Defect rate'], ['cases', 'Cases closed'], ['late', 'Late shipment']];
+function _qpDEbay() {
+    if (typeof _dccRows === 'undefined' || !_dccRows.length) return null;
+    const rows = _dccRows.map(r => {
+        const off = _QP_D_EBAY.map(k => ({ k: k[1], v: _dccEbayPct(r[k[0]]), s: _dccState(r, k[0]) })).filter(x => x.s);
+        const bad = off.filter(x => x.s === 'b').length;
+        off.sort((a, b) => (a.s === 'b' ? 0 : 1) - (b.s === 'b' ? 0 : 1));
+        return { store: r.store, bad, off: off.length, state: bad ? 'bad' : off.length ? 'warn' : 'good',
+                 text: off.length ? off.map(x => x.k + (x.v ? ' ' + x.v : '')).join(' · ') : 'All four clear',
+                 cats: (r.cats || []).filter(c => c.s === 'b').map(c => String(c.v || '').split(',')[0].trim()).filter(Boolean) };
+    }).sort((a, b) => b.bad - a.bad || b.off - a.off || a.store.localeCompare(b.store));
+    const n = st => rows.filter(r => r.state === st).length;
+    return { rows, danger: n('bad'), risk: n('warn'), clear: n('good') };
+}
+// Scorecard: the district's own audit average leads, PayMore's and the
+// scorecard beside it, then each store's SPEEKS audit worst first.
+function _qpDScore() {
+    if (typeof _dccRows === 'undefined' || !_dccRows.length) return null;
+    const avg = list => list.length ? list.reduce((a, x) => a + x, 0) / list.length : null;
+    const audits = _dccRows.filter(r => r.audit).map(r => Number(r.audit.pct) || 0);
+    const rows = _dccRows.map(r => ({ store: r.store, audit: r.audit ? Number(r.audit.pct) : null,
+        score: Number(r.score) || 0, scoreCls: { b: 'bad', w: 'warn' }[_dccState(r, 'score')] || 'good' }))
+        .sort((a, b) => (a.audit == null ? -1 : a.audit) - (b.audit == null ? -1 : b.audit));
+    return { audit: avg(audits), paudit: avg(_dccRows.filter(r => r.official).map(r => Number(r.official.pct) || 0)),
+             score: avg(_dccRows.map(r => Number(r.score) || 0)), week: (_dccRows.find(r => r.week) || {}).week || '', rows };
+}
+const _qpDLink = (label, tab) => '<button type="button" class="qp-hl-link" onclick="openDistrictFull(\'' + tab + '\')">' + label + ' →</button>';
+// The label line, and where "Open Full …" goes: under the card on its own, up
+// beside the label when the card shares a tab bar (h.compact) — the ~55px the
+// bar takes is what a combined card has to find, as the store cards' dropped
+// lines do.
+// At a third of a row the label and "Open Store Breakdown →" do not share a
+// line, so there the link is just "Open Full →" — the tab above says which.
+const _qpDTop = (h, label, link) => h.compact
+    ? '<div class="qp-hl-top"><div class="qp-hl-k">' + label + '</div>' + (h.narrow ? link.replace(/>[^<]*→</, '>Open Full →<') : link) + '</div>'
+    : '<div class="qp-hl-k">' + label + '</div>';
+const _qpDFoot = (h, link) => h.compact ? '' : link;
+const _qpDChip = (word, cls) => '<span class="qp-cw-due ' + cls + '">' + escapeHtml(word) + '</span>';
+const _QP_DHL_BUILD = {
+    live: function (h) {
+        const mode = (_qpDLiveMode !== 'today' && !h.prev) ? 'today' : _qpDLiveMode;
+        const sw = '<span class="qp-hl-switch" role="group" aria-label="District Live period">'
+            + [['today', 'Today'], ['prev', 'Yesterday'], ['month', 'Month']]
+                .filter(o => o[0] === 'today' || h.prev)
+                .map(o => '<button type="button" class="' + (o[0] === mode ? 'on' : '') + '" aria-pressed="' + (o[0] === mode)
+                    + '" onclick="qpDLiveMode(\'' + o[0] + '\')">' + o[1] + '</button>').join('') + '</span>';
+        const box = (s, v, sub) => '<div class="qp-hl-box"><div class="qp-hl-k">' + _qpDot(s) + s + '</div><div class="qp-hl-bv">' + v + '</div>'
+            + (sub ? '<div class="qp-hl-bs">' + sub + '</div>' : '') + '</div>';
+        // "To Goal": the box's small line is capitalised from its first word on
+        // (_qpCapLines), and "95% Of goal" read as a typo.
+        const pctOf = p => p == null ? '' : '<span class="' + _qpBand(p) + '">' + Math.round(p) + '%</span> To Goal';
+        const foot = '<div class="qp-hl-footrow"><button type="button" class="qp-hl-link" onclick="openLiveFullscreen(false)">Open Full Dashboard →</button>'
+            + '<span class="qp-hl-tools">' + _bdBtn() + '</span></div>';
+        const track = '<span class="' + _qpBand(h.pct) + '">Tracking to ' + Math.round(h.pct) + '% of goal</span>';
+        let html, boxes;
+        if (mode === 'today') {
+            html = '<div class="qp-hl-top"><div class="qp-hl-k">Net Sales Today' + (h.asOf ? ' <span class="qp-hl-asof">· ' + escapeHtml(h.asOf) + '</span>' : '') + '</div>' + sw + '</div>'
+                + '<div class="qp-hl-big">' + _lvMoney(h.net, false) + '<small>' + h.orders + (h.orders === 1 ? ' order' : ' orders') + '</small></div>'
+                + (h.pct == null ? '' : '<div class="qp-hl-sub qp-hl-track">' + track + (h.goal ? ' · of ' + _qpHLK(h.goal) : '') + '</div>')
+                + (h.proj && !h.compact ? '<div class="qp-hl-lines">' + _qpHLLine('Projected Month-End', 'Revenue ' + _qpHLK(h.proj.rev)
+                    + (h.proj.net == null ? '' : ' · Net Profit ' + _qpHLK(h.proj.net))) + '</div>' : '');
+            boxes = { cap: 'Today By Store', list: h.stores.map(s => box(s.code, _qpHLK(s.net), pctOf(s.pct))) };
+        } else {
+            const p = mode === 'prev' ? h.prev : h.month;
+            const label = mode === 'prev' ? 'Net Sales · ' + _qpDayLabel(p.date)
+                : 'Net Sales · Month to ' + _qpDayLabel(p.date).replace(/^\w+, /, '');
+            const sub = mode === 'prev'
+                ? (p.pct == null ? '' : '<span class="' + _qpBand(p.pct) + '">' + Math.round(p.pct) + '% of goal</span> through this day')
+                : (h.pct == null ? '' : track) + (p.dayOf && p.days ? ' · Day ' + p.dayOf + ' of ' + p.days : '');
+            html = '<div class="qp-hl-top"><div class="qp-hl-k">' + escapeHtml(label) + '</div>' + sw + '</div>'
+                + '<div class="qp-hl-big">' + _lvMoney(p.net, false) + '<small>' + p.orders + (p.orders === 1 ? ' order' : ' orders') + '</small></div>'
+                + (sub ? '<div class="qp-hl-sub qp-hl-track">' + sub + '</div>' : '')
+                + (p.np == null || h.compact ? '' : '<div class="qp-hl-lines">' + _qpHLLine('Net Profit', _lvMoney(p.np, false)
+                    + (p.net > 0 ? ' · ' + (p.np / p.net * 100).toFixed(1) + '%' : '')) + '</div>');
+            const key = mode === 'prev' ? 'prev' : 'month';
+            boxes = { cap: 'By Store', list: h.stores.map(s => {
+                const q = s[key];
+                if (!q) return box(s.code, '—', '');
+                return box(s.code, _qpHLK(q.net), mode === 'prev' ? (q.np == null ? '' : 'NP ' + _qpHLK(q.np)) : pctOf(q.pct));
+            }) };
+        }
+        // With the tab bar above it (h.compact) the caption goes: the boxes are
+        // plainly the stores, and its line is what kept the card inside 350px.
+        return html + (h.compact ? '' : '<div class="qp-hl-cap">' + boxes.cap + '</div>')
+            + '<div class="qp-hl-boxes qp-hl-5">' + boxes.list.join('') + '</div>' + foot;
+    },
+    watch: function (h) {
+        const chip = { critical: ['Critical', 'bad'], warn: ['Warning', 'warn'], watch: ['Watch', 'info'], ok: ['On Target', 'good'] };
+        const need = h.crit + h.warn;
+        const seg = (n, cls) => n ? '<i class="' + cls + '" style="flex:' + n + '"></i>' : '';
+        const link = _qpDLink('Open Full Matrix', 'watch');
+        return _qpDTop(h, 'Through ' + escapeHtml(h.asOf || 'Yesterday'), link)
+            + '<div class="qp-hl-big">' + (need ? '<span class="bad">' + need + '</span><small>of ' + h.rows.length + ' stores need attention</small>'
+                : '<span class="good">All Clear</span><small>' + h.rows.length + ' stores on target for the month</small>') + '</div>'
+            + (h.compact ? '' : '<div class="qp-hl-seg">' + seg(h.crit, 'bad') + seg(h.warn, 'warn') + seg(h.watch, 'info') + seg(h.ok, 'good') + '</div>')
+            + (h.compact ? '' : '<div class="qp-hl-sub">' + [h.crit + ' critical', h.warn + ' warning', h.watch ? h.watch + ' to watch' : '', h.ok + ' on target'].filter(Boolean).join(' · ') + '</div>')
+            + '<div class="qp-cw-grid">' + h.rows.map(r => {
+                const c = chip[r.state] || chip.ok;
+                return '<div class="qp-cw-ln"' + (r.title ? ' title="' + escapeHtml(r.title) + '"' : '') + '>' + _qpDChip(c[0], c[1])
+                    + '<span class="qp-cw-lt"><span class="qp-cw-st">' + _qpDot(r.store) + escapeHtml(r.store) + '</span>' + escapeHtml(r.text) + '</span></div>';
+            }).join('') + '</div>'
+            + _qpDFoot(h, link);
+    },
+    stores: function (h) {
+        const band = _qpBand(h.pct);
+        const cls = { g: 'good', w: 'warn', b: 'bad' };
+        const link = _qpDLink('Open Store Breakdown', 'stores');
+        return _qpDTop(h, (h.npAll ? 'Net Profit' : 'Gross Profit') + ' Tracking · This Month', link)
+            + '<div class="qp-hl-big">' + _dccMoney(h.track) + '<small>of ' + _dccMoney(h.goal) + (h.npAll ? ' NP goal' : ' GP goal')
+                + (h.pct != null ? ' · <span class="' + band + '">' + Math.round(h.pct) + '%</span>' : '') + '</small></div>'
+            + (h.compact ? '' : _qpHLBar(h.pct, [], band))
+            + '<div class="qp-hl-lines qp-dhl-rows">' + h.rows.map(r => '<div class="qp-cw-ln"><span class="qp-cw-lt"><span class="qp-cw-st">'
+                + _qpDot(r.store) + escapeHtml(r.store) + '</span>' + escapeHtml(r.line) + '</span>'
+                + '<b class="' + (cls[r.band] || '') + '">' + (r.pct == null ? '—' : Number(r.pct).toFixed(1) + '%') + '</b></div>').join('') + '</div>'
+            + _qpDFoot(h, link);
+    },
+    ebay: function (h) {
+        const seg = (n, cls) => n ? '<i class="' + cls + '" style="flex:' + n + '"></i>' : '';
+        const word = { bad: 'In Danger', warn: 'At Risk', good: 'Clear' };
+        // Failing categories are a count beside the big figure, not chips: three
+        // chips wrapped to two lines at half of a 1280 screen and took the card
+        // to 382px. Which ones they are is in the full eBay table.
+        const nCats = h.rows.reduce((a, r) => a + r.cats.length, 0);
+        const catTxt = nCats && !h.narrow ? ' · ' + nCats + (nCats === 1 ? ' category' : ' categories') + ' failing' : '';
+        const big = h.danger ? '<span class="bad">' + h.danger + '</span><small>' + (h.danger === 1 ? 'store' : 'stores') + ' in danger' + catTxt + '</small>'
+            : h.risk ? '<span class="warn">' + h.risk + '</span><small>' + (h.risk === 1 ? 'store' : 'stores') + ' at risk' + catTxt + '</small>'
+            : '<span class="good">Healthy</span><small>all ' + h.rows.length + ' accounts clear' + catTxt + '</small>';
+        const link = _qpDLink('Open Full eBay', 'ebay');
+        return _qpDTop(h, 'Account Health · ' + h.rows.length + ' Accounts', link)
+            + '<div class="qp-hl-big">' + big + '</div>'
+            + (h.compact ? '' : '<div class="qp-hl-seg">' + seg(h.danger, 'bad') + seg(h.risk, 'warn') + seg(h.clear, 'good') + '</div>')
+            + '<div class="qp-cw-grid">' + h.rows.map(r => '<div class="qp-cw-ln">' + _qpDChip(word[r.state], r.state)
+                + '<span class="qp-cw-lt"><span class="qp-cw-st">' + _qpDot(r.store) + escapeHtml(r.store) + '</span>' + escapeHtml(r.text) + '</span>'
+                + '<b class="' + r.state + '">' + r.off + ' of 4</b></div>').join('') + '</div>'
+            + _qpDFoot(h, link);
+    },
+    score: function (h) {
+        const band = h.audit == null ? '' : _qpHLBand(h.audit);
+        // Narrow (a third of a row at 1280): the short words, or the line beside
+        // the big figure wraps under it and the card runs past 350px.
+        const side = [h.paudit == null ? '' : (h.narrow ? 'PayMore ' : 'PayMore audit ') + h.paudit.toFixed(1) + '%',
+            h.score == null ? '' : (h.narrow ? 'Score ' + h.score.toFixed(1) : 'Scorecard ' + h.score.toFixed(1) + ' / 10')].filter(Boolean).join(' · ');
+        const link = _qpDLink('Open Full Scorecard', 'scorecard');
+        return _qpDTop(h, 'SPEEKS Audit · District Average' + (h.week && !h.compact ? ' · Week of ' + escapeHtml(h.week) : ''), link)
+            + '<div class="qp-hl-big ' + band + '">' + (h.audit == null ? 'No audit' : h.audit.toFixed(1) + '%') + '<small>' + escapeHtml(side) + '</small></div>'
+            // Pass and Target are the bar's two ticks, named on hover: a line of
+            // their own took the card past 350px with five stores under it.
+            + (h.audit == null ? '' : _qpHLBar(h.audit, [AUDIT_PASS_PCT, AUDIT_TARGET_PCT], band)
+                .replace('<div class="qp-hl-bar', '<div title="Pass ' + AUDIT_PASS_PCT + ' · Target ' + AUDIT_TARGET_PCT + '" class="qp-hl-bar'))
+            + (h.compact ? '' : '<div class="qp-hl-cap">SPEEKS Audit · Scorecard</div>')
+            + h.rows.map(r => _qpAiStoreRow(r.store, r.audit || 0, r.audit == null ? '—' : r.audit.toFixed(1) + '%', r.audit == null ? '' : _qpHLBand(r.audit),
+                '<span class="qp-dhl-tag ' + r.scoreCls + '">' + r.score.toFixed(1) + '</span>')).join('')
+            + _qpDFoot(h, link);
+    },
+};
+
+// THE FULL TABLE, OVER THE PAGE. A headline card never grows (Ethan,
+// 2026-10-21), so Matrix, Store Breakdown, eBay and Scorecard open their real
+// panel in the same full-window view Live's "Open Full Dashboard" uses. The
+// panel itself is MOVED in and put back on close, not copied: its rows drill
+// (_dcDrill), its rail picks a store (_dccPick) and its renderers find it by
+// id, so a copy would be a panel none of that reaches.
+function _dcFsEl() { return document.getElementById('dcFullscreen'); }
+function openDistrictFull(tab) {
+    if (_dcFsEl()) return;
+    const panel = document.getElementById('dc-panel-' + tab);
+    if (!panel) return;
+    const title = { watch: 'Matrix', stores: 'Store Breakdown', ebay: 'eBay', scorecard: 'Scorecard' }[tab] || 'District';
+    const el = document.createElement('div');
+    el.id = 'dcFullscreen';
+    el.className = 'lv-fs dc-fs';
+    el.innerHTML = '<div class="lv-fs-bar"><span class="lv-fs-title">District · ' + escapeHtml(title) + '</span>'
+        + '<button type="button" class="lv-fs-close" onclick="closeDistrictFull()" title="Close (Esc)" aria-label="Close">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">'
+        + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>'
+        + '<div class="lv-fs-card dc-fs-card"></div>';
+    const mark = document.createComment('dc-full');
+    panel.parentNode.insertBefore(mark, panel);
+    el._dcBack = { mark: mark, panel: panel, was: panel.classList.contains('cc-active') };
+    el.querySelector('.dc-fs-card').appendChild(panel);
+    panel.classList.add('cc-active');
+    document.body.appendChild(el);
+    document.documentElement.classList.add('lv-fs-open');
+    document.body.classList.add('lv-fs-open');
+    document.addEventListener('keydown', _dcFsKey);
+}
+function closeDistrictFull() {
+    const el = _dcFsEl();
+    if (!el) return;
+    const b = el._dcBack;
+    if (b && b.mark.parentNode) {
+        b.mark.parentNode.insertBefore(b.panel, b.mark);
+        b.mark.remove();
+        b.panel.classList.toggle('cc-active', b.was);
+    }
+    el.remove();
+    document.removeEventListener('keydown', _dcFsKey);
+    if (!_lvFsEl()) {
+        document.documentElement.classList.remove('lv-fs-open');
+        document.body.classList.remove('lv-fs-open');
+    }
+}
+function _dcFsKey(e) { if (e.key === 'Escape') closeDistrictFull(); }
 
 // --- ACTION ITEMS CARDS (Ethan, 2026-10-22) ---
 // An Action Items card shows its piece as a card of its own — the count and bar,
@@ -51295,11 +51662,10 @@ const _QP_DEFAULT_MAXW = 0.5;
 // list of dates). A card holding several pieces takes the widest of theirs,
 // so Due Dates combined with News is a half again.
 const _QP_PIECE_MAXW = { 'feed/due': 1 / 3 };
-// THE DISTRICT COMMAND CENTER KEEPS A FULL ROW (2026-10-26) until it gets the
-// headline cards the store one has (part A of the DM design): its panels are
-// five-store tables, and at half a row the Live one scrolls sideways. Never
-// shares its row either (_QP_MIN_W).
-const _QP_BLOCK_MAXW = { district: 1 };
+// Held to a fixed share whatever the family says. Empty since part A of the DM
+// design (2026-10-29): the District Command Center kept a full row until it had
+// headline cards, and now it has them it is held to half like the store one.
+const _QP_BLOCK_MAXW = {};
 function _qpMaxW(key) {
     // ONLY CUSTOMIZE PAGES ARE HELD TO HALF A ROW (Ethan, 2026-10-26). The rule
     // came with the headline cards, which are made to fit half a row; a page
@@ -51323,12 +51689,26 @@ function _qpNeedsPartner(key) { const m = _qpMaxW(key); return !!m && m < 1; }
 // 1/3 size"). The least of a row a card may have; a row holding one can take
 // only as many cards as leave it that much (_qpRowLimit), and no Card Widths
 // choice may squeeze it below it.
-// The District Command Center: a full row, alone (2026-10-26). At ½ beside the
-// feed its five-store tables ran past the card, and a widget added beside it
-// made that row 900px tall. Until part A gives it headline cards it shares
-// with nothing.
-const _QP_MIN_W = { chart: 0.5, district: 1 };
-function _qpMinW(key) { return _QP_MIN_W[key] || 0; }
+// The District Command Center was a full row, alone, until part A gave it
+// headline cards (2026-10-29). Now only a card holding its LIVE tab keeps half
+// a row (Ethan: "if it's not going to look good at 33% it can be designed for
+// just 50%"): the five store boxes cut their figures off at a third. Matrix,
+// Store Breakdown, eBay and Scorecard read at a third. The original card holds
+// Live unless a split-out card does in the saved layout — the layout, never the
+// page as drawn: mid-rebuild the page still has the card Live is leaving, and
+// asking it let the original (Live back inside) settle at a third.
+const _QP_MIN_W = { chart: 0.5 };
+function _qpMinW(key) {
+    if (_QP_MIN_W[key]) return _QP_MIN_W[key];
+    const p = _qpParse(String(key || ''));
+    if (!p || p.fam !== 'district') return 0;
+    if (p.shell) return p.pieces.indexOf('live') !== -1 ? 0.5 : 0;
+    return _qpDistrictLiveOut() ? 0 : 0.5;
+}
+function _qpDistrictLiveOut() {
+    const has = k => { const o = _qpParse(String(k)); return !!o && o.shell && o.fam === 'district' && o.pieces.indexOf('live') !== -1; };
+    return (_qpSaved() || []).some(r => (r.items || []).some(has));
+}
 function _qpRowLimit(keys) {
     return keys.reduce(function (n, k) { const m = _qpMinW(k); return m ? Math.min(n, Math.floor(1 / m + 1e-9)) : n; }, QP_MAX_PER_ROW);
 }
@@ -58639,6 +59019,9 @@ const DC_TABS = ['live', 'watch', 'stores', 'ebay', 'scorecard'];
 
 function switchDistrictTab(tab) {
     _tabSwitch(_DC_BOARD, tab);
+    // A combined QuickPortal card shows the open tab's headline (as
+    // switchCommandTab does), not while the renderer is the one opening it.
+    if (typeof _qpRenderHeadlines === 'function' && !_qpHLBusy) _qpRenderHeadlines();
 }
 function collapseDistrict() { _tabCollapse(_DC_BOARD); }
 
@@ -58971,6 +59354,8 @@ function renderDistrictTabs() {
     const sc = document.getElementById('dc-score-body');
     if (sc) sc.innerHTML = _dcScoreHtml();
     _dcSummaryFill();
+    // The QuickPortal district cards read the same rows (DISTRICT HEADLINES).
+    if (typeof _qpRenderHeadlines === 'function') _qpRenderHeadlines();
 }
 
 // ============================================================================
@@ -59045,6 +59430,7 @@ async function fetchDistrictWatch() {
 function renderDistrictWatch() {
     const body = document.getElementById('dc-watch-body');
     if (body) body.innerHTML = _dcWatchHtml();
+    if (typeof _qpRenderHeadlines === 'function') _qpRenderHeadlines();
 }
 
 // The last chronic_window days (7 since 0110) against the target line.
