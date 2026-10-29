@@ -51523,7 +51523,10 @@ async function _qpWLoad(id, force) {
     if (!spec || st.busy) return;
     if (!force && st.at && Date.now() - st.at < (st.data ? (spec.ttl || 120000) : 60000)) return;
     st.busy = true;
-    try { st.data = await spec.load(); st.err = false; }
+    // The test login draws made-up data where a widget has some
+    // (_QP_TEST_SAMPLES); everything else still reads live.
+    const load = (window._speeksTestSession && _QP_TEST_SAMPLES[id]) || spec.load;
+    try { st.data = await load(); st.err = false; }
     catch (e) { st.err = !st.data; }   // keep showing the last good read
     finally { st.at = Date.now(); st.busy = false; }
     _qpRenderWidgets();
@@ -51556,6 +51559,135 @@ function _qpVarianceSample() {
             Object.assign(line('Galaxy S22 Ultra 256GB', 'Kaden Fry', -19, 'Battery health was 81%'),
             { dm_note: 'Did we test the battery before quoting?', dm_reply_requested: true, mgr_reply: 'Yes — 81%, priced for it' })],
     } };
+}
+// SAMPLE DATA FOR EVERY ROLE ON THE TEST LOGIN (Ethan, 2026-10-28: "put a ton
+// of dummy data in those accounts so I can see what all of the widgets look
+// like for each role"). Live Claims, Call Backs, B2B and Store KPIs are often
+// empty or all clear, so a test user only ever saw the "All Clear" state.
+// These are made-up reads in each tool's own shape, scoped the way the real
+// read is (the signed-in store, an MSM's two, or all five for DM/CEO/MOCD), so
+// every model, chip and strip runs as it does on a real login. Nothing is
+// written anywhere: _qpWLoad uses one only when _speeksTestSession is set,
+// which is localhost-only. Variance, district Variance and SPEEKS Connect keep
+// their own samples inside their loads (older). Every name and number is made up.
+const _QP_TEST_SAMPLES = {
+    claims: async () => _qpClaimsSample(_claimsDueScope()),
+    dclaims: async () => _qpClaimsSample(_CLAIMS_OVERSIGHT_STORES),
+    kpis: async () => _qpKpiSample(_kpiMyStores()),
+    dkpis: async () => _qpKpiSample(_DMX_STORES),
+    callbacks: async () => _qpCallbacksSample(),
+    b2b: async () => _qpB2bSample(),
+};
+function _qpSampleDay(offset) {
+    const d = new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) + 'T12:00:00');
+    d.setDate(d.getDate() + offset);
+    return d.toLocaleDateString('en-CA');
+}
+// claims-disputes' GET: cases (eBay returns, INRs, cases), mismatches,
+// disputes, payments — each with a store, a state and a due date, spread over
+// Overdue / Today / This Week / Later so the strip fills.
+function _qpClaimsSample(stores) {
+    const out = { success: true, today: _qpSampleDay(0), stores: stores.slice(), cases: [], mismatches: [], disputes: [], payments: [], sync: [] };
+    const items = ['iPhone 14 Pro 256GB Deep Purple', 'PS5 Disc Edition 825GB', 'MacBook Air M2 13" 512GB', 'Galaxy S23 Ultra 512GB',
+        'Nintendo Switch OLED Neon', 'iPad Pro 11" M2 256GB', 'Apple Watch Series 9 45mm', 'Xbox Series X 1TB', 'AirPods Max Silver', 'DJI Mini 3 Pro'];
+    let k = 0;
+    const nx = () => items[k++ % items.length];
+    stores.forEach(function (s, si) {
+        const off = d => _qpSampleDay(d + si);   // each store a little different
+        out.cases.push({ store_code: s, kind: 'return', state: 'needs_reply', due_on: off(-2), amount: 412 + si * 37, item_title: nx() });
+        out.cases.push({ store_code: s, kind: 'return', state: 'due', due_on: off(0), amount: 189, item_title: nx() });
+        out.cases.push({ store_code: s, kind: 'return', state: 'checked', due_on: off(5), amount: 95, item_title: nx() });
+        out.cases.push({ store_code: s, kind: 'inquiry', state: 'needs_reply', due_on: off(1), amount: 268, item_title: nx() });
+        out.cases.push({ store_code: s, kind: 'case', case_type: 'ITEM_NOT_RECEIVED', state: 'needs_claim', due_on: off(-1), amount: 640, item_title: nx() });
+        out.mismatches.push({ store_code: s, state: 'due', due_on: off(-1), amount: 54.2, shopify_order_name: '#' + s + '-' + (4810 + si * 13) });
+        out.mismatches.push({ store_code: s, state: 'needs_reply', due_on: off(9), amount: 22.5, shopify_order_name: '#' + s + '-' + (4822 + si * 13) });
+        out.disputes.push({ store_code: s, source: si % 2 ? 'ebay' : 'shopify', state: 'needs_reply', due_on: off(4), amount: 529, item_title: nx() });
+        out.payments.push({ store_code: s, state: 'due', due_on: off(-3), outstanding: 315, order_name: '#' + s + '-' + (4790 + si * 7) });
+        out.payments.push({ store_code: s, state: 'due', due_on: off(2), outstanding: 140, order_name: '#' + s + '-' + (4799 + si * 7) });
+        out.sync.push({ store_code: s, source: 'ebay', synced_at: new Date(Date.now() - (12 + si * 3) * 60000).toISOString() });
+    });
+    return out;
+}
+// kpi-manage's periods, newest first, per store and type. Each store gets a
+// different week so the district card shows every state: entered and all
+// green, entered with reds, entered close, due, and overdue.
+function _qpKpiSample(stores) {
+    const today = _qpSampleDay(0);
+    const dow = new Date(today + 'T12:00:00').getDay();
+    const lastSun = _qpSampleDay(-dow), nextSun = _qpSampleDay(7 - dow);
+    const back = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() - n); return d.toLocaleDateString('en-CA'); };
+    const monthEnd = n => { const d = new Date(today + 'T12:00:00'); d.setMonth(d.getMonth() - n + 1, 0); return d.toLocaleDateString('en-CA'); };
+    // [margin %, customer conv %, device conv %, minutes, no-deals, listed]
+    const looks = { green: [56, 90, 89, 10.5, 6, 225], close: [52.5, 85, 88, 13.5, 9, 205], red: [48, 81, 84, 18, 12, 150] };
+    const people = ['Colin Davis', 'Kaden Fry', 'Nathan Zuklin'];
+    const entries = (look, at) => {
+        const [gm, cc, dc, att, nd, ls] = looks[look];
+        return people.map(function (name) {
+            const bv = 10000;
+            return { employee_name: name, buying_value: bv, buying_cost: Math.round(bv * (1 - gm / 100)), transaction_count: 40,
+                transaction_converted: Math.round(40 * cc / 100), device_count: 100, device_converted: Math.round(dc), avg_transaction_time: att,
+                no_deal_count: Math.round(nd / 3), no_deal_value: 900, no_deal_cost: 520, listed_count: Math.round(ls / 3),
+                listed_retail_price: 14000, listed_cost: 6400, listed_sold_value: 8200, mtd_google_reviews: 4, updated_at: at };
+        });
+    };
+    const per = (end, editable, look, at) => ({ period_end_date: end, is_editable: editable, saved_count: look ? 3 : 0, entries: look ? entries(look, at) : [] });
+    const at = d => d + 'T14:20:00Z';
+    // [this week, last week, the week before] and [this month, last, the one before]
+    const plans = [
+        { w: [per(lastSun, true, 'green', at(_qpSampleDay(-dow + 1))), per(back(lastSun, 7), false, 'close', at(back(lastSun, 6))), per(back(lastSun, 14), false, 'red', at(back(lastSun, 13)))] },
+        { w: [per(lastSun, true, null), per(back(lastSun, 7), false, 'green', at(back(lastSun, 6))), per(back(lastSun, 14), false, 'close', at(back(lastSun, 13)))] },
+        { w: [per(nextSun, true, null), per(lastSun, false, 'close', at(_qpSampleDay(-dow + 1))), per(back(lastSun, 7), false, 'green', at(back(lastSun, 6)))] },
+        { w: [per(lastSun, true, 'red', at(_qpSampleDay(-dow + 1))), per(back(lastSun, 7), false, 'close', at(back(lastSun, 6))), per(back(lastSun, 14), false, 'green', at(back(lastSun, 13)))] },
+        { w: [per(lastSun, true, 'close', at(_qpSampleDay(-dow + 1))), per(back(lastSun, 7), false, 'red', at(back(lastSun, 6))), per(back(lastSun, 14), false, 'red', at(back(lastSun, 13)))] },
+    ];
+    const months = ['green', 'close', 'red', 'green', 'close'];
+    const out = { weekly: {}, monthly: {} };
+    stores.forEach(function (s, i) {
+        out.weekly[s] = plans[i % plans.length].w;
+        out.monthly[s] = [per(monthEnd(0), true, null), per(monthEnd(1), false, months[i % 5], at(back(monthEnd(1), -2))),
+            per(monthEnd(2), false, months[(i + 2) % 5], at(back(monthEnd(2), -2)))];
+    });
+    return out;
+}
+// call-backs' active list: some with a suggested match at your store (In
+// Stock), some still open, some already called.
+function _qpCallbacksSample() {
+    const scope = _cbMatchScope() || [];
+    const s = scope[0] || 'OVL', other = STORE_CODES.find(x => !scope.includes(x)) || 'WSP';
+    const day = 86400000, now = Date.now(), iso = ms => new Date(ms).toISOString(), d10 = ms => iso(ms).slice(0, 10);
+    const cb = (item, who, store, status, ago, extra) => Object.assign({ item, customer_name: who, store, status, date_of_call: d10(now - ago * day),
+        updated_at: iso(now - ago * day), matches: [] }, extra || {});
+    return [
+        cb('iPhone 15 Pro 256GB', 'Marcus Taylor', s, 'open', 9, { matches: [{ state: 'suggested', store_code: s, price: 799 }] }),
+        cb('Nintendo Switch OLED White', 'Dana Reyes', other, 'open', 21, { matches: [{ state: 'suggested', store_code: s, price: 249 }] }),
+        cb('Canon EOS R6 Body', 'Sam Okafor', s, 'open', 4, { matches: [{ state: 'suggested', store_code: s, price: 1349 }] }),
+        cb('Steam Deck OLED 512GB', 'Priya Shah', s, 'open', 6),
+        cb('iPad Air M2 128GB', 'Leo Grant', s, 'open', 3),
+        cb('Meta Quest 3 512GB', 'Tess Whitfield', s, 'open', 15),
+        cb('MacBook Pro 14" M3', 'Jordan Lee', s, 'contacted', 12, { updated_at: iso(now - 3 * day), status_by: 'Colin Davis' }),
+        cb('Xbox Series X 1TB', 'Ava King', s, 'contacted', 8, { updated_at: iso(now - day), status_by: 'Kaden Fry' }),
+        cb('Sony WH-1000XM5', 'Ray Patel', s, 'contacted', 5, { updated_at: iso(now - 2 * day), status_by: 'Nathan Zuklin' }),
+    ];
+}
+// b2b-deals' open deals and unlisted read, for your store (or CORP for a
+// corp role): deals to price, pickups to sign off, deals at corp's review and
+// quote stages, and unlisted value by deal. _b2bInScope / _b2bActionFor
+// still decide what each role sees, as on a real login.
+function _qpB2bSample() {
+    const corp = _b2bIsCorp(), s = _b2bMyStores()[0] || 'OVL';
+    const day = 86400000, now = Date.now(), iso = ms => new Date(ms).toISOString();
+    const deal = (ref, company, stage, ago, units, value, store) => ({ id: ref, ref, company, stage, pricing_store: store, listing_store: store,
+        stage_changed_at: iso(now - ago * day), updated_at: iso(now - ago * day), created_at: iso(now - (ago + 5) * day), total_units: units, total_value: value });
+    const deals = [
+        deal('ACME-003', 'Acme Corp', 'pricing', 8, 22, 3100, s), deal('CITY-001', 'City Library', 'pricing', 3, 12, 1500, s),
+        deal('BLUV-002', 'Blue Valley Schools', 'pricing', 6, 48, 4200, s), deal('KCPS-004', 'KC Public Schools', 'pickup', 5, 40, 5200, s),
+        deal('HRBL-001', 'H&R Block', 'pickup', 1, 15, 1800, s), deal('MARI-002', 'Mariner', 'quote', 12, 18, 2400, 'CORP'),
+        deal('SAVOP-002', 'Savers', 'review', 2, 9, 900, 'CORP'), deal('CRNR-001', 'Cerner', 'pricing', 9, 60, 7400, 'CORP'),
+    ].map(_b2bShapeDeal).filter(_b2bInScope);
+    const unl = [['MARI-001', 'Mariner', 31, 1290], ['STOMA-001', 'Sertoma', 28, 1190], ['SAVOP-001', 'Savers Overland Park', 24, 570],
+        ['KCPS-001', 'KC Public Schools', 8, 310], ['ACME-001', 'Acme Corp', 5, 180]]
+        .map((r, i) => ({ ref: r[0], company: r[1], unlisted_units: r[2], unlisted_value: r[3], store: corp ? STORE_CODES[i % STORE_CODES.length] : s }));
+    return { deals, unl };
 }
 // "September" from "2026-09-30" (Monthly Breakdown's period end dates).
 function _qpMbMonth(iso) { return new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'long' }); }

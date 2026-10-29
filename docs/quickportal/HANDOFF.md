@@ -486,3 +486,12 @@ designs since have been shown inline in chat.
   narrow-card fixes (Champions labels, Awards video pill, Monthly switch
   1.25fr first column + 3px padding — `[data-qp-block] .qp-hl-switch` outranks
   plain .qp-mb-sw rules). All roles 350 in both layouts.
+  **10-28 (evening): sample data for every role on the test login** — Ethan:
+  "put a ton of dummy data in those accounts". `_QP_TEST_SAMPLES` (beside
+  `_qpVarianceSample`) gives Claims, district Claims, Store KPIs, district
+  KPIs, Call Backs and B2B a made-up read in the tool's own shape, scoped like
+  the real read; `_qpWLoad` uses it only when `_speeksTestSession`. KPIs give
+  each store a different week (green / overdue / due / red / close) so the
+  district card shows every state. Checked at 1280 as manager, DM, CEO, ASM
+  and MSM: every widget filled, all 350. Action Items, Your Feed, eBay and
+  Scorecard are still live data (empty for some test stores).
