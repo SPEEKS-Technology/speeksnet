@@ -2858,6 +2858,14 @@ select.bs-hidden-select:focus {
 #manageUsersList .mu-group.collapsed .mu-group-chev { transform: rotate(-90deg); }
 #manageUsersList .mu-group-body { padding-top: 8px; }
 #manageUsersList .mu-group.collapsed .mu-group-body { display: none; }
+/* Test Accounts (_muRenderTestAccounts): read-only, PIN first — the PIN is what
+   the list is for. Not .user-manage-row, so the save never reads them. */
+#manageUsersList .mu-test-note { font-size: 12px; color: #647082; margin: 0 2px 8px; }
+#manageUsersList .mu-test-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 1fr) 60px; gap: 10px; align-items: center;
+    background: #fff; padding: 10px 12px; border-radius: 8px; border: 1px dashed var(--gen-border); margin-bottom: 8px; font-size: 14px; }
+#manageUsersList .mu-test-pin { font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .08em; color: #146c3c; background: #e8f7ee; border-radius: 6px; padding: 3px 8px; justify-self: start; }
+#manageUsersList .mu-test-name { font-weight: 700; color: var(--slate-charcoal); }
+#manageUsersList .mu-test-role, #manageUsersList .mu-test-store { color: #5b6b64; }
 
 .idea-menu { width: 550px; max-width: 90vw; }
 .idea-label { display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: var(--slate-charcoal); }

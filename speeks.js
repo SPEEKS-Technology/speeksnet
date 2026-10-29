@@ -3161,6 +3161,7 @@ async function toggleManageUsers() {
             }
 
             globalUsersData = data.users || [];
+            _muTestUsers = data.test_users || [];
             populateUsersModal();
 
             fetch(`${AUTH_URL}?v=${Date.now()}`).then(r => r.json()).then(newData => {
@@ -3224,7 +3225,37 @@ function populateUsersModal() {
         groups[role].forEach(u => addManageUserRow(u, body));
     });
 
+    _muRenderTestAccounts(rows);
     _muApplyNotifyRoster();
+}
+
+// TEST ACCOUNTS, READ-ONLY (Ethan, 2026-10-28: "I would like to see them in
+// user permissions so I know what pin is for what test account"). They live in
+// test_users, not users (migration 0160), so they are listed here and nowhere
+// else, and they can't be edited from this screen. Their rows are NOT
+// .user-manage-row, so saveManageUsers never reads them: this save rewrites
+// the whole users table, and a test account in it would count toward listing
+// goals, the KPI roster, the usage report and the mail.
+let _muTestUsers = [];
+function _muRenderTestAccounts(rows) {
+    if (!_muTestUsers.length) return;
+    const chev = `<svg class="mu-group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+    const group = document.createElement('div');
+    group.className = 'mu-group mu-test-group collapsed';
+    group.innerHTML = `<div class="mu-group-head" onclick="toggleUserGroup(this)">${chev}<span class="mu-group-name">Test Accounts</span>`
+        + `<span class="mu-group-count">${_muTestUsers.length}</span></div>`
+        + `<div class="mu-group-body"><div class="mu-test-note">Sign in with these PINs to see a role's view. Nothing can be saved, and they never count in goals, rosters or reports. Read-only here.</div>`
+        + _muTestUsers.slice().sort((a, b) => String(a.pin).localeCompare(String(b.pin))).map(u => `<div class="mu-test-row">`
+            + `<span class="mu-test-pin">${escapeHtml(u.pin)}</span><span class="mu-test-name">${escapeHtml(u.name)}</span>`
+            + `<span class="mu-test-role">${escapeHtml(_muTestRole(u.role))}</span><span class="mu-test-store">${escapeHtml(String(u.store || '').toUpperCase())}</span></div>`).join('')
+        + `</div>`;
+    rows.appendChild(group);
+}
+// "multi-store manager" → "Multi-Store Manager", as the role dropdown spells it.
+function _muTestRole(r) {
+    const s = String(r || '').toLowerCase();
+    if (s === 'ceo' || s === 'mocd') return s.toUpperCase();
+    return s.replace(/(^|[\s(-])([a-z])/g, (m, a, b) => a + b.toUpperCase());
 }
 
 // Fill the per-row email-alert badge from the notify function's roster.
