@@ -26531,3 +26531,58 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 .main-content.qp-editing .qp-cell > [data-qp-block] .qp-shelf-grip { display: flex; pointer-events: auto; }
 .main-content.qp-editing .qp-shelf-grip:hover { border-color: #1f9d57; color: #146c3c; }
 .main-content.qp-editing .qp-shelf-grip:active { cursor: grabbing; }
+/* THE DISTRICT FOUR, each its own picture (Ethan, 2026-10-29; picked from
+   prototypes/district-variety.html). Sized for ½ a row; container queries
+   tighten them at ⅓ (428px), where five across has about 75px a store. */
+.qp-widget { container-type: inline-size; }
+.qp-drings { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.qp-dring { text-align: center; min-width: 0; }
+.qp-dring svg { display: block; width: 100%; max-width: 74px; height: auto; margin: 0 auto; }
+.qp-dring-s { font-size: 12px; font-weight: 800; color: #1a1c1e; margin-top: 4px; display: flex; align-items: center; justify-content: center; gap: 5px; }
+.qp-dring-n { font-size: 11px; font-weight: 700; color: #647082; margin-top: 2px; white-space: nowrap; }
+.qp-dring-n b { color: #1a1c1e; } .qp-dring-n b.good { color: #1f9d57; }
+.qp-strip { display: flex; height: 14px; border-radius: 99px; overflow: hidden; gap: 2px; margin: 4px 0 12px; }
+.qp-strip i { display: block; min-width: 2px; }
+.qp-stiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.qp-stile { border: 1px solid #e6ebf1; border-left: 4px solid #8a94a3; border-radius: 12px; padding: 9px 9px 8px; min-width: 0; }
+.qp-stile-s { font-size: 11px; font-weight: 800; color: #647082; white-space: nowrap; }
+.qp-stile-v { font-size: 16px; font-weight: 900; color: #1a1c1e; margin: 2px 0 4px; white-space: nowrap; }
+.qp-stile-tag { font-size: 10px; font-weight: 800; border-radius: 6px; padding: 1px 6px; display: inline-block; background: #eef1f4; color: #4b5563; white-space: nowrap; }
+.qp-stile-tag.good { background: #e8f7ee; color: #146c3c; } .qp-stile-tag.warn { background: #fdf3e2; color: #a46412; } .qp-stile-tag.bad { background: #fdecec; color: #c53030; }
+.qp-lb { margin-top: 2px; }
+.qp-lb-r { display: flex; align-items: center; gap: 10px; padding: 4px 2px; border-top: 1px solid #eef1f4; min-width: 0; }
+.qp-lb-r:first-child { border-top: 0; }
+.qp-lb-k { flex: none; width: 18px; font-size: 13px; font-weight: 900; color: #9aa4b1; text-align: center; }
+.qp-lb-r:nth-child(1) .qp-lb-k { color: #c9971c; } .qp-lb-r:nth-child(2) .qp-lb-k { color: #8f9aa7; } .qp-lb-r:nth-child(3) .qp-lb-k { color: #b0703a; }
+.qp-lb-av { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 10.5px; font-weight: 900; }
+.qp-lb-nm { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-lb-nm b { font-size: 12.5px; font-weight: 800; color: #1a1c1e; margin-right: 6px; }
+.qp-lb-nm span { font-size: 11px; font-weight: 700; color: #8a94a3; }
+.qp-lb-dv { flex: none; text-align: right; white-space: nowrap; }
+.qp-lb-dv b { font-size: 15px; font-weight: 900; color: #1a1c1e; margin-right: 4px; }
+.qp-lb-dv span { font-size: 10px; font-weight: 800; color: #8a94a3; letter-spacing: .04em; text-transform: uppercase; }
+.qp-heat { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+.qp-heat-t { border-radius: 14px; padding: 12px 6px; text-align: center; min-width: 0; background: #f1f4f7; color: #3c4654; }
+.qp-heat-t.good { background: #e8f7ee; color: #146c3c; } .qp-heat-t.warn { background: #fdf3e2; color: #8a5410; } .qp-heat-t.bad { background: #fdecec; color: #a72828; }
+.qp-heat-s { font-size: 11px; font-weight: 900; letter-spacing: .04em; }
+.qp-heat-q { font-size: 24px; font-weight: 900; margin-top: 4px; line-height: 1.1; }
+.qp-heat-l { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .75; }
+.qp-heat-d { margin-top: 8px; font-size: 12px; font-weight: 900; border-radius: 99px; background: rgba(255,255,255,.7); padding: 2px 0; white-space: nowrap; }
+.qp-heat-key { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 12px; font-size: 10.5px; font-weight: 700; color: #647082; }
+.qp-heat-key i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.qp-heat-key i.good { background: #bfe8cf; } .qp-heat-key i.warn { background: #f6dcae; } .qp-heat-key i.bad { background: #f6c4c4; }
+@container (max-width: 500px) {
+    .qp-drings, .qp-stiles, .qp-heat { gap: 5px; }
+    .qp-dring-n { font-size: 10px; }
+    .qp-stile { padding: 7px 6px 6px; border-left-width: 3px; }
+    .qp-stile-v { font-size: 13.5px; }
+    .qp-wide-only { display: none; }
+    .qp-heat-t { padding: 10px 4px; }
+    .qp-heat-q { font-size: 19px; }
+    .qp-heat-d { font-size: 10.5px; }
+    .qp-heat-key { gap: 8px; font-size: 9.5px; }
+    .qp-lb-nm span { display: none; }
+}
+/* The card body is a flex column; these keep their height instead of being
+   squeezed (the rings drew over the caption and their own store names). */
+.qp-drings, .qp-strip, .qp-stiles, .qp-lb, .qp-heat, .qp-heat-key { flex: none; }

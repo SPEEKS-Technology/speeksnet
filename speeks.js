@@ -54138,10 +54138,25 @@ Object.assign(_QP_WSPEC, {
         },
     },
 });
-// The district four: each store's line from the same snapshot the store cards
-// read, ranked, with a tag that says the one other thing a DM asks about it.
+// The district four (Ethan, 2026-10-29). First as bars, a store a line —
+// "the bars give off the same style and will make it feel super
+// repetitive" — so each is its own kind of picture now, picked from
+// prototypes/district-variety.html (A, B, A, A): Goal Pace as rings, Buying as
+// a share strip over store tiles, Team Production as a leaderboard of the top
+// producers, Inventory Pipeline as heat tiles. Same snapshot as the store cards.
 const _qpTag = (text, cls) => '<span class="qp-dhl-tag ' + (cls || '') + '">' + text + '</span>';
 const _qpDistLast = d => STORE_CODES.map(s => ({ s, y: _qpLast(d, s) })).filter(x => x.y);
+const _qpStoreColor = s => STORE_TINTS[s] || '#8a94a3';
+const _qpPct3 = p => (p >= 90 ? 'good' : p >= 80 ? 'warn' : 'bad');
+const _QP_TONE_HEX = { good: '#1f9d57', warn: '#f0a92b', bad: '#e05252' };
+function _qpRing(s, p, under) {
+    const r = 30, c = 2 * Math.PI * r, t = _qpPct3(p || 0);
+    return '<div class="qp-dring"><svg viewBox="0 0 74 74" aria-hidden="true"><circle cx="37" cy="37" r="' + r + '" fill="none" stroke="#eef1f4" stroke-width="8"/>'
+        + '<circle cx="37" cy="37" r="' + r + '" fill="none" stroke="' + _QP_TONE_HEX[t] + '" stroke-width="8" stroke-linecap="round" stroke-dasharray="'
+        + (c * Math.min(p || 0, 100) / 100).toFixed(1) + ' ' + c.toFixed(1) + '" transform="rotate(-90 37 37)"/>'
+        + '<text x="37" y="42" text-anchor="middle" font-size="15" font-weight="900" fill="#1a1c1e">' + Math.round(p || 0) + '%</text></svg>'
+        + '<div class="qp-dring-s">' + _qpDot(s) + escapeHtml(s) + '</div><div class="qp-dring-n">' + under + '</div></div>';
+}
 Object.assign(_QP_WSPEC, {
     dpace: {
         when: 'This Month', ttl: 600000, tabs: [['main', 'Pace', 'Goal Pace by Store']], where: () => 'District', load: _qpSnapLoad,
@@ -54153,36 +54168,41 @@ Object.assign(_QP_WSPEC, {
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(so, false) + '<small>of ' + _qpHLK(goal) + ' goal · net profit so far</small></div>'
                 + (pct == null ? '' : '<span class="qp-trend ' + (pct >= 100 ? 'up' : 'down') + '">Tracking to ' + Math.round(pct) + '%</span>') + '</div>'
                 + '<div class="qp-hl-cap">Tracking to Goal · Needed a Day</div>'
-                + rows.map(x => _qpAiStoreRow(x.s, Math.min(100, x.p.pct || 0), Math.round(x.p.pct || 0) + '%', _qpBand(x.p.pct),
-                    _qpTag(x.p.hit ? 'Hit' : _qpHLK(x.p.need), x.p.hit ? 'good' : ''))).join(''));
+                + '<div class="qp-drings">' + rows.map(x => _qpRing(x.s, x.p.pct, x.p.hit ? '<b class="good">Goal Hit</b>' : '<b>' + _qpHLK(x.p.need) + '</b> a day')).join('') + '</div>');
         },
     },
     dbuying: {
         when: 'Latest Report', ttl: 600000, tabs: [['main', 'Buying', 'Buying by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
-            const rows = _qpDistLast(d).sort((a, b) => b.y.est_value - a.y.est_value), mx = Math.max(1, ...rows.map(x => Number(x.y.est_value) || 0));
+            const rows = _qpDistLast(d).sort((a, b) => b.y.est_value - a.y.est_value);
             const pct = v => { v = Number(v); return v ? (v * (v <= 1 ? 100 : 1)) : null; };
             const bought = _qpSum(rows.map(x => x.y), 'est_value'), paid = _qpSum(rows.map(x => x.y), 'total_spent');
+            const mt = m => (m == null ? '' : m >= 40 ? 'good' : m >= 35 ? 'warn' : 'bad');
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(bought, false) + '<small>bought · ' + _lvMoney(paid, false) + ' paid</small></div>'
                 + (bought ? '<span class="qp-trend up">' + ((1 - paid / bought) * 100).toFixed(1) + '% Margin</span>' : '') + '</div>'
-                + '<div class="qp-hl-cap">Bought on Each Store\'s Latest Report · Margin</div>'
-                + rows.map(x => { const m = pct(x.y.est_margin_pct); return _qpAiStoreRow(x.s, (Number(x.y.est_value) || 0) / mx * 100, _qpHLK(x.y.est_value), '',
-                    _qpTag(m == null ? '—' : m.toFixed(0) + '%', m == null ? '' : m >= 40 ? 'good' : m >= 35 ? 'warn' : 'bad')); }).join(''));
+                + '<div class="qp-hl-cap">Share of the District\'s Buying · Latest Report</div>'
+                + '<div class="qp-strip">' + rows.map(x => '<i style="flex:' + (Number(x.y.est_value) || 0) + ';background:' + _qpStoreColor(x.s) + '"></i>').join('') + '</div>'
+                + '<div class="qp-stiles">' + rows.map(x => { const m = pct(x.y.est_margin_pct), sh = bought ? Math.round((Number(x.y.est_value) || 0) / bought * 100) : 0;
+                    return '<div class="qp-stile" style="border-left-color:' + _qpStoreColor(x.s) + '"><div class="qp-stile-s">' + escapeHtml(x.s) + ' · ' + sh + '%</div>'
+                        + '<div class="qp-stile-v">' + _qpHLK(x.y.est_value) + '</div>'
+                        + (m == null ? '' : '<span class="qp-stile-tag ' + mt(m) + '">' + m.toFixed(0) + '%<span class="qp-wide-only"> Margin</span></span>') + '</div>'; }).join('') + '</div>');
         },
     },
     dteam: {
         when: 'Latest Report', ttl: 600000, tabs: [['main', 'Team', 'Team Production by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
-            const rows = STORE_CODES.map(s => ({ s, t: _qpTeamOf(d, s) })).filter(x => x.t).sort((a, b) => b.t.total - a.t.total);
-            const mx = Math.max(1, ...rows.map(x => x.t.total));
+            const rows = STORE_CODES.map(s => ({ s, t: _qpTeamOf(d, s) })).filter(x => x.t);
+            const tops = rows.map(x => ({ s: x.s, total: x.t.total, m: x.t.team.find(m => m.top) || x.t.team[0] })).filter(x => x.m).sort((a, b) => b.m.n - a.m.n);
+            const ini = n => String(n || '').split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _qpN(rows.reduce((a, x) => a + x.t.total, 0)) + '<small>devices processed · '
                 + _qpHLK(rows.reduce((a, x) => a + x.t.value, 0)) + ' value</small></div></div>'
-                + '<div class="qp-hl-cap">Processed on the Latest Report · Top Producer</div>'
-                + rows.map(x => { const top = x.t.team.find(m => m.top) || x.t.team[0];
-                    return _qpAiStoreRow(x.s, x.t.total / mx * 100, _qpN(x.t.total), x.t.total >= mx * 0.75 ? 'good' : x.t.total >= mx * 0.5 ? 'warn' : 'bad',
-                        _qpTag(top ? escapeHtml(_qpShort(top.name)) : '—', 'qp-dhl-name')); }).join(''));
+                + '<div class="qp-hl-cap">Top Producer at Each Store · Latest Report</div>'
+                + '<div class="qp-lb">' + tops.map((x, i) => '<div class="qp-lb-r"><span class="qp-lb-k">' + (i + 1) + '</span>'
+                    + '<span class="qp-lb-av" style="background:' + _qpStoreColor(x.s) + '">' + escapeHtml(ini(x.m.name)) + '</span>'
+                    + '<div class="qp-lb-nm"><b>' + escapeHtml(x.m.name) + '</b><span>' + escapeHtml(x.s) + ' · store processed ' + _qpN(x.total) + '</span></div>'
+                    + '<div class="qp-lb-dv"><b>' + _qpN(x.m.n) + '</b><span>Devices</span></div></div>').join('') + '</div>');
         },
     },
     dpipeline: {
@@ -54196,10 +54216,12 @@ Object.assign(_QP_WSPEC, {
                 const q = Number(x.y.queue_count) || 0;
                 return { s: x.s, q, avail: Number(x.y.available_count) || 0, days: avg ? Math.ceil(q / avg) : null };
             }).sort((a, b) => b.q - a.q);
-            const mx = Math.max(1, ...rows.map(x => x.q)), band = n => (n == null ? '' : n <= 3 ? 'good' : n <= 7 ? 'warn' : 'bad');
+            const band = n => (n == null ? '' : n <= 3 ? 'good' : n <= 7 ? 'warn' : 'bad');
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _qpN(_qpSum(rows, 'q')) + '<small>waiting to process · ' + _qpN(_qpSum(rows, 'avail')) + ' available</small></div></div>'
                 + '<div class="qp-hl-cap">In Queue · Days to Clear at the Store\'s Pace</div>'
-                + rows.map(x => _qpAiStoreRow(x.s, x.q / mx * 100, _qpN(x.q), band(x.days), _qpTag(x.days == null ? '—' : x.days + 'd', band(x.days)))).join(''));
+                + '<div class="qp-heat">' + rows.map(x => '<div class="qp-heat-t ' + band(x.days) + '"><div class="qp-heat-s">' + escapeHtml(x.s) + '</div><div class="qp-heat-q">' + _qpN(x.q) + '</div>'
+                    + '<div class="qp-heat-l">In Queue</div><div class="qp-heat-d">' + (x.days == null ? '—' : x.days + (x.days === 1 ? ' Day' : ' Days')) + '</div></div>').join('') + '</div>'
+                + '<div class="qp-heat-key"><span><i class="good"></i>3 Days or Less</span><span><i class="warn"></i>4–7 Days</span><span><i class="bad"></i>Over a Week</span></div>');
         },
     },
 });
