@@ -25604,11 +25604,12 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-mn-empty { visibility: hidden; border: 2px dashed #d5dde6; border-radius: 16px; background: none; color: #8a94a3; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
 .main-content.qp-editing .qp-mn-x { display: grid; place-items: center; }
 .main-content.qp-editing .qp-mn-empty { visibility: visible; }
-/* A mini is carried by its icon in Customize (Ethan, 2026-10-29); the rest of
-   the shelf still carries the whole shelf. A ring on hover says it can be held. */
-.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip { pointer-events: auto; cursor: grab; transition: box-shadow .12s; }
-.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip:hover { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #1f9d57; }
-.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip:active { cursor: grabbing; }
+/* A mini is carried by the whole mini in Customize (Ethan, 2026-10-29: "grab
+   each row in the shelf"); a shelf's free rows still carry the whole shelf.
+   Its insides stay pointer-less (the rule above), so the press lands on it. */
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mshelf > .qp-mn { pointer-events: auto; cursor: grab; transition: border-color .12s, box-shadow .12s; }
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mshelf > .qp-mn:hover { border-color: #9fd8b6; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mshelf > .qp-mn:active { cursor: grabbing; }
 .qp-mn.qp-dragging { opacity: .45; }
 /* The 1 Row / 2 Rows switch, beside the × in Customize (qpMiniRows). */
 .qp-mn-sz { display: none; position: absolute; top: 6px; right: 32px; height: 22px; border: 1px solid #e3e8ee; border-radius: 7px; background: #fff; overflow: hidden; z-index: 1; }

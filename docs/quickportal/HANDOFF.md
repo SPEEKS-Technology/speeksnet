@@ -435,6 +435,21 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Grab a mini, not the shelf; sizes fit, 10-29** (Ethan: "I can't split
+  the shelf up now ... grab each row in the shelf and move it either within or
+  outside of the shelf"; "grabbing a 2 row and putting it in a shelf with only
+  1 row available it should collapse it to 1 row and vice versa"). The WHOLE
+  mini is the handle now (`.qp-mshelf > .qp-mn`, `_qpMiniGrips`; the icon-only
+  grip is gone); a shelf's free rows / empty slots still carry the whole
+  shelf. Sizes: token `id~c` = one row that wants two (`_qpFitTok`,
+  `_qpTokWants2`): a two-row mini dropped where one row is free lands as `~c`;
+  moved where two rows are free (another shelf, or out on its own) it is `~2`
+  again. Room is checked against the fewest rows a mini can take
+  (`_qpMiniMinRows`); the overlay says "· As 1 Row / As 2 Rows". Picking 1 on
+  the switch forgets the wish. Real mouse drags: two-row onto a 1-free shelf →
+  `~c` (110px); that onto a 2-free shelf → `~2` (230px). Out to a + slot and
+  a lone `~c` moving out → `~2` checked with dispatched events (the pane's
+  drag end can't reach that far down).
 - **Shelf onto shelf combines, 10-29** (Ethan: "Can I not drag the one on the
   left into the one on the right?" — he grabbed the shelf's card, which used
   to SWAP). A whole shelf over another shelf's middle now combines into it

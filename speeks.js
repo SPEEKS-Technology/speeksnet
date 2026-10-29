@@ -54321,9 +54321,7 @@ Object.assign(QP_MINIS.mavail, { draw2: d => {
     return _qpX2.head(m, 'Available Inventory', _qpHLK(_qpSum(list, 'n')) + '<small>at cost · latest report</small>') + _qpX2.rows(list, _qpHLK, () => 'blue');
 } });
 function _qpMiniOk(id) { const m = QP_MINIS[_qpTokId(id)]; try { return !!m && !!m.avail(); } catch (e) { return false; } }
-// A mini's icon is also what it is carried by in Customize (.qp-mn-grip,
-// made draggable by _qpMiniGrips).
-function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico qp-mn-grip ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
+function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
 
 // The data a mini draws from, loading it once if it is missing or stale.
 const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: false, data: null } };
@@ -54376,6 +54374,19 @@ const _qpMiniSize = tok => { const m = QP_MINIS[_qpTokId(tok)]; return m && (m.d
 const _qpShelfUsed = ids => ids.filter(_qpMiniOk).reduce((a, id) => a + _qpMiniSize(id), 0);
 function _qpShelves(main) { return Array.from(main.querySelectorAll('[data-qp-shelf]')); }
 function _qpMiniShelf(main, id) { id = _qpTokId(id); return _qpShelves(main).find(b => _qpShelfIds(_qpKey(b)).some(t => _qpTokId(t) === id)) || null; }
+// FITTING A MOVE (Ethan, 2026-10-29: "grabbing a 2 row and putting it in a
+// shelf with only 1 row available it should collapse it to 1 row and vice
+// versa"). A two-row mini dropped where one row is free goes in as one row,
+// remembered as "id~c" (one row, wants two); dropped later where two rows are
+// free it grows back to "id~2". Picking 1 on its switch forgets the wish (plain id).
+const _qpTokWants2 = tok => /~(2|c)$/.test(String(tok || ''));
+function _qpFitTok(tok, free) {
+    const id = _qpTokId(tok), m = QP_MINIS[id];
+    if (!m || m.double || !m.draw2 || !_qpTokWants2(tok)) return tok;
+    return free >= 2 ? id + '~2' : id + '~c';
+}
+// The fewest rows a mini can take: one, unless it has no one-row version.
+const _qpMiniMinRows = tok => { const m = QP_MINIS[_qpTokId(tok)]; return m && m.double ? 2 : 1; };
 function _qpMiniTok(main, id) { const b = _qpMiniShelf(main, id); return b ? _qpShelfIds(_qpKey(b)).find(t => _qpTokId(t) === id) : null; }
 function _qpMakeShelf(key) {
     const el = document.createElement('section');
@@ -54425,9 +54436,13 @@ function _qpMoveMini(main, drag, t) {
     // id: the mini; tok: it with its size ("id~2"), which travels with it.
     const id = drag.mini, from = drag.from, tok = drag.tok || id;
     const left = _qpShelfIds(from).filter(function (x) { return _qpTokId(x) !== id; });
-    const put = function (ids, at) { ids = ids.slice(); ids.splice(Math.max(0, Math.min(at == null ? ids.length : at, ids.length)), 0, tok); return ids; };
+    // Onto another shelf it takes the rows that shelf has free (_qpFitTok).
+    const put = function (ids, at, own) {
+        const tk = own ? tok : _qpFitTok(tok, 3 - _qpShelfUsed(ids));
+        ids = ids.slice(); ids.splice(Math.max(0, Math.min(at == null ? ids.length : at, ids.length)), 0, tk); return ids;
+    };
     if (t.zone === 'shelf' && t.key === from) {
-        const ids = put(left, t.at);
+        const ids = put(left, t.at, true);
         if (ids.join(',') === _qpShelfIds(from).join(',')) return _qpRenderControls(main);
         // Undo by hand, before the rename: _qpShelfRekey changes the block on
         // the page, so the layout _qpCommit would save as "before" is already the after.
@@ -54435,8 +54450,11 @@ function _qpMoveMini(main, drag, t) {
         _qpCommit(main, _qpShelfRekey(main, from, ids), true);
         return;
     }
-    if (!left.length) {
-        if (t.zone !== 'shelf') return _qpDropAt(main, { key: from }, t);
+    if (!left.length && t.zone !== 'shelf') {
+        // Alone, out to a place of its own: the shelf moves. Squeezed to one
+        // row (~c), it goes the long way below so it lands at two again.
+        if (_qpFitTok(tok, 3) === tok) return _qpDropAt(main, { key: from }, t);
+    } else if (!left.length) {
         // Its last mini onto another shelf: the shelf it left goes.
         _qpUndoPush(_qpCurrentRows(main));
         _qpShelfRekey(main, from, []);
@@ -54446,7 +54464,8 @@ function _qpMoveMini(main, drag, t) {
     _qpUndoPush(_qpCurrentRows(main));
     // Rename the shelf it left in place first, so the rows the drop was worked
     // out against still line up (its cell stays where it was).
-    const lk = _qpShelfKey(left);
+    // (Left empty — a lone squeezed mini going out on its own — the shelf goes.)
+    const lk = left.length ? _qpShelfKey(left) : null;
     _qpShelfRekey(main, from, left);
     if (t.zone === 'shelf') {
         _qpCommit(main, _qpShelfRekey(main, t.key, put(_qpShelfIds(t.key), t.at)), true);
@@ -54455,8 +54474,8 @@ function _qpMoveMini(main, drag, t) {
     const fix = function (k) { return k === from ? lk : k; };
     if (t.beforeKey === from) t.beforeKey = lk;
     if (t.key === from) t.key = lk;
-    if (t.bump) t.bump.rows = t.bump.rows.map(function (r) { return { items: r.items.map(fix), w: r.w }; });
-    const nk = _qpShelfKey([tok]);
+    if (t.bump) t.bump.rows = t.bump.rows.map(function (r) { const it = r.items.map(fix); return { items: it.filter(Boolean), w: it.indexOf(null) === -1 ? r.w : null }; });
+    const nk = _qpShelfKey([_qpFitTok(tok, 3)]);
     main.insertBefore(_qpMakeShelf(nk), _qpAnchor(main));
     const n = _qpUndo.length;
     _qpDropAt(main, { key: nk }, t);
@@ -54473,10 +54492,10 @@ function _qpMergeShelves(main, from, t) {
     _qpShelfRekey(main, from, []);
     _qpCommit(main, _qpShelfRekey(main, t.key, ids), true);
 }
-// The icons a mini is carried by: draggable in Customize only, so outside it
-// a press on one is an ordinary click.
+// The minis are what is carried: draggable in Customize only, so outside it a
+// press on one is an ordinary click (its "go").
 function _qpMiniGrips(main) {
-    main.querySelectorAll('.qp-mn-grip').forEach(function (g) {
+    main.querySelectorAll('.qp-mshelf > .qp-mn[data-qp-mini]').forEach(function (g) {
         if (_qpEditing) { g.draggable = true; g.title = 'Drag to Move This Mini Widget'; }
         else { g.removeAttribute('draggable'); g.removeAttribute('title'); }
     });
@@ -55184,7 +55203,11 @@ function _qpTargetAt(main, el, x, y) {
     // against the room.
     if (zone === 'combine' && _qpDrag.add && _qpIsShelfKey(_qpDrag.add) && _qpIsShelfKey(key)) {
         const mid = _qpDrag.mini, ids = _qpShelfIds(key), mine = !!mid && ids.some(t => _qpTokId(t) === mid);
-        const full = !mine && _qpShelfUsed(ids) + _qpMiniSize(_qpShelfIds(_qpDrag.add)[0]) > 3;
+        // Room: the fewest rows it can take (a two-row one collapses to one,
+        // _qpFitTok); fit is the size it would land at, for the overlay.
+        const carried = _qpShelfIds(_qpDrag.add)[0], free = 3 - _qpShelfUsed(ids);
+        const full = !mine && _qpMiniMinRows(carried) > free;
+        const fit = mine ? carried : _qpFitTok(carried, free);
         let at = null, of = 0;
         if (mid) {
             at = 0;
@@ -55195,7 +55218,8 @@ function _qpTargetAt(main, el, x, y) {
                 if (y > q.top + q.height / 2) at++;
             });
         }
-        return { zone: 'shelf', el: b, cell: cell, key: key, row: rows.indexOf(row), full: full, at: at, of: of, mine: mine };
+        return { zone: 'shelf', el: b, cell: cell, key: key, row: rows.indexOf(row), full: full, at: at, of: of, mine: mine,
+                 resize: !mine && _qpMiniSize(fit) !== _qpMiniSize(carried) ? _qpMiniSize(fit) : 0 };
     }
     // A WHOLE SHELF over another shelf's middle combines into it, if their
     // minis fit in its three rows (Ethan, 2026-10-29: "Can I not drag the one
@@ -55371,7 +55395,8 @@ function _qpShowHint(main, t) {
         ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
             + (t.full ? '<span class="qp-ov-big">No Room on This Shelf</span><span class="qp-ov-small">A Shelf Holds Three Rows</span>'
                 : t.merge ? '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Puts Its Minis on This Shelf, ' + where + '</span>'
-                : '<span class="qp-ov-big">' + (_qpDrag.mini ? 'Drop to Move' : 'Drop to Add') + '</span><span class="qp-ov-small">Puts It ' + (t.at == null || !t.mine ? 'on This Shelf' + (t.at == null ? '' : ', ' + where) : where) + '</span>');
+                : '<span class="qp-ov-big">' + (_qpDrag.mini ? 'Drop to Move' : 'Drop to Add') + '</span><span class="qp-ov-small">Puts It ' + (t.at == null || !t.mine ? 'on This Shelf' + (t.at == null ? '' : ', ' + where) : where)
+                    + (t.resize ? ' · As ' + (t.resize === 1 ? '1 Row' : '2 Rows') : '') + '</span>');
     } else if (t.zone === 'swap') {
         const other = b.getAttribute('data-qp-label') || t.key;
         ov.className = 'qp-ov qp-ov-combine qp-ov-swap' + (t.full ? ' qp-ov-no' : '');
@@ -55439,13 +55464,15 @@ function _qpWireDrag(main) {
     main.addEventListener('click', _qpBlockClicks, true);
     main.addEventListener('dragstart', function (e) {
         if (!_qpEditing) return;
-        // A MINI, by its icon (.qp-mn-grip, Ethan 2026-10-29: "how do I move
-        // something from a shelf out of a shelf"). It travels as a new shelf
-        // of its own ("shelf:<id>", like one out of the drawer), so every drop
-        // target already knows it; the drop takes it off the shelf it left
-        // (_qpMoveMini). The rest of the shelf still drags the whole shelf.
-        const grip = e.target.closest && e.target.closest('.qp-mn-grip');
-        const mn = grip && grip.closest('[data-qp-mini]');
+        // A MINI, by the whole mini (Ethan, 2026-10-29: "instead of grabbing
+        // the whole shelf I need to be able to grab each row in the shelf and
+        // move it either within or outside of the shelf" — it was the icon
+        // only, and a shelf grabbed by its card swallowed its minis). It
+        // travels as a new shelf of its own ("shelf:<tok>", like one out of the
+        // drawer), so every drop target already knows it; the drop takes it off
+        // the shelf it left (_qpMoveMini). A shelf's free rows still carry the
+        // whole shelf.
+        const mn = e.target.closest && e.target.closest('.qp-mshelf > .qp-mn[data-qp-mini]');
         const sh = mn && mn.closest('[data-qp-shelf]');
         if (mn && sh) {
             const id = mn.getAttribute('data-qp-mini');
