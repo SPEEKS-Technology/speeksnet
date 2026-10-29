@@ -53932,12 +53932,15 @@ Object.assign(_QP_WSPEC, {
         when: 'This Month', ttl: 600000, tabs: [['main', 'Reviews', 'Google Reviews by Store']], where: () => 'District', load: _qpSnapLoad,
         card: function (d) {
             const rows = STORE_CODES.map(s => Object.assign({ s }, _qpReviewsOf(d, s))).sort((a, b) => b.mtd - a.mtd);
-            const tot = _qpSum(rows, 'mtd'), prev = _qpSum(rows, 'prev'), mx = Math.max(1, ...rows.map(r => r.mtd));
+            const tot = _qpSum(rows, 'mtd'), prev = _qpSum(rows, 'prev');
+            // A card a store (Ethan, 2026-10-29, from prototypes/widget-spruce.html —
+            // it was a bar a store, like every other district list): the month's
+            // count, its five-star, and its own reviews-a-day line. The leader is gold.
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + tot + '<small>reviews across ' + rows.length + ' stores</small></div>'
                 + _qpTrendHtml(tot - prev, _qpN, true, 'Last Month') + '</div>'
-                + '<div class="qp-hl-cap">Reviews · Five-Star This Month</div>'
-                + rows.map(r => _qpAiStoreRow(r.s, r.mtd / mx * 100, String(r.mtd), r.mtd >= mx * 0.75 ? 'good' : r.mtd >= mx * 0.5 ? 'warn' : 'bad',
-                    '<span class="qp-dhl-tag">' + r.stars + '★</span>')).join(''));
+                + '<div class="qp-hl-cap">Reviews This Month · Five-Star · Reviews a Day</div>'
+                + '<div class="qp-rvc">' + rows.map((r, i) => '<div class="' + (i === 0 && r.mtd ? 'lead' : '') + '"><div class="qp-rvc-s">' + _qpDot(r.s) + escapeHtml(r.s) + '</div>'
+                    + '<div class="qp-rvc-v">' + _qpN(r.mtd) + '</div><div class="qp-rvc-st">★ ' + _qpN(r.stars) + '</div>' + _qpSparkFill(r.days, _qpStoreColor(r.s)) + '</div>').join('') + '</div>');
         },
     },
     pace: {
@@ -53968,14 +53971,14 @@ Object.assign(_QP_WSPEC, {
         card: function (d) {
             const s = _qpMyStore(), cur = _qpThisMonth(d, s), prev = _qpLastMonthSoFar(d, s), y = cur[cur.length - 1];
             const lost = _qpSum(cur, 'lost_revenue'), tot = _qpSum(cur, 'total_customers'), nod = _qpSum(cur, 'no_deal_customers');
+            // Three stat boxes and a red column a day (Ethan, 2026-10-29,
+            // prototypes/widget-spruce.html — it was three lines of chips).
+            const f = _qpFacts(d, s).slice(-6);
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(lost, false) + '</span><small>walked out</small></div>'
                 + _qpTrendHtml(lost - _qpSum(prev, 'lost_revenue'), _qpHLK, false, 'Last Month') + '</div>'
-                + '<div class="qp-hl-sub">' + _qpN(_qpSum(cur, 'failed_deals')) + ' failed deals · ' + _qpN(_qpSum(cur, 'devices_lost')) + ' devices lost</div>'
-                + (y ? '<div class="qp-hl-cap">' + _qpDayLabel(y.date) + '</div>'
-                    + _qpWLine(_qpWChip('Failed', 'bad'), (Number(y.failed_deals) || 0) + ' deals walked out', y.lost_revenue ? _lvMoney(y.lost_revenue, false) : '')
-                    + _qpWLine(_qpWChip('Lost', 'warn'), (Number(y.devices_lost) || 0) + ' devices left with the customer', '')
-                    + _qpWLine(_qpWChip('No Deal', 'grey'), (Number(y.no_deal_customers) || 0) + ' customers bought nothing', '') : '')
-                + (tot ? '<div class="qp-hl-sub" style="margin-top:6px">' + Math.round(nod / tot * 100) + '% of customers this month left without a deal</div>' : ''));
+                + '<div class="qp-box3"><div><b>' + _qpN(_qpSum(cur, 'failed_deals')) + '</b><span>Failed Deals</span></div><div><b>' + _qpN(_qpSum(cur, 'devices_lost')) + '</b><span>Devices Lost</span></div>'
+                + '<div><b>' + (tot ? Math.round(nod / tot * 100) : 0) + '%</b><span><span class="qp-wide-only">Left With </span>No Deal</span></div></div>'
+                + (y ? '<div class="qp-hl-cap">Lost a Day · Last ' + f.length + ' Reports</div>' + _qpDayCols(f.map(r => [_qpDayLabel(r.date).replace(/,.*$/, ''), Number(r.lost_revenue) || 0]), 'red', 50) : ''));
         },
     },
     dlost: {
@@ -53983,11 +53986,16 @@ Object.assign(_QP_WSPEC, {
         card: function (d) {
             const rows = STORE_CODES.map(s => { const c = _qpThisMonth(d, s); return { s, lost: _qpSum(c, 'lost_revenue'), failed: _qpSum(c, 'failed_deals'), tot: _qpSum(c, 'total_customers'), nod: _qpSum(c, 'no_deal_customers') }; })
                 .sort((a, b) => b.lost - a.lost);
-            const mx = Math.max(1, ...rows.map(r => r.lost));
-            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(_qpSum(rows, 'lost'), false) + '</span><small>walked out · ' + _qpN(_qpSum(rows, 'failed')) + ' failed deals</small></div></div>'
-                + '<div class="qp-hl-cap">Lost Revenue · Share Who Left Without a Deal</div>'
-                + rows.map(r => { const sh = r.tot ? Math.round(r.nod / r.tot * 100) : 0; return _qpAiStoreRow(r.s, r.lost / mx * 100, _qpHLK(r.lost), r.lost >= mx * 0.75 ? 'bad' : r.lost >= mx * 0.4 ? 'warn' : 'good',
-                    '<span class="qp-dhl-tag ' + (sh >= 15 ? 'bad' : sh >= 10 ? 'warn' : 'good') + '">' + sh + '%</span>'); }).join(''));
+            // A donut of where the lost money is, with each store's share and its
+            // no-deal % beside it (Ethan, 2026-10-29, prototypes/widget-spruce.html).
+            const all = _qpSum(rows, 'lost');
+            const nd = r => (r.tot ? Math.round(r.nod / r.tot * 100) : 0);
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(all, false) + '</span><small>walked out · ' + _qpN(_qpSum(rows, 'failed')) + ' failed deals</small></div></div>'
+                + '<div class="qp-dn">' + _qpDonut(rows.map(r => [r.lost, _qpStoreColor(r.s)]), _qpHLK(all), 'Walked Out')
+                + '<div class="qp-dn-lg"><div class="qp-dn-h"><span></span><span>Store</span><span>Lost</span><span>No Deal</span></div>'
+                + rows.map(r => '<div><i style="background:' + _qpStoreColor(r.s) + '"></i><b>' + escapeHtml(r.s) + '</b><span>' + _qpHLK(r.lost)
+                    + '<span class="qp-wide-only"> · ' + (all ? Math.round(r.lost / all * 100) : 0) + '%</span></span>'
+                    + '<span class="qp-stile-tag ' + (nd(r) >= 15 ? 'bad' : nd(r) >= 10 ? 'warn' : 'good') + '">' + nd(r) + '%</span></div>').join('') + '</div></div>');
         },
     },
     team: {
@@ -54040,9 +54048,10 @@ Object.assign(_QP_WSPEC, {
             const mv = _qpSum(cur, 'est_value'), ms = _qpSum(cur, 'total_spent');
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(y.est_value, false) + '<small>bought · ' + _lvMoney(y.total_spent, false) + ' paid</small></div>'
                 + (avg ? _qpTrendHtml(Math.round(Number(y.est_value) - avg), _qpHLK, true, 'Same Day Avg') : '') + '</div>'
-                + '<div class="qp-hl-sub">Buy margin ' + pct(y.est_margin_pct) + ' · ' + (Number(y.cust_conv_den) ? Math.round(y.cust_conv_num / y.cust_conv_den * 100) + '% of customers sold to us' : '') + '</div>'
-                + '<div class="qp-hl-cap">Last 5 Reports</div>'
-                + f.slice(-5).reverse().map(r => _qpWLine('', _qpDayLabel(r.date) + ' · ' + pct(r.est_margin_pct) + ' margin', _qpHLK(r.est_value))).join('')
+                // A column a day with its margin on top, the latest in full blue
+                // (Ethan, 2026-10-29, prototypes/widget-spruce.html — five lines of text).
+                + '<div class="qp-hl-cap">Bought a Day · Last ' + Math.min(6, f.length) + ' Reports · Margin on Top</div>'
+                + _qpDayCols(f.slice(-6).map(r => [_qpDayLabel(r.date).replace(/,.*$/, ''), Number(r.est_value) || 0, Number(r.est_margin_pct) ? Math.round(Number(r.est_margin_pct) * (Number(r.est_margin_pct) <= 1 ? 100 : 1)) + '%' : '']), 'blue', 108)
                 + '<div class="qp-hl-sub" style="margin-top:6px">' + _qpHLK(mv) + ' bought this month · ' + (mv ? ((1 - ms / mv) * 100).toFixed(1) + '% margin' : '') + '</div>');
         },
     },
@@ -54156,6 +54165,34 @@ function _qpRing(s, p, under) {
         + (c * Math.min(p || 0, 100) / 100).toFixed(1) + ' ' + c.toFixed(1) + '" transform="rotate(-90 37 37)"/>'
         + '<text x="37" y="42" text-anchor="middle" font-size="15" font-weight="900" fill="#1a1c1e">' + Math.round(p || 0) + '%</text></svg>'
         + '<div class="qp-dring-s">' + _qpDot(s) + escapeHtml(s) + '</div><div class="qp-dring-n">' + under + '</div></div>';
+}
+// A store's line across its card, one point a report (Google Reviews by Store).
+function _qpSparkFill(vals, color) {
+    vals = (vals || []).map(Number).filter(v => isFinite(v));
+    if (vals.length < 2) return '';
+    const W = 100, H = 28, mx = Math.max(...vals), mn = Math.min(...vals);
+    return '<svg class="qp-rvc-sp" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true"><polyline points="'
+        + vals.map((v, i) => (i * W / (vals.length - 1)).toFixed(1) + ',' + (H - 3 - (v - mn) / ((mx - mn) || 1) * (H - 6)).toFixed(1)).join(' ')
+        + '" fill="none" stroke="' + color + '" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>';
+}
+// A donut of parts [[value, colour]…] with a figure and a word in the middle.
+function _qpDonut(parts, mid, word) {
+    const R = 60, C = 2 * Math.PI * R, tot = parts.reduce((a, p) => a + (p[0] || 0), 0) || 1;
+    let at = 0;
+    return '<svg class="qp-dn-svg" viewBox="0 0 150 150" aria-hidden="true"><g transform="rotate(-90 75 75)">' + parts.filter(p => p[0] > 0).map(function (p) {
+        const len = p[0] / tot * C, s = '<circle cx="75" cy="75" r="' + R + '" fill="none" stroke="' + p[1] + '" stroke-width="22" stroke-dasharray="'
+            + Math.max(0, len - 2).toFixed(1) + ' ' + C.toFixed(1) + '" stroke-dashoffset="' + (-at).toFixed(1) + '"/>';
+        at += len;
+        return s;
+    }).join('') + '</g><text x="75" y="72" text-anchor="middle" font-size="20" font-weight="900" fill="#e05252">' + escapeHtml(mid) + '</text>'
+        + '<text x="75" y="90" text-anchor="middle" font-size="10" font-weight="800" fill="#8a94a3" letter-spacing=".5">' + escapeHtml(String(word).toUpperCase()) + '</text></svg>';
+}
+// A column a day, [label, value, note-on-top?], the last one in full colour.
+function _qpDayCols(list, tone, maxH) {
+    const mx = Math.max(1, ...list.map(x => x[1]));
+    return '<div class="qp-dcols ' + tone + '">' + list.map((x, i) => '<div class="' + (i === list.length - 1 ? 'on' : '') + '">'
+        + (x[2] ? '<span class="qp-dcols-m">' + escapeHtml(x[2]) + '</span>' : '')
+        + '<i style="height:' + Math.max(3, Math.round(x[1] / mx * maxH)) + 'px"></i><span class="qp-dcols-x">' + escapeHtml(x[0]) + '<br>' + _qpHLK(x[1]) + '</span></div>').join('') + '</div>';
 }
 Object.assign(_QP_WSPEC, {
     dpace: {
@@ -54373,8 +54410,13 @@ Object.assign(QP_MINIS.mreviews, { draw2: d => {
 Object.assign(QP_MINIS.mstars, { draw2: d => {
     const m = QP_MINIS.mstars;
     if (_qpIsDist()) {
-        const list = STORE_CODES.map(s => ({ k: s, n: _qpReviewsOf(d, s).stars })).sort((a, b) => b.n - a.n);
-        return _qpX2.head(m, 'Five-Star · This Month', _qpSum(list, 'n') + '<small>across ' + list.length + ' stores</small>') + _qpX2.rows(list, _qpN, _qpX2.tone);
+        // Star chips, a store each (Ethan, 2026-10-29, prototypes/widget-spruce.html):
+        // the district two-row minis were all a bar a store.
+        const list = STORE_CODES.map(s => ({ k: s, n: _qpReviewsOf(d, s).stars, prev: _qpSum(_qpLastMonthSoFar(d, s), 'five_star_today') })).sort((a, b) => b.n - a.n);
+        const diff = _qpSum(list, 'n') - _qpSum(list, 'prev');
+        return _qpX2.head(m, 'Five-Star · This Month', _qpSum(list, 'n') + '<small>across ' + list.length + ' stores</small>')
+            + '<div class="qp-x2-chips">' + list.map(x => '<div><b>' + _qpN(x.n) + '</b><span>★ ' + escapeHtml(x.k) + '</span></div>').join('') + '</div>'
+            + _qpX2.cap('Most at ' + escapeHtml(list[0].k) + (diff ? ' · ' + Math.abs(diff) + (diff > 0 ? ' more' : ' fewer') + ' than last month' : ''));
     }
     const s = _qpMyStore(), f = _qpFacts(d, s).slice(-14), me = _qpReviewsOf(d, s).stars;
     const prev = _qpSum(_qpLastMonthSoFar(d, s), 'five_star_today');
@@ -54395,8 +54437,12 @@ Object.assign(QP_MINIS.mcash, { draw2: d => {
     if (_qpIsDist()) {
         const lastDay = c.length ? c[c.length - 1].day : null, on = c.filter(x => x.day === lastDay);
         const list = on.map(x => ({ k: x.store, n: Number(x.total) || 0 })).sort((a, b) => b.n - a.n);
+        // Store tiles, the low one in red (Ethan, 2026-10-29, widget-spruce.html):
+        // under 60% of the stores' average.
+        const avg = list.length ? _qpSum(list, 'n') / list.length : 0, low = list.filter(x => avg && x.n < avg * 0.6);
         return _qpX2.head(m, 'Cash in Stores' + (lastDay ? ' · ' + _qpDayLabel(lastDay).replace(/,.*$/, '') : ''), _qpHLK(_qpSum(list, 'n')) + '<small>' + list.length + ' stores</small>')
-            + _qpX2.rows(list, _qpHLK, (x, mx) => (x.n < mx * 0.5 ? 'bad' : ''));
+            + '<div class="qp-x2-tiles">' + list.map(x => '<div class="' + (low.indexOf(x) !== -1 ? 'low' : '') + '"><b>' + _qpHLK(x.n) + '</b><span>' + _qpDot(x.k) + escapeHtml(x.k) + '</span></div>').join('') + '</div>'
+            + _qpX2.cap(low.length ? 'Lowest: ' + escapeHtml(low.sort((a, b) => a.n - b.n)[0].k) + ', ' + Math.round(low[0].n / avg * 100) + '% of the average' : 'Every store near the average');
     }
     const mine = c.filter(x => x.store === _qpMyStore()), l = mine[mine.length - 1];
     if (!l) return _qpX2.head(m, 'Cash on Hand', '—') + _qpX2.cap('No cash count yet');
@@ -54444,8 +54490,10 @@ Object.assign(QP_MINIS.mlive, { draw2: d => {
     if (_qpIsDist()) {
         const t = STORE_CODES.map(s => ({ s, f: _qpLast(d, s) })).filter(x => x.f);
         const list = t.map(x => ({ k: x.s, n: Number(x.f.live_count) || 0 })).sort((a, b) => b.n - a.n);
+        // Columns in each store's colour (Ethan, 2026-10-29, widget-spruce.html).
+        const mx = Math.max(1, ...list.map(x => x.n));
         return _qpX2.head(m, 'Live Listings · District', _qpN(_qpSum(list, 'n')) + '<small>live · ' + _qpN(t.reduce((a, x) => a + (Number(x.f.listed_devices) || 0), 0)) + ' listed on the latest report</small>')
-            + _qpX2.rows(list, _qpN);
+            + '<div class="qp-x2-cols">' + list.map(x => '<div><b>' + _qpN(x.n) + '</b><i style="height:' + Math.max(3, Math.round(x.n / mx * 52)) + 'px;background:' + _qpStoreColor(x.k) + '"></i><span>' + escapeHtml(x.k) + '</span></div>').join('') + '</div>';
     }
     const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
     if (!y) return _qpX2.head(m, 'Live Listings', '—') + _qpX2.cap('No report yet');
@@ -54485,7 +54533,10 @@ Object.assign(QP_MINIS.musage, { draw2: d => {
 } });
 Object.assign(QP_MINIS.mavail, { draw2: d => {
     const m = QP_MINIS.mavail, list = STORE_CODES.map(s => ({ k: s, f: _qpLast(d, s) })).filter(x => x.f).map(x => ({ k: x.k, n: Number(x.f.available_cost) || 0 })).sort((a, b) => b.n - a.n);
-    return _qpX2.head(m, 'Available Inventory', _qpHLK(_qpSum(list, 'n')) + '<small>at cost · latest report</small>') + _qpX2.rows(list, _qpHLK, () => 'blue');
+    // A share strip and a legend (Ethan, 2026-10-29, widget-spruce.html).
+    return _qpX2.head(m, 'Available Inventory', _qpHLK(_qpSum(list, 'n')) + '<small>at cost · latest report</small>')
+        + '<div class="qp-strip qp-x2-strip">' + list.map(x => '<i style="flex:' + x.n + ';background:' + _qpStoreColor(x.k) + '"></i>').join('') + '</div>'
+        + '<div class="qp-mix-l">' + list.map(x => '<span><i class="qp-sw" style="background:' + _qpStoreColor(x.k) + '"></i>' + escapeHtml(x.k) + '<b>' + _qpHLK(x.n) + '</b></span>').join('') + '</div>';
 } });
 function _qpMiniOk(id) { const m = QP_MINIS[_qpTokId(id)]; try { return !!m && !!m.avail(); } catch (e) { return false; } }
 function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + icon + '</span>'; }

@@ -435,6 +435,22 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Looks, not bars, 10-29** (Ethan: the by-store bars "will make it feel super
+  repetitive"). District four picked from `prototypes/district-variety.html`
+  (A, B, A, A): Goal Pace = rings (`_qpRing`, class `qp-dring` — `qp-ring` is
+  Action Items' ring, the clash drew them over their caption), Buying = share
+  strip + store tiles, Team = top-producer leaderboard, Pipeline = heat tiles.
+  Then "All eight" of `prototypes/widget-spruce.html`: Google Reviews by Store =
+  a card a store with its reviews-a-day line, leader gold (`qp-rvc`,
+  `_qpSparkFill`); Lost Deals by Store = donut + legend (`_qpDonut`); store
+  Buying = a column a day, margin on top (`_qpDayCols` blue); store Lost Deals
+  = three stat boxes + red day columns; district two-row minis Five-Star =
+  star chips, Cash = store tiles (low < 60% of the average in red), Live
+  Listings = colour columns, Available Inventory = share strip + legend. The
+  card body is a flex column — new blocks need `flex: none`. `.qp-widget` is a
+  size container; `@container (max-width: 500px)` tightens everything at ⅓
+  and hides `.qp-wide-only` words. Swept ½ / ⅓ / shelves, Test MOCD + Test
+  Manager: all 350 (minis 230), nothing clipped.
 - **District versions of the store-only four, 10-29** (Ethan: "make a district
   version of those so the DM at least has something of everything"). `dpace`
   (Goal Pace by Store: tracking %, needed a day or Hit), `dbuying` (latest
