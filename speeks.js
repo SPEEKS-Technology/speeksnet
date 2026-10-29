@@ -51894,7 +51894,25 @@ function _qpPairWidgets(main, rows) {
         if (best === -1) break;
         moveTo(rows[lone], rows[best], key);
     }
-    return rows.filter(r => r.items.length);
+    rows = rows.filter(r => r.items.length);
+    // HOLES GO TO THE BOTTOM (Ethan, 2026-10-29: "There should only ever be
+    // empty at the bottom and shift things up to fill holes" — a ½ card with
+    // nothing left to pair it sat alone near the top, "Add a Card Beside It"
+    // across the rest). Whatever is still short after the above moves under
+    // everything else, and short rows that fit together become one.
+    const isShort = r => { const v = shown(r); return v.length > 0 && v.every(_qpNeedsPartner) && v.reduce((a, k) => a + cap(k, v), 0) < 0.999; };
+    const tail = rows.filter(isShort);
+    if (tail.length && !(tail.length === 1 && rows[rows.length - 1] === tail[0])) {
+        const out = [];
+        tail.forEach(function (r) {
+            const last = out[out.length - 1];
+            const both = last ? shown(last).concat(shown(r)) : null;
+            if (both && both.length <= _qpRowLimit(both) && both.reduce((a, k) => a + cap(k, both), 0) <= 1.001) { last.items = last.items.concat(r.items); last.w = null; }
+            else out.push({ items: r.items.slice(), w: null });
+        });
+        rows = rows.filter(r => !isShort(r)).concat(out);
+    }
+    return rows;
 }
 // Pair, then SAFETY NET (2026-10-25): pairing can leave a row breaking a size
 // rule when nothing nearby can take the card it moves out (the chart in a row
@@ -54196,7 +54214,10 @@ function _qpDayCols(list, tone, maxH) {
 }
 Object.assign(_QP_WSPEC, {
     dpace: {
-        when: 'This Month', ttl: 600000, tabs: [['main', 'Pace', 'Goal Pace by Store']], where: () => 'District', load: _qpSnapLoad,
+        // Through the last day with net profit in (Ethan, 2026-10-29: "we should put
+        // the through date on there") — yesterday, unless the night run is behind.
+        when: () => { const d = _qpSnap.data, last = d && (d.np || []).filter(r => r.date < d.today).map(r => r.date).sort().pop(); return last ? 'Through ' + _qpDayLabel(last) : 'This Month'; },
+        ttl: 600000, tabs: [['main', 'Pace', 'Goal Pace by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (STORE_CODES.some(s => (d.goals || {})[s]) ? '' : 'No net profit goals are set for this month yet.'),
         card: function (d) {
             const rows = STORE_CODES.map(s => ({ s, p: _qpPaceOf(d, s) })).filter(x => x.p.goal).sort((a, b) => (b.p.pct || 0) - (a.p.pct || 0));
@@ -54204,7 +54225,10 @@ Object.assign(_QP_WSPEC, {
             const pct = goal ? rows.reduce((a, x) => a + x.p.soFar + x.p.avg * x.p.left, 0) / goal * 100 : null;
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(so, false) + '<small>of ' + _qpHLK(goal) + ' goal · net profit so far</small></div>'
                 + (pct == null ? '' : '<span class="qp-trend ' + (pct >= 100 ? 'up' : 'down') + '">Tracking to ' + Math.round(pct) + '%</span>') + '</div>'
-                + '<div class="qp-hl-cap">Tracking to Goal · Needed a Day</div>'
+                // "Needed a day" (Ethan asked what it means): the net profit a store
+                // must average on each open day left to reach its goal — what is left of
+                // the goal over the open days left, Sundays off (_qpPaceOf). Said in full.
+                + '<div class="qp-hl-cap">Tracking to Goal · Net Profit Needed Each Open Day to Hit Goal · ' + (rows[0] ? rows[0].p.left : 0) + ' Days Left</div>'
                 + '<div class="qp-drings">' + rows.map(x => _qpRing(x.s, x.p.pct, x.p.hit ? '<b class="good">Goal Hit</b>' : '<b>' + _qpHLK(x.p.need) + '</b> a day')).join('') + '</div>');
         },
     },
