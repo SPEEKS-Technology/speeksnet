@@ -435,6 +435,18 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Two-row minis, 10-29** (Ethan: "All of them", from
+  `prototypes/mini-two-row.html`; "are the bars and charts going to be on a
+  daily basis" — yes: every chart is one bar/point a Day End report, or a
+  calendar day for cash and sign-ins, and its caption says so; bars beside a
+  store or a name are that store/person). A shelf key names each mini as a
+  TOKEN: `id`, or `id~2` for two rows (`_qpTokId`, `_qpTokTwo`, `_qpMiniSize`),
+  so the size saves with the layout. Every single mini has `draw2` (helpers
+  `_qpX2`); Customer Mix / Coming Up stay `double`. Customize: a 1 | 2 switch
+  beside the × (`qpMiniRows`, one Undo; 2 greyed out on a full shelf via
+  `_qpShelfFreeNow`). A moved mini keeps its size (`_qpDrag.tok`). What's New
+  two-row lists the latest release's lines (`window._qpLatestPatch`). Swept
+  Test Manager (12) + Test DM (8) at two rows: all 230px, nothing clipped.
 - **Moving minis, 10-29** (Ethan: "how do I move something from a shelf out
   of a shelf"). In Customize a mini is carried by its ICON (`.qp-mn-grip`,
   draggable via `_qpMiniGrips`); the rest of the shelf still carries the whole

@@ -25610,6 +25610,31 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip:hover { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #1f9d57; }
 .main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip:active { cursor: grabbing; }
 .qp-mn.qp-dragging { opacity: .45; }
+/* The 1 Row / 2 Rows switch, beside the × in Customize (qpMiniRows). */
+.qp-mn-sz { display: none; position: absolute; top: 6px; right: 32px; height: 22px; border: 1px solid #e3e8ee; border-radius: 7px; background: #fff; overflow: hidden; z-index: 1; }
+.qp-mn-sz button { font: inherit; font-size: 10.5px; font-weight: 800; width: 22px; height: 100%; border: 0; background: none; color: #8a94a3; cursor: pointer; padding: 0; }
+.qp-mn-sz button.on { background: #e8f7ee; color: #146c3c; }
+.qp-mn-sz button:disabled { color: #d0d6de; cursor: not-allowed; }
+.main-content.qp-editing .qp-mn-sz { display: flex; }
+/* TWO-ROW MINIS (_qpX2, Ethan 2026-10-29, from prototypes/mini-two-row.html). */
+.qp-mn.x2 .qp-days { height: 44px; margin: 2px 0; }
+.qp-x2-bar { height: 8px; border-radius: 99px; background: #eef1f4; position: relative; overflow: hidden; margin: 2px 0; flex: none; }
+.qp-x2-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: #1f9d57; }
+.qp-x2-bar i.warn { background: #f0a92b; } .qp-x2-bar i.bad { background: #e05252; } .qp-x2-bar i.blue { background: #2563b8; }
+.qp-x2-bar b { position: absolute; top: 0; bottom: 0; width: 2px; background: #1a1c1e; opacity: .55; }
+.qp-x2-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 700; color: #3c4654; min-width: 0; }
+.qp-x2-row .k { flex: none; width: 34px; font-weight: 800; color: #1a1c1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-row.wide .k { width: 64px; }
+.qp-x2-row .qp-x2-bar { flex: 1 1 auto; margin: 0; height: 6px; }
+.qp-x2-row .v { flex: none; min-width: 44px; text-align: right; font-weight: 800; color: #1a1c1e; }
+.qp-x2-split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.qp-x2-split div { background: #f6f8fa; border-radius: 9px; padding: 6px 8px; min-width: 0; }
+.qp-x2-split b { display: block; font-size: 15px; font-weight: 900; color: #1a1c1e; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-split span { display: block; font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-line { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #3c4654; padding: 4px 0; border-top: 1px solid #eef1f4; min-width: 0; }
+.qp-x2-line span:not(.qp-cw-due) { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-line em { flex: none; font-style: normal; font-weight: 800; color: #1a1c1e; }
+.qp-x2-wide { display: block; width: 100%; height: 34px; flex: none; }
 .main-content.qp-editing .qp-mn-empty:hover { border-color: #1f9d57; color: #1f9d57; }
 .main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] { pointer-events: auto; }
 .main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] * { pointer-events: none; }
