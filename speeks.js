@@ -54587,14 +54587,17 @@ function _qpMiniHtml(tok) {
     const two = _qpMiniSize(tok) === 2 && !m.double;
     let r = null;
     if (data) { try { r = two ? { html: m.draw2(data), go: (m.draw(data) || {}).go } : m.draw(data); } catch (e) { console.error('Mini widget ' + id + ':', e); } }
-    const x = '<button type="button" class="qp-mn-x" data-qp-edit-ok title="Remove ' + escapeHtml(m.label) + '" aria-label="Remove ' + escapeHtml(m.label) + '" onclick="qpRemoveMini(\'' + id + '\')">'
+    // The × and the 1 | 2 switch sit INSIDE the mini, whose own click opens
+    // its page ("go") — so they stop there (Ethan, 2026-10-29: × "ends up
+    // getting rid of it then taking me to that place on the site").
+    const x = '<button type="button" class="qp-mn-x" data-qp-edit-ok title="Remove ' + escapeHtml(m.label) + '" aria-label="Remove ' + escapeHtml(m.label) + '" onclick="event.stopPropagation(); qpRemoveMini(\'' + id + '\')">'
         + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'
         // Customize only, beside the ×: 1 Row / 2 Rows, on every mini that has
         // both. Two is greyed out when the shelf has no free row for it.
         + (m.draw2 && !m.double ? '<span class="qp-mn-sz">'
-            + '<button type="button" data-qp-edit-ok class="' + (two ? '' : 'on') + '" title="One Row" onclick="qpMiniRows(\'' + id + '\', 1)">1</button>'
+            + '<button type="button" data-qp-edit-ok class="' + (two ? '' : 'on') + '" title="One Row" onclick="event.stopPropagation(); qpMiniRows(\'' + id + '\', 1)">1</button>'
             + '<button type="button" data-qp-edit-ok class="' + (two ? 'on' : '') + '" title="' + (two || _qpMiniRoom(tok) ? 'Two Rows' : 'No Free Row on This Shelf') + '"'
-            + (two || _qpMiniRoom(tok) ? '' : ' disabled') + ' onclick="qpMiniRows(\'' + id + '\', 2)">2</button></span>' : '');
+            + (two || _qpMiniRoom(tok) ? '' : ' disabled') + ' onclick="event.stopPropagation(); qpMiniRows(\'' + id + '\', 2)">2</button></span>' : '');
     const go = r && r.go ? ' data-go="1" role="button" tabindex="0" onclick="' + escapeHtml(r.go) + '"' : '';
     if (!r) return '<div class="qp-mn' + (m.double || two ? ' x2' : '') + '" data-qp-mini="' + id + '">' + _qpMiniIco(m.icon, m.tone)
         + '<div class="qp-mn-b"><div class="qp-mn-k">' + escapeHtml(m.label) + '</div><div class="qp-mn-s">Syncing…</div></div>' + x + '</div>';
