@@ -129,9 +129,12 @@ type Scope = {
   corp: boolean; canList: boolean; allStores: boolean;
 };
 
-async function scopeFor(pin: string): Promise<Scope | null> {
+async function scopeFor(pin: string, reading = false): Promise<Scope | null> {
   if (!pin) return null;
-  const found = await rows(`users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
+  let found = await rows(`users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
+  // A TEST ACCOUNT (migration 0160) may read with its own role and store; a
+  // write with its PIN finds nobody and is refused, as before.
+  if (!found?.[0] && reading) found = await rows(`test_users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
   const user = found[0];
   if (!user) return null;
 
@@ -503,7 +506,7 @@ Deno.serve(async (req: Request) => {
 
   let scope: Scope | null = null;
   try {
-    scope = await scopeFor(pin);
+    scope = await scopeFor(pin, req.method === "GET");
   } catch (e) {
     return json({ error: "lookup failed", detail: String((e as Error).message) }, 500);
   }

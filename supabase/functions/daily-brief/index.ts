@@ -885,7 +885,10 @@ Deno.serve(async (req) => {
   if (!machine) {
     const pin = req.headers.get("x-user-pin") || "";
     if (!pin) return json({ ok: false, error: "unauthorized" }, 401);
-    const { data } = await sb.from("users").select("name, role").eq("pin", pin).single();
+    let { data } = await sb.from("users").select("name, role").eq("pin", pin).single();
+    // A TEST ACCOUNT (migration 0160) may read with its own role; a write with
+    // its PIN finds nobody and is refused, as before.
+    if (!data && req.method === "GET") ({ data } = await sb.from("test_users").select("name, role").eq("pin", pin).maybeSingle());
     if (!data) return json({ ok: false, error: "unauthorized" }, 401);
 
     const role = String(data.role ?? "").toLowerCase().trim();

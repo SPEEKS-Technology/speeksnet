@@ -152,7 +152,18 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
             console.warn('[test session] blocked ' + method + ' ' + url.split('?')[0]);
             return Promise.reject(new TypeError('Test session: writes are disabled'));
         }
-        return realFetch(input, init);
+        // A read a test account is refused (most often a function that only
+        // knows real PINs) is named in the console and kept in _testReadFails,
+        // so a page that comes up empty for a test account says which call to
+        // give sample data.
+        return realFetch(input, init).then(function (r) {
+            if (!r.ok) {
+                const what = r.status + ' ' + url.replace(/^.*\/functions\/v1\//, '').replace(/([?&])v=\d+&?/, '$1').slice(0, 120);
+                (window._testReadFails = window._testReadFails || []).push(what);
+                console.info('[test session] read refused: ' + what);
+            }
+            return r;
+        });
     };
     // A beacon is always a write (it is a POST that cannot be read back).
     if (navigator.sendBeacon) {

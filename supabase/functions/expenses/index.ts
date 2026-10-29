@@ -75,8 +75,13 @@ Deno.serve(async (req: Request) => {
   // ---- auth (both verbs) ----
   const pin = req.headers.get("x-user-pin") || "";
   if (!pin) return json({ error: "Missing x-user-pin header" }, 401);
-  const { data: user } = await supabase
+  let { data: user } = await supabase
     .from("users").select("name, role").eq("pin", pin).single();
+  // A TEST ACCOUNT (migration 0160) may read with its own role; a write with
+  // its PIN finds nobody and is refused, as before.
+  if (!user && req.method === "GET") {
+    ({ data: user } = await supabase.from("test_users").select("name, role").eq("pin", pin).maybeSingle());
+  }
   if (!user) return json({ error: "Invalid PIN" }, 401);
 
   const role = String(user.role || "").toLowerCase().trim();

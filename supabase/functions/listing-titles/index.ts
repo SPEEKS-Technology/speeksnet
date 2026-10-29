@@ -188,9 +188,12 @@ async function featureSays(key: string, role: string, name: string): Promise<boo
   return null;
 }
 
-async function scopeFor(pin: string): Promise<Scope | null> {
+async function scopeFor(pin: string, reading = false): Promise<Scope | null> {
   if (!pin) return null;
-  const found = await rows(`users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
+  let found = await rows(`users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
+  // A TEST ACCOUNT (migration 0160) may read with its own role and store; a
+  // write with its PIN finds nobody and is refused, as before.
+  if (!found?.[0] && reading) found = await rows(`test_users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
   const user = found?.[0];
   if (!user) return null;
   const role = String(user.role || "").toLowerCase().trim();
@@ -5656,7 +5659,7 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === "POST" || view === "review" || view === "counts"
         || view === "feedback") {
-      const scope = await scopeFor(pin);
+      const scope = await scopeFor(pin, req.method === "GET");
       // A stale sessionStorage PIN outlives a PIN change and lands exactly here.
       if (!scope) {
         return json({ error: "unauthorized",

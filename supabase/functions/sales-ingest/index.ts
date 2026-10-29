@@ -164,7 +164,10 @@ Deno.serve(async (req: Request) => {
   } else {
     const pin = req.headers.get("x-user-pin") || "";
     if (!pin) return json({ ok: false, error: "unauthorized" }, 401);
-    const { data: user } = await sb.from("users").select("name, role").eq("pin", pin).single();
+    let { data: user } = await sb.from("users").select("name, role").eq("pin", pin).single();
+    // A TEST ACCOUNT (migration 0160) may read the status; running an import
+    // (a POST) with its PIN finds nobody and is refused, as before.
+    if (!user && req.method === "GET") ({ data: user } = await sb.from("test_users").select("name, role").eq("pin", pin).maybeSingle());
     if (!user) return json({ ok: false, error: "Invalid PIN" }, 401);
     if (!ADMIN_ROLES.includes(String(user.role || "").toLowerCase().trim())) {
       return json({ ok: false, error: "Insufficient role" }, 403);

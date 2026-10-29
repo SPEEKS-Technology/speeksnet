@@ -539,3 +539,22 @@ designs since have been shown inline in chat.
   only once this branch reaches main — until then 0000-0008 do nothing there.
   Layouts a test account saves stay in that browser (the qp-layout POST is
   blocked like every write).
+  **10-28 (later still): short test names + test PINs may READ in 7 functions.**
+  0161 renamed the test accounts (Test CEO … Test Store, none longer than 13
+  characters) — the long names pushed the top nav into icons-only at widths
+  where a real person's did not (NAV COMPACT MODE; at 1440 every manager-level
+  account is icons-only anyway). The test-session guard now logs every refused
+  read as `[test session] read refused` and keeps `window._testReadFails`.
+  A survey of six roles × every page/sub-tab found ONLY these failing, all 401
+  for "no such PIN": notify, daily-brief, sales-ingest (status), expenses,
+  shopify-recat, listing-titles, ebay-channel. Each now looks a GET's PIN up in
+  test_users when it is not in users (writes still refused). **NOT DEPLOYED**
+  (the deploy was refused by the session's permission check). To deploy:
+    npx --yes supabase functions deploy notify --no-verify-jwt --project-ref ejzaqmyxxrkmxvzbjeuo
+    (same for daily-brief, sales-ingest, expenses, shopify-recat, listing-titles)
+  ⚠️ ebay-channel: the REPO copy carries an undeployed Aug-24 "standby" feature
+  (ea32d4d, 146 lines). Deploy the LIVE copy plus the test-PIN change, kept at
+  docs/quickportal/ebay-channel-live/index.ts — copy it over
+  supabase/functions/ebay-channel/index.ts in a scratch checkout, deploy, then
+  restore. All seven were byte-identical to live before the edit (6) or diffed
+  (ebay-channel).
