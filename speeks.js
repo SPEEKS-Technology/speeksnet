@@ -54164,7 +54164,9 @@ const QP_MINIS = {
 };
 const _QP_MINI_ADDED = '2026-10-29';
 function _qpMiniOk(id) { const m = QP_MINIS[id]; try { return !!m && !!m.avail(); } catch (e) { return false; } }
-function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
+// A mini's icon is also what it is carried by in Customize (.qp-mn-grip,
+// made draggable by _qpMiniGrips).
+function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico qp-mn-grip ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
 
 // The data a mini draws from, loading it once if it is missing or stale.
 const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: false, data: null } };
@@ -54237,19 +54239,76 @@ function qpAddMini(id, t) {
     else if (!t) into = _qpShelves(main).find(b => b.offsetParent !== null && _qpShelfUsed(_qpShelfIds(_qpKey(b))) + need <= 3) || null;
     if (into && _qpShelfUsed(_qpShelfIds(_qpKey(into))) + need <= 3) {
         const k = _qpKey(into);
-        _qpCommit(main, _qpShelfRekey(main, k, _qpShelfIds(k).concat([id])));
+        _qpUndoPush(_qpCurrentRows(main));   // before the rename (see _qpMoveMini)
+        _qpCommit(main, _qpShelfRekey(main, k, _qpShelfIds(k).concat([id])), true);
         into.scrollIntoView({ behavior: 'smooth', block: 'center' });
     } else {
         qpAddWidget(_qpShelfKey([id]), t && !(t.key && _qpIsShelfKey(t.key)) ? t : null);
     }
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
+// A mini carried off a shelf by its icon, let go at t. One move, one Undo: the
+// layout before it is pushed once, and every commit after goes without.
+//   Onto its own shelf: a reorder. Onto another shelf: off this one, onto that
+//   one at the height it was dropped. Anywhere else: a shelf of its own, placed
+//   as a ⅓ card would be — unless it was alone, when that is the shelf moving.
+function _qpMoveMini(main, drag, t) {
+    const id = drag.mini, from = drag.from;
+    const left = _qpShelfIds(from).filter(function (x) { return x !== id; });
+    const put = function (ids, at) { ids = ids.slice(); ids.splice(Math.max(0, Math.min(at == null ? ids.length : at, ids.length)), 0, id); return ids; };
+    if (t.zone === 'shelf' && t.key === from) {
+        const ids = put(left, t.at);
+        if (ids.join(',') === _qpShelfIds(from).join(',')) return _qpRenderControls(main);
+        // Undo by hand, before the rename: _qpShelfRekey changes the block on
+        // the page, so the layout _qpCommit would save as "before" is already the after.
+        _qpUndoPush(_qpCurrentRows(main));
+        _qpCommit(main, _qpShelfRekey(main, from, ids), true);
+        return;
+    }
+    if (!left.length) {
+        if (t.zone !== 'shelf') return _qpDropAt(main, { key: from }, t);
+        // Its last mini onto another shelf: the shelf it left goes.
+        _qpUndoPush(_qpCurrentRows(main));
+        _qpShelfRekey(main, from, []);
+        _qpCommit(main, _qpShelfRekey(main, t.key, put(_qpShelfIds(t.key), t.at)), true);
+        return;
+    }
+    _qpUndoPush(_qpCurrentRows(main));
+    // Rename the shelf it left in place first, so the rows the drop was worked
+    // out against still line up (its cell stays where it was).
+    const lk = _qpShelfKey(left);
+    _qpShelfRekey(main, from, left);
+    if (t.zone === 'shelf') {
+        _qpCommit(main, _qpShelfRekey(main, t.key, put(_qpShelfIds(t.key), t.at)), true);
+        return;
+    }
+    const fix = function (k) { return k === from ? lk : k; };
+    if (t.beforeKey === from) t.beforeKey = lk;
+    if (t.key === from) t.key = lk;
+    if (t.bump) t.bump.rows = t.bump.rows.map(function (r) { return { items: r.items.map(fix), w: r.w }; });
+    const nk = _qpShelfKey([id]);
+    main.insertBefore(_qpMakeShelf(nk), _qpAnchor(main));
+    const n = _qpUndo.length;
+    _qpDropAt(main, { key: nk }, t);
+    // _qpDropAt pushes its own Undo of the half-way layout; this move has one.
+    while (_qpUndo.length > n) _qpUndo.pop();
+    _qpUndoSync();
+}
+// The icons a mini is carried by: draggable in Customize only, so outside it
+// a press on one is an ordinary click.
+function _qpMiniGrips(main) {
+    main.querySelectorAll('.qp-mn-grip').forEach(function (g) {
+        if (_qpEditing) { g.draggable = true; g.title = 'Drag to Move This Mini Widget'; }
+        else { g.removeAttribute('draggable'); g.removeAttribute('title'); }
+    });
+}
 function qpRemoveMini(id) {
     const main = _qpMain();
     const b = main && _qpMiniShelf(main, id);
     if (!b) return;
     const k = _qpKey(b);
-    _qpCommit(main, _qpShelfRekey(main, k, _qpShelfIds(k).filter(x => x !== id)));
+    _qpUndoPush(_qpCurrentRows(main));   // before the rename (see _qpMoveMini)
+    _qpCommit(main, _qpShelfRekey(main, k, _qpShelfIds(k).filter(x => x !== id)), true);
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
 function _qpMiniHtml(id) {
@@ -54285,6 +54344,7 @@ function _qpRenderShelves(main) {
         if (b._qpHtml !== html) { b.innerHTML = html; b._qpHtml = html; _qpCapLines(b); }
         if (was !== b.hidden) _qpSyncHidden(main);
     });
+    _qpMiniGrips(main);
 }
 
 // --- THE REDESIGNED WIDGET BODIES (Ethan, 2026-10-28: "I like all of them as
@@ -54914,10 +54974,25 @@ function _qpTargetAt(main, el, x, y) {
     const sameGroup = !!fam && fam === (_qpDrag.key ? (_qpParse(_qpDrag.key) || {}).fam : _qpDrag.fam);
     const fromHere = !_qpDrag.key && _qpDrag.from === key;
     let zone = f < 0.25 ? 'left' : f > 0.75 ? 'right' : 'combine';
-    // A MINI out of the drawer over a shelf's middle goes ON that shelf.
+    // A MINI over a shelf's middle goes ON that shelf: one out of the drawer,
+    // or one carried off a shelf by its icon (_qpDrag.mini). For a carried one
+    // `at` is where it lands among the others, by the pointer's height — over
+    // its own shelf that is a reorder (mine), and its own rows don't count
+    // against the room.
     if (zone === 'combine' && _qpDrag.add && _qpIsShelfKey(_qpDrag.add) && _qpIsShelfKey(key)) {
-        const full = _qpShelfUsed(_qpShelfIds(key)) + _qpMiniSize(_qpShelfIds(_qpDrag.add)[0]) > 3;
-        return { zone: 'shelf', el: b, cell: cell, key: key, row: rows.indexOf(row), full: full };
+        const mid = _qpDrag.mini, ids = _qpShelfIds(key), mine = !!mid && ids.indexOf(mid) !== -1;
+        const full = !mine && _qpShelfUsed(ids) + _qpMiniSize(_qpShelfIds(_qpDrag.add)[0]) > 3;
+        let at = null, of = 0;
+        if (mid) {
+            at = 0;
+            b.querySelectorAll('[data-qp-mini]').forEach(function (m) {
+                if (m.getAttribute('data-qp-mini') === mid) return;
+                of++;
+                const q = m.getBoundingClientRect();
+                if (y > q.top + q.height / 2) at++;
+            });
+        }
+        return { zone: 'shelf', el: b, cell: cell, key: key, row: rows.indexOf(row), full: full, at: at, of: of, mine: mine };
     }
     // The middle of a card from ANOTHER group swaps the two (Ethan, 2026-10-23:
     // trading places used to mean removing one and adding it back). Whole cards
@@ -54936,7 +55011,8 @@ function _qpTargetAt(main, el, x, y) {
     // or a tab dragged out to be a card of its own — over the middle of a card
     // from another group takes that card's place, in red. What it pushes off
     // goes where it came from (_qpRetire). Over its own group it combines.
-    if (zone === 'combine' && !fromHere && !sameGroup && (_qpDrag.add || (!_qpDrag.key && _qpDrag.piece))) {
+    // A mini carried off a shelf never replaces a card: it places beside it.
+    if (zone === 'combine' && !fromHere && !sameGroup && !_qpDrag.mini && (_qpDrag.add || (!_qpDrag.key && _qpDrag.piece))) {
         const nk = _qpDrag.add || _qpShellKey(_qpDrag.fam, [_qpDrag.piece]);
         const why = _qpReplaceWhyNot(main, b, key, nk);
         return { zone: 'replace', el: b, cell: cell, key: key, row: rows.indexOf(row), full: !!why, why: why };
@@ -55017,7 +55093,10 @@ function _qpPreview(main, t) {
     }
     pv.setAttribute('data-sig', sig);
     if (!next) {
-        pv.innerHTML = '<div class="qp-pv-t">After You Drop</div><div class="qp-pv-no">' + (t ? 'Can\x27t Drop Here' : 'Move Over a Card or a +') + '</div>';
+        // Onto a shelf the rows don't change, so there is no layout to show —
+        // but it can drop there (the overlay says where), which "Can't" denied.
+        const onShelf = t && t.zone === 'shelf' && !t.full;
+        pv.innerHTML = '<div class="qp-pv-t">After You Drop</div><div class="qp-pv-no">' + (onShelf ? 'Goes on This Shelf' : t ? 'Can\x27t Drop Here' : 'Move Over a Card or a +') + '</div>';
         return;
     }
     const shown = r => r.items.filter(k => _qpKeyShown(main, k));
@@ -55074,10 +55153,11 @@ function _qpShowHint(main, t) {
         ov.className = 'qp-ov qp-ov-combine qp-ov-no qp-ov-replace' + (t.why ? ' qp-ov-refused' : '');
         ov.innerHTML = replaceHtml();
     } else if (t.zone === 'shelf') {
+        const where = t.at == null ? 'On This Shelf' : t.at === 0 ? 'At the Top' : t.at >= t.of ? 'At the Bottom' : 'In the Middle';
         ov.className = 'qp-ov qp-ov-combine' + (t.full ? ' qp-ov-no' : '');
         ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
             + (t.full ? '<span class="qp-ov-big">No Room on This Shelf</span><span class="qp-ov-small">A Shelf Holds Three Rows</span>'
-                : '<span class="qp-ov-big">Drop to Add</span><span class="qp-ov-small">Puts It on This Shelf</span>');
+                : '<span class="qp-ov-big">' + (_qpDrag.mini ? 'Drop to Move' : 'Drop to Add') + '</span><span class="qp-ov-small">Puts It ' + (t.at == null || !t.mine ? 'on This Shelf' + (t.at == null ? '' : ', ' + where) : where) + '</span>');
     } else if (t.zone === 'swap') {
         const other = b.getAttribute('data-qp-label') || t.key;
         ov.className = 'qp-ov qp-ov-combine qp-ov-swap' + (t.full ? ' qp-ov-no' : '');
@@ -55145,6 +55225,26 @@ function _qpWireDrag(main) {
     main.addEventListener('click', _qpBlockClicks, true);
     main.addEventListener('dragstart', function (e) {
         if (!_qpEditing) return;
+        // A MINI, by its icon (.qp-mn-grip, Ethan 2026-10-29: "how do I move
+        // something from a shelf out of a shelf"). It travels as a new shelf
+        // of its own ("shelf:<id>", like one out of the drawer), so every drop
+        // target already knows it; the drop takes it off the shelf it left
+        // (_qpMoveMini). The rest of the shelf still drags the whole shelf.
+        const grip = e.target.closest && e.target.closest('.qp-mn-grip');
+        const mn = grip && grip.closest('[data-qp-mini]');
+        const sh = mn && mn.closest('[data-qp-shelf]');
+        if (mn && sh) {
+            const id = mn.getAttribute('data-qp-mini');
+            _qpDrag = { key: _qpShelfKey([id]), add: _qpShelfKey([id]), mini: id, from: _qpKey(sh) };
+            try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'qp-mini:' + id); e.dataTransfer.setDragImage(mn, 20, 20); } catch (_) {}
+            mn.classList.add('qp-dragging');
+            requestAnimationFrame(function () {
+                if (!_qpDrag) return;
+                main.classList.add('qp-dragging-any');
+                _qpRenderSlots(main);
+            });
+            return;
+        }
         // The piece first: it sits inside a draggable card, and the drag that
         // starts is the innermost draggable one.
         const piece = e.target.closest && e.target.closest('.qp-piece-drag');
@@ -55186,6 +55286,7 @@ function _qpWireDrag(main) {
         _qpClearSlots(main);
         if (!t || t.full) { _qpRenderControls(main); return; }
         e.preventDefault();
+        if (drag.mini) return _qpMoveMini(main, drag, t);
         // A widget carried out of the drawer is built where it lands.
         if (drag.add) return qpAddWidget(drag.add, t);
         _qpDropAt(main, drag, t);

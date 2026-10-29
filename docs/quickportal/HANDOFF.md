@@ -435,6 +435,22 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Moving minis, 10-29** (Ethan: "how do I move something from a shelf out
+  of a shelf"). In Customize a mini is carried by its ICON (`.qp-mn-grip`,
+  draggable via `_qpMiniGrips`); the rest of the shelf still carries the whole
+  shelf. The drag travels as `shelf:<id>` with `_qpDrag.mini` + `.from`, so
+  every target already knows it: over a shelf's middle = zone 'shelf' with
+  `at` (its place, by pointer height) — its own shelf reorders; another shelf
+  takes it if there is room; beside a card / a + = a new shelf of its own.
+  Never Replace. `_qpMoveMini` does it as ONE Undo. Fixed on the way: adding
+  or removing a mini never made an Undo step (`_qpShelfRekey` renames the block
+  before `_qpCommit` reads "before"), so those push their own now. Confirmed
+  with real mouse drags (reorder, onto another shelf, out beside the
+  Leaderboard) + Undo. Pane drag scaling at 1440 emulation, measured 10-29:
+  START x×1.8, y×~0.99; END x×~0.98, y×~0.54 — an end point can only reach
+  CSS y ≲ 489, so put the target high on screen. Two-row versions of the single
+  minis: `prototypes/mini-two-row.html`, awaiting Ethan's pick (would be a
+  1 Row / 2 Rows switch per mini in Customize).
 - **Test-login samples for the new widgets, 10-29** (Ethan: "add dummy data to
   the test accounts for all of these new widgets"). `_qpSnapGet` returns
   `_qpSnapSample()` in the test session (no fetch; test-login has no PIN, so

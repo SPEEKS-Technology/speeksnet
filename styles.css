@@ -25604,6 +25604,12 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-mn-empty { visibility: hidden; border: 2px dashed #d5dde6; border-radius: 16px; background: none; color: #8a94a3; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
 .main-content.qp-editing .qp-mn-x { display: grid; place-items: center; }
 .main-content.qp-editing .qp-mn-empty { visibility: visible; }
+/* A mini is carried by its icon in Customize (Ethan, 2026-10-29); the rest of
+   the shelf still carries the whole shelf. A ring on hover says it can be held. */
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip { pointer-events: auto; cursor: grab; transition: box-shadow .12s; }
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip:hover { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #1f9d57; }
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mn-grip:active { cursor: grabbing; }
+.qp-mn.qp-dragging { opacity: .45; }
 .main-content.qp-editing .qp-mn-empty:hover { border-color: #1f9d57; color: #1f9d57; }
 .main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] { pointer-events: auto; }
 .main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] * { pointer-events: none; }
