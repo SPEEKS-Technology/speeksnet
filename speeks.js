@@ -52013,7 +52013,7 @@ function qpLibraryOpen(sec) {
         // windows and Settings) — Ethan, 2026-10-26.
         + '<button type="button" class="modal-close-btn" aria-label="Close" title="Close" onclick="qpLibraryClose()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>'
         + '<input type="search" class="qp-lib-search" placeholder="Search widgets" aria-label="Search widgets" oninput="_qpLibraryList(this.value)">'
-        + '<div class="qp-lib-hint">Click Add, or drag a widget onto the page.</div>'
+        + '<div class="qp-lib-hint">Click a tile to add it, or drag it onto the page.</div>'
         + '<div class="qp-lib-list" id="qpLibList"></div></aside>';
     ov.addEventListener('click', function (e) { if (e.target === ov) qpLibraryClose(); });
     ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') qpLibraryClose(); });
@@ -52066,20 +52066,32 @@ function _qpLibraryList(q) {
     // SECTIONS (Ethan, 2026-10-23): one per page the tools live on, in the site
     // menu's order (Operations, then Workspace). A section with nothing this
     // person can add — or nothing matching the search — is left out.
+    // TILES (Ethan, 2026-10-29, option C of prototypes/widget-drawer.html: the
+    // one long list of rows "looks a bit chaotic" at 31 widgets). Widgets two
+    // across, minis three across like the shelf they go on. The tile itself is
+    // the Add — click it or drag it; no Add button. One on the page keeps its
+    // Remove, as a small pill in the corner (no "On Page" label, 2026-10-22:
+    // the button says it). New sits in the same corner.
+    const tile = function (o) {
+        return '<div class="qp-lib-tile' + (o.on ? ' qp-lib-on' : ' qp-lib-drag') + (o.mini ? ' qp-lib-mini' : '') + '"'
+            + (o.on ? '' : ' draggable="true" role="button" tabindex="0" data-qp-add="' + o.add + '" title="' + escapeHtml(o.sub) + ' — click to add, or drag onto the page"'
+                + ' onclick="' + o.click + '" onkeydown="if(event.key===\x27Enter\x27||event.key===\x27 \x27){event.preventDefault();' + o.click + '}"')
+            + '>'
+            + '<span class="qp-lib-ico ' + o.tone + '" aria-hidden="true">' + o.icon + '</span>'
+            + (o.on ? '<button type="button" class="qp-lib-rm" onclick="' + o.rm + '">Remove</button>'
+                : (o.isNew ? '<span class="qp-lib-new">New</span>' : ''))
+            + '<div class="qp-lib-name">' + escapeHtml(o.label) + '</div>'
+            // A mini says only its name (and 2 Rows); its line is the tooltip.
+            + (o.mini ? (o.double ? '<div class="qp-lib-size">2 Rows</div>' : '') : '<div class="qp-lib-sub">' + escapeHtml(o.sub) + '</div>')
+            + '</div>';
+    };
     const row = function (id) {
         const w = QP_WIDGETS[id];
         const on = !!(main && main.querySelector('[data-qp-widget="' + id + '"]'));
-        return '<div class="qp-lib-row' + (on ? '' : ' qp-lib-drag') + '"' + (on ? '' : ' draggable="true" data-qp-add="' + id + '" title="Drag onto the page, or click Add"') + '>'
-            + '<span class="qp-lib-ico ' + w.tone + '" aria-hidden="true">' + w.icon + '</span>'
-            + '<div class="qp-lib-body"><div class="qp-lib-name">' + escapeHtml(w.label) + (_qpLibNew.indexOf(id) !== -1 ? '<span class="qp-lib-new">New</span>' : '') + '</div><div class="qp-lib-sub">' + escapeHtml(w.sub) + '</div>'
-            // No size pills (Ethan, 2026-10-22): the drag hints say the size
-            // as it is placed ("Place Beside · ⅓ Row"), which is when it matters.
-            + '</div>'
-            // On the page: Remove where Add was (Ethan, 2026-10-22 — no "On Page"
-            // label; the button says it). The same as the widget's ×.
-            + (on ? '<button type="button" class="qp-lib-rm" onclick="qpLibraryRemove(\x27' + id + '\x27)">Remove</button>'
-                : '<button type="button" class="qp-lib-add" draggable="false" onclick="qpAddWidget(\'' + id + '\')">Add</button>')
-            + '</div>';
+        // No size pills (Ethan, 2026-10-22): the drag hints say the size as it
+        // is placed ("Place Beside · ⅓ Row"), which is when it matters.
+        return tile({ add: id, on: on, label: w.label, sub: w.sub, tone: w.tone, icon: w.icon, isNew: _qpLibNew.indexOf(id) !== -1,
+            click: 'qpAddWidget(\x27' + id + '\x27)', rm: 'qpLibraryRemove(\x27' + id + '\x27)' });
     };
     // MINI WIDGETS: one-row cards that go on a shelf (qpAddMini). Add puts
     // one on a shelf with room or makes a shelf; a drag lands it where dropped.
@@ -52090,23 +52102,18 @@ function _qpLibraryList(q) {
     const miniRow = function (id) {
         const m = QP_MINIS[id];
         const on = !!(main && _qpMiniShelf(main, id));
-        return '<div class="qp-lib-row' + (on ? '' : ' qp-lib-drag') + '"' + (on ? '' : ' draggable="true" data-qp-add="shelf:' + id + '" title="Drag onto the page or a shelf, or click Add"') + '>'
-            + '<span class="qp-lib-ico ' + m.tone + '" aria-hidden="true">' + m.icon + '</span>'
-            + '<div class="qp-lib-body"><div class="qp-lib-name">' + escapeHtml(m.label) + (m.double ? '<span class="qp-lib-size">2 Rows</span>' : '')
-            + (_qpLibMiniNew() ? '<span class="qp-lib-new">New</span>' : '') + '</div><div class="qp-lib-sub">' + escapeHtml(m.sub) + '</div></div>'
-            + (on ? '<button type="button" class="qp-lib-rm" onclick="qpRemoveMini(\x27' + id + '\x27)">Remove</button>'
-                : '<button type="button" class="qp-lib-add" draggable="false" onclick="qpAddMini(\'' + id + '\')">Add</button>')
-            + '</div>';
+        return tile({ add: 'shelf:' + id, on: on, mini: true, double: m.double, label: m.label, sub: m.sub, tone: m.tone, icon: m.icon, isNew: _qpLibMiniNew(),
+            click: 'qpAddMini(\x27' + id + '\x27)', rm: 'qpRemoveMini(\x27' + id + '\x27)' });
     };
     list.innerHTML = ids.length || minis.length ? _QP_LIB_SECTIONS.map(function (sec) {
         if (sec === 'Mini Widgets') {
             return minis.length ? '<div class="qp-lib-sec" data-qp-lib-sec="Mini Widgets"><div class="qp-lib-sec-h">Mini Widgets<span>' + minis.length + '</span></div>'
-                + '<div class="qp-lib-note">One-row cards that share a ⅓ shelf, three to a shelf. Add one and a shelf is made for it.</div>'
-                + minis.map(miniRow).join('') + '</div>' : '';
+                + '<div class="qp-lib-note">One-row cards that share a ⅓ shelf, three to a shelf.</div>'
+                + '<div class="qp-lib-tiles qp-lib-tiles-m">' + minis.map(miniRow).join('') + '</div></div>' : '';
         }
         const mine = ids.filter(function (id) { return (QP_WIDGETS[id].section || 'Other') === sec; });
         return mine.length ? '<div class="qp-lib-sec" data-qp-lib-sec="' + escapeHtml(sec) + '"><div class="qp-lib-sec-h">' + escapeHtml(sec) + '<span>' + mine.length + '</span></div>'
-            + mine.map(row).join('') + '</div>' : '';
+            + '<div class="qp-lib-tiles">' + mine.map(row).join('') + '</div></div>' : '';
     }).join('') : '<div class="qp-lib-none">' + (q ? 'No widgets match “' + escapeHtml(q) + '”.' : 'No widgets to add yet.') + '</div>';
 }
 // A drag out of the drawer is a card drag (_qpDrag.key) for a card that is not

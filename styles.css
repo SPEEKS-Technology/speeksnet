@@ -26096,6 +26096,33 @@ a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
 /* "New" on a widget added in the last 30 days that this person has not yet
    seen in the drawer (_qpIsNew, Ethan 2026-10-25). */
 .qp-lib-new { display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 999px; background: #e8f7ee; color: #146c3c; font-size: 10px; font-weight: 800; letter-spacing: .02em; vertical-align: 1px; }
+/* THE DRAWER AS TILES (Ethan, 2026-10-29, option C of
+   prototypes/widget-drawer.html). 460px wide; widgets two across, minis three
+   across like the shelf they go on. The tile is the Add (click or drag); New,
+   or Remove for one already on the page, sits in its top-right corner. */
+.qp-lib .qp-lib-panel { width: min(460px, 100%); }
+.qp-lib-sec + .qp-lib-sec { margin-top: 4px; }
+.qp-lib-sec .qp-lib-sec-h { border-bottom: 0; padding: 14px 2px 8px; }
+.qp-lib-sec .qp-lib-note { margin: -4px 2px 8px; font-size: 11.5px; }
+.qp-lib-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.qp-lib-tiles.qp-lib-tiles-m { grid-template-columns: 1fr 1fr 1fr; }
+.qp-lib-tile { position: relative; display: flex; flex-direction: column; gap: 7px; min-width: 0; min-height: 104px; box-sizing: border-box;
+    padding: 11px 11px 10px; border: 1px solid #e6ebf1; border-radius: 12px; background: #fff; outline: none;
+    transition: border-color .12s, box-shadow .12s; }
+.qp-lib-tile.qp-lib-drag { cursor: grab; }
+.qp-lib-tile.qp-lib-drag:hover, .qp-lib-tile.qp-lib-drag:focus-visible { border-color: #9fd8b6; box-shadow: 0 2px 8px rgba(31,157,87,.12); }
+.qp-lib-tile.qp-lib-drag:active { cursor: grabbing; }
+.qp-lib-tile.qp-lib-on { background: #f8fafb; }
+.qp-lib-tile.qp-lib-mini { min-height: 78px; padding: 9px; gap: 5px; }
+.qp-lib-tile .qp-lib-ico { width: 28px; height: 28px; border-radius: 8px; }
+.qp-lib-tile .qp-lib-ico svg { width: 15px; height: 15px; }
+.qp-lib-tile .qp-lib-name { font-size: 12.5px; font-weight: 800; line-height: 1.25; }
+.qp-lib-tile.qp-lib-mini .qp-lib-name { font-size: 11.5px; }
+.qp-lib-tile .qp-lib-sub { font-size: 11px; font-weight: 600; line-height: 1.4; min-height: 0; margin: 0; }
+.qp-lib-tile .qp-lib-new { position: absolute; top: 9px; right: 9px; margin: 0; font-size: 9.5px; padding: 1px 6px; }
+.qp-lib-tile .qp-lib-size { align-self: flex-start; margin: 0; font-size: 9.5px; }
+.qp-lib-tile .qp-lib-rm { position: absolute; top: 7px; right: 7px; font-size: 10.5px; padding: 2px 8px; border-radius: 999px; }
+.qp-lib-tile.qp-lib-mini .qp-lib-rm { top: 6px; right: 6px; font-size: 10px; padding: 1px 6px; }
 /* Reset reads as the drastic one (Ethan, 2026-10-25: Undo and Reset looked
    alike): red, a layout-grid-with-an-X icon, and furthest from Save. */
 .qp-btn.qp-btn-reset { color: #c53030; }

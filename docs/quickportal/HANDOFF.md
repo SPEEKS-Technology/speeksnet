@@ -427,6 +427,14 @@ designs since have been shown inline in chat.
   Mini Widgets. `_qpCapLines` keeps a letter glued to a following number
   ("v3.10.2"). Checked manager / DM / employee at 1440: all 350, real figures.
   `scripts/qp-shelf-check.js` (8). Not done: reordering minis inside a shelf.
+- **Drawer as tiles, 10-29** (Ethan: with 31 rows the drawer "looks a bit
+  chaotic"; picked option C of `prototypes/widget-drawer.html` over a
+  Widgets/Minis switch and folding sections). 460px drawer; widgets two across,
+  minis three across. The tile is the Add (click, Enter, or drag; no Add
+  button); New, or Remove on a widget already on the page, is a pill in the
+  tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
+  the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
+  TILES". Cache-buster 20261029f.
 - **Store Breakdown removed, 10-29** (Ethan: "Live dashboard, eBay widget,
   and Matrix kind of handling that"). Tab, panel, piece and headline gone;
   `DC_TABS` is live / watch / ebay / scorecard. `fetchMasterDistrictDashboard`

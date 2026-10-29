@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Widget Drawer</title>
+<!-- Ways to organise the Add a Widget drawer (Ethan, 2026-10-29: "Now that
+     there is a lot, it looks a bit chaotic"). A Test Manager at OVL sees 31 rows
+     in one 340px list, every one tagged New. Rows here are the real drawer rows
+     for that login (names, subs, icons, tones), drawn with the site's own
+     styles.css. Monthly Breakdown, Claims & Disputes and Store KPIs are shown as
+     already on the page. Not linked from the app. -->
+<link rel="stylesheet" href="../styles.css?v=20261029e">
+<style>
+  html, body { height: auto !important; overflow: auto !important; }
+  body { background: #eef1f4; margin: 0; padding: 20px; font-family: 'Inter', 'Segoe UI', Arial, sans-serif; }
+  .pv-row { display: flex; gap: 20px; align-items: flex-start; }
+  .pv-col { width: 340px; }
+  .pv-col.wide { width: 460px; }
+  .pv-col .qp-lib-panel { width: 100%; }
+  .pv-col { flex: none; }
+  .pv-lab { font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #1a1c1e; margin: 0 0 4px; }
+  .pv-why { font-size: 12px; font-weight: 600; color: #647082; margin: 0 0 10px; max-width: 340px; line-height: 1.45; }
+  /* Each drawer sits in a 900px-tall frame, as on a 1440×900 screen. */
+  .pv-frame { height: 860px; position: relative; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 10px rgba(16,24,40,.08); }
+  .pv-frame .qp-lib-panel { position: static; height: 100%; box-sizing: border-box; animation: none; transform: none !important; opacity: 1 !important; }
+  .pv-frame .qp-lib-panel.w460 { width: 460px; }
+
+  /* --- shared bits for the options --- */
+  .dw-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: #f1f4f7; border-radius: 11px; margin: 12px 0 2px; }
+  .dw-switch button { font: inherit; font-size: 12.5px; font-weight: 750; border: 0; background: transparent; color: #647082; padding: 7px 0; border-radius: 8px; cursor: pointer; }
+  .dw-switch button.on { background: #fff; color: #146c3c; font-weight: 800; box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+  .dw-switch button span { font-weight: 700; color: #b4bcc6; margin-left: 5px; }
+  .dw-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+  .dw-chip { font: inherit; font-size: 11.5px; font-weight: 750; border: 1px solid #dfe5ec; background: #fff; color: #4b5563; padding: 5px 10px; border-radius: 999px; cursor: pointer; }
+  .dw-chip.on { background: #e8f7ee; border-color: #9fd8b6; color: #146c3c; }
+  .dw-chip span { color: #9aa4b1; font-weight: 700; margin-left: 4px; }
+  .dw-chip.on span { color: #4f9e72; }
+  .dw-plus { width: 30px; height: 30px; border-radius: 9px; border: 1px solid #1f9d57; background: #fff; color: #1f9d57; font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer; flex: none; display: grid; place-items: center; }
+  .dw-plus:hover { background: #1f9d57; color: #fff; }
+  .dw-on { font-size: 11px; font-weight: 750; color: #8a94a3; flex: none; display: flex; align-items: center; gap: 5px; }
+  .dw-on svg { width: 14px; height: 14px; fill: none; stroke: #1f9d57; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+  .dw-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #1f9d57; margin-left: 7px; vertical-align: 2px; }
+
+  /* A: compact rows — one-line sub, smaller icon, + button */
+  .dwa .qp-lib-row { padding: 8px 8px; gap: 10px; border-bottom: 0; border-radius: 10px; }
+  .dwa .qp-lib-row:hover { background: #f6f9f7; }
+  .dwa .qp-lib-row.is-on { opacity: .62; }
+  .dwa .qp-lib-ico { width: 30px; height: 30px; border-radius: 9px; }
+  .dwa .qp-lib-ico svg { width: 16px; height: 16px; }
+  .dwa .qp-lib-sub { min-height: 0; -webkit-line-clamp: 1; line-clamp: 1; }
+  .dwa .qp-lib-sec-h { border-bottom: 0; padding: 12px 8px 4px; }
+
+  /* B: accordion — one section open at a time, New summarised on the header */
+  .dwb .acc { border: 1px solid #e6ebf1; border-radius: 12px; margin-top: 8px; overflow: hidden; }
+  .dwb .acc-h { display: flex; align-items: center; gap: 10px; padding: 11px 12px; cursor: pointer; user-select: none; }
+  .dwb .acc-h:hover { background: #f8fafb; }
+  .dwb .acc-t { font-size: 13px; font-weight: 800; color: #1a1c1e; flex: 1; }
+  .dwb .acc-c { font-size: 11.5px; font-weight: 700; color: #9aa4b1; }
+  .dwb .acc-new { font-size: 10px; font-weight: 800; color: #146c3c; background: #e8f7ee; border-radius: 999px; padding: 1px 7px; }
+  .dwb .acc-ch { width: 14px; height: 14px; fill: none; stroke: #9aa4b1; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+  .dwb .acc.open .acc-ch { transform: rotate(180deg); }
+  .dwb .acc-b { display: none; border-top: 1px solid #eef1f4; padding: 4px 4px; }
+  .dwb .acc.open .acc-b { display: block; }
+  .dwb .acc-ico { width: 26px; height: 26px; border-radius: 8px; }
+  .dwb .acc-ico svg { width: 14px; height: 14px; }
+  .dwb .qp-lib-row { padding: 8px 8px; gap: 10px; border-bottom: 0; border-radius: 9px; }
+  .dwb .qp-lib-row:hover { background: #f6f9f7; }
+  .dwb .qp-lib-row.is-on { opacity: .62; }
+  .dwb .qp-lib-ico { width: 30px; height: 30px; border-radius: 9px; }
+  .dwb .qp-lib-ico svg { width: 16px; height: 16px; }
+  .dwb .qp-lib-sub { min-height: 0; -webkit-line-clamp: 1; line-clamp: 1; }
+  .dwb .new-strip { background: #f3fbf6; border: 1px solid #cfeedd; border-radius: 12px; padding: 10px 12px; margin-top: 12px; font-size: 12px; font-weight: 650; color: #146c3c; line-height: 1.45; }
+  .dwb .new-strip b { font-weight: 800; }
+
+  /* C: wider gallery — tiles two across, minis three across like a shelf */
+  .dwc .qp-lib-sec-h { border-bottom: 0; padding: 14px 2px 8px; }
+  .dwc .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .dwc .tiles.m { grid-template-columns: 1fr 1fr 1fr; }
+  .dwc .tile { position: relative; border: 1px solid #e6ebf1; border-radius: 12px; padding: 11px 11px 10px; cursor: grab; background: #fff; display: flex; flex-direction: column; gap: 7px; min-height: 104px; box-sizing: border-box; }
+  .dwc .tile:hover { border-color: #9fd8b6; box-shadow: 0 2px 8px rgba(31,157,87,.12); }
+  .dwc .tile.is-on { background: #f8fafb; cursor: default; }
+  .dwc .tile.is-on:hover { border-color: #e6ebf1; box-shadow: none; }
+  .dwc .tiles.m .tile { min-height: 78px; padding: 9px; gap: 5px; }
+  .dwc .tile .qp-lib-ico { width: 28px; height: 28px; border-radius: 8px; }
+  .dwc .tile .qp-lib-ico svg { width: 15px; height: 15px; }
+  .dwc .tile-n { font-size: 12.5px; font-weight: 800; color: #1a1c1e; line-height: 1.25; }
+  .dwc .tiles.m .tile-n { font-size: 11.5px; }
+  .dwc .tile-s { font-size: 11px; font-weight: 600; color: #647082; line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .dwc .tile-new { position: absolute; top: 9px; right: 9px; font-size: 9.5px; font-weight: 800; color: #146c3c; background: #e8f7ee; border-radius: 999px; padding: 1px 6px; }
+  .dwc .tile-onm { position: absolute; top: 9px; right: 9px; font-size: 9.5px; font-weight: 800; color: #8a94a3; background: #eef1f4; border-radius: 999px; padding: 1px 6px; }
+  .dwc .tile-x2 { font-size: 9.5px; font-weight: 800; color: #2563b8; }
+</style>
+</head>
+<body>
+<div class="pv-row" id="row"></div>
+
+<script>
+const IC = {
+  chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  cart: '<path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/>',
+  phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  x: '<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/>',
+  check: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  scale: '<path d="M12 3v18M3 7h18M6 7l-3 7h6l-3-7zM18 7l-3 7h6l-3-7z"/>',
+  trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0V4zM6 5H3v2a3 3 0 0 0 3 3M18 5h3v2a3 3 0 0 1-3 3M9 20h6M12 13v7"/>',
+  brief: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M12 8v5M12 16h.01"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  keys: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  book: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+  award: '<circle cx="12" cy="8" r="7"/><path d="M8.2 13.9L7 23l5-3 5 3-1.2-9.1"/>',
+  cash: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
+  box: '<path d="M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.5 3.3-5.5 6.5-5.5s5.9 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.7c1.7.8 2.8 2.6 3 5.3"/>',
+  recycle: '<path d="M7 19H4l3-5M17 19h3l-3-5M12 4l-2 3.5h4zM8 13l-1.5-2.5M16 13l1.5-2.5M9 19h6"/>',
+  spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>',
+};
+// [id, name, sub, tone, icon, on page?, new?, two rows?]
+const SECS = [
+  ['Sales & Goals', 'Sales', [
+    ['monthly', 'Monthly Breakdown', "Last month's key numbers and where the store ranked", 'b', 'chart', 1, 0],
+    ['pace', 'Goal Pace', "Net profit needed a day to hit this month's goal", 'g', 'flag', 0, 1],
+    ['buying', 'Buying', "Yesterday's buying against the same day other weeks", 'b', 'cart', 0, 1]]],
+  ['Customers & Reviews', 'Customers', [
+    ['callbacks', 'Customer Call Backs', 'Items your customers asked for that are in stock', 'a', 'phone', 0, 0],
+    ['reviews', 'Google Reviews', 'This month against the goal, and reviews a day', 'a', 'star', 0, 1],
+    ['lost', 'Lost Deals', 'Deals and devices that walked out, and what they were worth', 'r', 'x', 0, 1]]],
+  ['Team & Production', 'Team', [
+    ['kpis', 'Store KPIs', 'When KPIs are due, and how the store did', 'g', 'check', 1, 0],
+    ['variance', 'Variance Replies', 'Lines to explain, DM notes, and the deadline', 'a', 'scale', 0, 0],
+    ['team', 'Team Production', 'Who processed what yesterday, and the top producer', 'a', 'trophy', 0, 1]]],
+  ['Inventory & Listings', 'Inventory', [
+    ['b2b', 'Business-to-Business', 'Deals to price, deals waiting on you, unlisted value', 't', 'brief', 0, 0],
+    ['connect', 'SPEEKS Connect', 'Listings with no pictures, category or title', 'g', 'tag', 0, 0],
+    ['pipeline', 'Inventory Pipeline', 'Queue, available and live, and how fast the queue clears', 't', 'layers', 0, 1]]],
+  ['Store Operations', 'Operations', [
+    ['claims', 'Claims & Disputes', 'What needs attention, and what is due next', 'r', 'shield', 1, 0],
+    ['calendar', 'Store Calendar', 'What is coming up in the next two weeks', 'b', 'cal', 0, 1],
+    ['hotkeys', 'Hotkeys & Commands', "Find a device's hotkey without opening the list", 'b', 'keys', 0, 1]]],
+  ['Company', 'Company', [
+    ['docs', 'Processes & Policies', 'Search the library, and your pinned documents', 'b', 'book', 0, 0],
+    ['stats', 'Stats & Awards', "This week's champions, the monthly awards, your store's records", 'a', 'award', 0, 0]]],
+];
+const MINIS = [
+  ['mreviews', 'Google Reviews', 'This month, and how it is tracking', 'a', 'star'],
+  ['mstars', 'Five-Star Reviews', 'Five-star reviews this month', 'a', 'star'],
+  ['mpace', 'Goal Pace', 'Net profit a day still needed', 'g', 'flag'],
+  ['mcash', 'Cash on Hand', 'Drawer and safe from the latest report', 'g', 'cash'],
+  ['mqueue', 'Waiting to Process', 'The processing queue and what is available', 'b', 'box'],
+  ['mdue', 'Next Due', 'The nearest deadline from Your Feed', 'r', 'clock'],
+  ['mmix', 'Customer Mix', 'New, returning, recycle and no-deal customers', 'b', 'users', 1],
+  ['mrecycle', 'Recycle Requests', 'Requests waiting on a verdict', 'g', 'recycle'],
+  ['mnews', "What's New", 'The latest patch notes', 'b', 'spark'],
+  ['mlive', 'Live Listings', 'Listings live on the online store', 'g', 'tag'],
+  ['mbuy', 'Buying', 'What the store bought on the latest report', 'b', 'cart'],
+  ['mlost', 'Lost Deals', 'What walked out on the latest report', 'r', 'x'],
+  ['mtop', 'Top Producer', 'Who processed the most on the latest report', 'a', 'trophy'],
+  ['mcal', 'Coming Up', 'The next three events on the Store Calendar', 'b', 'cal', 1],
+];
+const ico = (k, tone, cls) => '<span class="qp-lib-ico ' + tone + (cls ? ' ' + cls : '') + '"><svg viewBox="0 0 24 24">' + IC[k] + '</svg></span>';
+const CLOSE = '<button type="button" class="modal-close-btn" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
+const HEAD = '<div class="qp-lib-head"><span class="qp-lib-t">Add a Widget</span>' + CLOSE + '</div>';
+const SEARCH = '<input type="search" class="qp-lib-search" placeholder="Search widgets">';
+const TICK = '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>';
+const allWidgets = SECS.flatMap(s => s[2]);
+const newCount = allWidgets.filter(w => w[6]).length + MINIS.length;
+
+// CURRENT: what the drawer draws today, every row New on a fresh login.
+function current() {
+  const row = (w, mini) => '<div class="qp-lib-row' + (w[5] ? '' : ' qp-lib-drag') + '">' + ico(w[4], w[3])
+    + '<div class="qp-lib-body"><div class="qp-lib-name">' + w[1] + (mini && w[5] ? '<span class="qp-lib-size">2 Rows</span>' : '') + '<span class="qp-lib-new">New</span></div><div class="qp-lib-sub">' + w[2] + '</div></div>'
+    + (!mini && w[5] ? '<button class="qp-lib-rm">Remove</button>' : '<button class="qp-lib-add">Add</button>') + '</div>';
+  return HEAD + SEARCH + '<div class="qp-lib-hint">Click Add, or drag a widget onto the page.</div><div class="qp-lib-list">'
+    + SECS.map(s => '<div class="qp-lib-sec"><div class="qp-lib-sec-h">' + s[0] + '<span>' + s[2].length + '</span></div>' + s[2].map(w => row(w)).join('') + '</div>').join('')
+    + '<div class="qp-lib-sec"><div class="qp-lib-sec-h">Mini Widgets<span>' + MINIS.length + '</span></div><div class="qp-lib-note">One-row cards that share a ⅓ shelf, three to a shelf. Add one and a shelf is made for it.</div>'
+    + MINIS.map(m => row(m, 1)).join('') + '</div></div>';
+}
+
+// A: Widgets | Mini Widgets switch, topic chips filter, compact rows.
+let aKind = 'w', aTopic = 'All';
+function optA() {
+  const row = (w, mini) => {
+    const on = !mini && w[5];
+    return '<div class="qp-lib-row' + (on ? ' is-on' : ' qp-lib-drag') + '">' + ico(w[4], w[3])
+      + '<div class="qp-lib-body"><div class="qp-lib-name">' + w[1] + ((mini || w[6]) ? '<span class="dw-dot" title="New"></span>' : '') + (mini && w[5] ? '<span class="qp-lib-size">2 Rows</span>' : '') + '</div><div class="qp-lib-sub">' + w[2] + '</div></div>'
+      + (on ? '<span class="dw-on">' + TICK + 'On Page</span>' : '<button class="dw-plus" title="Add">+</button>') + '</div>';
+  };
+  let body;
+  if (aKind === 'm') {
+    body = '<div class="qp-lib-note" style="margin:10px 8px 6px">One-row cards that share a ⅓ shelf, three to a shelf.</div>' + MINIS.map(m => row(m, 1)).join('');
+  } else {
+    const chips = '<div class="dw-chips">' + ['All'].concat(SECS.map(s => s[1])).map(t => '<button class="dw-chip' + (t === aTopic ? ' on' : '') + '" onclick="aTopic=\'' + t + '\';draw()">' + t + (t === 'All' ? '' : '<span>' + SECS.find(s => s[1] === t)[2].length + '</span>') + '</button>').join('') + '</div>';
+    body = chips + SECS.filter(s => aTopic === 'All' || s[1] === aTopic).map(s => '<div class="qp-lib-sec"><div class="qp-lib-sec-h">' + s[0] + '</div>' + s[2].map(w => row(w)).join('') + '</div>').join('');
+  }
+  return HEAD + SEARCH
+    + '<div class="dw-switch"><button class="' + (aKind === 'w' ? 'on' : '') + '" onclick="aKind=\'w\';draw()">Widgets<span>' + allWidgets.length + '</span></button><button class="' + (aKind === 'm' ? 'on' : '') + '" onclick="aKind=\'m\';draw()">Mini Widgets<span>' + MINIS.length + '</span></button></div>'
+    + '<div class="qp-lib-list">' + body + '</div>';
+}
+
+// B: one section open at a time; New summarised once at the top and on headers.
+let bOpen = 'Sales & Goals';
+function optB() {
+  const row = (w, mini) => {
+    const on = !mini && w[5];
+    return '<div class="qp-lib-row' + (on ? ' is-on' : ' qp-lib-drag') + '">' + ico(w[4], w[3])
+      + '<div class="qp-lib-body"><div class="qp-lib-name">' + w[1] + (mini && w[5] ? '<span class="qp-lib-size">2 Rows</span>' : '') + '</div><div class="qp-lib-sub">' + w[2] + '</div></div>'
+      + (on ? '<span class="dw-on">' + TICK + 'On Page</span>' : '<button class="dw-plus" title="Add">+</button>') + '</div>';
+  };
+  const CH = '<svg class="acc-ch" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+  const secIco = { 'Sales & Goals': ['chart', 'g'], 'Customers & Reviews': ['star', 'a'], 'Team & Production': ['trophy', 'a'], 'Inventory & Listings': ['layers', 't'], 'Store Operations': ['shield', 'r'], 'Company': ['book', 'b'], 'Mini Widgets': ['box', 'b'] };
+  const acc = (name, items, mini) => {
+    const n = mini ? items.length : items.filter(w => w[6]).length;
+    return '<div class="acc' + (bOpen === name ? ' open' : '') + '"><div class="acc-h" onclick="bOpen=(bOpen===\'' + name + '\'?\'\':\'' + name + '\');draw()">'
+      + ico(secIco[name][0], secIco[name][1], 'acc-ico') + '<span class="acc-t">' + name + '</span>'
+      + (n ? '<span class="acc-new">' + n + ' New</span>' : '') + '<span class="acc-c">' + items.length + '</span>' + CH + '</div>'
+      + '<div class="acc-b">' + (mini ? '<div class="qp-lib-note" style="margin:6px 8px">One-row cards that share a ⅓ shelf, three to a shelf.</div>' : '') + items.map(w => row(w, mini)).join('') + '</div></div>';
+  };
+  return HEAD + SEARCH
+    + '<div class="new-strip"><b>' + newCount + ' new this month</b> — ' + allWidgets.filter(w => w[6]).length + ' widgets and ' + MINIS.length + ' mini widgets. Look for the green tag on each section.</div>'
+    + '<div class="qp-lib-list">' + SECS.map(s => acc(s[0], s[2])).join('') + acc('Mini Widgets', MINIS, 1) + '</div>';
+}
+
+// C: a wider drawer of tiles; minis three across, like the shelf they go on.
+function optC() {
+  const tile = (w, mini) => {
+    const on = !mini && w[5];
+    return '<div class="tile' + (on ? ' is-on' : '') + '">' + ico(w[4], w[3])
+      + (on ? '<span class="tile-onm">On Page</span>' : ((mini || w[6]) ? '<span class="tile-new">New</span>' : ''))
+      + '<div class="tile-n">' + w[1] + '</div>'
+      + (mini ? (w[5] ? '<div class="tile-x2">2 Rows</div>' : '') : '<div class="tile-s">' + w[2] + '</div>') + '</div>';
+  };
+  return HEAD + SEARCH + '<div class="qp-lib-hint">Drag a tile onto the page, or click it to add.</div><div class="qp-lib-list">'
+    + SECS.map(s => '<div class="qp-lib-sec-h">' + s[0] + '<span>' + s[2].length + '</span></div><div class="tiles">' + s[2].map(w => tile(w)).join('') + '</div>').join('')
+    + '<div class="qp-lib-sec-h">Mini Widgets<span>' + MINIS.length + '</span></div><div class="tiles m">' + MINIS.map(m => tile(m, 1)).join('') + '</div></div>';
+}
+
+function col(lab, why, html, cls, wide) {
+  return '<div class="pv-col' + (wide ? ' wide' : '') + '"><div class="pv-lab">' + lab + '</div><div class="pv-why">' + why + '</div><div class="pv-frame"><aside class="qp-lib-panel ' + cls + (wide ? ' w460' : '') + '">' + html + '</aside></div></div>';
+}
+function draw() {
+  const y = [...document.querySelectorAll('.qp-lib-list')].map(l => l.scrollTop);
+  document.getElementById('row').innerHTML =
+    col('Today', '31 rows in one list, every one tagged New, two-line descriptions, a big green Add on each.', current(), '')
+    + col('A · Switch + Topics', 'Widgets and Mini Widgets are two lists. Topic chips narrow the widgets. One-line rows, a small + to add, a green dot for New.', optA(), 'dwa')
+    + col('B · Folding Sections', 'One section open at a time, seven headers to scan. "3 New" sits on the header, not on every row. Click a header to open it.', optB(), 'dwb')
+    + col('C · Tile Gallery', 'A wider drawer (460px). Widgets two across, minis three across like the shelf they sit on. Tiles only, no buttons.', optC(), 'dwc', 1);
+  document.querySelectorAll('.qp-lib-list').forEach((l, i) => { l.scrollTop = y[i] || 0; });
+}
+draw();
+</script>
+</body>
+</html>
