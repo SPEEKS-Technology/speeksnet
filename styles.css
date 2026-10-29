@@ -25713,6 +25713,8 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 /* A group label on the All tab — the same caption as "Next Up" on the Action Items cards. */
 .speeks-action-menu .sam-fsec { padding: 8px 12px 2px; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
 .speeks-action-menu .sam-fsec:first-child { padding-top: 4px; }
+/* DUE DATES: the Due list is grouped by date (_samDueInfo); Overdue's label is red. */
+.speeks-action-menu .sam-fsec.sam-fsec-over { color: var(--red-alert); }
 /* FEED PIECES: the Due / To Do / News markers the layout moves between feed
    cards. Present and "shown" (the layout tests display), but take no room. */
 .speeks-action-menu .sam-fpiece { display: block; width: 0; height: 0; overflow: hidden; flex: none; pointer-events: none !important; }

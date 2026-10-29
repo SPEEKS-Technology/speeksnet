@@ -86,8 +86,16 @@ designs since have been shown inline in chat.
   index.html) the layout moves between cards, and `_samPaintFeedCard` paints
   each feed card from the markers it holds. One-kind cards are titled by the
   kind and have no tabs; in Customize the tabs are the drag handles.
-  Not done: real due DATES and Overdue / Today / This Week groups (claims, B2B
-  pricing and variance need to stamp their dates on their bubbles first).
+  **Due dates DONE 10-29:** every deadline card stamps `data-due-on`
+  (YYYY-MM-DD Central) on its state-carrier — Weekly / Monthly KPIs (the
+  Monday), 4pm claims (earliest line), B2B pricing (soonest deal), variance
+  (explanations or DM-note reply, sooner), aging, today's listing goals.
+  `_samDueInfo` turns it into the badge (Overdue / Due Today / Due Tomorrow /
+  Due Sat / Due Nov 9) and the group; on the QuickPortal the Due list is
+  labelled Overdue (red) / Due Today / Due This Week (next 6 days) / Due Later /
+  No Set Date, soonest first. No Set Date = expense report (no written
+  deadline) and the DM's variance review. Variance / aging titles lost their
+  "— Oct 31" suffix (the badge says it). Test login sample covers every group.
 - **Customize is a corner button** (2026-10-22): 30px round icons fixed
   bottom-right in `.main-content`'s 50px right padding (never over a card);
   Reset stacks above Save. z-index 100, under the side panels (101).

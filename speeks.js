@@ -7522,6 +7522,9 @@ function _kpiRenderDueBubble(which, show, opts) {
         // The feed card's title + badge (Due vs Overdue) read this off the bubble,
         // so the whole card always agrees with the bubble — no split-source drift.
         textEl.dataset.overdue = overdue ? '1' : '';
+        // The Monday the numbers are due (YYYY-MM-DD, Central) — the feed's date
+        // badge and its Overdue / Today / This Week groups (_samDueInfo).
+        if (opts && opts.dueOn) textEl.dataset.dueOn = opts.dueOn; else delete textEl.dataset.dueOn;
         // Snooze identity: re-nags if the store list or overdue state changes.
         textEl.dataset.sig = (monthly ? 'm' : 'w') + '|' + [...stores].sort().join(',') + '|' + (overdue ? 'od' : 'due');
         if (stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
@@ -7575,8 +7578,8 @@ async function checkKpiDueReminders() {
             weekly:  { due: wkPending.length > 0, overdue: wkOverdue, stores: wkPending },
             monthly: { due: moPending.length > 0, overdue: moOverdue, stores: moPending },
         };
-        _kpiRenderDueBubble('weekly',  _kpiDueState.weekly.due,  { overdue: wkOverdue, stores: wkPending });
-        _kpiRenderDueBubble('monthly', _kpiDueState.monthly.due, { overdue: moOverdue, stores: moPending });
+        _kpiRenderDueBubble('weekly',  _kpiDueState.weekly.due,  { overdue: wkOverdue, stores: wkPending, dueOn: wkEnd ? _kpiAddDays(wkEnd, 1) : '' });
+        _kpiRenderDueBubble('monthly', _kpiDueState.monthly.due, { overdue: moOverdue, stores: moPending, dueOn: moFirstSun ? _kpiAddDays(moFirstSun, 1) : '' });
         if (typeof applyKpiReminder === 'function') applyKpiReminder();
         if (typeof renderActionFeed === 'function') renderActionFeed();
     } catch (e) { /* next poll / ping retries */ }
@@ -20031,6 +20034,8 @@ async function checkListingGoalsDailyReminder() {
             + ' aren’t finished — give everyone working a role, and tap Off for anyone who isn’t in today.'
             + (waiting ? ' Still waiting on: ' + waiting + '.' : '');
         t.dataset.sig = 'lgd:' + today + ':' + pending.map(p => p.store + '|' + p.missing.join(',')).join(';');
+        // Due the day it is for — the feed files it under Due Today (_samDueInfo).
+        t.dataset.dueOn = _kpiCentralToday();
         t.textContent = t.dataset.summary;
     }
     el.style.display = 'flex';
@@ -31493,6 +31498,8 @@ function _b2bPricingCard(deals, muted) {
         sig: today + '|' + list.map(x => `${x.d.id}:${x.due.dueOn}`).join(','),
         late: late ? String(late) : '',
         count: String(list.length),
+        // The soonest deal's due date — the feed's date badge and groups (_samDueInfo).
+        dueOn: list[0].due.dueOn,
     });
 }
 
@@ -39801,6 +39808,10 @@ async function checkClaimsDueAlerts() {
         const summary = (items.length > 1 ? 'Resolve ' + items.length + ': ' : '') + items.map(line).join(' · ');
         t.dataset.summary = summary;
         t.dataset.overdue = overdue ? '1' : '';
+        // The earliest due date on the card (YYYY-MM-DD) — the feed's date badge
+        // and its Overdue / Today / This Week groups (_samDueInfo).
+        const dueOn = items.map(it => String(it.due || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
+        if (dueOn) t.dataset.dueOn = dueOn; else delete t.dataset.dueOn;
         // The tab the first (most urgent) item lives on.
         const first = items[0].type;
         t.dataset.tab = first === 'payment' ? 'payments' : first === 'mismatch' ? 'mismatch' : 'cases';
@@ -47513,7 +47524,7 @@ function _vrMaybePopup() {
     const explain = [];         // { store, n, state: 'over' | 'today' | 'open' }
     let explainDueAt = 0;
     const replyStores = [];     // stores with DM notes still awaiting a reply
-    let replyCount = 0, replyOverdue = false;
+    let replyCount = 0, replyOverdue = false, replyDueOn = '';
     const reviewedStores = [];  // DM reviewed, no reply needed — FYI until they look
     const clearedStores = [];   // in the clear, but a report they haven't opened
 
@@ -47550,7 +47561,11 @@ function _vrMaybePopup() {
                 // second day is on time. Must match the DM side's replyClosed
                 // exactly, or the manager stops being nagged on a different day
                 // from the one the DM is told the window shut.
-                if (_vrDayPast(Math.max(due, new Date(p.dm_notes_at).getTime()), 2)) replyOverdue = true;
+                const replyMs = Math.max(due, new Date(p.dm_notes_at).getTime());
+                if (_vrDayPast(replyMs, 2)) replyOverdue = true;
+                // The last day a reply is on time, for the feed's date badge.
+                const replyDay = _vrAddDays(_vrCtDay(replyMs), 2);
+                if (!replyDueOn || replyDay < replyDueOn) replyDueOn = replyDay;
             } else {
                 // DM reviewed with NO reply requested (or all replies already in) →
                 // one-time FYI so the manager reads the notes. Clears when they open
@@ -47616,12 +47631,16 @@ function _vrMaybePopup() {
                 : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due today' : 'Variance replies needed')),
         summary + '.', summary, coveredStores, fyiOnly);
 
-    // Deadline for the feed card's title. Stamped after the render (which rewrites
+    // The soonest deadline still owed — explanations or a reply to DM notes —
+    // as a Central YYYY-MM-DD for the feed's date badge and its Overdue / Today /
+    // This Week groups (_samDueInfo). Stamped after the render (which rewrites
     // innerHTML but leaves the element's dataset alone), same channel as data-fyi.
+    // It used to go on the title as "— Oct 31"; the badge says it now.
     const _vrTextEl = document.getElementById('varianceAlertBubbleText');
     if (_vrTextEl) {
-        if (explainDueAt) _vrTextEl.dataset.due = _samShortDate(explainDueAt);
-        else delete _vrTextEl.dataset.due;
+        delete _vrTextEl.dataset.due;
+        const dueOn = [explainDueAt ? _vrCtDay(explainDueAt) : '', replyDueOn].filter(Boolean).sort()[0] || '';
+        if (dueOn) _vrTextEl.dataset.dueOn = dueOn; else delete _vrTextEl.dataset.dueOn;
     }
 }
 
@@ -48630,6 +48649,8 @@ function _agBuildStoreBubble(mine) {
             if (d && (!due || d < due)) due = d;
         });
         if (due) agTextEl.dataset.due = _samShortDate(due); else delete agTextEl.dataset.due;
+        // Same deadline as a Central YYYY-MM-DD for the feed's date badge (_samDueInfo).
+        if (due) agTextEl.dataset.dueOn = _vrCtDay(due); else delete agTextEl.dataset.dueOn;
     }
 }
 
@@ -54400,6 +54421,13 @@ function _samPaintFeedCard(c, ctx) {
     let tab = showTabs ? (_samFeedTabOf[c.key] || 'all') : 'all';
     if (tab !== 'all' && !has(tab)) tab = 'all';
     const grouped = _SAM_FEED_KINDS.map(k => has(k[0]) ? ctx.all.filter(it => _samFeedKind(it) === k[0]) : []);
+    // DUE DATES: on the QuickPortal the Due list runs by date — Overdue, Due
+    // Today, Due This Week, Due Later, No Set Date (_samDueInfo), soonest first
+    // in each — and each of those is a label of its own, in place of "Due Dates".
+    // The plain newest-first list (phones, no Customize) keeps its order; the
+    // badge still carries the date there.
+    const dueRank = it => _SAM_DUE_ORDER.indexOf(it.dueGroup || 'none');
+    if (ctx.tabsOn) grouped[0].sort((a, b) => dueRank(a) - dueRank(b) || String(a.dueOn || '9').localeCompare(String(b.dueOn || '9')));
     const items = (ctx.tabsOn
         ? [].concat.apply([], grouped.filter((g, i) => tab === 'all' || tab === _SAM_FEED_KINDS[i][0]))
         : ctx.all.filter(it => has(_samFeedKind(it)))).slice(0, 8);
@@ -54450,7 +54478,18 @@ function _samPaintFeedCard(c, ctx) {
     // On the tabs, All puts a label over each group, and the patch row leads
     // the News group rather than the whole list.
     let lastKind = null, patchDone = !showPatch;
-    const startGroup = kind => {
+    const startGroup = (kind, it) => {
+        // Due items are labelled by their date group wherever the Due list is
+        // shown on the QuickPortal: under All, on the Due tab, and on a Due
+        // Dates card of its own.
+        if (kind === 'due' && ctx.tabsOn) {
+            const g = (it && it.dueGroup) || 'none';
+            if ('due:' + g !== lastKind) {
+                lastKind = 'due:' + g;
+                desired.push({ key: 'sec:due:' + g, html: `<div class="sam-fsec${g === 'over' ? ' sam-fsec-over' : ''}">${_SAM_DUE_GROUPS[g]}</div>` });
+            }
+            return;
+        }
         if (showTabs && tab === 'all' && kind !== lastKind) {
             lastKind = kind;
             const label = _SAM_FEED_KINDS.find(k => k[0] === kind)[1];
@@ -54460,7 +54499,7 @@ function _samPaintFeedCard(c, ctx) {
     };
     if (!showTabs && !patchDone) { patchDone = true; desired.push({ key: 'patch', html: ctx.patchRow }); }
     items.forEach(it => {
-        startGroup(_samFeedKind(it));
+        startGroup(_samFeedKind(it), it);
         if (it.type === 'rem') {
             // grey = informational rather than a task, so it gets the calm blue dot
             const dotcls = it.dueCls === 'sam-due-red' ? 'urgent'
@@ -55059,6 +55098,36 @@ function _samShortDate(ms) {
         ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// DUE DATES ON THE FEED (Ethan, 2026-10-29: "the due dates for all applicable
+// notifications for all roles"). A card with a deadline stamps it on its
+// state-carrier as data-due-on (YYYY-MM-DD, Central): Weekly / Monthly KPIs,
+// the 4pm claims card, B2B pricing, variance replies, aging replies, today's
+// listing goals. This turns it into the badge and the group the card sits in
+// on the QuickPortal's Due list — Overdue, Due Today, Due This Week (the next
+// six days, as on the Claims strip), Due Later. A deadline card with no date to
+// stamp (the expense report — nothing written says when it is due; the DM's
+// variance review) keeps its plain badge under No Set Date rather than being
+// given a date nobody set. `over` is the card's own overdue flag, which wins:
+// KPIs go overdue at 8:30am on the day they are due.
+const _SAM_DUE_GROUPS = { over: 'Overdue', today: 'Due Today', week: 'Due This Week', later: 'Due Later', none: 'No Set Date' };
+const _SAM_DUE_ORDER = ['over', 'today', 'week', 'later', 'none'];
+function _samDueInfo(dueOn, over) {
+    if (!dueOn) return { group: over ? 'over' : 'none', badge: over ? 'Overdue' : '' };
+    const left = _b2bDayDiff(_kpiCentralToday(), dueOn);
+    if (over || left < 0) return { group: 'over', badge: 'Overdue' };
+    if (left === 0) return { group: 'today', badge: 'Due Today' };
+    const d = new Date(dueOn + 'T12:00:00Z');
+    if (left === 1) return { group: 'week', badge: 'Due Tomorrow' };
+    if (left < 7) return { group: 'week', badge: 'Due ' + d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }) };
+    return { group: 'later', badge: 'Due ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) };
+}
+// A reminder row's date fields, for a card that answers to a deadline.
+function _samDueFields(c, dueOn) {
+    if (c.kind !== 'due') return {};
+    const info = _samDueInfo(dueOn, c.due === 'Overdue');
+    return { dueOn: dueOn || '', dueGroup: info.group, due: info.badge || c.due };
+}
+
 function _samReminderCfg() {
     // Variance flips between a real deadline and a "go and look" — a store marked
     // in the clear owes no replies but still has to read its numbers. data-fyi is
@@ -55067,9 +55136,9 @@ function _samReminderCfg() {
     const _vrT = document.getElementById('varianceAlertBubbleText');
     const _vrFyi = !!(_vrT && _vrT.dataset && _vrT.dataset.fyi);
     // Deadlines stamped by _vrMaybePopup / _agBuildStoreBubble — the soonest one
-    // still outstanding. Appended to the title so the card answers "by when?"
-    // without being opened. Absent when nothing is actually owed (an FYI row).
-    const _vrDue = (_vrT && _vrT.dataset && _vrT.dataset.due) || '';
+    // still outstanding. They were appended to the title ("— Oct 31"); the due
+    // badge carries the date now (data-due-on, _samDueInfo), so the titles don't.
+    // Absent when nothing is actually owed (an FYI row).
     const _agT = document.getElementById('agingAlertBubbleText');
     const _agDue = (_agT && _agT.dataset && _agT.dataset.due) || '';
     // Is anything actually past its reply date? _agMyItemsCache is the store's
@@ -55101,8 +55170,7 @@ function _samReminderCfg() {
     // same way it sets its title, so the tab can't disagree with the badge.
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
-          title: _vrFyi ? 'Variance Report to Review'
-                        : 'Variance Replies Due' + (_vrDue ? ' — ' + _vrDue : ''),
+          title: _vrFyi ? 'Variance Report to Review' : 'Variance Replies Due',
           urgency: _vrFyi ? 1 : 2, due: _vrFyi ? 'Review' : 'Due',
           cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red', kind: _vrFyi ? '' : 'due',
           // _vrMarkReviewed first: opening the card IS the DM's review, and it
@@ -55156,8 +55224,7 @@ function _samReminderCfg() {
           // fixed title, so a store three days past its reply deadline looked
           // identical to one with four days left — the only tell was a sentence
           // in the subtitle, which is the part nobody reads on a feed row.
-          title: _agLate ? 'Aging Inventory Replies Overdue'
-                         : 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
+          title: _agLate ? 'Aging Inventory Replies Overdue' : 'Aging Inventory Review',
           urgency: _agLate ? 2 : 1,
           due: _agLate ? 'Overdue' : 'Review',
           cls: _agLate ? 'sam-due-red' : 'sam-due-amber', kind: (_agLate || _agDue) ? 'due' : '',
@@ -55425,12 +55492,16 @@ function _samSetDismissedRem(map) { try { localStorage.setItem(_samDismKey(), JS
 // [key, who gets it — m store managers, d DM / CEO / MOCD, e ASMs and the
 // store team — line]; a key missing from this role's config is skipped too.
 // Never on a real login.
+// A due card's fourth field is when it is due, in days from today ('mon' = the
+// coming Monday, null = no set date); a past one reads as overdue.
 const _SAM_TEST_REMS = [
-    ['claimsDue', 'm', '3 claims are due by 4pm — a return, an INR and an unpaid order'],
-    ['kpiWeekly', 'm', 'Week ending Sunday — enter them by Monday 8:30am'],
-    ['b2bPricing', 'me', 'ACME-003 · Acme Corp — 22 units, priced 1 day late'],
-    ['listingGoalsDaily', 'm', 'Today’s roles and goals aren’t set yet for 4 people'],
-    ['variance', 'md', '3 lines to explain on the report uploaded yesterday'],
+    ['claimsDue', 'm', 'A return was due by 4pm yesterday · an INR and an unpaid order are due today', -1],
+    ['kpiWeekly', 'm', 'This week’s KPIs — enter them by 8:30am on Monday', 'mon'],
+    ['b2bPricing', 'mde', 'ACME-003 · Acme Corp — 22 units, 2 days left to price', 2],
+    ['listingGoalsDaily', 'm', 'Today’s roles and goals aren’t set yet for 4 people', 0],
+    ['variance', 'md', '3 lines to explain on the report uploaded yesterday', null],
+    ['kpiMonthly', 'm', 'Last month’s KPIs — due the Monday after the first Sunday', 11],
+    ['expenseFile', 'd', 'Your expense report hasn’t been filed yet — email it, then mark it filed', null],
     ['gpgoals', 'd', 'LEE and MPL have no goals set for this month'],
     ['claims', 'md', '2 returns waiting on a reply · 1 eBay case escalated'],
     ['recycle', 'md', '4 recycle requests awaiting your review'],
@@ -55449,9 +55520,15 @@ function _samTestReminders() {
     return _SAM_TEST_REMS.map(function (r) {
         const c = cfg.find(x => x.key === r[0]);
         if (!c || r[1].indexOf(who) === -1) return null;
-        return { type: 'rem', key: c.key, sig: r[2], title: c.title, snippet: r[2], due: c.due, dueCls: c.kind === 'due' ? 'sam-due-red' : c.cls,
+        const today = _kpiCentralToday();
+        const off = r[3] === 'mon' ? (8 - new Date(today + 'T12:00:00Z').getUTCDay()) % 7 || 7 : r[3];
+        const dueOn = typeof off === 'number' ? _b2bAddDays(today, off) : '';
+        // The live title reads its overdue flag off a bubble the sample has none of.
+        const title = off < 0 ? c.title.replace(/ Due( Today)?$/, ' Overdue') : c.title;
+        return { type: 'rem', key: c.key, sig: r[2], title, snippet: r[2], due: c.due, dueCls: c.kind === 'due' ? 'sam-due-red' : c.cls,
             urgency: c.urgency, read: false, dateMs: now + (c.urgency || 0), action: _samDestDead(c.action) ? '' : (c.action || ''), noSnooze: !!c.noSnooze,
-            noDue: !!c.noDue, kind: c.kind || '', readAction: c.readAction || '', doneAction: c.doneAction || '', doneLabel: c.doneLabel || '' };
+            noDue: !!c.noDue, kind: c.kind || '', readAction: c.readAction || '', doneAction: c.doneAction || '', doneLabel: c.doneLabel || '',
+            ..._samDueFields(c, dueOn) };
     }).filter(Boolean);
 }
 function _samTestNotes() {
@@ -55555,7 +55632,8 @@ function _samGatherReminders() {
             // went overdue, so the Due tab read as two grades of the same thing.
             due: c.due, dueCls: c.kind === 'due' ? 'sam-due-red' : c.cls, urgency: c.urgency, read: false, dateMs: nowBase + c.urgency,
             action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, kind: c.kind || '', readAction: c.readAction || '',
-            doneAction: c.doneAction || '', doneLabel: c.doneLabel || ''
+            doneAction: c.doneAction || '', doneLabel: c.doneLabel || '',
+            ..._samDueFields(c, (t && t.dataset && t.dataset.dueOn) || '')
         });
     });
     return out;
