@@ -435,6 +435,25 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Phones/tablets, no mini Add slot, Quick Messages, 10-29** (Ethan: "on
+  mobile and tablet, customize is disabled and the new widgets aren't
+  active"; "the add mini widget doesn't need to exist"; "the only other
+  widget we can make is the quick messages one"). The "full size" What's New
+  he saw was his 783px pane = the phone tier, where every card stacks full
+  width — not a desktop sizing bug. COMPACT TIER (`_compactMediaQuery()`: ≤900px,
+  or ≤1366 touch): styles.css hides the corner buttons' CONTENTS (`.qp-bar > *`
+  — applyRoleBasedUI puts an inline `display:flex !important` on #qpBar itself,
+  which no stylesheet beats) and every widget/shelf cell (`:has`). Customize
+  ends on crossing into it (`_qpCompactCheck`, matchMedia change + a resize
+  fallback, since the pane's emulation fired no change event) and
+  `qpToggleEdit` won't start it there. The saved layout is untouched (only a
+  Customize edit saves), so widgets return at desktop size. NOTE: since
+  `_qpHeadlinesOn` reads #qpBar's display and the bar itself stays flex,
+  headline cards are unchanged on phones. Empty shelf rows are blank (no
+  button). New widget `qmsgs` (Quick Messages): every tab's messages scoped
+  like renderQMTab (store + Everyone; Networking for DM / manager / owner),
+  search in place, the window's Copy (`copyQMToClipboard`), "+N More", Open
+  Quick Messages; 350 at ⅓ with a small Copy. Swept 1440 / 768 / 375.
 - **Grab a mini, not the shelf; sizes fit, 10-29** (Ethan: "I can't split
   the shelf up now ... grab each row in the shelf and move it either within or
   outside of the shelf"; "grabbing a 2 row and putting it in a shelf with only

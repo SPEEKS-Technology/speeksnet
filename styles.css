@@ -25601,9 +25601,9 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
    empty slot is plain space, so the shelf keeps its three rows. */
 .qp-mn-x { display: none; position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 7px; border: 1px solid #e3e8ee; background: #fff; color: #647082; padding: 0; cursor: pointer; }
 .qp-mn-x svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
-.qp-mn-empty { visibility: hidden; border: 2px dashed #d5dde6; border-radius: 16px; background: none; color: #8a94a3; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
+/* A shelf's empty rows: blank space, in Customize too (no "+ Add a Mini Widget"). */
+.qp-mn-empty { visibility: hidden; }
 .main-content.qp-editing .qp-mn-x { display: grid; place-items: center; }
-.main-content.qp-editing .qp-mn-empty { visibility: visible; }
 /* A mini is carried by the whole mini in Customize (Ethan, 2026-10-29: "grab
    each row in the shelf"); a shelf's free rows still carry the whole shelf.
    Its insides stay pointer-less (the rule above), so the press lands on it. */
@@ -25636,7 +25636,6 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-x2-line span:not(.qp-cw-due) { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-x2-line em { flex: none; font-style: normal; font-weight: 800; color: #1a1c1e; }
 .qp-x2-wide { display: block; width: 100%; height: 34px; flex: none; }
-.main-content.qp-editing .qp-mn-empty:hover { border-color: #1f9d57; color: #1f9d57; }
 .main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] { pointer-events: auto; }
 .main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] * { pointer-events: none; }
 /* A shelf is its minis' backdrop, not a card: no outline of its own in
@@ -26495,3 +26494,21 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .qp-hero-t { flex: 1 1 calc(100% - 60px); }
     .qp-hero-vid { margin-left: 56px; }
 }
+
+/* PHONES AND TABLETS (Ethan, 2026-10-29: "on mobile and tablet, customize is
+   disabled and the new widgets aren't active"). The compact tier — the same
+   query as _compactMediaQuery(), so a desktop window under 900px counts. No
+   corner buttons (no Customize; _qpHeadlinesOn reads this, so the cards go back
+   to their full panels too), and no added widget or shelf, whatever the saved
+   layout holds. The layout itself is kept for the desktop. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    /* The bar itself gets an inline display:flex !important from applyRoleBasedUI
+       (dynamic-module-flex), which no stylesheet beats — so its buttons go. */
+    .qp-bar > * { display: none !important; }
+    .main-content .qp-cell:has(> [data-qp-widget]), .main-content .qp-cell:has(> [data-qp-shelf]) { display: none !important; }
+}
+/* The Quick Messages widget (qmsgs): the window's Copy button, small enough
+   that six lines keep the card at 350, and a gap after the tab name
+   ("Common", "No Deals") — it is wider than a store code. */
+.qp-hk-list .qp-qm-copy { flex: none; padding: 2px 9px; font-size: 9.5px; line-height: 1.5; }
+.qp-hk-list .qp-cw-st { margin-right: 8px; }

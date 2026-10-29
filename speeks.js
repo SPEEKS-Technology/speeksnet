@@ -53865,17 +53865,24 @@ Object.assign(QP_WIDGETS, {
         icon: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>',
         tone: 'b', avail: () => true,
     },
+    // Ethan, 2026-10-29: "the only other widget we can make is the quick
+    // messages one since you made one for the hotkeys and the calendar".
+    qmsgs: {
+        label: 'Quick Messages', sub: 'Find a message and copy it without opening the list',
+        icon: '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        tone: 'g', avail: () => true,
+    },
 });
 const _QP_WIDGET_SECTION = {
     pace: 'Sales & Goals', buying: 'Sales & Goals', monthly: 'Sales & Goals',
     reviews: 'Customers & Reviews', dreviews: 'Customers & Reviews', lost: 'Customers & Reviews', dlost: 'Customers & Reviews', callbacks: 'Customers & Reviews',
     team: 'Team & Production', kpis: 'Team & Production', dkpis: 'Team & Production', variance: 'Team & Production', dvariance: 'Team & Production',
     pipeline: 'Inventory & Listings', connect: 'Inventory & Listings', dconnect: 'Inventory & Listings', b2b: 'Inventory & Listings',
-    claims: 'Store Operations', dclaims: 'Store Operations', calendar: 'Store Operations', hotkeys: 'Store Operations',
+    claims: 'Store Operations', dclaims: 'Store Operations', calendar: 'Store Operations', hotkeys: 'Store Operations', qmsgs: 'Customers & Reviews',
     docs: 'Company', stats: 'Company',
 };
 Object.keys(_QP_WIDGET_SECTION).forEach(id => { if (QP_WIDGETS[id]) QP_WIDGETS[id].section = _QP_WIDGET_SECTION[id]; });
-['reviews', 'dreviews', 'pace', 'lost', 'dlost', 'team', 'pipeline', 'buying', 'calendar', 'hotkeys'].forEach(id => {
+['reviews', 'dreviews', 'pace', 'lost', 'dlost', 'team', 'pipeline', 'buying', 'calendar', 'hotkeys', 'qmsgs'].forEach(id => {
     QP_WIDGETS[id].added = '2026-10-29';
     _QP_WIDGET_MAXW[id] = 0.5;
 });
@@ -54058,6 +54065,56 @@ function _qpHkRows(d, q) {
         // "+21 More", as the Processes & Policies card says it (Ethan, 2026-10-29).
         + (hits.length > 6 ? '<div class="qp-doc-more">+' + (hits.length - 6) + ' More</div>' : '');
 }
+// QUICK MESSAGES: every tab's messages in one searchable list, scoped as the
+// Quick Messages window scopes them (renderQMTab): a store's own and
+// "Everyone" rows, Networking only for the roles that see its tab. Copy uses
+// the window's own copyQMToClipboard. The search filters in place, like Hotkeys.
+const _QP_QM_TABS = [['common', 'Common'], ['noDeals', 'No Deals'], ['reviews', 'Reviews'], ['networking', 'Networking']];
+function _qpQmList(d) {
+    let store = String(sessionStorage.getItem('speeksUserStore') || 'OVL').toUpperCase();
+    if (store === 'ALL') store = 'CORP';
+    const net = ['district manager', 'manager', 'owner (manager)'].indexOf(_qpRole()) !== -1;
+    const out = [];
+    _QP_QM_TABS.forEach(function (t) {
+        if (t[0] === 'networking' && !net) return;
+        (d[t[0]] || []).forEach(function (r) {
+            const rs = String(r.store || 'Everyone').trim().toUpperCase();
+            if (t[0] !== 'networking' && rs !== 'EVERYONE' && rs !== store) return;
+            if (r.name && r.message) out.push({ tab: t[1], cat: r.category || '', name: String(r.name), message: String(r.message) });
+        });
+    });
+    return out;
+}
+function _qpQmRows(list, q) {
+    q = String(q || '').trim().toLowerCase();
+    const hits = list.filter(x => !q || (x.tab + ' ' + x.cat + ' ' + x.name + ' ' + x.message).toLowerCase().indexOf(q) !== -1);
+    if (!hits.length) return '<div class="qp-hl-sub">No message matches “' + escapeHtml(q) + '”.</div>';
+    return hits.slice(0, 6).map(x => '<div class="qp-cw-ln"><span class="qp-cw-lt"><span class="qp-cw-st">' + escapeHtml(x.tab) + '</span>'
+        + escapeHtml(x.name) + '</span><button type="button" class="qm-copy-btn qp-qm-copy" title="' + escapeHtml(x.message) + '" data-message="' + escapeHtml(x.message)
+        + '" onclick="copyQMToClipboard(this)">Copy</button></div>').join('')
+        + (hits.length > 6 ? '<div class="qp-doc-more">+' + (hits.length - 6) + ' More</div>' : '');
+}
+function _qpQmSearch(input) {
+    const st = _qpWState('qmsgs'), list = input.parentElement.querySelector('.qp-hk-list');
+    if (list && st.data) { list.innerHTML = _qpQmRows(st.data, input.value); _qpCapLines(list); }
+}
+Object.assign(_QP_WSPEC, {
+    qmsgs: {
+        when: 'Copy and Paste', ttl: 3600000, tabs: [['main', 'Messages', 'Quick Messages']], where: () => (_qpMyStore() || 'Company'),
+        load: async function () {
+            const j = await fetch(QUICK_MSG_URL).then(r => r.json());
+            if (j && typeof j === 'object') quickMsgCache = quickMsgCache || j;   // the window reuses it
+            return _qpQmList(j || {});
+        },
+        off: d => d.length ? '' : 'No quick messages have been added yet.',
+        card: function (d) {
+            return '<div class="qp-ai-body qp-doc-body">'
+                + '<input type="search" class="qp-doc-q" placeholder="Search a Message" aria-label="Search quick messages" oninput="_qpQmSearch(this)">'
+                + '<div class="qp-hk-list">' + _qpQmRows(d, '') + '</div>'
+                + _qpAiLink('Open Quick Messages', "toggleModal('quickMsgDropdown'); loadQuickMessages();") + '</div>';
+        },
+    },
+});
 function _qpHkSearch(input) {
     const st = _qpWState('hotkeys'), list = input.parentElement.querySelector('.qp-hk-list');
     if (list && st.data) { list.innerHTML = _qpHkRows(st.data, input.value); _qpCapLines(list); }
@@ -54559,9 +54616,10 @@ function _qpRenderShelves(main) {
         _qpShelfFreeNow = 3 - _qpShelfUsed(ids);   // for the 2 Rows switch (_qpMiniRoom)
         let used = 0;
         const parts = ids.map(id => { used += _qpMiniSize(id); return _qpMiniHtml(id); });
-        // Empty slots say how to fill them in Customize, and are blank space
-        // otherwise (styles.css), so the shelf keeps its three rows either way.
-        for (; used < 3; used++) parts.push('<button type="button" class="qp-mn-empty" data-qp-edit-ok onclick="qpLibraryOpen(\'Mini Widgets\')">+ Add a Mini Widget</button>');
+        // Empty slots are blank space, in Customize too, so the shelf keeps its
+        // three rows. No "+ Add a Mini Widget" (Ethan, 2026-10-29: "doesn't need
+        // to exist since we don't have one for normal widgets") — the drawer adds.
+        for (; used < 3; used++) parts.push('<div class="qp-mn-empty" aria-hidden="true"></div>');
         const html = '<div class="qp-mshelf">' + parts.join('') + '</div>';
         if (b._qpHtml !== html) { b.innerHTML = html; b._qpHtml = html; _qpCapLines(b); }
         if (was !== b.hidden) _qpSyncHidden(main);
@@ -55449,7 +55507,7 @@ function _qpBlockClicks(e) {
     if (!_qpEditing) return;
     const b = e.target.closest && e.target.closest('.qp-cell > [data-qp-block]');
     if (!b) return;
-    // A shelf's own Customize controls (a mini's ×, "+ Add a Mini Widget").
+    // A shelf's own Customize controls (a mini's × and 1 | 2 switch).
     if (e.target.closest('[data-qp-edit-ok]')) return;
     e.preventDefault();
     e.stopPropagation();
@@ -55628,8 +55686,28 @@ function _qpSetEditing(main, on) {
 
 function qpToggleEdit() {
     const main = _qpMain();
-    if (main) _qpSetEditing(main, !_qpEditing);
+    // Desktop only (Ethan, 2026-10-29: "on mobile and tablet, customize is
+    // disabled"): styles.css hides the corner buttons in the compact tier.
+    if (main && !(_qpEditing === false && _isMobileLayout())) _qpSetEditing(main, !_qpEditing);
 }
+// PHONES AND TABLETS: no Customize, no added widgets or shelves (Ethan, same
+// day: "I don't know what they will look like on that"). styles.css hides the
+// corner buttons and every widget / shelf cell in the compact tier — the one
+// _compactMediaQuery() names, so a desktop window narrower than 900px counts
+// too. The saved layout is untouched (only an edit in Customize saves), so the
+// widgets are back as soon as the window is desktop-sized again. Crossing the
+// line ends Customize and rebuilds, because the size rules (_qpMaxW, through
+// _qpHeadlinesOn) change with it.
+function _qpCompactCheck() {
+    const main = _qpMain();
+    if (!main) return;
+    if (_qpEditing && _isMobileLayout()) _qpSetEditing(main, false);
+    _qpApplyLayout();
+}
+try { window.matchMedia(_compactMediaQuery()).addEventListener('change', _qpCompactCheck); } catch (_) {}
+// ...and on a resize while customizing, in case a browser crosses the line
+// without the query's change event (the pane's device emulation did).
+window.addEventListener('resize', function () { if (_qpEditing && _isMobileLayout()) _qpCompactCheck(); });
 
 // UNDO (Ethan, 2026-10-25). A drop can move other cards now — one bumped
 // down, a lone one joining a row, at worst the whole page re-fitted — so every
