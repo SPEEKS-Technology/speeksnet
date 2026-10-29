@@ -65,7 +65,8 @@ t('Records: this store\'s figures and place, no GP, no person records, whole dol
 
 t('the widget is in the drawer for everyone, ⅓ or ½, three pieces', function () {
     if (!QP_WIDGETS.stats.avail()) return 'not available';
-    if (_QP_LIB_SECTIONS.indexOf('Stats & Awards') === -1) return 'no drawer section';
+    // Under "Company" since the drawer went to categories (2026-10-29).
+    if (_QP_LIB_SECTIONS.indexOf(QP_WIDGETS.stats.section) === -1) return 'no drawer section';
     if (QP_FAMILIES.stats.pieces.map(function (p) { return p.key; }).join() !== 'champions,awards,records') return 'pieces';
     return _qpMaxW('stats') === 0.5 ? true : 'max ' + _qpMaxW('stats');
 });

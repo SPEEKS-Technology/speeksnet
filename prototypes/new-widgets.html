@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New Widgets</title>
+<!-- New QuickPortal widget ideas + the mini-widget shelf (Ethan, 2026-10-29:
+     "create new widgets based on aspects of the site we track that we not have
+     had a dedicated widget for ... maybe in one of the 33% blocks ... a mini one
+     row widget ... the user could put 3 of them in there or a 66% size one").
+     Rendered with the site's own styles.css and widget classes, at the real
+     1440px widths (⅓ = 428px, ½ = 652px) and 350px card height. Figures are
+     real October / yesterday numbers from day_end_facts, daily_np and store_cash
+     unless marked sample. Not linked from the app. -->
+<link rel="stylesheet" href="../styles.css?v=20261029d">
+<style>
+  body { background: #f4f6f8; }
+  html, body { height: auto !important; overflow: auto !important; }
+  .main-content { padding-top: 24px !important; height: auto !important; overflow: visible !important; }
+  .pv-lab { font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; margin: 28px 0 10px; }
+  .pv-lab:first-child { margin-top: 6px; }
+  .pv-lab small { font-weight: 600; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+  .pv-card { height: 350px; box-sizing: border-box; }
+  /* THE MINI SHELF: a ⅓ block split into three one-row slots. A mini takes one
+     slot (110px) or two (230px); three minis, or one double + one single. */
+  .qp-mshelf { display: grid; grid-template-rows: repeat(3, 1fr); gap: 10px; height: 350px; }
+  .qp-mn { background: #fff; border: 1px solid #e6ebf1; border-radius: 16px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+             padding: 12px 16px; display: flex; align-items: center; gap: 12px; min-height: 0; box-sizing: border-box; overflow: hidden; }
+  .qp-mn.x2 { grid-row: span 2; flex-direction: column; align-items: stretch; gap: 8px; }
+  .qp-mn .qp-cw-ico { width: 30px; height: 30px; border-radius: 9px; }
+  .qp-mn .qp-cw-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .qp-mn-b { flex: 1 1 auto; min-width: 0; }
+  .qp-mn-k { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qp-mn-v { font-size: 22px; font-weight: 900; color: #1a1c1e; line-height: 1.15; white-space: nowrap; }
+  .qp-mn-v small { font-size: 12px; font-weight: 700; color: #8a94a3; margin-left: 5px; }
+  .qp-mn-s { font-size: 11.5px; font-weight: 600; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qp-mn-r { flex: none; text-align: right; }
+  .qp-mn-head { display: flex; align-items: center; gap: 10px; }
+  .qp-spark { display: block; }
+  .qp-mix { display: flex; height: 10px; border-radius: 99px; overflow: hidden; gap: 2px; margin: 4px 0 6px; }
+  .qp-mix i { display: block; }
+  .qp-mix-l { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; font-size: 11.5px; font-weight: 700; color: #3c4654; }
+  .qp-mix-l span { display: flex; align-items: center; gap: 6px; }
+  .qp-mix-l b { margin-left: auto; font-weight: 800; }
+  .qp-sw { width: 8px; height: 8px; border-radius: 3px; display: inline-block; }
+  .qp-quote { font-size: 13px; line-height: 1.45; color: #3c4654; font-weight: 600; border-left: 3px solid #f0a92b; padding: 2px 0 2px 10px; margin: 8px 0; }
+  .qp-quote b { color: #1a1c1e; }
+  .qp-quote-by { font-size: 11px; font-weight: 700; color: #8a94a3; margin-top: 4px; }
+  .qp-pipe { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: center; gap: 6px; margin: 10px 0 6px; }
+  .qp-pipe-s { background: #f6f8fa; border-radius: 12px; padding: 8px 10px; text-align: center; }
+  .qp-pipe-s b { display: block; font-size: 18px; font-weight: 900; color: #1a1c1e; }
+  .qp-pipe-s span { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+  .qp-pipe-a { color: #b4bcc8; font-weight: 900; }
+  .qp-days { display: flex; align-items: flex-end; gap: 4px; height: 54px; margin: 8px 0 4px; }
+  .qp-days i { flex: 1; background: #cfe9da; border-radius: 4px 4px 2px 2px; }
+  .qp-days i.on { background: #1f9d57; }
+  .qp-days i.zero { background: #eef1f4; }
+</style>
+</head>
+<body class="is-authenticated">
+<main class="main-content" id="pv"></main>
+<script>
+const DOT = { OVL: '#7c6fd6', LEE: '#4e90cf', WSP: '#2ea36a', MPL: '#d99f43', BAL: '#d9776a' };
+const dot = s => '<i class="qp-dot" style="background:' + DOT[s] + '"></i>';
+const bar = (pct, cls, ticks) => '<div class="qp-hl-bar ' + (cls || '') + '"><i style="width:' + Math.min(100, pct) + '%"></i>' + (ticks || []).map(t => '<b style="left:' + t + '%"></b>').join('') + '</div>';
+const ICON = {
+  star: '<svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+  quote: '<svg viewBox="0 0 24 24"><path d="M7 7h4v4c0 3-1.5 5-4 6M14 7h4v4c0 3-1.5 5-4 6"/></svg>',
+  cash: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/></svg>',
+  box: '<svg viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8"/></svg>',
+  clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  x: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
+  users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.5 3.3-5.5 6.5-5.5s5.9 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.7c1.7.8 2.8 2.6 3 5.3"/></svg>',
+  flag: '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
+  trophy: '<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0V4zM6 5H3v2a3 3 0 0 0 3 3M18 5h3v2a3 3 0 0 1-3 3M9 20h6M12 13v7"/></svg>',
+  layers: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
+  pulse: '<svg viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>',
+  cal: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  key: '<svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></svg>',
+};
+const ico = (k, tone) => '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + ICON[k] + '</span>';
+// A widget card exactly as _qpMakeWidget + _qpRenderWidgets draw one.
+const widget = (w, k, tone, eyebrow, title, body) => '<div class="qp-cell" style="flex-grow:1;max-width:' + w + '">'
+  + '<section class="speeks-action-menu qp-part qp-widget pv-card" data-qp-block="pv"><div class="sam-board"><div class="sam-card"><div class="qp-ai">'
+  + '<div class="qp-ai-head">' + ico(k, tone) + '<div><div class="ew-eyebrow">' + eyebrow + '</div><div class="qp-ai-title">' + title + '</div></div></div>'
+  + body + '</div></div></div></section></div>';
+const third = 'calc(33.333% - 14px)', half = 'calc(50% - 10px)', twoThirds = 'calc(66.666% - 7px)';
+const shelf = minis => '<div class="qp-cell" style="flex-grow:1;max-width:' + third + '"><div class="qp-mshelf">' + minis.join('') + '</div></div>';
+const mini = (k, tone, label, v, sub, right) => '<div class="qp-mn">' + ico(k, tone) + '<div class="qp-mn-b"><div class="qp-mn-k">' + label + '</div>'
+  + '<div class="qp-mn-v">' + v + '</div><div class="qp-mn-s">' + sub + '</div></div>' + (right ? '<div class="qp-mn-r">' + right + '</div>' : '') + '</div>';
+const spark = (vals, color) => { const W = 72, H = 30, mx = Math.max(...vals), mn = Math.min(...vals); const pts = vals.map((v, i) => (i * W / (vals.length - 1)).toFixed(1) + ',' + (H - 3 - (v - mn) / ((mx - mn) || 1) * (H - 6)).toFixed(1)).join(' ');
+  return '<svg class="qp-spark" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '"><polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>'; };
+const ln = (chip, s, text, right, rc) => '<div class="qp-cw-ln">' + (chip ? '<span class="qp-cw-due ' + chip[1] + '">' + chip[0] + '</span>' : '')
+  + '<span class="qp-cw-lt">' + (s ? '<span class="qp-cw-st">' + dot(s) + s + '</span>' : '') + text + '</span>' + (right ? '<b' + (rc ? ' class="' + rc + '"' : '') + '>' + right + '</b>' : '') + '</div>';
+const link = t => '<button type="button" class="qp-hl-link">' + t + ' →</button>';
+const row = (...c) => '<div class="qp-row">' + c.join('') + '</div>';
+const lab = (t, s) => '<div class="pv-lab">' + t + (s ? '<small>' + s + '</small>' : '') + '</div>';
+const pp = (s, pct, fig, cls, after) => '<div class="qp-ai-pp"><span class="qp-ai-pn">' + dot(s) + s + '</span>' + bar(pct, cls) + '<b>' + fig + '</b>' + (after || '') + '</div>';
+
+// ---------- STORE WIDGETS (manager · ASM · employee where noted) ----------
+const reviews = widget(third, 'star', 'a', 'OVL · October', 'Google Reviews',
+  '<div class="qp-ai-body"><div class="qp-ai-top"><div class="qp-hl-big">31<small>Of 40 This Month</small></div><span class="qp-trend up">▲ 6 vs Last Month</span></div>'
+  + bar(77.5, 'warn', [100 * 35 / 40]) + '<div class="qp-hl-sub"><span class="warn">Tracking to 35</span> · 9 to Go · 3 Days Left</div>'
+  + '<div class="qp-hl-cap">Reviews a Day · Last 14 Days</div><div class="qp-days">'
+  + [2,1,0,3,1,2,0,1,4,2,0,1,3,2].map(n => '<i class="' + (n ? 'on' : 'zero') + '" style="height:' + (n ? 12 + n * 10 : 6) + 'px"></i>').join('') + '</div>'
+  + '<div class="qp-hl-sub">41 Five-Star This Month · Best Day Mon, Oct 19 (4)</div></div>');
+const shoutouts = widget(third, 'quote', 'g', 'LEE · Customer Shoutouts', 'What Customers Said',
+  '<div class="qp-ai-body"><div class="qp-quote">“<b>Super nice</b> service and great communication throughout the process — shoutout to <b>Richard</b>.”</div>'
+  + '<div class="qp-quote-by">Google Review · Wed, Oct 28</div>'
+  + '<div class="qp-quote">“The whole team <b>genuinely cares</b> about the customer.”</div><div class="qp-quote-by">Google Review · Wed, Oct 28</div>'
+  + '<div class="qp-hl-sub" style="margin-top:8px">8 Days With Shoutouts in October</div>' + link('All Shoutouts') + '</div>');
+const shelfA = shelf([
+  mini('cash', 'g', 'Cash on Hand · Yesterday', '$3,575', 'Drawer $3,175 · Safe $400', spark([6885, 6510, 3575, 5200, 4100, 3575], '#1f9d57')),
+  mini('box', 'b', 'Waiting to Process', '242', '1,801 Available · $27.9k Cost', spark([180, 205, 220, 198, 236, 242], '#2563b8')),
+  mini('clock', 'r', 'Next Due', 'Mon', 'Weekly KPIs · by 8:30am', ''),
+]);
+const lost = widget(third, 'x', 'r', 'OVL · October', 'Lost Deals',
+  '<div class="qp-ai-body"><div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">$26,292</span><small>Walked Out</small></div><span class="qp-trend down">▼ $3.1k vs Last Month</span></div>'
+  + '<div class="qp-hl-sub">48 Failed Deals · 104 Devices Lost</div>'
+  + '<div class="qp-hl-cap">Yesterday</div>'
+  + ln(['Failed', 'bad'], '', '2 deals walked out', '$717', 'bad')
+  + ln(['Lost', 'warn'], '', '2 devices left with the customer', '', '')
+  + ln(['No Deal', 'grey'], '', '2 customers bought nothing', '', '')
+  + '<div class="qp-hl-sub" style="margin-top:6px">13% of Customers This Month Left Without a Deal</div></div>');
+const pipeline = widget(third, 'layers', 't', 'OVL · Yesterday', 'Inventory Pipeline',
+  '<div class="qp-ai-body"><div class="qp-pipe"><div class="qp-pipe-s"><b>242</b><span>In Queue</span></div><span class="qp-pipe-a">→</span>'
+  + '<div class="qp-pipe-s"><b>1,801</b><span>Available</span></div><span class="qp-pipe-a">→</span><div class="qp-pipe-s"><b>2,238</b><span>Live</span></div></div>'
+  + '<div class="qp-hl-sub"><span class="warn">Queue Up 34%</span> in 7 Days · $27.9k Sitting Available</div>'
+  + '<div class="qp-hl-cap">Processed Yesterday</div>' + pp('OVL', 72, '43', 'good', '<span style="color:#8a94a3;font-weight:700;min-width:70px;text-align:right">Goal 60</span>')
+  + '<div class="qp-hl-sub" style="margin-top:8px">At This Pace the Queue Clears in 6 Days</div></div>');
+const shelfB = shelf([
+  '<div class="qp-mn x2"><div class="qp-mn-head">' + ico('users', 'b') + '<div class="qp-mn-b"><div class="qp-mn-k">Customers · October</div><div class="qp-mn-v">380<small>Through the Door</small></div></div></div>'
+  + '<div class="qp-mix"><i style="flex:196;background:#2563b8"></i><i style="flex:124;background:#1f9d57"></i><i style="flex:12;background:#f0a92b"></i><i style="flex:48;background:#e05252"></i></div>'
+  + '<div class="qp-mix-l"><span><i class="qp-sw" style="background:#2563b8"></i>New<b>196</b></span><span><i class="qp-sw" style="background:#1f9d57"></i>Returning<b>124</b></span>'
+  + '<span><i class="qp-sw" style="background:#f0a92b"></i>Recycle<b>12</b></span><span><i class="qp-sw" style="background:#e05252"></i>No Deal<b>48</b></span></div>'
+  + '<div class="qp-mn-s" style="margin-top:4px">33% Come Back · Conversion 87%</div></div>',
+  mini('star', 'a', 'Five-Star Reviews', '41', 'This Month · 8 Ahead of LEE', ''),
+]);
+const pace = widget(half, 'flag', 'g', 'OVL · October', 'Goal Pace',
+  '<div class="qp-ai-body"><div class="qp-ai-top"><div class="qp-hl-big">$664<small>Net Profit a Day to Hit Goal</small></div><span class="qp-trend up">▲ $92 Easier Than Last Week</span></div>'
+  + bar(86, 'warn', [100]) + '<div class="qp-hl-sub">$12,408 of $14,400 · <span class="warn">Tracking to 95%</span> · 3 Days Left</div>'
+  + '<div class="qp-hl-boxes" style="margin-top:12px"><div class="qp-hl-box"><div class="qp-hl-k">Averaging</div><div class="qp-hl-bv">$443</div><div class="qp-hl-bs">A Day This Month</div></div>'
+  + '<div class="qp-hl-box"><div class="qp-hl-k">Best Day</div><div class="qp-hl-bv">$1,186</div><div class="qp-hl-bs">Sat, Oct 17</div></div>'
+  + '<div class="qp-hl-box"><div class="qp-hl-k">Needed</div><div class="qp-hl-bv warn">$664</div><div class="qp-hl-bs">Fri · Sat · Mon</div></div></div>'
+  + '<div class="qp-hl-sub" style="margin-top:10px">Two Days Like Your Best and the Goal Is Done</div></div>');
+const team = widget(half, 'trophy', 'a', 'LEE · Yesterday', 'Team Production',
+  '<div class="qp-ai-body"><div class="qp-ai-top"><div class="qp-hl-big">43<small>Devices Processed · $4,311 Value</small></div><span class="qp-trend up">▲ 9 vs Wed Average</span></div>'
+  + '<div class="qp-hl-cap">Who Processed What</div>'
+  + [['Mike P.', 100, 15, '$1,550', 'good'], ['Jurell G.', 93, 14, '$1,302', 'good'], ['Richard P.', 73, 11, '$949', 'good'], ['Caleb S.', 20, 3, '$510', 'warn']]
+      .map(r => '<div class="qp-ai-pp"><span class="qp-ai-pn" style="min-width:84px">' + r[0] + '</span>' + bar(r[1], r[4]) + '<b>' + r[2] + '</b><span style="min-width:56px;text-align:right;font-weight:700;color:#647082">' + r[3] + '</span></div>').join('')
+  + '<div class="qp-hl-sub" style="margin-top:8px">Top Producer: Mike P. · 3rd Day This Week</div></div>');
+
+// ---------- DM / CEO ----------
+const dReviews = widget(half, 'star', 'a', 'District · October', 'Google Reviews by Store',
+  '<div class="qp-ai-body"><div class="qp-ai-top"><div class="qp-hl-big">122<small>Reviews Across 5 Stores</small></div><span class="qp-trend up">▲ 14 vs Last Month</span></div>'
+  + '<div class="qp-hl-cap">This Month</div>'
+  + pp('OVL', 80, '32', 'good', '<span class="qp-dhl-tag good">41★</span>') + pp('WSP', 73, '29', 'good', '<span class="qp-dhl-tag good">29★</span>')
+  + pp('BAL', 58, '23', 'warn', '<span class="qp-dhl-tag warn">38★</span>') + pp('MPL', 53, '21', 'warn', '<span class="qp-dhl-tag warn">28★</span>')
+  + pp('LEE', 43, '17', 'bad', '<span class="qp-dhl-tag bad">37★</span>') + '</div>');
+const dLost = widget(half, 'x', 'r', 'District · October', 'Lost Deals by Store',
+  '<div class="qp-ai-body"><div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">$112,790</span><small>Walked Out · 227 Failed Deals</small></div></div>'
+  + '<div class="qp-hl-cap">Lost Revenue · Share of Customers</div>'
+  + pp('MPL', 100, '$39.1k', 'bad', '<span class="qp-dhl-tag bad">16%</span>') + pp('OVL', 67, '$26.3k', 'warn', '<span class="qp-dhl-tag warn">13%</span>')
+  + pp('WSP', 45, '$17.6k', 'warn', '<span class="qp-dhl-tag warn">13%</span>') + pp('BAL', 44, '$17.1k', 'warn', '<span class="qp-dhl-tag warn">12%</span>')
+  + pp('LEE', 33, '$12.7k', 'good', '<span class="qp-dhl-tag good">8%</span>') + '</div>');
+const dShelf = shelf([
+  mini('cash', 'g', 'Cash in Stores · Yesterday', '$18,940', 'BAL $3,575 · Lowest LEE', ''),
+  mini('pulse', 'b', 'SPEEKSNET Use · 7 Days', '24', 'People Signed In · 3 Never Did', spark([18, 21, 19, 22, 24, 23, 24], '#2563b8')),
+  mini('layers', 't', 'Available Inventory', '$106.9k', 'MPL Holds $51.6k of It', ''),
+]);
+
+document.getElementById('pv').innerHTML =
+  lab('Store · Manager', 'three full widgets and a mini shelf of three single minis')
+  + row(reviews, shoutouts, shelfA)
+  + lab('Store · Manager', 'a mini shelf with one double mini and one single')
+  + row(lost, pipeline, shelfB)
+  + lab('Store · Manager / ASM', 'half-row widgets')
+  + row(pace, team)
+  + lab('District · DM / CEO', 'the same ideas across five stores')
+  + row(dReviews, dLost)
+  + row(dShelf);
+</script>
+</body>
+</html>

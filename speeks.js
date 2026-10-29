@@ -50574,7 +50574,8 @@ function _qpCapLines(root) {
             let j = i;
             while (j < s.length && /[A-Za-z'’]/.test(s[j])) j++;
             const word = s.slice(i, j), prev = i ? s[i - 1] : '';
-            const keep = quoted || /[0-9.$]/.test(prev) || /[A-Z]/.test(word.slice(1))
+            // A letter glued to the number AFTER it is a value too: "v3.10.2".
+            const keep = quoted || /[0-9.$]/.test(prev) || /[0-9]/.test(s[j] || '') || /[A-Z]/.test(word.slice(1))
                 || /^[A-Z]/.test(word) || word === 'vs' || word === 'am' || word === 'pm'
                 || (!first && prev !== '-' && _QP_CAP_SMALL.has(word.toLowerCase()));
             out += keep ? word : word.charAt(0).toUpperCase() + word.slice(1);
@@ -51703,6 +51704,8 @@ function _qpMaxW(key) {
     // sat at half the screen with nothing beside it, and a full Live table
     // squeezed into half scrolled sideways. So without Customize nothing is held.
     if (!_qpHeadlinesOn()) return 1;
+    // A shelf is a ⅓ block (Ethan, 2026-10-29: "in one of the 33% blocks").
+    if (_qpIsShelfKey(key)) return 1 / 3;
     if (_QP_BLOCK_MAXW[key]) return _QP_BLOCK_MAXW[key];
     const id = _qpWidgetId(key || '');
     if (id) return _QP_WIDGET_MAXW[id] || _QP_DEFAULT_MAXW;
@@ -51923,6 +51926,18 @@ function _qpEnsureWidgets(main, rows) {
     Object.keys(want).forEach(function (id) {
         if (!main.querySelector('[data-qp-widget="' + id + '"]')) main.insertBefore(_qpMakeWidget(id), _qpAnchor(main));
     });
+    // Shelves, the same way: their key is their contents (NEW WIDGETS block).
+    const shelves = {};
+    (rows || []).forEach(function (r) { (r && r.items || []).forEach(function (k) { if (_qpIsShelfKey(k)) shelves[k] = true; }); });
+    _qpShelves(main).forEach(function (el) {
+        if (shelves[_qpKey(el)]) return;
+        const cell = el.parentElement && el.parentElement.classList.contains('qp-cell') ? el.parentElement : null;
+        el.remove();
+        if (cell) cell.remove();
+    });
+    Object.keys(shelves).forEach(function (k) {
+        if (!main.querySelector('[data-qp-block="' + k + '"]')) main.insertBefore(_qpMakeShelf(k), _qpAnchor(main));
+    });
 }
 // rows: the layout being applied, when _qpDistribute calls this mid-build.
 function _qpRenderWidgets(rows) {
@@ -51933,16 +51948,22 @@ function _qpRenderWidgets(rows) {
         if (!id || !(el.hasAttribute('data-qp-widget') || el.hasAttribute('data-qp-shell'))) return;
         try { _qpWidgetCard(el, rows, id); } catch (e) { console.error('QuickPortal widget:', e); }
     });
+    try { _qpRenderShelves(main); } catch (e) { console.error('QuickPortal shelf:', e); }
 }
 // Put a widget on the page: a row of its own at the bottom (Add), or wherever
 // it was dropped (t, from a drag out of the drawer — _qpWireDrag's drop).
 function qpAddWidget(id, t) {
     const main = _qpMain();
-    if (!main || !_qpWidgetOk(id)) return;
+    // A SHELF (a mini out of the drawer, or qpAddMini making one): "shelf:<mini>".
+    // Dropped on a shelf it goes on that shelf instead (qpAddMini).
+    const shelf = _qpIsShelfKey(id);
+    if (shelf && t && t.zone === 'shelf') return qpAddMini(_qpShelfIds(id)[0], t);
+    if (shelf && main && _qpMiniShelf(main, _qpShelfIds(id)[0])) return;
+    if (!main || (!shelf && !_qpWidgetOk(id))) return;
     // The drawer stays open: its Add turns into Remove (Ethan, 2026-10-22), so
     // several can be added or taken off in one go. × or a click off it closes.
-    if (main.querySelector('[data-qp-widget="' + id + '"]')) return;
-    main.insertBefore(_qpMakeWidget(id), _qpAnchor(main));
+    if (!shelf && main.querySelector('[data-qp-widget="' + id + '"]')) return;
+    main.insertBefore(shelf ? _qpMakeShelf(id) : _qpMakeWidget(id), _qpAnchor(main));
     if (t) _qpDropAt(main, { key: id }, t);
     else {
         const rows = _qpCurrentRows(main);
@@ -51960,7 +51981,7 @@ function qpAddWidget(id, t) {
         else rows.push({ items: [id], w: null });
         _qpCommit(main, rows);
     }
-    const el = main.querySelector('[data-qp-widget="' + id + '"]');
+    const el = main.querySelector('[data-qp-block="' + id + '"]');
     if (el && !t) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
@@ -51981,8 +52002,8 @@ function qpRemoveWidget(key) {
 // be added can also be DRAGGED onto the page: the drawer steps aside while it
 // is carried (.qp-lib-carrying), and the page's own drop targets — beside a
 // card, or the + between rows — say where it lands.
-function qpLibraryOpen() {
-    if (document.getElementById('qpLib')) return;
+function qpLibraryOpen(sec) {
+    if (document.getElementById('qpLib')) { _qpLibScrollTo(sec); return; }
     const ov = document.createElement('div');
     ov.id = 'qpLib';
     ov.className = 'qp-lib';
@@ -52005,6 +52026,12 @@ function qpLibraryOpen() {
     // next frame, so the browser has the closed position to move from.
     requestAnimationFrame(function () { requestAnimationFrame(function () { ov.classList.add('open'); }); });
     ov.querySelector('.qp-lib-search').focus({ preventScroll: true });
+    _qpLibScrollTo(sec);
+}
+function _qpLibScrollTo(sec) {
+    if (typeof sec !== 'string' || !sec) return;
+    const el = document.querySelector('#qpLib [data-qp-lib-sec="' + sec + '"]');
+    if (el) el.scrollIntoView({ block: 'start' });
 }
 // ...and out the same way, then goes.
 function qpLibraryClose() {
@@ -52021,7 +52048,10 @@ function qpLibraryRemove(id) {
     _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
 }
 let _qpLibNew = [];
-const _QP_LIB_SECTIONS = ['Operations', 'Workspace', 'Processes & Policies', 'Stats & Awards', 'Other'];
+// The minis are new as a set: New for 30 days from the day they came.
+function _qpLibMiniNew() { return (Date.now() - Date.parse(_QP_MINI_ADDED + 'T12:00:00')) / 86400000 <= QP_NEW_DAYS; }
+// What each widget helps with (_QP_WIDGET_SECTION, 2026-10-29), then the minis.
+const _QP_LIB_SECTIONS = ['Sales & Goals', 'Customers & Reviews', 'Team & Production', 'Inventory & Listings', 'Store Operations', 'Company', 'Mini Widgets', 'Other'];
 function _qpLibraryList(q) {
     const list = document.getElementById('qpLibList');
     const main = _qpMain();
@@ -52051,9 +52081,31 @@ function _qpLibraryList(q) {
                 : '<button type="button" class="qp-lib-add" draggable="false" onclick="qpAddWidget(\'' + id + '\')">Add</button>')
             + '</div>';
     };
-    list.innerHTML = ids.length ? _QP_LIB_SECTIONS.map(function (sec) {
+    // MINI WIDGETS: one-row cards that go on a shelf (qpAddMini). Add puts
+    // one on a shelf with room or makes a shelf; a drag lands it where dropped.
+    const minis = Object.keys(QP_MINIS).filter(_qpMiniOk).filter(function (id) {
+        const m = QP_MINIS[id];
+        return !q || (m.label + ' ' + m.sub + ' mini widgets shelf').toLowerCase().indexOf(q) !== -1;
+    });
+    const miniRow = function (id) {
+        const m = QP_MINIS[id];
+        const on = !!(main && _qpMiniShelf(main, id));
+        return '<div class="qp-lib-row' + (on ? '' : ' qp-lib-drag') + '"' + (on ? '' : ' draggable="true" data-qp-add="shelf:' + id + '" title="Drag onto the page or a shelf, or click Add"') + '>'
+            + '<span class="qp-lib-ico ' + m.tone + '" aria-hidden="true">' + m.icon + '</span>'
+            + '<div class="qp-lib-body"><div class="qp-lib-name">' + escapeHtml(m.label) + (m.double ? '<span class="qp-lib-size">2 Rows</span>' : '')
+            + (_qpLibMiniNew() ? '<span class="qp-lib-new">New</span>' : '') + '</div><div class="qp-lib-sub">' + escapeHtml(m.sub) + '</div></div>'
+            + (on ? '<button type="button" class="qp-lib-rm" onclick="qpRemoveMini(\x27' + id + '\x27)">Remove</button>'
+                : '<button type="button" class="qp-lib-add" draggable="false" onclick="qpAddMini(\'' + id + '\')">Add</button>')
+            + '</div>';
+    };
+    list.innerHTML = ids.length || minis.length ? _QP_LIB_SECTIONS.map(function (sec) {
+        if (sec === 'Mini Widgets') {
+            return minis.length ? '<div class="qp-lib-sec" data-qp-lib-sec="Mini Widgets"><div class="qp-lib-sec-h">Mini Widgets<span>' + minis.length + '</span></div>'
+                + '<div class="qp-lib-note">One-row cards that share a ⅓ shelf, three to a shelf. Add one and a shelf is made for it.</div>'
+                + minis.map(miniRow).join('') + '</div>' : '';
+        }
         const mine = ids.filter(function (id) { return (QP_WIDGETS[id].section || 'Other') === sec; });
-        return mine.length ? '<div class="qp-lib-sec"><div class="qp-lib-sec-h">' + escapeHtml(sec) + '<span>' + mine.length + '</span></div>'
+        return mine.length ? '<div class="qp-lib-sec" data-qp-lib-sec="' + escapeHtml(sec) + '"><div class="qp-lib-sec-h">' + escapeHtml(sec) + '<span>' + mine.length + '</span></div>'
             + mine.map(row).join('') + '</div>' : '';
     }).join('') : '<div class="qp-lib-none">' + (q ? 'No widgets match “' + escapeHtml(q) + '”.' : 'No widgets to add yet.') + '</div>';
 }
@@ -53499,6 +53551,628 @@ const _QP_WSPEC = {
         },
     },
 };
+// ============================================================================
+// NEW WIDGETS, MINI WIDGETS AND SHELVES (Ethan, 2026-10-29)
+// ----------------------------------------------------------------------------
+// "Create new widgets based on aspects of the site we track that we not have
+// had a dedicated widget for ... the 2nd part ... in one of the 33% blocks of
+// the dashboard ... a mini one row widget ... the user could put 3 of them in
+// there or a 66% size one". Picked from renderings (prototypes/new-widgets.html);
+// Customer Shoutouts was dropped ("I don't think it will be easy"), and Box
+// Order has no record of past orders to show.
+//
+// WHERE THE NUMBERS COME FROM. Almost all of it is the PayMore Day End report
+// (day_end_facts), which only the morning jobs read until now; store-snapshot
+// is the browser's one read of it, with cash and NP beside it, scoped by PIN
+// (see its header). One fetch, shared: _qpSnapGet caches it ten minutes and
+// every card and mini that needs it reads the same copy. The rest is reads the
+// site already makes (the Store Calendar, recycle requests, hotkeys, the feed's
+// own reminders, patch notes) — no new fetch for those beyond the tool's own.
+//
+// A SHELF is a ⅓ block of three one-row slots. A mini takes one slot or two
+// (double: true). Its contents are its key — "shelf:cash,queue,due" — so the
+// layout saves, restores and drags it like any card, and a mini can be on the
+// page once. Adding a mini puts it on the first shelf with room, or makes a new
+// shelf where a ⅓ card would go (qpAddMini): nobody has to build a shelf first.
+// Dragging a mini out of the drawer onto a shelf adds it there; anywhere else
+// makes a shelf there. The last mini taken off a shelf takes the shelf with it.
+// ============================================================================
+const STORE_SNAPSHOT_URL = `${_BASE}/store-snapshot`;
+const _qpSnap = { data: null, at: 0, p: null, err: false };
+function _qpSnapGet() {
+    if (_qpSnap.data && Date.now() - _qpSnap.at < 600000) return Promise.resolve(_qpSnap.data);
+    if (_qpSnap.p) return _qpSnap.p;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    _qpSnap.p = fetch(`${STORE_SNAPSHOT_URL}?days=62&v=${Date.now()}`, { headers: { 'x-user-pin': pin } })
+        .then(r => r.json())
+        .then(j => {
+            if (!j || !j.success) throw new Error((j && j.error) || 'store-snapshot');
+            _qpSnap.data = j; _qpSnap.at = Date.now(); _qpSnap.err = false;
+            return j;
+        })
+        .catch(e => { _qpSnap.err = true; _qpSnap.at = Date.now(); throw e; })
+        .finally(() => { _qpSnap.p = null; });
+    return _qpSnap.p;
+}
+const _qpRole = () => (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+const _qpIsDist = () => ['district manager', 'ceo', 'mocd'].includes(_qpRole());
+const _qpIsMgr = () => ['manager', 'owner (manager)', 'multi-store manager'].includes(_qpRole())
+    || (typeof isMultiStoreManager === 'function' && isMultiStoreManager());
+const _qpIsAsm = () => _qpRole() === 'assistant manager';
+const _qpIsEmp = () => _qpRole() === 'employee';
+// The store a store-side card is about: the dashboard on screen for a
+// Multi-Store Manager, otherwise the person's own.
+function _qpMyStore() {
+    const s = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return STORE_CODES.includes(s) ? s : (_claimStores()[0] || '');
+}
+const _qpSum = (rows, k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+function _qpFacts(d, store) { return (d.facts || []).filter(f => f.store === store).sort((a, b) => a.date.localeCompare(b.date)); }
+function _qpLast(d, store) { const f = _qpFacts(d, store); return f[f.length - 1] || null; }
+const _qpMonth1 = d => d.today.slice(0, 8) + '01';
+function _qpThisMonth(d, store) { const m = _qpMonth1(d); return _qpFacts(d, store).filter(f => f.date >= m); }
+// The same days of last month as this month has so far (1st through the day
+// of the latest report), for "vs Last Month".
+function _qpLastMonthSoFar(d, store) {
+    const cur = _qpThisMonth(d, store);
+    if (!cur.length) return [];
+    const upto = Number(cur[cur.length - 1].date.slice(8));
+    const lm = new Date(d.today.slice(0, 8) + '01T12:00:00Z'); lm.setUTCMonth(lm.getUTCMonth() - 1);
+    const pre = lm.toISOString().slice(0, 8);
+    return _qpFacts(d, store).filter(f => f.date.slice(0, 8) === pre && Number(f.date.slice(8)) <= upto);
+}
+function _qpTrendHtml(diff, fmt, goodWhenUp, vs) {
+    if (!diff) return '';
+    const up = diff > 0, good = up === !!goodWhenUp;
+    return '<span class="qp-trend ' + (good ? 'up' : 'down') + '">' + (up ? '▲' : '▼') + ' ' + fmt(Math.abs(diff)) + ' vs ' + vs + '</span>';
+}
+const _qpN = n => Math.round(Number(n) || 0).toLocaleString('en-US');
+// Open days left in the month from today on — the stores shut on Sundays.
+function _qpOpenDaysLeft(today) {
+    const d = new Date(today + 'T12:00:00Z'), m = d.getUTCMonth();
+    let n = 0;
+    for (; d.getUTCMonth() === m; d.setUTCDate(d.getUTCDate() + 1)) if (d.getUTCDay() !== 0) n++;
+    return n;
+}
+function _qpDaysHtml(vals) {
+    const mx = Math.max(1, ...vals);
+    return '<div class="qp-days">' + vals.map(n => '<i class="' + (n ? 'on' : 'zero') + '" style="height:' + (n ? Math.round(10 + n / mx * 44) : 5) + 'px"></i>').join('') + '</div>';
+}
+function _qpSpark(vals, color) {
+    vals = (vals || []).filter(v => v != null && isFinite(v));
+    if (vals.length < 2) return '';
+    const W = 72, H = 30, mx = Math.max(...vals), mn = Math.min(...vals);
+    const pts = vals.map((v, i) => (i * W / (vals.length - 1)).toFixed(1) + ',' + (H - 3 - (v - mn) / ((mx - mn) || 1) * (H - 6)).toFixed(1)).join(' ');
+    return '<svg class="qp-spark" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true"><polyline points="' + pts
+        + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+}
+const _qpAvg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+// The same weekday's last four reports, before the latest one.
+function _qpSameWeekday(rows, last, k) {
+    const dow = new Date(last.date + 'T12:00:00Z').getUTCDay();
+    return rows.filter(r => r.date < last.date && new Date(r.date + 'T12:00:00Z').getUTCDay() === dow).slice(-4).map(r => Number(r[k]) || 0);
+}
+
+// ---- the numbers each card draws, worked once from a snapshot ----
+function _qpReviewsOf(d, store) {
+    const cur = _qpThisMonth(d, store), last = cur[cur.length - 1];
+    const mtd = _qpSum(cur, 'reviews_today');
+    const prev = _qpSum(_qpLastMonthSoFar(d, store), 'reviews_today');
+    const fc = typeof _lvFcFor === 'function' ? _lvFcFor(store) : null;
+    const goal = fc && fc.reviewsGoal > 0 ? fc.reviewsGoal : 0;
+    const dom = last ? Number(last.date.slice(8)) : 0;
+    const dim = new Date(Date.UTC(+d.today.slice(0, 4), +d.today.slice(5, 7), 0)).getUTCDate();
+    const track = dom ? Math.round(mtd / dom * dim) : 0;
+    const best = cur.reduce((b, r) => (Number(r.reviews_today) || 0) > (b ? Number(b.reviews_today) || 0 : 0) ? r : b, null);
+    return { mtd, prev, goal, track, stars: last ? Number(last.five_star_mtd) || 0 : 0, best,
+             days: _qpFacts(d, store).slice(-14).map(r => Number(r.reviews_today) || 0), left: dim - dom };
+}
+function _qpPaceOf(d, store) {
+    const m = _qpMonth1(d);
+    const rows = (d.np || []).filter(r => r.store === store && r.date >= m && r.date < d.today);
+    const soFar = _qpSum(rows, 'np');
+    const goal = (d.goals || {})[store] || 0;
+    const open = rows.filter(r => Number(r.sales) || Number(r.np));
+    const avg = open.length ? soFar / open.length : 0;
+    const best = open.reduce((b, r) => Number(r.np) > (b ? Number(b.np) : -Infinity) ? r : b, null);
+    const left = _qpOpenDaysLeft(d.today);
+    const need = goal > soFar && left ? (goal - soFar) / left : 0;
+    const pct = goal ? (soFar + avg * left) / goal * 100 : null;
+    return { soFar, goal, avg, best, left, need, pct, hit: goal > 0 && soFar >= goal };
+}
+function _qpTeamOf(d, store) {
+    const f = _qpFacts(d, store).filter(r => Array.isArray(r.team_production) && r.team_production.length);
+    const last = f[f.length - 1] || _qpLast(d, store);
+    if (!last) return null;
+    const team = (last.team_production || []).map(m => ({ name: m.name, n: Number(m.processed) || 0, value: Number(m.value) || 0, top: !!m.top }))
+        .sort((a, b) => b.n - a.n || b.value - a.value);
+    const avg = _qpAvg(_qpSameWeekday(_qpFacts(d, store), last, 'devices_processed'));
+    const topRun = (() => {
+        const t = team.find(m => m.top);
+        if (!t) return 0;
+        let n = 0;
+        for (let i = f.length - 1; i >= 0; i--) { if ((f[i].team_production || []).some(m => m.top && m.name === t.name)) n++; else break; }
+        return n;
+    })();
+    return { last, team, total: Number(last.devices_processed) || 0, value: Number(last.processed_value) || 0, avg, topRun };
+}
+const _qpShort = name => typeof _qpWWho === 'function' ? _qpWWho(name) : name;
+
+// ---- FULL-SIZE WIDGETS: their drawer rows ----
+// CATEGORIES (Ethan, 2026-10-29: "make sure we put these in good categories on
+// the add widget page"). The drawer's sections were the pages the tools live
+// on; with a dozen more widgets that stopped saying what a widget is FOR, so
+// every widget — old and new — now sits under what it helps with.
+Object.assign(QP_WIDGETS, {
+    reviews: {
+        label: 'Google Reviews', sub: 'This month against the goal, and reviews a day',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+        tone: 'a', avail: () => !!_qpMyStore() && !_qpIsDist(),
+    },
+    dreviews: {
+        label: 'Google Reviews', sub: 'Every store\'s reviews and five-stars this month',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+        tone: 'a', avail: () => _qpIsDist(),
+    },
+    pace: {
+        label: 'Goal Pace', sub: 'Net profit needed a day to hit this month\'s goal',
+        icon: '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
+        tone: 'g', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+    },
+    lost: {
+        label: 'Lost Deals', sub: 'Deals and devices that walked out, and what they were worth',
+        icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
+        tone: 'r', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+    },
+    dlost: {
+        label: 'Lost Deals', sub: 'Revenue that walked out of every store this month',
+        icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
+        tone: 'r', avail: () => _qpIsDist(),
+    },
+    team: {
+        label: 'Team Production', sub: 'Who processed what yesterday, and the top producer',
+        icon: '<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0V4zM6 5H3v2a3 3 0 0 0 3 3M18 5h3v2a3 3 0 0 1-3 3M9 20h6M12 13v7"/></svg>',
+        tone: 'a', avail: () => !!_qpMyStore() && !_qpIsDist(),
+    },
+    pipeline: {
+        label: 'Inventory Pipeline', sub: 'Queue, available and live, and how fast the queue clears',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
+        tone: 't', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+    },
+    buying: {
+        label: 'Buying', sub: 'Yesterday\'s buying against the same day other weeks',
+        icon: '<svg viewBox="0 0 24 24"><path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/></svg>',
+        tone: 'b', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+    },
+    calendar: {
+        label: 'Store Calendar', sub: 'What is coming up in the next two weeks',
+        icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+        tone: 'b', avail: () => typeof toggleCalendar === 'function' && (!!_qpMyStore() || _qpIsDist()),
+    },
+    hotkeys: {
+        label: 'Hotkeys & Commands', sub: 'Find a device\'s hotkey without opening the list',
+        icon: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>',
+        tone: 'b', avail: () => true,
+    },
+});
+const _QP_WIDGET_SECTION = {
+    pace: 'Sales & Goals', buying: 'Sales & Goals', monthly: 'Sales & Goals',
+    reviews: 'Customers & Reviews', dreviews: 'Customers & Reviews', lost: 'Customers & Reviews', dlost: 'Customers & Reviews', callbacks: 'Customers & Reviews',
+    team: 'Team & Production', kpis: 'Team & Production', dkpis: 'Team & Production', variance: 'Team & Production', dvariance: 'Team & Production',
+    pipeline: 'Inventory & Listings', connect: 'Inventory & Listings', dconnect: 'Inventory & Listings', b2b: 'Inventory & Listings',
+    claims: 'Store Operations', dclaims: 'Store Operations', calendar: 'Store Operations', hotkeys: 'Store Operations',
+    docs: 'Company', stats: 'Company',
+};
+Object.keys(_QP_WIDGET_SECTION).forEach(id => { if (QP_WIDGETS[id]) QP_WIDGETS[id].section = _QP_WIDGET_SECTION[id]; });
+['reviews', 'dreviews', 'pace', 'lost', 'dlost', 'team', 'pipeline', 'buying', 'calendar', 'hotkeys'].forEach(id => {
+    QP_WIDGETS[id].added = '2026-10-29';
+    _QP_WIDGET_MAXW[id] = 0.5;
+});
+
+// ---- FULL-SIZE WIDGETS: their cards ----
+const _qpSnapLoad = () => _qpSnapGet();
+const _qpBody = html => '<div class="qp-ai-body">' + html + '</div>';
+Object.assign(_QP_WSPEC, {
+    reviews: {
+        when: 'This Month', ttl: 600000, tabs: [['main', 'Reviews', 'Google Reviews']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        card: function (d) {
+            const r = _qpReviewsOf(d, _qpMyStore());
+            const band = r.goal ? _qpBand(r.track / r.goal * 100) : '';
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + r.mtd + '<small>' + (r.goal ? 'of ' + r.goal + ' this month' : 'this month') + '</small></div>'
+                + _qpTrendHtml(r.mtd - r.prev, _qpN, true, 'Last Month') + '</div>'
+                + (r.goal ? _qpHLBar(r.mtd / r.goal * 100, [Math.min(100, r.track / r.goal * 100)], band)
+                    + '<div class="qp-hl-sub"><span class="' + band + '">Tracking to ' + r.track + '</span> · ' + Math.max(0, r.goal - r.mtd) + ' to go · ' + r.left + ' days left</div>'
+                    : '<div class="qp-hl-sub">Tracking to ' + r.track + ' this month</div>')
+                + '<div class="qp-hl-cap">Reviews a Day · Last 14 Reports</div>' + _qpDaysHtml(r.days)
+                + '<div class="qp-hl-sub">' + r.stars + ' five-star this month' + (r.best && Number(r.best.reviews_today) ? ' · best day ' + _qpDayLabel(r.best.date) + ' (' + r.best.reviews_today + ')' : '') + '</div>');
+        },
+    },
+    dreviews: {
+        when: 'This Month', ttl: 600000, tabs: [['main', 'Reviews', 'Google Reviews by Store']], where: () => 'District', load: _qpSnapLoad,
+        card: function (d) {
+            const rows = STORE_CODES.map(s => Object.assign({ s }, _qpReviewsOf(d, s))).sort((a, b) => b.mtd - a.mtd);
+            const tot = _qpSum(rows, 'mtd'), prev = _qpSum(rows, 'prev'), mx = Math.max(1, ...rows.map(r => r.mtd));
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + tot + '<small>reviews across ' + rows.length + ' stores</small></div>'
+                + _qpTrendHtml(tot - prev, _qpN, true, 'Last Month') + '</div>'
+                + '<div class="qp-hl-cap">Reviews · Five-Star This Month</div>'
+                + rows.map(r => _qpAiStoreRow(r.s, r.mtd / mx * 100, String(r.mtd), r.mtd >= mx * 0.75 ? 'good' : r.mtd >= mx * 0.5 ? 'warn' : 'bad',
+                    '<span class="qp-dhl-tag">' + r.stars + '★</span>')).join(''));
+        },
+    },
+    pace: {
+        when: 'This Month', ttl: 600000, tabs: [['main', 'Pace', 'Goal Pace']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        off: d => ((d.goals || {})[_qpMyStore()] ? '' : 'No net profit goal is set for this month yet.'),
+        card: function (d) {
+            const p = _qpPaceOf(d, _qpMyStore());
+            const band = p.pct == null ? '' : _qpBand(p.pct);
+            const box = (k, v, s, cls) => '<div class="qp-hl-box"><div class="qp-hl-k">' + k + '</div><div class="qp-hl-bv ' + (cls || '') + '">' + v + '</div><div class="qp-hl-bs">' + s + '</div></div>';
+            const big = p.hit
+                ? '<div class="qp-hl-big good">' + _lvMoney(p.soFar, false) + '<small>goal of ' + _qpHLK(p.goal) + ' reached</small></div>'
+                : '<div class="qp-hl-big">' + _lvMoney(p.need, false) + '<small>net profit a day to hit goal</small></div>';
+            const pill = p.hit ? '<span class="qp-trend up">Goal Hit</span>'
+                : p.avg >= p.need ? '<span class="qp-trend up">On Pace</span>'
+                : '<span class="qp-trend down">' + _qpHLK(p.need - p.avg) + ' a Day Short</span>';
+            const bestN = p.best && Number(p.best.np) > 0 && !p.hit ? Math.ceil((p.goal - p.soFar) / Number(p.best.np)) : 0;
+            return _qpBody('<div class="qp-ai-top">' + big + pill + '</div>'
+                + _qpHLBar(p.goal ? p.soFar / p.goal * 100 : 0, [100], band)
+                + '<div class="qp-hl-sub">' + _lvMoney(p.soFar, false) + ' of ' + _lvMoney(p.goal, false) + (p.pct == null ? '' : ' · <span class="' + band + '">Tracking to ' + Math.round(p.pct) + '%</span>') + ' · ' + p.left + ' open days left</div>'
+                + '<div class="qp-hl-boxes">' + box('Averaging', _qpHLK(p.avg), 'a day this month')
+                + box('Best Day', p.best ? _qpHLK(p.best.np) : '—', p.best ? _qpDayLabel(p.best.date).replace(/^\w+, /, '') : '')
+                + box('Needed', p.hit ? 'Done' : _qpHLK(p.need), p.hit ? 'goal reached' : 'a day from today', p.hit ? 'good' : (p.avg >= p.need ? 'good' : 'warn')) + '</div>'
+                + (bestN && bestN <= p.left ? '<div class="qp-hl-sub" style="margin-top:8px">' + bestN + (bestN === 1 ? ' day' : ' days') + ' like your best would do it</div>' : ''));
+        },
+    },
+    lost: {
+        when: 'This Month', ttl: 600000, tabs: [['main', 'Lost', 'Lost Deals']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        card: function (d) {
+            const s = _qpMyStore(), cur = _qpThisMonth(d, s), prev = _qpLastMonthSoFar(d, s), y = cur[cur.length - 1];
+            const lost = _qpSum(cur, 'lost_revenue'), tot = _qpSum(cur, 'total_customers'), nod = _qpSum(cur, 'no_deal_customers');
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(lost, false) + '</span><small>walked out</small></div>'
+                + _qpTrendHtml(lost - _qpSum(prev, 'lost_revenue'), _qpHLK, false, 'Last Month') + '</div>'
+                + '<div class="qp-hl-sub">' + _qpN(_qpSum(cur, 'failed_deals')) + ' failed deals · ' + _qpN(_qpSum(cur, 'devices_lost')) + ' devices lost</div>'
+                + (y ? '<div class="qp-hl-cap">' + _qpDayLabel(y.date) + '</div>'
+                    + _qpWLine(_qpWChip('Failed', 'bad'), (Number(y.failed_deals) || 0) + ' deals walked out', y.lost_revenue ? _lvMoney(y.lost_revenue, false) : '')
+                    + _qpWLine(_qpWChip('Lost', 'warn'), (Number(y.devices_lost) || 0) + ' devices left with the customer', '')
+                    + _qpWLine(_qpWChip('No Deal', 'grey'), (Number(y.no_deal_customers) || 0) + ' customers bought nothing', '') : '')
+                + (tot ? '<div class="qp-hl-sub" style="margin-top:6px">' + Math.round(nod / tot * 100) + '% of customers this month left without a deal</div>' : ''));
+        },
+    },
+    dlost: {
+        when: 'This Month', ttl: 600000, tabs: [['main', 'Lost', 'Lost Deals by Store']], where: () => 'District', load: _qpSnapLoad,
+        card: function (d) {
+            const rows = STORE_CODES.map(s => { const c = _qpThisMonth(d, s); return { s, lost: _qpSum(c, 'lost_revenue'), failed: _qpSum(c, 'failed_deals'), tot: _qpSum(c, 'total_customers'), nod: _qpSum(c, 'no_deal_customers') }; })
+                .sort((a, b) => b.lost - a.lost);
+            const mx = Math.max(1, ...rows.map(r => r.lost));
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(_qpSum(rows, 'lost'), false) + '</span><small>walked out · ' + _qpN(_qpSum(rows, 'failed')) + ' failed deals</small></div></div>'
+                + '<div class="qp-hl-cap">Lost Revenue · Share Who Left Without a Deal</div>'
+                + rows.map(r => { const sh = r.tot ? Math.round(r.nod / r.tot * 100) : 0; return _qpAiStoreRow(r.s, r.lost / mx * 100, _qpHLK(r.lost), r.lost >= mx * 0.75 ? 'bad' : r.lost >= mx * 0.4 ? 'warn' : 'good',
+                    '<span class="qp-dhl-tag ' + (sh >= 15 ? 'bad' : sh >= 10 ? 'warn' : 'good') + '">' + sh + '%</span>'); }).join(''));
+        },
+    },
+    team: {
+        when: () => { const t = _qpSnap.data && _qpTeamOf(_qpSnap.data, _qpMyStore()); return t ? _qpDayLabel(t.last.date) : 'Yesterday'; },
+        ttl: 600000, tabs: [['main', 'Team', 'Team Production']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        off: d => (_qpTeamOf(d, _qpMyStore()) ? '' : 'No Day End report has come in for this store yet.'),
+        card: function (d) {
+            const t = _qpTeamOf(d, _qpMyStore()), mx = Math.max(1, ...t.team.map(m => m.n));
+            const head = '<div class="qp-ai-top"><div class="qp-hl-big">' + t.total + '<small>devices processed · ' + _lvMoney(t.value, false) + ' value</small></div>'
+                + (t.avg ? _qpTrendHtml(Math.round(t.total - t.avg), _qpN, true, 'Same Day Avg') : '') + '</div>';
+            // An employee's snapshot carries their own line only (store-snapshot).
+            if (_qpIsEmp()) {
+                const me = t.team[0];
+                return _qpBody(head + '<div class="qp-hl-cap">Your Day</div>'
+                    + (me ? '<div class="qp-ai-pp"><span class="qp-ai-pn">' + escapeHtml(_qpShort(me.name)) + '</span>' + _qpHLBar(t.total ? me.n / t.total * 100 : 0, [], 'good') + '<b>' + me.n + '</b><span class="qp-tm-v">' + _lvMoney(me.value, false) + '</span></div>'
+                        + '<div class="qp-hl-sub" style="margin-top:8px">' + (t.total ? Math.round(me.n / t.total * 100) : 0) + '% of the store\'s devices' + (me.top ? ' · top producer' : '') + '</div>'
+                        : '<div class="qp-hl-sub">You were not on yesterday\'s report.</div>'));
+            }
+            const top = t.team.find(m => m.top);
+            return _qpBody(head + '<div class="qp-hl-cap">Who Processed What</div>'
+                + t.team.slice(0, 5).map(m => '<div class="qp-ai-pp"><span class="qp-ai-pn qp-tm-n">' + escapeHtml(_qpShort(m.name)) + '</span>'
+                    + _qpHLBar(m.n / mx * 100, [], m.n >= mx * 0.5 ? 'good' : 'warn') + '<b>' + m.n + '</b><span class="qp-tm-v">' + _qpHLK(m.value) + '</span></div>').join('')
+                + (top ? '<div class="qp-hl-sub" style="margin-top:8px">Top producer: ' + escapeHtml(_qpShort(top.name)) + (t.topRun > 1 ? ' · ' + t.topRun + ' reports running' : '') + '</div>' : ''));
+        },
+    },
+    pipeline: {
+        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        off: d => (_qpLast(d, _qpMyStore()) ? '' : 'No Day End report has come in for this store yet.'),
+        card: function (d) {
+            const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1], wk = f.filter(r => r.date < y.date).slice(-6)[0];
+            const pr = f.slice(-7).map(r => Number(r.devices_processed) || 0), avg = _qpAvg(pr.filter(Boolean));
+            const q = Number(y.queue_count) || 0, qch = wk && Number(wk.queue_count) ? Math.round((q - wk.queue_count) / wk.queue_count * 100) : null;
+            const stage = (v, k) => '<div class="qp-pipe-s"><b>' + _qpN(v) + '</b><span>' + k + '</span></div>';
+            return _qpBody('<div class="qp-pipe">' + stage(q, 'In Queue') + '<span class="qp-pipe-a">→</span>' + stage(y.available_count, 'Available')
+                + '<span class="qp-pipe-a">→</span>' + stage(y.live_count, 'Live') + '</div>'
+                + '<div class="qp-hl-sub">' + (qch == null ? '' : '<span class="' + (qch > 10 ? 'warn' : qch < -10 ? 'good' : '') + '">Queue ' + (qch >= 0 ? 'up ' : 'down ') + Math.abs(qch) + '%</span> in a week · ')
+                + _qpHLK(y.available_cost) + ' sitting available</div>'
+                + '<div class="qp-hl-cap">Processed · Last 7 Reports</div>' + _qpDaysHtml(pr)
+                + (avg ? '<div class="qp-hl-sub">At ' + Math.round(avg) + ' a day the queue clears in ' + Math.ceil(q / avg) + (Math.ceil(q / avg) === 1 ? ' day' : ' days') + '</div>' : ''));
+        },
+    },
+    buying: {
+        when: () => { const y = _qpSnap.data && _qpLast(_qpSnap.data, _qpMyStore()); return y ? _qpDayLabel(y.date) : 'Yesterday'; },
+        ttl: 600000, tabs: [['main', 'Buying', 'Buying']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        off: d => (_qpLast(d, _qpMyStore()) ? '' : 'No Day End report has come in for this store yet.'),
+        card: function (d) {
+            const s = _qpMyStore(), f = _qpFacts(d, s), y = f[f.length - 1], cur = _qpThisMonth(d, s);
+            const avg = _qpAvg(_qpSameWeekday(f, y, 'est_value'));
+            const pct = v => v == null ? '—' : (Number(v) * (Number(v) <= 1 ? 100 : 1)).toFixed(1) + '%';
+            const mv = _qpSum(cur, 'est_value'), ms = _qpSum(cur, 'total_spent');
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(y.est_value, false) + '<small>bought · ' + _lvMoney(y.total_spent, false) + ' paid</small></div>'
+                + (avg ? _qpTrendHtml(Math.round(Number(y.est_value) - avg), _qpHLK, true, 'Same Day Avg') : '') + '</div>'
+                + '<div class="qp-hl-sub">Buy margin ' + pct(y.est_margin_pct) + ' · ' + (Number(y.cust_conv_den) ? Math.round(y.cust_conv_num / y.cust_conv_den * 100) + '% of customers sold to us' : '') + '</div>'
+                + '<div class="qp-hl-cap">Last 5 Reports</div>'
+                + f.slice(-5).reverse().map(r => _qpWLine('', _qpDayLabel(r.date) + ' · ' + pct(r.est_margin_pct) + ' margin', _qpHLK(r.est_value))).join('')
+                + '<div class="qp-hl-sub" style="margin-top:6px">' + _qpHLK(mv) + ' bought this month · ' + (mv ? ((1 - ms / mv) * 100).toFixed(1) + '% margin' : '') + '</div>');
+        },
+    },
+    calendar: {
+        when: 'Next Two Weeks', ttl: 300000, tabs: [['main', 'Calendar', 'Store Calendar']],
+        where: () => (_qpIsDist() ? 'District' : _qpMyStore()),
+        load: async function () { if (!_scal.loaded) await _scalLoad(); return { at: Date.now() }; },
+        card: function () {
+            const today = _scalTodayISO(), to = _scalISO(_scalAddDays(new Date(), 13));
+            const store = _qpIsDist() ? 'ALL' : _qpMyStore();
+            const occ = _scalOccurrences(today, to, store).filter(o => o.first || o.day === today);
+            if (!occ.length) return _qpBody('<div class="qp-clear"><div class="qp-clear-t">Nothing Coming Up</div><div class="qp-clear-s">No events in the next two weeks</div></div>'
+                + _qpAiLink('Open Store Calendar', 'toggleCalendar()'));
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + occ.length + '<small>' + (occ.length === 1 ? 'event' : 'events') + ' in the next two weeks</small></div></div>'
+                + occ.slice(0, 5).map(o => _qpWLine(_qpWChip(o.day === today ? 'Today' : _qpDayLabel(o.day).replace(/,.*$/, '') + ' ' + Number(o.day.slice(8)), o.day === today ? 'bad' : 'grey'),
+                    o.ev.title + (o.ev.scope === 'store' && store === 'ALL' ? ' · ' + o.ev.store : ''), o.ev.all_day ? '' : _scalFmtTime(o.ev.start_time, true))).join('')
+                + _qpAiLink('Open Store Calendar', 'toggleCalendar()'));
+        },
+    },
+    hotkeys: {
+        when: 'Point of Sale', ttl: 3600000, tabs: [['main', 'Hotkeys', 'Hotkeys & Commands']], where: () => (_qpMyStore() || 'Company'),
+        load: async function () {
+            const j = await fetch(`${HOTKEYS_URL}?v=${Date.now()}`).then(r => r.json());
+            return (Array.isArray(j) ? j : []).filter(x => x.brand && String(x.brand).toLowerCase() !== 'brand');
+        },
+        off: d => d.length ? '' : 'No hotkeys have been added yet.',
+        // The search filters the list in place, as the Processes & Policies
+        // card's does — a redraw would take the cursor out of the box.
+        card: function (d) {
+            return '<div class="qp-ai-body qp-doc-body">'
+                + '<input type="search" class="qp-doc-q" placeholder="Search a Brand, Device or Task" aria-label="Search hotkeys" oninput="_qpHkSearch(this)">'
+                + '<div class="qp-hk-list">' + _qpHkRows(d, '') + '</div>'
+                + _qpAiLink('Open Hotkeys &amp; Commands', "toggleModal('hotkeysDropdown')") + '</div>';
+        },
+    },
+});
+function _qpHkRows(d, q) {
+    q = String(q || '').trim().toLowerCase();
+    const hits = d.filter(x => !q || (x.brand + ' ' + x.device + ' ' + x.func + ' ' + x.hotkey).toLowerCase().indexOf(q) !== -1);
+    if (!hits.length) return '<div class="qp-hl-sub">No hotkey matches “' + escapeHtml(q) + '”.</div>';
+    return hits.slice(0, 6).map(x => '<div class="qp-cw-ln"><span class="qp-cw-lt"><span class="qp-cw-st">' + escapeHtml(x.brand) + '</span>'
+        + escapeHtml(x.device) + ' · ' + escapeHtml(x.func) + '</span><b class="qp-hk-k" title="' + escapeHtml(x.hotkey) + '">' + escapeHtml(x.hotkey) + '</b></div>').join('')
+        + (hits.length > 6 ? '<div class="qp-hl-sub">' + (hits.length - 6) + ' more — keep typing</div>' : '');
+}
+function _qpHkSearch(input) {
+    const st = _qpWState('hotkeys'), list = input.parentElement.querySelector('.qp-hk-list');
+    if (list && st.data) { list.innerHTML = _qpHkRows(st.data, input.value); _qpCapLines(list); }
+}
+
+// ---- MINI WIDGETS ----
+// draw(d) returns { k, v, s, right, go } for a one-slot mini, or { html, go }
+// for a double. src: 'snap' (store-snapshot), 'cal' (the Store Calendar's own
+// read), 'recycle' (recycle-requests), or 'page' (what the page already holds).
+const _qpMI = {
+    star: QP_WIDGETS.reviews.icon, flag: QP_WIDGETS.pace.icon, x: QP_WIDGETS.lost.icon, layers: QP_WIDGETS.pipeline.icon,
+    trophy: QP_WIDGETS.team.icon, cal: QP_WIDGETS.calendar.icon, cart: QP_WIDGETS.buying.icon,
+    cash: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/></svg>',
+    box: '<svg viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8"/></svg>',
+    clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.5 3.3-5.5 6.5-5.5s5.9 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.7c1.7.8 2.8 2.6 3 5.3"/></svg>',
+    recycle: '<svg viewBox="0 0 24 24"><path d="M7 19H4l3-5M17 19h3l-3-5M12 4l-2 3.5h4zM8 13l-1.5-2.5M16 13l1.5-2.5M9 19h6"/></svg>',
+    spark: '<svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/></svg>',
+    tag: '<svg viewBox="0 0 24 24"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/></svg>',
+    pulse: '<svg viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>',
+};
+const _qpStoreSide = () => !!_qpMyStore() && !_qpIsDist();
+const QP_MINIS = {
+    mreviews: { label: 'Google Reviews', sub: 'This month, and how it is tracking', icon: _qpMI.star, tone: 'a', src: 'snap', avail: _qpStoreSide,
+        draw: d => { const r = _qpReviewsOf(d, _qpMyStore()); return { k: 'Google Reviews · This Month', v: r.mtd + (r.goal ? '<small>of ' + r.goal + '</small>' : ''), s: 'Tracking to ' + r.track + ' · ' + r.stars + ' five-star', right: _qpSpark(r.days, '#d68a12') }; } },
+    mstars: { label: 'Five-Star Reviews', sub: 'Five-star reviews this month', icon: _qpMI.star, tone: 'a', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
+        draw: d => {
+            if (_qpIsDist()) { const r = STORE_CODES.map(s => ({ s, n: _qpReviewsOf(d, s).stars })).sort((a, b) => b.n - a.n); return { k: 'Five-Star · This Month', v: String(_qpSum(r, 'n')), s: 'Most at ' + r[0].s + ' (' + r[0].n + ')' }; }
+            const me = _qpReviewsOf(d, _qpMyStore()).stars; return { k: 'Five-Star Reviews', v: String(me), s: 'This month' };
+        } },
+    mpace: { label: 'Goal Pace', sub: 'Net profit a day still needed', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => { const p = _qpPaceOf(d, _qpMyStore()); return p.hit ? { k: 'Goal Pace', v: '<span class="good">Goal Hit</span>', s: _qpHLK(p.soFar) + ' of ' + _qpHLK(p.goal) }
+            : { k: 'Needed a Day', v: _qpHLK(p.need), s: 'To hit ' + _qpHLK(p.goal) + ' · ' + p.left + ' days left' }; } },
+    mcash: { label: 'Cash on Hand', sub: 'Drawer and safe from the latest report', icon: _qpMI.cash, tone: 'g', src: 'snap', avail: () => _qpIsMgr() || _qpIsDist(),
+        draw: d => {
+            const c = (d.cash || []).slice().sort((a, b) => a.day.localeCompare(b.day));
+            if (_qpIsDist()) {
+                const lastDay = c.length ? c[c.length - 1].day : null, on = c.filter(x => x.day === lastDay);
+                const lo = on.slice().sort((a, b) => a.total - b.total)[0];
+                return { k: 'Cash in Stores · ' + (lastDay ? _qpDayLabel(lastDay).replace(/,.*$/, '') : ''), v: _qpHLK(_qpSum(on, 'total')), s: lo ? 'Lowest ' + lo.store + ' ' + _qpHLK(lo.total) : '' };
+            }
+            const mine = c.filter(x => x.store === _qpMyStore()), l = mine[mine.length - 1];
+            return l ? { k: 'Cash on Hand · ' + _qpDayLabel(l.day).replace(/,.*$/, ''), v: _lvMoney(l.total, false), s: 'Drawer ' + _qpHLK(l.drawer) + ' · Safe ' + _qpHLK(l.safe), right: _qpSpark(mine.map(x => Number(x.total)), '#1f9d57') }
+                : { k: 'Cash on Hand', v: '—', s: 'No cash count yet' };
+        } },
+    mqueue: { label: 'Waiting to Process', sub: 'The processing queue and what is available', icon: _qpMI.box, tone: 'b', src: 'snap', avail: _qpStoreSide,
+        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; return y ? { k: 'Waiting to Process', v: _qpN(y.queue_count), s: _qpN(y.available_count) + ' available · ' + _qpHLK(y.available_cost) + ' cost', right: _qpSpark(f.slice(-7).map(r => Number(r.queue_count)), '#2563b8') } : { k: 'Waiting to Process', v: '—', s: 'No report yet' }; } },
+    mdue: { label: 'Next Due', sub: 'The nearest deadline from Your Feed', icon: _qpMI.clock, tone: 'r', src: 'page', avail: () => true,
+        draw: () => {
+            const order = ['over', 'today', 'week', 'later', 'none'];
+            const due = (typeof _samGatherReminders === 'function' ? _samGatherReminders() : []).filter(x => x.kind === 'due')
+                .sort((a, b) => order.indexOf(a.dueGroup || 'none') - order.indexOf(b.dueGroup || 'none') || String(a.dueOn || '9').localeCompare(String(b.dueOn || '9')));
+            const n = due[0];
+            if (!n) return { k: 'Next Due', v: '<span class="good">All Clear</span>', s: 'Nothing due' };
+            const v = n.dueGroup === 'over' ? '<span class="bad">Overdue</span>' : n.dueGroup === 'today' ? '<span class="warn">Today</span>' : escapeHtml(String(n.due || '').replace(/^Due /, '') || 'Due');
+            return { k: 'Next Due' + (due.length > 1 ? ' · ' + due.length + ' Deadlines' : ''), v, s: n.title, go: n.action || '' };
+        } },
+    mmix: { label: 'Customer Mix', sub: 'New, returning, recycle and no-deal customers', icon: _qpMI.users, tone: 'b', src: 'snap', double: true, avail: () => _qpStoreSide() || _qpIsDist(),
+        draw: d => {
+            const rows = _qpIsDist() ? [].concat(...STORE_CODES.map(s => _qpThisMonth(d, s))) : _qpThisMonth(d, _qpMyStore());
+            const v = { n: _qpSum(rows, 'new_customers'), r: _qpSum(rows, 'return_customers'), c: _qpSum(rows, 'recycle_customers'), x: _qpSum(rows, 'no_deal_customers') };
+            const tot = _qpSum(rows, 'total_customers') || (v.n + v.r + v.c + v.x);
+            const conv = _qpSum(rows, 'cust_conv_den') ? Math.round(_qpSum(rows, 'cust_conv_num') / _qpSum(rows, 'cust_conv_den') * 100) : null;
+            const seg = (n, c) => n ? '<i style="flex:' + n + ';background:' + c + '"></i>' : '';
+            const li = (lab, n, c) => '<span><i class="qp-sw" style="background:' + c + '"></i>' + lab + '<b>' + _qpN(n) + '</b></span>';
+            return { html: '<div class="qp-mn-head">' + _qpMiniIco(_qpMI.users, 'b') + '<div class="qp-mn-b"><div class="qp-mn-k">Customers · This Month</div><div class="qp-mn-v">' + _qpN(tot) + '<small>through the door</small></div></div></div>'
+                + '<div class="qp-mix">' + seg(v.n, '#2563b8') + seg(v.r, '#1f9d57') + seg(v.c, '#f0a92b') + seg(v.x, '#e05252') + '</div>'
+                + '<div class="qp-mix-l">' + li('New', v.n, '#2563b8') + li('Returning', v.r, '#1f9d57') + li('Recycle', v.c, '#f0a92b') + li('No Deal', v.x, '#e05252') + '</div>'
+                + '<div class="qp-mn-s">' + (tot ? Math.round(v.r / tot * 100) + '% came back' : '') + (conv != null ? ' · conversion ' + conv + '%' : '') + '</div>' };
+        } },
+    mrecycle: { label: 'Recycle Requests', sub: 'Requests waiting on a verdict', icon: _qpMI.recycle, tone: 'g', src: 'recycle', avail: () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('tool-recycle-inventory') && (_qpStoreSide() || _qpIsDist()),
+        draw: d => { const open = (d.rows || []).filter(r => !r.reviewed_at && !r.deleted_at); return { k: 'Recycle Requests', v: String(open.length), s: open.length ? (_qpIsDist() ? 'Waiting on your verdict' : 'Waiting on the DM') : 'Nothing waiting', go: 'openRecycleFocused()' }; } },
+    mnews: { label: 'What\'s New', sub: 'The latest patch notes', icon: _qpMI.spark, tone: 'b', src: 'page', avail: () => true,
+        draw: () => { const k = (typeof _latestPatchKey === 'string' && _latestPatchKey) ? _latestPatchKey.split('|') : null;
+            return { k: 'What\'s New', v: k ? 'v' + String(k[0]).replace(/^\s*v/i, '') : '—', s: k ? 'Released ' + escapeHtml(k[1] || '') : 'No patch notes yet', go: 'openHubToPatch()' }; } },
+    mlive: { label: 'Live Listings', sub: 'Listings live on the online store', icon: _qpMI.tag, tone: 'g', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
+        draw: d => {
+            if (_qpIsDist()) { const t = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean); return { k: 'Live Listings · District', v: _qpN(_qpSum(t, 'live_count')), s: _qpN(_qpSum(t, 'listed_devices')) + ' listed on the latest report' }; }
+            const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
+            return y ? { k: 'Live Listings', v: _qpN(y.live_count), s: _qpN(y.listed_devices) + ' listed on the latest report', right: _qpSpark(f.slice(-7).map(r => Number(r.live_count)), '#1f9d57') } : { k: 'Live Listings', v: '—', s: 'No report yet' };
+        } },
+    musage: { label: 'SPEEKSNET Use', sub: 'Who signed in this week, and who did not', icon: _qpMI.pulse, tone: 'b', src: 'snap', avail: () => _qpIsDist(),
+        draw: d => { const u = d.usage; if (!u) return { k: 'SPEEKSNET Use', v: '—', s: '' };
+            return { k: 'SPEEKSNET Use · 7 Days', v: u.week + '<small>of ' + u.roster + ' signed in</small>', s: u.quiet.length ? 'Not yet: ' + u.quiet.slice(0, 2).map(q => _qpShort(q.name)).join(', ') + (u.quiet.length > 2 ? ' +' + (u.quiet.length - 2) : '') : 'Everyone signed in',
+                     right: _qpSpark(u.days.map(x => x.people), '#2563b8') }; } },
+    mavail: { label: 'Available Inventory', sub: 'Cost of stock sitting available, every store', icon: _qpMI.layers, tone: 't', src: 'snap', avail: () => _qpIsDist(),
+        draw: d => { const t = STORE_CODES.map(s => ({ s, f: _qpLast(d, s) })).filter(x => x.f); const top = t.slice().sort((a, b) => b.f.available_cost - a.f.available_cost)[0];
+            return { k: 'Available Inventory', v: _qpHLK(t.reduce((a, x) => a + (Number(x.f.available_cost) || 0), 0)), s: top ? top.s + ' holds ' + _qpHLK(top.f.available_cost) : '' }; } },
+    mbuy: { label: 'Buying', sub: 'What the store bought on the latest report', icon: _qpMI.cart, tone: 'b', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; if (!y) return { k: 'Buying', v: '—', s: 'No report yet' };
+            const m = Number(y.est_margin_pct); return { k: 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _lvMoney(y.est_value, false), s: (m ? (m * (m <= 1 ? 100 : 1)).toFixed(1) + '% margin · ' : '') + _lvMoney(y.total_spent, false) + ' paid', right: _qpSpark(f.slice(-7).map(r => Number(r.est_value)), '#2563b8') }; } },
+    mlost: { label: 'Lost Deals', sub: 'What walked out on the latest report', icon: _qpMI.x, tone: 'r', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => { const y = _qpLast(d, _qpMyStore()); return y ? { k: 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span>', s: (Number(y.failed_deals) || 0) + ' failed · ' + (Number(y.devices_lost) || 0) + ' devices lost' } : { k: 'Lost Deals', v: '—', s: 'No report yet' }; } },
+    mtop: { label: 'Top Producer', sub: 'Who processed the most on the latest report', icon: _qpMI.trophy, tone: 'a', src: 'snap', avail: () => _qpStoreSide() && !_qpIsEmp(),
+        draw: d => { const t = _qpTeamOf(d, _qpMyStore()); const top = t && (t.team.find(m => m.top) || t.team[0]);
+            return top ? { k: 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), v: escapeHtml(_qpShort(top.name)), s: top.n + ' devices · ' + _qpHLK(top.value) + (t.topRun > 1 ? ' · ' + t.topRun + ' running' : '') } : { k: 'Top Producer', v: '—', s: 'No report yet' }; } },
+    mcal: { label: 'Coming Up', sub: 'The next three events on the Store Calendar', icon: _qpMI.cal, tone: 'b', src: 'cal', double: true, avail: () => typeof toggleCalendar === 'function' && (!!_qpMyStore() || _qpIsDist()),
+        draw: () => {
+            const today = _scalTodayISO(), store = _qpIsDist() ? 'ALL' : _qpMyStore();
+            const occ = _scalOccurrences(today, _scalISO(_scalAddDays(new Date(), 30)), store).filter(o => o.first || o.day === today).slice(0, 3);
+            return { go: 'toggleCalendar()', html: '<div class="qp-mn-head">' + _qpMiniIco(_qpMI.cal, 'b') + '<div class="qp-mn-b"><div class="qp-mn-k">Coming Up</div><div class="qp-mn-v">' + occ.length + '<small>' + (occ.length === 1 ? 'event' : 'events') + ' · next 30 days</small></div></div></div>'
+                + (occ.length ? '' : '<div class="qp-mn-s">Nothing on the calendar yet</div>')
+                + occ.map(o => '<div class="qp-mn-ev"><b>' + (o.day === today ? 'Today' : escapeHtml(_qpDayLabel(o.day).replace(/^\w+, /, ''))) + '</b><span>' + escapeHtml(o.ev.title) + '</span></div>').join('') };
+        } },
+};
+const _QP_MINI_ADDED = '2026-10-29';
+function _qpMiniOk(id) { const m = QP_MINIS[id]; try { return !!m && !!m.avail(); } catch (e) { return false; } }
+function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
+
+// The data a mini draws from, loading it once if it is missing or stale.
+const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: false, data: null } };
+function _qpMiniData(src) {
+    if (src === 'page') return {};
+    if (src === 'snap') {
+        if (!_qpSnap.data || Date.now() - _qpSnap.at > 600000) {
+            if (!_qpSnap.p && (!_qpSnap.err || Date.now() - _qpSnap.at > 60000)) _qpSnapGet().then(_qpRenderWidgets, () => {});
+        }
+        return _qpSnap.data;
+    }
+    if (src === 'cal') {
+        const st = _qpMiniSrcState.cal;
+        if (!_scal.loaded && !st.busy && Date.now() - st.at > 60000) { st.busy = true; _scalLoad().finally(() => { st.busy = false; st.at = Date.now(); _qpRenderWidgets(); }); }
+        return _scal.loaded ? {} : null;
+    }
+    if (src === 'recycle') {
+        const st = _qpMiniSrcState.recycle;
+        if (!st.busy && Date.now() - st.at > 300000) {
+            st.busy = true;
+            const scope = _qpIsDist() ? '' : _claimStores().join(',');
+            fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(scope)}&v=${Date.now()}`).then(r => r.json())
+                .then(j => { if (j && j.success) st.data = { rows: j.data || [] }; })
+                .catch(() => {}).finally(() => { st.busy = false; st.at = Date.now(); _qpRenderWidgets(); });
+        }
+        return st.data;
+    }
+    return null;
+}
+
+// ---- SHELVES ----
+const _qpIsShelfKey = k => String(k || '').indexOf('shelf:') === 0;
+const _qpShelfIds = key => String(key).slice(6).split(',').filter(Boolean);
+const _qpShelfKey = ids => 'shelf:' + ids.join(',');
+const _qpMiniSize = id => (QP_MINIS[id] && QP_MINIS[id].double ? 2 : 1);
+const _qpShelfUsed = ids => ids.filter(_qpMiniOk).reduce((a, id) => a + _qpMiniSize(id), 0);
+function _qpShelves(main) { return Array.from(main.querySelectorAll('[data-qp-shelf]')); }
+function _qpMiniShelf(main, id) { return _qpShelves(main).find(b => _qpShelfIds(_qpKey(b)).indexOf(id) !== -1) || null; }
+function _qpMakeShelf(key) {
+    const el = document.createElement('section');
+    el.className = 'qp-shelfblk qp-part';
+    el.setAttribute('data-qp-block', key);
+    el.setAttribute('data-qp-shelf', '');
+    el.setAttribute('data-qp-label', 'Mini Widgets');
+    el.innerHTML = '<div class="qp-mshelf"></div>';
+    return el;
+}
+// A shelf's key IS its contents, so changing what is on it renames it — in
+// the rows and on the block — and the layout commits as for any move.
+function _qpShelfRekey(main, oldKey, ids) {
+    const rows = _qpCurrentRows(main);
+    const b = main.querySelector('[data-qp-block="' + oldKey + '"]');
+    if (!ids.length) { _qpTakeOut(rows, oldKey); if (b) { const cell = b.parentElement; b.remove(); if (cell && cell.classList.contains('qp-cell')) cell.remove(); } return rows; }
+    const nk = _qpShelfKey(ids);
+    rows.forEach(r => { const i = r.items.indexOf(oldKey); if (i !== -1) r.items[i] = nk; });
+    if (b) { b.setAttribute('data-qp-block', nk); b._qpHtml = null; }
+    return rows;
+}
+// Add a mini: on the first shelf with room for it, or a new shelf where a ⅓
+// card would go. t: a drop from the drawer (onto a shelf, or anywhere).
+function qpAddMini(id, t) {
+    const main = _qpMain();
+    if (!main || !_qpMiniOk(id) || _qpMiniShelf(main, id)) return;
+    const need = _qpMiniSize(id);
+    let into = null;
+    if (t && t.key && _qpIsShelfKey(t.key)) into = main.querySelector('[data-qp-block="' + t.key + '"]');
+    else if (!t) into = _qpShelves(main).find(b => b.offsetParent !== null && _qpShelfUsed(_qpShelfIds(_qpKey(b))) + need <= 3) || null;
+    if (into && _qpShelfUsed(_qpShelfIds(_qpKey(into))) + need <= 3) {
+        const k = _qpKey(into);
+        _qpCommit(main, _qpShelfRekey(main, k, _qpShelfIds(k).concat([id])));
+        into.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+        qpAddWidget(_qpShelfKey([id]), t && !(t.key && _qpIsShelfKey(t.key)) ? t : null);
+    }
+    _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
+}
+function qpRemoveMini(id) {
+    const main = _qpMain();
+    const b = main && _qpMiniShelf(main, id);
+    if (!b) return;
+    const k = _qpKey(b);
+    _qpCommit(main, _qpShelfRekey(main, k, _qpShelfIds(k).filter(x => x !== id)));
+    _qpLibraryList((document.querySelector('#qpLib .qp-lib-search') || {}).value || '');
+}
+function _qpMiniHtml(id) {
+    const m = QP_MINIS[id], data = _qpMiniData(m.src);
+    let r = null;
+    if (data) { try { r = m.draw(data); } catch (e) { console.error('Mini widget ' + id + ':', e); } }
+    const x = '<button type="button" class="qp-mn-x" data-qp-edit-ok title="Remove ' + escapeHtml(m.label) + '" aria-label="Remove ' + escapeHtml(m.label) + '" onclick="qpRemoveMini(\'' + id + '\')">'
+        + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+    const go = r && r.go ? ' data-go="1" role="button" tabindex="0" onclick="' + escapeHtml(r.go) + '"' : '';
+    if (!r) return '<div class="qp-mn' + (m.double ? ' x2' : '') + '" data-qp-mini="' + id + '">' + _qpMiniIco(m.icon, m.tone)
+        + '<div class="qp-mn-b"><div class="qp-mn-k">' + escapeHtml(m.label) + '</div><div class="qp-mn-s">Syncing…</div></div>' + x + '</div>';
+    if (r.html) return '<div class="qp-mn x2" data-qp-mini="' + id + '"' + go + '>' + r.html + x + '</div>';
+    return '<div class="qp-mn" data-qp-mini="' + id + '"' + go + '>' + _qpMiniIco(m.icon, m.tone)
+        + '<div class="qp-mn-b"><div class="qp-mn-k">' + escapeHtml(r.k) + '</div><div class="qp-mn-v">' + r.v + '</div><div class="qp-mn-s">' + escapeHtml(r.s || '') + '</div></div>'
+        + (r.right ? '<div class="qp-mn-r">' + r.right + '</div>' : '') + x + '</div>';
+}
+// Minis that read what the page holds (Next Due, What's New) change when the
+// feed or the patch notes do, which no widget load hears about: they redraw
+// every 15s. A redraw that changes nothing touches nothing (_qpHtml).
+let _qpShelfTimer = null;
+function _qpRenderShelves(main) {
+    if (!_qpShelfTimer && _qpShelves(main).length) _qpShelfTimer = setInterval(function () { const m = _qpMain(); if (m) _qpRenderShelves(m); }, 15000);
+    _qpShelves(main).forEach(function (b) {
+        const ids = _qpShelfIds(_qpKey(b)).filter(_qpMiniOk);
+        const was = b.hidden;
+        b.hidden = !ids.length;
+        let used = 0;
+        const parts = ids.map(id => { used += _qpMiniSize(id); return _qpMiniHtml(id); });
+        // Empty slots say how to fill them in Customize, and are blank space
+        // otherwise (styles.css), so the shelf keeps its three rows either way.
+        for (; used < 3; used++) parts.push('<button type="button" class="qp-mn-empty" data-qp-edit-ok onclick="qpLibraryOpen(\'Mini Widgets\')">+ Add a Mini Widget</button>');
+        const html = '<div class="qp-mshelf">' + parts.join('') + '</div>';
+        if (b._qpHtml !== html) { b.innerHTML = html; b._qpHtml = html; _qpCapLines(b); }
+        if (was !== b.hidden) _qpSyncHidden(main);
+    });
+}
+
 // --- THE REDESIGNED WIDGET BODIES (Ethan, 2026-10-28: "I like all of them as
 // long as records and KPIs bubbles are all the same size") ---
 // A tile grid three across. Every tile is one fixed height with a two-line
@@ -53603,7 +54277,7 @@ function _qpKeepScroll(fn) {
 // The cards the page always has: not split-out shells, and not added widgets
 // (so a page with a widget on it is never "the default").
 function _qpOriginalKeys(main) {
-    return _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell') && !b.hasAttribute('data-qp-widget'); }).map(_qpKey);
+    return _qpBlocks(main).filter(function (b) { return !b.hasAttribute('data-qp-shell') && !b.hasAttribute('data-qp-widget') && !b.hasAttribute('data-qp-shelf'); }).map(_qpKey);
 }
 
 // Commit a new arrangement: rebuild, save (or forget, if it IS the default),
@@ -54040,6 +54714,9 @@ function _qpRenderControls(main) {
                 x.onclick = function () { qpRemoveWidget(key); };
                 cell.appendChild(x);
             }
+            // A shelf has no × of its own: it sat on top of its first mini's ×,
+            // two crosses in one corner. Each mini has one, and the last mini
+            // taken off takes the shelf with it (qpRemoveMini).
             // A card with two or more pieces showing lets each one be dragged out
             // by its tab (Command Center) or its row (Action Items).
             if (fam) {
@@ -54123,6 +54800,11 @@ function _qpTargetAt(main, el, x, y) {
     const sameGroup = !!fam && fam === (_qpDrag.key ? (_qpParse(_qpDrag.key) || {}).fam : _qpDrag.fam);
     const fromHere = !_qpDrag.key && _qpDrag.from === key;
     let zone = f < 0.25 ? 'left' : f > 0.75 ? 'right' : 'combine';
+    // A MINI out of the drawer over a shelf's middle goes ON that shelf.
+    if (zone === 'combine' && _qpDrag.add && _qpIsShelfKey(_qpDrag.add) && _qpIsShelfKey(key)) {
+        const full = _qpShelfUsed(_qpShelfIds(key)) + _qpMiniSize(_qpShelfIds(_qpDrag.add)[0]) > 3;
+        return { zone: 'shelf', el: b, cell: cell, key: key, row: rows.indexOf(row), full: full };
+    }
     // The middle of a card from ANOTHER group swaps the two (Ethan, 2026-10-23:
     // trading places used to mean removing one and adding it back). Whole cards
     // only — a tab dragged out still places beside — and not one still in the drawer.
@@ -54211,7 +54893,7 @@ function _qpPreview(main, t) {
     const sig = !t ? 'none' : [t.zone, t.key, t.row, t.before, t.beforeKey, t.full ? 1 : 0, t.lone ? 1 : 0].join('|');
     if (pv && pv.getAttribute('data-sig') === sig) return;
     const drag = _qpDrag.add ? { key: _qpDrag.add } : _qpDrag;
-    const next = !t || t.full || t.lone ? null : _qpDropAt(main, drag, t, true);
+    const next = !t || t.full || t.lone || t.zone === 'shelf' ? null : _qpDropAt(main, drag, t, true);
     if (!pv) {
         pv = document.createElement('div');
         pv.id = 'qpPreview';
@@ -54277,6 +54959,11 @@ function _qpShowHint(main, t) {
     if (t.zone === 'replace') {
         ov.className = 'qp-ov qp-ov-combine qp-ov-no qp-ov-replace' + (t.why ? ' qp-ov-refused' : '');
         ov.innerHTML = replaceHtml();
+    } else if (t.zone === 'shelf') {
+        ov.className = 'qp-ov qp-ov-combine' + (t.full ? ' qp-ov-no' : '');
+        ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
+            + (t.full ? '<span class="qp-ov-big">No Room on This Shelf</span><span class="qp-ov-small">A Shelf Holds Three Rows</span>'
+                : '<span class="qp-ov-big">Drop to Add</span><span class="qp-ov-small">Puts It on This Shelf</span>');
     } else if (t.zone === 'swap') {
         const other = b.getAttribute('data-qp-label') || t.key;
         ov.className = 'qp-ov qp-ov-combine qp-ov-swap' + (t.full ? ' qp-ov-no' : '');
@@ -54329,6 +55016,8 @@ function _qpBlockClicks(e) {
     if (!_qpEditing) return;
     const b = e.target.closest && e.target.closest('.qp-cell > [data-qp-block]');
     if (!b) return;
+    // A shelf's own Customize controls (a mini's ×, "+ Add a Mini Widget").
+    if (e.target.closest('[data-qp-edit-ok]')) return;
     e.preventDefault();
     e.stopPropagation();
 }

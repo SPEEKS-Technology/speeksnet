@@ -402,6 +402,31 @@ designs since have been shown inline in chat.
   the full panels. Swept DM at 1280 + 1440, every tab, every Live mode, split /
   combined / ⅓ / ½: all 350; CEO's card now sits at ½ beside the feed.
   `scripts/qp-district-check.js` (9 checks, also covers the feed due dates).
+- **New widgets + mini shelves, 10-29** (Ethan: widgets for "aspects of the
+  site we track that we not have had a dedicated widget for", and "in one of
+  the 33% blocks ... a mini one row widget ... 3 of them in there or a 66% size
+  one"; picked from `prototypes/new-widgets.html`; Customer Shoutouts dropped,
+  Box Order has no order history). Data: new edge function **store-snapshot**
+  (DEPLOYED 10-29 on Ethan's yes) — GET + x-user-pin (test PINs read), Day End
+  rows / daily NP + goal / cash (managers+) / sign-ins (DM, CEO, MOCD), scoped
+  by role; employees get only their own team line. `_qpSnapGet` shares one copy.
+  Full widgets (QP_WIDGETS + _QP_WSPEC `card`): reviews, dreviews, pace, lost,
+  dlost, team, pipeline, buying, calendar (the Store Calendar's own read),
+  hotkeys (Hotkeys & Commands, filters in place like docs). Minis: `QP_MINIS`
+  (14; `double` takes two slots; src snap / page / cal / recycle). A SHELF is a
+  ⅓ block keyed by its contents `shelf:a,b,c` (`_qpMakeShelf`,
+  `_qpEnsureWidgets` builds them from the layout, `_qpShelfRekey` renames on
+  change). Add a mini → first shelf with room, else a new shelf placed like a ⅓
+  widget (`qpAddMini` → `qpAddWidget('shelf:id')`); drawer drag onto a shelf's
+  middle = zone 'shelf' (adds there), elsewhere = new shelf; last mini off takes
+  the shelf (no shelf ×: it sat on the first mini's ×). Customize: mini × and
+  "+ Add a Mini Widget" (opens the drawer at Mini Widgets) are
+  `[data-qp-edit-ok]` (exempt from `_qpBlockClicks`). DRAWER CATEGORIES now by
+  purpose for every widget (`_QP_WIDGET_SECTION`): Sales & Goals, Customers &
+  Reviews, Team & Production, Inventory & Listings, Store Operations, Company,
+  Mini Widgets. `_qpCapLines` keeps a letter glued to a following number
+  ("v3.10.2"). Checked manager / DM / employee at 1440: all 350, real figures.
+  `scripts/qp-shelf-check.js` (8). Not done: reordering minis inside a shelf.
 - **Store Breakdown removed, 10-29** (Ethan: "Live dashboard, eBay widget,
   and Matrix kind of handling that"). Tab, panel, piece and headline gone;
   `DC_TABS` is live / watch / ebay / scorecard. `fetchMasterDistrictDashboard`
