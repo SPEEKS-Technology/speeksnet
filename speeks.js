@@ -14335,6 +14335,8 @@ function openLiveFullscreen(real) {
     el.className = 'lv-fs';
     el.innerHTML = '<div class="lv-fs-bar">'
         + '<span class="lv-fs-title">Live Dashboard</span>'
+        // The district's Run daily import / Run weekly summary (_dcImportsPaint).
+        + '<span class="lv-fs-tools" id="lvFsTools"></span>'
         + '<button type="button" class="lv-fs-close" onclick="closeLiveFullscreen()"'
         + ' title="Close (Esc)" aria-label="Close full screen">'
         + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
@@ -14343,6 +14345,7 @@ function openLiveFullscreen(real) {
         + '</button></div>'
         + '<div class="lv-fs-card"><div class="lv-strip"></div><div class="lv-detail"></div></div>';
     document.body.appendChild(el);
+    if (typeof _dcImportsPaint === 'function') _dcImportsPaint();
     // Both elements, as the login overlay does: it is the ROOT that scrolls, so
     // locking only body leaves the page moving behind this and keeps a scrollbar
     // gutter beside a view that is supposed to be the whole window.
@@ -17921,8 +17924,12 @@ const _DCC_PORTAL_LINKS = {
 };
 
 async function fetchMasterDistrictDashboard() {
+    // The Store Breakdown tab this used to draw is gone (Ethan, 2026-10-29), but
+    // the rows it built still feed eBay, Scorecard and the summary line. So it
+    // runs on any page with the district card, and paints a board only if a
+    // #district-master-body is ever put back.
+    if (!document.getElementById('dcWidget')) return;
     const container = document.getElementById('district-master-body');
-    if (!container) return;
 
     const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     // (Store emoji removed with the card headers — the three-letter code identifies
@@ -17938,7 +17945,7 @@ async function fetchMasterDistrictDashboard() {
     // checks. See the DISTRICT COMMAND CENTER block further down.
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
         _dccRows = STORES.map(s => _dccRow(s, hubData, varData, scoreData, alertsData, weeklyResults));
-        container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
+        if (container) container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
         // The eBay and Scorecard tabs and the collapsed summary are the same rows
         // read across the district instead of down one store, so they fill here too.
         renderDistrictTabs();
@@ -17947,7 +17954,7 @@ async function fetchMasterDistrictDashboard() {
         fetchSalesImportStatus();
     };
 
-    const cachedHtml = localStorage.getItem('speeksDistMasterHtml');
+    const cachedHtml = container ? localStorage.getItem('speeksDistMasterHtml') : null;
     if (cachedHtml) container.innerHTML = cachedHtml;
 
     try {
@@ -17976,10 +17983,10 @@ async function fetchMasterDistrictDashboard() {
 
         const weeklyResults = await Promise.all(weeklyPromises);
         renderMasterBoard(hubData, varData, scoreData, alertsData, weeklyResults);
-        localStorage.setItem('speeksDistMasterHtml', container.innerHTML);
+        if (container) localStorage.setItem('speeksDistMasterHtml', container.innerHTML);
 
     } catch (error) { 
-        if (!cachedHtml) {
+        if (container && !cachedHtml) {
             container.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; grid-column: 1 / -1;">Error compiling Master Dashboard.</div>'; 
         }
     }
@@ -49602,7 +49609,6 @@ const QP_FAMILIES = {
         pieces: [
             { key: 'live', label: 'Live Dashboard', ids: ['dc-tab-live', 'dc-sum-live', 'dc-sum-mtd', 'dc-sum-refunds', 'dc-sum-goal', 'dc-sum-reviews', 'dc-panel-live'] },
             { key: 'watch', label: 'Matrix', ids: ['dc-tab-watch', 'dc-panel-watch'] },
-            { key: 'stores', label: 'Store Breakdown', ids: ['dc-tab-stores', 'dc-panel-stores'] },
             { key: 'ebay', label: 'eBay', ids: ['dc-tab-ebay', 'dc-sum-ebay', 'dc-panel-ebay'] },
             { key: 'score', label: 'Scorecard', ids: ['dc-tab-scorecard', 'dc-sum-score', 'dc-sum-audit', 'dc-panel-scorecard'] },
         ],
@@ -50543,7 +50549,8 @@ const _QP_HL_BUILD = {
 //   · letters glued to a number — "$55.4k", "3d", "8:30am"
 //   · am / pm after a time, "vs", "e.g."-style abbreviations
 // Not "so" / "yet": in these lines they are never joining words ("$55.4k So Far").
-// "vs" stays lowercase even opening a line: "▲ 4 vs Last Week", never "Vs".
+// "vs", "am" and "pm" stay lowercase even opening a line: "▲ 4 vs Last Week",
+// "· 10:06 am" (the time's own text node starts at the "am"), never "Vs" / "Am".
 const _QP_CAP_SMALL = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'nor', 'for', 'to', 'of', 'in', 'on', 'at', 'by', 'as', 'vs', 'per', 'via', 'am', 'pm']);
 const _QP_CAP_KEEP = '.qp-hl-note, .qp-dmn-q, .qp-hl-ot, input, textarea, select, option, script, style';
 function _qpCapLines(root) {
@@ -50568,7 +50575,7 @@ function _qpCapLines(root) {
             while (j < s.length && /[A-Za-z'’]/.test(s[j])) j++;
             const word = s.slice(i, j), prev = i ? s[i - 1] : '';
             const keep = quoted || /[0-9.$]/.test(prev) || /[A-Z]/.test(word.slice(1))
-                || /^[A-Z]/.test(word) || word === 'vs'
+                || /^[A-Z]/.test(word) || word === 'vs' || word === 'am' || word === 'pm'
                 || (!first && prev !== '-' && _QP_CAP_SMALL.has(word.toLowerCase()));
             out += keep ? word : word.charAt(0).toUpperCase() + word.slice(1);
             first = false;
@@ -50688,8 +50695,8 @@ function _qpSetHeadline(piece, h) {
 //             its grey boxes. Half a row only: at a third the boxes cut their
 //             figures off (_qpMinW).
 //   Matrix    the coloured status bar and a line a store with its state tag.
-//   Stores    district NP tracking, a bar, then each store's % to goal and the
-//             one line the Store Breakdown rail already writes for it.
+//   (Store Breakdown had a card too, until the tab was removed the same day —
+//   Ethan: Live, eBay and Matrix cover it.)
 //   eBay      the store eBay card's status bar, then a line a store.
 //   Scorecard district audit average, a bar with Pass and Target, then the
 //             stores as bars like the district Action Items cards.
@@ -50708,7 +50715,6 @@ function _qpDistrictHL(piece) {
     try {
         if (piece === 'live') return _qpDLive();
         if (piece === 'watch') return _qpDWatch();
-        if (piece === 'stores') return _qpDStores();
         if (piece === 'ebay') return _qpDEbay();
         if (piece === 'score') return _qpDScore();
     } catch (e) { console.error('District headline:', e); }
@@ -50781,17 +50787,6 @@ function _qpDWatch() {
     if (d.day) asOf = _qpDayLabel(d.day);
     return { rows, asOf, crit: n('critical'), warn: n('warn'), watch: n('watch'), ok: n('ok') };
 }
-// Store Breakdown: the district's NP tracking and the rail's own line per store.
-function _qpDStores() {
-    if (typeof _dccRows === 'undefined' || !_dccRows.length) return null;
-    _dccApplyNp();
-    const npAll = _dccRows.every(r => r.npKind);
-    const track = _dccRows.reduce((a, r) => a + (npAll ? r.npTrack : r.gpTrack), 0);
-    const goal = _dccRows.reduce((a, r) => a + r.goal, 0);
-    const rows = _dccRows.slice().sort((a, b) => (isFinite(a.salesPct) ? a.salesPct : -1) - (isFinite(b.salesPct) ? b.salesPct : -1))
-        .map(r => ({ store: r.store, pct: isFinite(r.salesPct) ? r.salesPct : null, line: _dccLine(r), band: _dccBand(r) }));
-    return { npAll, track, goal, pct: goal > 0 ? track / goal * 100 : null, rows };
-}
 // eBay: the four account checks a store, as the district table judges them.
 const _QP_D_EBAY = [['track', 'Tracking'], ['defect', 'Defect rate'], ['cases', 'Cases closed'], ['late', 'Late shipment']];
 function _qpDEbay() {
@@ -50824,7 +50819,7 @@ const _qpDLink = (label, tab) => '<button type="button" class="qp-hl-link" oncli
 // beside the label when the card shares a tab bar (h.compact) — the ~55px the
 // bar takes is what a combined card has to find, as the store cards' dropped
 // lines do.
-// At a third of a row the label and "Open Store Breakdown →" do not share a
+// At a third of a row the label and "Open Full Scorecard →" do not share a
 // line, so there the link is just "Open Full →" — the tab above says which.
 const _qpDTop = (h, label, link) => h.compact
     ? '<div class="qp-hl-top"><div class="qp-hl-k">' + label + '</div>' + (h.narrow ? link.replace(/>[^<]*→</, '>Open Full →<') : link) + '</div>'
@@ -50896,19 +50891,6 @@ const _QP_DHL_BUILD = {
             }).join('') + '</div>'
             + _qpDFoot(h, link);
     },
-    stores: function (h) {
-        const band = _qpBand(h.pct);
-        const cls = { g: 'good', w: 'warn', b: 'bad' };
-        const link = _qpDLink('Open Store Breakdown', 'stores');
-        return _qpDTop(h, (h.npAll ? 'Net Profit' : 'Gross Profit') + ' Tracking · This Month', link)
-            + '<div class="qp-hl-big">' + _dccMoney(h.track) + '<small>of ' + _dccMoney(h.goal) + (h.npAll ? ' NP goal' : ' GP goal')
-                + (h.pct != null ? ' · <span class="' + band + '">' + Math.round(h.pct) + '%</span>' : '') + '</small></div>'
-            + (h.compact ? '' : _qpHLBar(h.pct, [], band))
-            + '<div class="qp-hl-lines qp-dhl-rows">' + h.rows.map(r => '<div class="qp-cw-ln"><span class="qp-cw-lt"><span class="qp-cw-st">'
-                + _qpDot(r.store) + escapeHtml(r.store) + '</span>' + escapeHtml(r.line) + '</span>'
-                + '<b class="' + (cls[r.band] || '') + '">' + (r.pct == null ? '—' : Number(r.pct).toFixed(1) + '%') + '</b></div>').join('') + '</div>'
-            + _qpDFoot(h, link);
-    },
     ebay: function (h) {
         const seg = (n, cls) => n ? '<i class="' + cls + '" style="flex:' + n + '"></i>' : '';
         const word = { bad: 'In Danger', warn: 'At Risk', good: 'Clear' };
@@ -50950,7 +50932,7 @@ const _QP_DHL_BUILD = {
 };
 
 // THE FULL TABLE, OVER THE PAGE. A headline card never grows (Ethan,
-// 2026-10-21), so Matrix, Store Breakdown, eBay and Scorecard open their real
+// 2026-10-21), so Matrix, eBay and Scorecard open their real
 // panel in the same full-window view Live's "Open Full Dashboard" uses. The
 // panel itself is MOVED in and put back on close, not copied: its rows drill
 // (_dcDrill), its rail picks a store (_dccPick) and its renderers find it by
@@ -50960,7 +50942,7 @@ function openDistrictFull(tab) {
     if (_dcFsEl()) return;
     const panel = document.getElementById('dc-panel-' + tab);
     if (!panel) return;
-    const title = { watch: 'Matrix', stores: 'Store Breakdown', ebay: 'eBay', scorecard: 'Scorecard' }[tab] || 'District';
+    const title = { watch: 'Matrix', ebay: 'eBay', scorecard: 'Scorecard' }[tab] || 'District';
     const el = document.createElement('div');
     el.id = 'dcFullscreen';
     el.className = 'lv-fs dc-fs';
@@ -51741,7 +51723,7 @@ function _qpNeedsPartner(key) { const m = _qpMaxW(key); return !!m && m < 1; }
 // headline cards (2026-10-29). Now only a card holding its LIVE tab keeps half
 // a row (Ethan: "if it's not going to look good at 33% it can be designed for
 // just 50%"): the five store boxes cut their figures off at a third. Matrix,
-// Store Breakdown, eBay and Scorecard read at a third. The original card holds
+// eBay and Scorecard read at a third. The original card holds
 // Live unless a split-out card does in the saved layout — the layout, never the
 // page as drawn: mid-rebuild the page still has the card Live is leaving, and
 // asking it let the original (Live back inside) settle at a third.
@@ -58800,12 +58782,30 @@ function _swLineHtml() {
 // same guard _dccPick uses — the cached HTML restores clickable controls before
 // any data exists.
 function _dccRepaint() {
+    // The two buttons first: they live in the full Live view now and must show
+    // "Importing…" and their result whether or not the rows have loaded.
+    _dcImportsPaint();
     if (!_dccRows.length) return;
     const el = document.getElementById('district-master-body');
     if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
     // The eBay, Scorecard and summary panels read the same _dccRows, so they are
     // stale the moment this is.
     if (typeof renderDistrictTabs === 'function') renderDistrictTabs();
+}
+
+// RUN DAILY IMPORT / RUN WEEKLY SUMMARY, IN THE FULL LIVE VIEW (Ethan,
+// 2026-10-29). They sat on the Store Breakdown tab's header; when that tab went
+// he chose the top bar of Live's full view ("Open Full Dashboard") — the board
+// whose numbers the daily import feeds. Same buttons, same Feature Access keys
+// (dcc-sales-import / dcc-weekly-summary, DM and CEO by default). Repainted by
+// _dccRepaint, which every run and status read already calls.
+function _dcImportsPaint() {
+    const host = document.getElementById('lvFsTools');
+    if (!host) return;
+    const rc = typeof _jumpRoleClass === 'function' ? _jumpRoleClass() : '';
+    const who = sessionStorage.getItem('speeksUserName') || '';
+    const ok = k => typeof _featureEffectiveVisible === 'function' && _featureEffectiveVisible(k, rc, who);
+    host.innerHTML = (ok('dcc-sales-import') ? _siLineHtml() : '') + (ok('dcc-weekly-summary') ? _swLineHtml() : '');
 }
 
 // "8/3" from "2026-08-03"; the year is noise at this size.
@@ -59063,7 +59063,9 @@ function _dccPick(store) {
 // 'watch' sits second, immediately after Live: it is the tab that answers "who
 // needs me today", which is the question a DM opens this card with. Everything
 // after it is for when the answer is "go look at X".
-const DC_TABS = ['live', 'watch', 'stores', 'ebay', 'scorecard'];
+// No 'stores' since 2026-10-29: the Store Breakdown tab was removed (Ethan: Live,
+// eBay and Matrix cover it).
+const DC_TABS = ['live', 'watch', 'ebay', 'scorecard'];
 
 function switchDistrictTab(tab) {
     _tabSwitch(_DC_BOARD, tab);
@@ -59075,7 +59077,11 @@ function collapseDistrict() { _tabCollapse(_DC_BOARD); }
 
 // Row click on a district table: open the store's own board. Both halves of the
 // original design survive, and neither needs a modal.
+// Unused since the Store Breakdown tab went (2026-10-29): the eBay and Scorecard
+// rows no longer drill. Kept so a stale cached row that still calls it is a
+// no-op rather than an error.
 function _dcDrill(store) {
+    return;
     _dccPick(store);
     switchDistrictTab('stores');
     const w = document.getElementById('dcWidget');
@@ -59099,6 +59105,8 @@ function _dcStoreCell(code, sub, subTitle) {
         + '</td>';
 }
 function _dcRowOpen(code) {
+    // A plain row since the Store Breakdown tab it opened was removed.
+    return '<tr>';
     return '<tr class="dc-clickable" tabindex="0" role="button"'
         + ' onclick="_dcDrill(\'' + code + '\')"'
         + ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_dcDrill(\'' + code + '\');}"'
@@ -59136,8 +59144,7 @@ function _dcEbayHtml() {
             + _dcRowOpen(r.store) + _dcStoreCell(r.store)
             + cell(r, 'track', r.track) + cell(r, 'defect', r.defect)
             + cell(r, 'cases', r.cases) + cell(r, 'late', r.late) + '</tr>'
-            + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
-            + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
+            + '<tr class="dc-catrow">'
             + '<td colspan="5" class="dc-cats">' + _dcCatsHtml(r) + '</td></tr></tbody>';
     });
     return html + '</table></div>';
@@ -59247,8 +59254,7 @@ function _dcScoreHtml() {
             + _dcCell(r.score.toFixed(1) + '<span class="lv-of"> / 10</span>',
                       _dcSev(_dccState(r, 'score')))
             + catCells + '</tr>'
-            + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
-            + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
+            + '<tr class="dc-catrow">'
             + '<td colspan="' + (catNames.length + 4) + '" class="dc-cats">'
             + _dcAuditSecHtml(r, chipCols) + '</td></tr></tbody>';
     });

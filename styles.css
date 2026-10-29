@@ -16425,6 +16425,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 /* One rule separates the controls from the district total; a second one between
    two adjacent buttons just reads as clutter. */
 .si-line + .si-line { border-left: none; padding-left: 0; margin-left: 0; }
+/* Their home since the Store Breakdown tab went (2026-10-29): the full Live
+   view's top bar, between the title and the close button (_dcImportsPaint). */
+.lv-fs-tools { margin-left: auto; margin-right: 12px; display: flex; align-items: center; gap: 8px; }
+.lv-fs-tools:empty { display: none; }
+.lv-fs-tools .si-line:first-child { border-left: none; padding-left: 0; margin-left: 0; }
 .si-dot  { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #cbd5e0; }
 .si-dot.si-good { background: #1f9d57; }
 .si-dot.si-warn { background: #d98324; }
@@ -25572,8 +25577,6 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-hl-seg > i.info { background: #2563b8; }
 /* Scorecard: each store's scorecard beside its audit bar. */
 .qp-dhl-tag { flex: none; min-width: 26px; text-align: right; font-weight: 800; }
-/* Store Breakdown's lines: the % to goal on the right edge. */
-.qp-dhl-rows .qp-cw-ln b { margin-left: auto; }
 /* "Open Full …" (openDistrictFull): the real panel, in Live's full-window view. */
 .dc-fs-card > .cc-panel { display: block !important; opacity: 1; pointer-events: auto; }
 

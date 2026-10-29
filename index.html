@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261029c">
+  <link rel="stylesheet" href="styles.css?v=20261029d">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261029c" defer></script>
+  <script src="speeks.js?v=20261029d" defer></script>
 </head>
 
 <body class="preload">
@@ -1154,7 +1154,6 @@
                    was left deliberately: every id, key and function stays `watch`,
                    every label a person sees says Matrix. -->
               <button id="dc-tab-watch" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('watch')" data-feature="widget-district-watch">Matrix</button>
-              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('stores')" title="Store Breakdown"><span class="cc-tl">Store Breakdown</span><span class="cc-ts">Stores</span></button>
               <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
               <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('scorecard')" title="Scorecard"><span class="cc-tl">Scorecard</span><span class="cc-ts">Score</span></button>
           </div>
@@ -1219,24 +1218,22 @@
               <div id="dc-score-body"><div class="status-message">Syncing the district&hellip;</div></div>
           </div>
 
-          <!-- The store-major board, unchanged. Monthly Team Goals, Listing Goals and
-               the Cleaning Checklist used to sit beside it; they are action-menu items
-               now (#dmGoalsModal, #dmListingModal, #dmCleaningModal).
-               Sits second, right after Live: it is the tab a DM opens most, and the
-               one the eBay and Scorecard rows drill into. -->
-          <div class="cc-panel" id="dc-panel-stores" data-mobile="hide" data-tablet="show">
-              <div id="district-master-body">
-                  <div class="dcc-empty">Syncing the district&hellip;</div>
-              </div>
-          </div>
+          <!-- NO STORE BREAKDOWN TAB (Ethan, 2026-10-29: "we can actually get rid of
+               the store breakdown widget entirely as the live dashboard, ebay
+               widget, and matrix kind of handling that"). The store-major board
+               went with it. Its rows (_dccRows) still load — eBay, Scorecard and the
+               summary read them — through fetchMasterDistrictDashboard, which no
+               longer needs #district-master-body. Its two buttons, Run daily import
+               and Run weekly summary, moved to the full Live view's top bar
+               (_dcImportsPaint). -->
 
           <!-- No KPIs tab. It held the month-by-month monthly-KPI grid
                (fetchDistrictMonthlyKPIs / renderDistrictKPIs, which read
                #district-kpi-body); with the container gone those return at their
                first line again and make no network calls. The Store Breakdown tab
-               carries each store's weekly metrics, which is what a DM reads day to
-               day. Restoring the tab means putting the two elements back — see the
-               Scorecard panel above for the shape. -->
+               carried each store's weekly metrics. Restoring the tab means putting the two elements back — see the
+               Scorecard panel above for the shape. (The Store Breakdown tab that
+               carried them is gone too, 2026-10-29 — see above.) -->
       </div>
   </div>
 

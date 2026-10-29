@@ -19,6 +19,13 @@ _qpHeadlinesOn = function () { return true; };
 var _saved = null;
 _qpSaved = function () { return _saved; };
 
+t('Store Breakdown is gone from the district card (2026-10-29)', function () {
+    if (DC_TABS.indexOf('stores') !== -1) return 'DC_TABS still has stores';
+    if (QP_FAMILIES.district.pieces.some(function (p) { return p.key === 'stores'; })) return 'still a district piece';
+    if (_QP_DHL_BUILD.stores) return 'still a headline';
+    return true;
+});
+
 t('the district card is held to half a row, not a full one', function () {
     if (_qpMaxW('district') !== 0.5) return 'district max ' + _qpMaxW('district');
     if (_qpMaxW('district:watch') !== 0.5) return 'a split-out tab max ' + _qpMaxW('district:watch');
@@ -31,7 +38,7 @@ t('a card holding Live keeps half a row; the other tabs may take a third', funct
     if (_qpMinW('district:live') !== 0.5) return 'Live on its own: ' + _qpMinW('district:live');
     if (_qpMinW('district:live,ebay') !== 0.5) return 'Live combined: ' + _qpMinW('district:live,ebay');
     if (_qpMinW('district:watch') !== 0) return 'Matrix on its own: ' + _qpMinW('district:watch');
-    if (_qpMinW('district:stores,ebay') !== 0) return 'Stores + eBay: ' + _qpMinW('district:stores,ebay');
+    if (_qpMinW('district:watch,ebay') !== 0) return 'Matrix + eBay: ' + _qpMinW('district:watch,ebay');
     return true;
 });
 
@@ -102,7 +109,8 @@ t('widget lines are Title Case, except what has to stay as written', function ()
         + '<div class="qp-cw-lt">Reply — “did we test the battery?” · eBay listing</div>'
         + '<div class="qp-hl-note">“keep the photos sharp”</div>'
         + '<div class="qp-hl-ot">Apple iPad Air 64GB wi-fi</div>'
-        + '<div class="qp-hl-bs">of goal</div>';
+        + '<div class="qp-hl-bs">of goal</div>'
+        + '<div class="qp-hl-k">Net Sales Today <span class="qp-hl-asof">· 10:06 am</span></div>';
     _qpCapLines(box);
     var got = Array.prototype.map.call(box.children, function (e) { return e.textContent; });
     var want = ['87.3%PayMore Audit 98.5% · of 6 in the Green',
@@ -110,7 +118,8 @@ t('widget lines are Title Case, except what has to stay as written', function ()
         'Reply — “did we test the battery?” · eBay Listing',
         '“keep the photos sharp”',
         'Apple iPad Air 64GB wi-fi',
-        'Of Goal'];
+        'Of Goal',
+        'Net Sales Today · 10:06 am'];
     for (var i = 0; i < want.length; i++) if (got[i] !== want[i]) return 'got "' + got[i] + '"';
     return true;
 });

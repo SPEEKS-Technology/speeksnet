@@ -402,6 +402,16 @@ designs since have been shown inline in chat.
   the full panels. Swept DM at 1280 + 1440, every tab, every Live mode, split /
   combined / ⅓ / ½: all 350; CEO's card now sits at ½ beside the feed.
   `scripts/qp-district-check.js` (9 checks, also covers the feed due dates).
+- **Store Breakdown removed, 10-29** (Ethan: "Live dashboard, eBay widget,
+  and Matrix kind of handling that"). Tab, panel, piece and headline gone;
+  `DC_TABS` is live / watch / ebay / scorecard. `fetchMasterDistrictDashboard`
+  still builds `_dccRows` (eBay, Scorecard, summary read them) without
+  `#district-master-body`. eBay / Scorecard rows no longer drill (`_dcDrill`
+  is a no-op). Run daily import / Run weekly summary moved, on Ethan's pick, to
+  the full Live view's top bar (`#lvFsTools`, `_dcImportsPaint`, same Feature
+  Access keys `dcc-sales-import` / `dcc-weekly-summary`). Lost with the tab:
+  the one-store deep dive (reviews, variance total, buy tracking, weekly
+  metrics, store folder links).
 - **Title Case, every word, 10-29** (Ethan on "PayMore audit 98.5%"): `_qpCapLines`
   now Title Cases every text node in a headline / Action Items card / widget
   body, not just the first word of three line kinds; small joining words stay
