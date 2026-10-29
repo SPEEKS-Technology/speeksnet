@@ -435,6 +435,15 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **District versions of the store-only four, 10-29** (Ethan: "make a district
+  version of those so the DM at least has something of everything"). `dpace`
+  (Goal Pace by Store: tracking %, needed a day or Hit), `dbuying` (latest
+  report's bought + margin tag), `dteam` (processed + top producer), `dpipeline`
+  (queue + days to clear at the store's own 7-report pace). DM / CEO / MOCD
+  only (`_qpIsDist`), from the same store-snapshot read, ranked rows via
+  `_qpAiStoreRow` like Lost Deals by Store. 350 at ½ and ⅓. Every new full
+  widget now has a district version or is role-neutral (Calendar, Hotkeys,
+  Quick Messages).
 - **Polish 1–4, 10-29** (Ethan picked 1–4 of 6; 5 = realistic test sample
   scales, 6 = check-suite coverage for the mini rules, both left).
   (1) MOVES SLIDE: FLIP in `_qpCommit` — `_qpFlipSnap` before, `_qpFlipPlay`

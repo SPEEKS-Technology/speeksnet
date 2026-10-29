@@ -53872,17 +53872,40 @@ Object.assign(QP_WIDGETS, {
         icon: '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
         tone: 'g', avail: () => true,
     },
+    // DISTRICT VERSIONS of the store-only four (Ethan, 2026-10-29: "make a
+    // district version of those so the DM at least has something of
+    // everything"). One line a store, ranked, like Lost Deals by Store.
+    dpace: {
+        label: 'Goal Pace', sub: 'Every store tracking to its net profit goal, and what each needs a day',
+        icon: '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
+        tone: 'g', avail: () => _qpIsDist(),
+    },
+    dbuying: {
+        label: 'Buying', sub: 'What every store bought on its latest report, and the margin',
+        icon: '<svg viewBox="0 0 24 24"><path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/></svg>',
+        tone: 'b', avail: () => _qpIsDist(),
+    },
+    dteam: {
+        label: 'Team Production', sub: 'Devices every store processed, and each store\'s top producer',
+        icon: '<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0V4zM6 5H3v2a3 3 0 0 0 3 3M18 5h3v2a3 3 0 0 1-3 3M9 20h6M12 13v7"/></svg>',
+        tone: 'a', avail: () => _qpIsDist(),
+    },
+    dpipeline: {
+        label: 'Inventory Pipeline', sub: 'Every store\'s processing queue, and how many days it takes to clear',
+        icon: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
+        tone: 't', avail: () => _qpIsDist(),
+    },
 });
 const _QP_WIDGET_SECTION = {
-    pace: 'Sales & Goals', buying: 'Sales & Goals', monthly: 'Sales & Goals',
+    pace: 'Sales & Goals', dpace: 'Sales & Goals', buying: 'Sales & Goals', dbuying: 'Sales & Goals', monthly: 'Sales & Goals',
     reviews: 'Customers & Reviews', dreviews: 'Customers & Reviews', lost: 'Customers & Reviews', dlost: 'Customers & Reviews', callbacks: 'Customers & Reviews',
-    team: 'Team & Production', kpis: 'Team & Production', dkpis: 'Team & Production', variance: 'Team & Production', dvariance: 'Team & Production',
-    pipeline: 'Inventory & Listings', connect: 'Inventory & Listings', dconnect: 'Inventory & Listings', b2b: 'Inventory & Listings',
+    team: 'Team & Production', dteam: 'Team & Production', kpis: 'Team & Production', dkpis: 'Team & Production', variance: 'Team & Production', dvariance: 'Team & Production',
+    pipeline: 'Inventory & Listings', dpipeline: 'Inventory & Listings', connect: 'Inventory & Listings', dconnect: 'Inventory & Listings', b2b: 'Inventory & Listings',
     claims: 'Store Operations', dclaims: 'Store Operations', calendar: 'Store Operations', hotkeys: 'Store Operations', qmsgs: 'Customers & Reviews',
     docs: 'Company', stats: 'Company',
 };
 Object.keys(_QP_WIDGET_SECTION).forEach(id => { if (QP_WIDGETS[id]) QP_WIDGETS[id].section = _QP_WIDGET_SECTION[id]; });
-['reviews', 'dreviews', 'pace', 'lost', 'dlost', 'team', 'pipeline', 'buying', 'calendar', 'hotkeys', 'qmsgs'].forEach(id => {
+['reviews', 'dreviews', 'pace', 'lost', 'dlost', 'team', 'pipeline', 'buying', 'calendar', 'hotkeys', 'qmsgs', 'dpace', 'dbuying', 'dteam', 'dpipeline'].forEach(id => {
     QP_WIDGETS[id].added = '2026-10-29';
     _QP_WIDGET_MAXW[id] = 0.5;
 });
@@ -54112,6 +54135,71 @@ Object.assign(_QP_WSPEC, {
                 + '<input type="search" class="qp-doc-q" placeholder="Search a Message" aria-label="Search quick messages" oninput="_qpQmSearch(this)">'
                 + '<div class="qp-hk-list">' + _qpQmRows(d, '') + '</div>'
                 + _qpAiLink('Open Quick Messages', "toggleModal('quickMsgDropdown'); loadQuickMessages();") + '</div>';
+        },
+    },
+});
+// The district four: each store's line from the same snapshot the store cards
+// read, ranked, with a tag that says the one other thing a DM asks about it.
+const _qpTag = (text, cls) => '<span class="qp-dhl-tag ' + (cls || '') + '">' + text + '</span>';
+const _qpDistLast = d => STORE_CODES.map(s => ({ s, y: _qpLast(d, s) })).filter(x => x.y);
+Object.assign(_QP_WSPEC, {
+    dpace: {
+        when: 'This Month', ttl: 600000, tabs: [['main', 'Pace', 'Goal Pace by Store']], where: () => 'District', load: _qpSnapLoad,
+        off: d => (STORE_CODES.some(s => (d.goals || {})[s]) ? '' : 'No net profit goals are set for this month yet.'),
+        card: function (d) {
+            const rows = STORE_CODES.map(s => ({ s, p: _qpPaceOf(d, s) })).filter(x => x.p.goal).sort((a, b) => (b.p.pct || 0) - (a.p.pct || 0));
+            const so = rows.reduce((a, x) => a + x.p.soFar, 0), goal = rows.reduce((a, x) => a + x.p.goal, 0);
+            const pct = goal ? rows.reduce((a, x) => a + x.p.soFar + x.p.avg * x.p.left, 0) / goal * 100 : null;
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(so, false) + '<small>of ' + _qpHLK(goal) + ' goal · net profit so far</small></div>'
+                + (pct == null ? '' : '<span class="qp-trend ' + (pct >= 100 ? 'up' : 'down') + '">Tracking to ' + Math.round(pct) + '%</span>') + '</div>'
+                + '<div class="qp-hl-cap">Tracking to Goal · Needed a Day</div>'
+                + rows.map(x => _qpAiStoreRow(x.s, Math.min(100, x.p.pct || 0), Math.round(x.p.pct || 0) + '%', _qpBand(x.p.pct),
+                    _qpTag(x.p.hit ? 'Hit' : _qpHLK(x.p.need), x.p.hit ? 'good' : ''))).join(''));
+        },
+    },
+    dbuying: {
+        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Buying', 'Buying by Store']], where: () => 'District', load: _qpSnapLoad,
+        off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
+        card: function (d) {
+            const rows = _qpDistLast(d).sort((a, b) => b.y.est_value - a.y.est_value), mx = Math.max(1, ...rows.map(x => Number(x.y.est_value) || 0));
+            const pct = v => { v = Number(v); return v ? (v * (v <= 1 ? 100 : 1)) : null; };
+            const bought = _qpSum(rows.map(x => x.y), 'est_value'), paid = _qpSum(rows.map(x => x.y), 'total_spent');
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(bought, false) + '<small>bought · ' + _lvMoney(paid, false) + ' paid</small></div>'
+                + (bought ? '<span class="qp-trend up">' + ((1 - paid / bought) * 100).toFixed(1) + '% Margin</span>' : '') + '</div>'
+                + '<div class="qp-hl-cap">Bought on Each Store\'s Latest Report · Margin</div>'
+                + rows.map(x => { const m = pct(x.y.est_margin_pct); return _qpAiStoreRow(x.s, (Number(x.y.est_value) || 0) / mx * 100, _qpHLK(x.y.est_value), '',
+                    _qpTag(m == null ? '—' : m.toFixed(0) + '%', m == null ? '' : m >= 40 ? 'good' : m >= 35 ? 'warn' : 'bad')); }).join(''));
+        },
+    },
+    dteam: {
+        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Team', 'Team Production by Store']], where: () => 'District', load: _qpSnapLoad,
+        off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
+        card: function (d) {
+            const rows = STORE_CODES.map(s => ({ s, t: _qpTeamOf(d, s) })).filter(x => x.t).sort((a, b) => b.t.total - a.t.total);
+            const mx = Math.max(1, ...rows.map(x => x.t.total));
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _qpN(rows.reduce((a, x) => a + x.t.total, 0)) + '<small>devices processed · '
+                + _qpHLK(rows.reduce((a, x) => a + x.t.value, 0)) + ' value</small></div></div>'
+                + '<div class="qp-hl-cap">Processed on the Latest Report · Top Producer</div>'
+                + rows.map(x => { const top = x.t.team.find(m => m.top) || x.t.team[0];
+                    return _qpAiStoreRow(x.s, x.t.total / mx * 100, _qpN(x.t.total), x.t.total >= mx * 0.75 ? 'good' : x.t.total >= mx * 0.5 ? 'warn' : 'bad',
+                        _qpTag(top ? escapeHtml(_qpShort(top.name)) : '—', 'qp-dhl-name')); }).join(''));
+        },
+    },
+    dpipeline: {
+        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline by Store']], where: () => 'District', load: _qpSnapLoad,
+        off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
+        card: function (d) {
+            // Days to clear: the queue over the store's own pace (processed a
+            // day, last 7 reports) — what the store Inventory Pipeline card says.
+            const rows = _qpDistLast(d).map(x => {
+                const avg = _qpAvg(_qpFacts(d, x.s).slice(-7).map(r => Number(r.devices_processed) || 0).filter(Boolean));
+                const q = Number(x.y.queue_count) || 0;
+                return { s: x.s, q, avail: Number(x.y.available_count) || 0, days: avg ? Math.ceil(q / avg) : null };
+            }).sort((a, b) => b.q - a.q);
+            const mx = Math.max(1, ...rows.map(x => x.q)), band = n => (n == null ? '' : n <= 3 ? 'good' : n <= 7 ? 'warn' : 'bad');
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _qpN(_qpSum(rows, 'q')) + '<small>waiting to process · ' + _qpN(_qpSum(rows, 'avail')) + ' available</small></div></div>'
+                + '<div class="qp-hl-cap">In Queue · Days to Clear at the Store\'s Pace</div>'
+                + rows.map(x => _qpAiStoreRow(x.s, x.q / mx * 100, _qpN(x.q), band(x.days), _qpTag(x.days == null ? '—' : x.days + 'd', band(x.days)))).join(''));
         },
     },
 });
