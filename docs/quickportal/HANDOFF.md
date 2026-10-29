@@ -548,8 +548,10 @@ designs since have been shown inline in chat.
   A survey of six roles × every page/sub-tab found ONLY these failing, all 401
   for "no such PIN": notify, daily-brief, sales-ingest (status), expenses,
   shopify-recat, listing-titles, ebay-channel. Each now looks a GET's PIN up in
-  test_users when it is not in users (writes still refused). **NOT DEPLOYED**
-  (the deploy was refused by the session's permission check). To deploy:
+  test_users when it is not in users (writes still refused). **DEPLOYED 10-28**
+  on Ethan's yes (ebay-channel from the live copy below); all seven byte-checked
+  after, smoke-tested (test PIN reads 200, bogus PIN 401, test-PIN POST 401), and
+  SPEEKS Connect loads for Test DM / Manager / Employee. How it was deployed:
     npx --yes supabase functions deploy notify --no-verify-jwt --project-ref ejzaqmyxxrkmxvzbjeuo
     (same for daily-brief, sales-ingest, expenses, shopify-recat, listing-titles)
   ⚠️ ebay-channel: the REPO copy carries an undeployed Aug-24 "standby" feature
