@@ -12428,6 +12428,10 @@ body.sam-active .hotbar-btn:hover {
     background: #eef1f5;
     display: flex; flex-direction: column;
     overflow: auto;
+    /* Yesterday and Month are taller than Today, so switching to them brought
+       a scrollbar in and the whole board slid 15px left (Ethan, 2026-10-28:
+       "glitchy" tabs). The track's room is kept whether it is needed or not. */
+    scrollbar-gutter: stable;
 }
 .lv-fs-bar {
     display: flex; align-items: center; justify-content: space-between;
@@ -25854,6 +25858,20 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
     border-color: #1f9d57 !important; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10) !important;
 }
 .notif-tabs.notif-tabs > .tab-btn.tab-btn:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+/* The Live dashboard's Today / Yesterday / Month switch, in the full view and
+   anywhere else it is drawn outside a QuickPortal card (Ethan, 2026-10-28: "in
+   the full look at the live dashboard, make the tabs look like the new tab
+   design"). The small-switch version, look only: its size stays its own. */
+.lv-modes.lv-modes { background: #f3f7f4; border: 1px solid #e4ece7; border-radius: 9px; padding: 2px; gap: 3px; }
+.lv-modes.lv-modes .lv-mode {
+    background: #fff; border: 1px solid #dde6e0; color: #5b6b64; border-radius: 7px; box-shadow: none;
+    padding-top: 3px; padding-bottom: 3px;   /* the new 1px border, so the switch is no taller */
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+.lv-modes.lv-modes .lv-mode:hover:not(.on) { border-color: #c3d6cb; color: var(--slate-charcoal); }
+.lv-modes.lv-modes .lv-mode.on {
+    background: #e8f7ee; color: #146c3c; border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35);
+}
 /* The Listing Goals Today / Yesterday switch — the small-switch version. */
 .timeframe-toggle.timeframe-toggle { background: #f3f7f4 !important; border: 1px solid #e4ece7; gap: 3px; }
 .timeframe-toggle.timeframe-toggle .toggle-btn {
@@ -26217,8 +26235,11 @@ a.qp-doc.qp-doc-tile:hover { border-color: #9fd8b6; background: #f3fbf6; }
 .qp-mb-top { margin-top: 6px; }
 /* Five equal columns across the card: five buttons evened to the widest do not
    fit a third of a row, so the even-tabs helper backed off and the buttons
-   shifted as the bold one moved (2026-10-28). A grid holds them still. */
-.qp-mb-sw { display: grid !important; grid-template-columns: minmax(0, 1.25fr) repeat(4, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
+   shifted as the bold one moved (2026-10-28). A grid holds them still.
+   ALL FIVE THE SAME (Ethan, 2026-10-28): Net Profit's wider 1.25fr column is
+   gone. At 10px (below) "Net Profit" fits a fifth of a ⅓ card at 1280 even
+   bold — measured, 64px a button, nothing cut. */
+.qp-mb-sw { display: grid !important; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
 .qp-mb-sw button { min-width: 0 !important; padding-left: 1px !important; padding-right: 1px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-mbars { display: grid; gap: 5px; margin-top: 8px; }
 .qp-mbar { display: grid; grid-template-columns: 50px minmax(0, 1fr) 58px; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 700; color: #5b6b64; }

@@ -20290,7 +20290,19 @@ async function fetchAndRenderEmployeeKPIs() {
 
     try {
         const response = await fetch(`${WEEKLY_KPI_URL}?store=${store}&v=${Date.now()}`);
-        const d = await response.json();
+        let d = await response.json();
+        // SAMPLE ROW for the localhost test login (Ethan, 2026-10-28: "can I see
+        // what the weekly KPI widget looks like when full?"): a test user is in
+        // no store's KPI roster, so this tab only ever said "No KPIs for you
+        // yet". A made-up week for them — two of the rules missed, so the
+        // headline shows a miss with its goal — beside the store's real total
+        // when there is one. Never on a real login (_speeksTestSession).
+        if (window._speeksTestSession) d = Object.assign({}, d, {
+            employees: (d.employees || []).concat([{ employee_name: userName, buying_value: 11840, gross_margin_pct: 52.4,
+                transaction_count: 46, customer_conversion_pct: 81.5, avg_transaction_time: 14.6, no_deal_count: 5, listed_count: 61 }]),
+            store_total: (d.store_total && d.store_total.buying_value != null) ? d.store_total : { buying_value: 41260, gross_margin_pct: 55.2,
+                transaction_count: 171, customer_conversion_pct: 88.3, avg_transaction_time: 11.9, no_deal_count: 7, listed_count: 214 },
+        });
 
         // New clean JSON format: { employees, store_total, period_label }
         const emps   = d.employees   || [];
@@ -67298,8 +67310,8 @@ function _ddWatch() {
 // inline-flex switches sized to their words, full-width flex strips, wrapping
 // rows — and the one CSS answer (a grid of equal columns) would change how each
 // one sits on its row. A min-width of the widest button's width changes nothing
-// else, and a bar whose buttons are already even (flex: 1 1 0 strips) is left
-// alone.
+// else. (A bar whose buttons were already even used to be left alone; since
+// 2026-10-28 every bar is set, from bold widths — see below.)
 //
 // It backs off when it does not fit: if evening the buttons would push the bar
 // past its own box or its parent's (a ⅓ card with Daily…Quarterly beside the
@@ -67313,7 +67325,7 @@ function _ddWatch() {
 // off — set, then cleared — would run it again forever.
 const _EQ_TAB_GROUPS = [
     '.notif-tabs', '.cc-seg', '.ew-seg', '.qp-hl-switch', '.timeframe-toggle', '.mb-view-toggle',
-    '.lgpw-seg', '.crm-tabs', '.ann-docs-tabs', '.stats-subnav', '.qp-ai-tabs', '.sam-ftabs',
+    '.lgpw-seg', '.crm-tabs', '.ann-docs-tabs', '.stats-subnav', '.qp-ai-tabs', '.sam-ftabs', '.lv-modes',
 ].join(', ');
 function _eqTabsRun() {
     document.querySelectorAll(_EQ_TAB_GROUPS).forEach(function (g) {
@@ -67326,9 +67338,34 @@ function _eqTabsRun() {
         if (btns.length < 2) return;
         // offsetWidth, not the bounding box: a closed modal sits scaled down (its
         // open animation), and a scaled width set as a min-width came out short.
+        // EVERY BUTTON MEASURED AT THE CHOSEN TAB'S WEIGHT (Ethan, 2026-10-28:
+        // "glitchy" switching on the Performance chart and Action Items). The
+        // chosen tab is bolder (800 against 750), so when the widest word was an
+        // UNchosen one, choosing it made it 1-2px wider than the min-width and
+        // pushed its neighbours along. Measured bold, the min-width already holds
+        // any button at its chosen weight, and a click moves nothing.
+        const bold = String(Math.max.apply(null, btns.map(function (b) { return parseInt(getComputedStyle(b).fontWeight, 10) || 400; })));
+        // !important: the tab rules mark their weights !important (ONE TAB LOOK).
+        const weights = btns.map(function (b) {
+            const w = [b.style.getPropertyValue('font-weight'), b.style.getPropertyPriority('font-weight')];
+            b.style.setProperty('font-weight', bold, 'important');
+            return w;
+        });
         const ws = btns.map(function (b) { return b.offsetWidth; });
-        const max = Math.max.apply(null, ws), min = Math.min.apply(null, ws);
-        if (max - min < 1) return;
+        btns.forEach(function (b, i) {
+            if (weights[i][0]) b.style.setProperty('font-weight', weights[i][0], weights[i][1]);
+            else b.style.removeProperty('font-weight');
+        });
+        const max = Math.max.apply(null, ws);
+        // EVERY BAR GETS THE MIN-WIDTH, even one that already looks even. An
+        // "already even, leave it" test used to skip bars, and it missed a bar of
+        // equal grid columns sized to its widest label (Claims & Disputes' tabs):
+        // even as drawn, but "Cases & Disputes" bold is 15px wider, so choosing it
+        // widened all five columns and moved the bar (Ethan, 2026-10-28). Any test
+        // on the widths AS DRAWN depends on which tab is chosen, so a bar was set
+        // in one state and not the other (a 1px jump on the Customer Conversion /
+        // Buying Margin tabs). The bold widths don't depend on it, so every bar is
+        // set from them.
         const par = g.parentElement;
         const room = function () {
             return g.scrollWidth <= g.clientWidth + 1 && (!par || par.scrollWidth <= par.clientWidth + 1);

@@ -506,3 +506,18 @@ designs since have been shown inline in chat.
   `_SAM_TEST_REMS` scoped m / d / e by role) and the store notes are
   `_samTestNotes()`; announcements stay live. Checked manager, DM, employee at
   1280: all 350. Cache-buster 20261028f.
+  **10-28 (night): tab glitches, site-wide.** Ethan saw the Performance chart and
+  Action Items switches "glitch". Causes found by measuring every tab bar after
+  each click (headless sweep in the pane, all five pages, panels, the full Live
+  view): (1) the chosen tab is bolder (800 vs 750), so `_eqTabsRun` evened bars
+  to a width the bold label then outgrew — it now measures every button at the
+  bold weight (`setProperty(..., 'important')`, the tab rules are !important)
+  and sets every bar, not only uneven ones (Claims & Disputes' equal grid
+  columns grew 15px when "Cases & Disputes" went bold); (2) the full Live view
+  gained a scrollbar on Yesterday / Month — `scrollbar-gutter: stable` on
+  `.lv-fs`. Also: the full Live view's Today / Yesterday / Month takes the new
+  switch look (`.lv-modes`, now in `_EQ_TAB_GROUPS`); Monthly Breakdown's five
+  metric buttons are equal (no 1.25fr); the ASM / employee Weekly KPIs tab gets a
+  sample row on the test login. Left: CRM "New Clients 0 → 25" widens its bar
+  once when the count first loads; the District card grows when a tab is clicked
+  (part A). Cache-buster 20261028n.
