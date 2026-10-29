@@ -54464,6 +54464,15 @@ function _qpMoveMini(main, drag, t) {
     while (_qpUndo.length > n) _qpUndo.pop();
     _qpUndoSync();
 }
+// A whole shelf dropped on another (_qpTargetAt's merge): its minis, sizes and
+// all, go onto that shelf where it was dropped, and the shelf it was goes.
+function _qpMergeShelves(main, from, t) {
+    const ids = _qpShelfIds(t.key).slice(), at = Math.max(0, Math.min(t.at == null ? ids.length : t.at, ids.length));
+    ids.splice.apply(ids, [at, 0].concat(_qpShelfIds(from)));
+    _qpUndoPush(_qpCurrentRows(main));   // before the renames (see _qpMoveMini)
+    _qpShelfRekey(main, from, []);
+    _qpCommit(main, _qpShelfRekey(main, t.key, ids), true);
+}
 // The icons a mini is carried by: draggable in Customize only, so outside it
 // a press on one is an ordinary click.
 function _qpMiniGrips(main) {
@@ -55188,6 +55197,16 @@ function _qpTargetAt(main, el, x, y) {
         }
         return { zone: 'shelf', el: b, cell: cell, key: key, row: rows.indexOf(row), full: full, at: at, of: of, mine: mine };
     }
+    // A WHOLE SHELF over another shelf's middle combines into it, if their
+    // minis fit in its three rows (Ethan, 2026-10-29: "Can I not drag the one
+    // on the left into the one on the right?" — a shelf is grabbed by its card
+    // far more than by a mini's icon). No room: it swaps, as below.
+    if (zone === 'combine' && _qpDrag.key && !_qpDrag.add && _qpIsShelfKey(_qpDrag.key) && _qpIsShelfKey(key)
+        && _qpShelfUsed(_qpShelfIds(_qpDrag.key)) + _qpShelfUsed(_qpShelfIds(key)) <= 3) {
+        let at = 0, of = 0;
+        b.querySelectorAll('[data-qp-mini]').forEach(function (m) { of++; const q = m.getBoundingClientRect(); if (y > q.top + q.height / 2) at++; });
+        return { zone: 'shelf', merge: true, el: b, cell: cell, key: key, row: rows.indexOf(row), full: false, at: at, of: of };
+    }
     // The middle of a card from ANOTHER group swaps the two (Ethan, 2026-10-23:
     // trading places used to mean removing one and adding it back). Whole cards
     // only — a tab dragged out still places beside — and not one still in the drawer.
@@ -55351,6 +55370,7 @@ function _qpShowHint(main, t) {
         ov.className = 'qp-ov qp-ov-combine' + (t.full ? ' qp-ov-no' : '');
         ov.innerHTML = '<span class="qp-ov-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>'
             + (t.full ? '<span class="qp-ov-big">No Room on This Shelf</span><span class="qp-ov-small">A Shelf Holds Three Rows</span>'
+                : t.merge ? '<span class="qp-ov-big">Drop to Combine</span><span class="qp-ov-small">Puts Its Minis on This Shelf, ' + where + '</span>'
                 : '<span class="qp-ov-big">' + (_qpDrag.mini ? 'Drop to Move' : 'Drop to Add') + '</span><span class="qp-ov-small">Puts It ' + (t.at == null || !t.mine ? 'on This Shelf' + (t.at == null ? '' : ', ' + where) : where) + '</span>');
     } else if (t.zone === 'swap') {
         const other = b.getAttribute('data-qp-label') || t.key;
@@ -55482,6 +55502,7 @@ function _qpWireDrag(main) {
         if (!t || t.full) { _qpRenderControls(main); return; }
         e.preventDefault();
         if (drag.mini) return _qpMoveMini(main, drag, t);
+        if (t.merge) return _qpMergeShelves(main, drag.key, t);
         // A widget carried out of the drawer is built where it lands.
         if (drag.add) return qpAddWidget(drag.add, t);
         _qpDropAt(main, drag, t);

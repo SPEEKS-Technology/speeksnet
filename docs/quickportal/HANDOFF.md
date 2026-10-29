@@ -435,6 +435,11 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Shelf onto shelf combines, 10-29** (Ethan: "Can I not drag the one on the
+  left into the one on the right?" — he grabbed the shelf's card, which used
+  to SWAP). A whole shelf over another shelf's middle now combines into it
+  (`_qpTargetAt` merge → `_qpMergeShelves`, one Undo, sizes kept) when their
+  minis fit in three rows; no room, it still swaps. Real mouse drag confirmed.
 - **Two-row minis, 10-29** (Ethan: "All of them", from
   `prototypes/mini-two-row.html`; "are the bars and charts going to be on a
   daily basis" — yes: every chart is one bar/point a Day End report, or a
