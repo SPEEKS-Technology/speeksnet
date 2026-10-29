@@ -435,6 +435,16 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Test-login samples for the new widgets, 10-29** (Ethan: "add dummy data to
+  the test accounts for all of these new widgets"). `_qpSnapGet` returns
+  `_qpSnapSample()` in the test session (no fetch; test-login has no PIN, so
+  the real read failed): 62 days of Day End rows for all five stores, NP this
+  month + last, goals, cash (managers+), sign-ins (DM/CEO/MOCD), an employee's
+  own team line only. Seeded by store + day so redraws match. Calendar:
+  `_scalSampleEvents()` is added to the real events in the test session.
+  Recycle mini: 3 waiting (7 for district). Hotkeys says "+21 More" like
+  Processes & Policies. Cache-buster 20261029g. Swept Test Manager / DM /
+  Employee with every new widget + mini: all filled, no errors.
 - **Store Breakdown removed, 10-29** (Ethan: "Live dashboard, eBay widget,
   and Matrix kind of handling that"). Tab, panel, piece and headline gone;
   `DC_TABS` is live / watch / ebay / scorecard. `fetchMasterDistrictDashboard`

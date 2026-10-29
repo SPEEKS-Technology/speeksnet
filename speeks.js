@@ -1897,12 +1897,35 @@ function _scalEditCompany(id) {
 }
 
 // ---- network ----
+// The test login's made-up events (Ethan, 2026-10-29: dummy data for the new
+// QuickPortal widgets), dated from today so the next two weeks always have
+// some: company ones on every store, and one store event per store. Added to
+// the real list in the test session only; saving is blocked there anyway.
+function _scalSampleEvents() {
+    const day = n => _scalISO(_scalAddDays(new Date(), n));
+    const ev = (id, title, n, category, extra) => Object.assign({ id: 'sample-' + id, title, event_date: day(n), end_date: null, all_day: true,
+        start_time: null, end_time: null, category, repeat: 'none', repeats_yearly: false, scope: 'company', store: null, stores: STORE_CODES.slice(),
+        notes: 'Sample event on the test login.', source: 'sample' }, extra || {});
+    const out = [
+        ev('meet', 'District Managers Meeting', 2, 'meeting', { all_day: false, start_time: '10:00:00', end_time: '11:30:00' }),
+        ev('pay', 'Payday', 4, 'payday'),
+        ev('bday', "Test Employee's Birthday", 1, 'celebration'),
+        ev('promo', 'Holiday Trade-In Promo Starts', 9, 'promo'),
+        ev('train', 'New Grading Standards Training', 6, 'training', { all_day: false, start_time: '14:00:00', end_time: '15:00:00' }),
+    ];
+    STORE_CODES.forEach(function (s, i) {
+        out.push(ev('ship-' + s, 'eBay Shipment Pickup', i, 'shipment', { scope: 'store', store: s, stores: null, all_day: false, start_time: '15:30:00', end_time: '16:00:00' }));
+        out.push(ev('count-' + s, 'Monthly Inventory Count', 3 + i, 'inventory', { scope: 'store', store: s, stores: null }));
+        out.push(ev('fire-' + s, 'Fire Extinguisher Inspection', 11 + (i % 3), 'maintenance', { scope: 'store', store: s, stores: null }));
+    });
+    return out;
+}
 async function _scalLoad() {
     try {
         const res = await fetch(`${STORE_CALENDAR_URL}?v=${Date.now()}`);
         const j = await res.json();
         if (!j || !j.success || !Array.isArray(j.events)) throw new Error((j && j.error) || 'Could not load the calendar');
-        _scal.events = j.events;
+        _scal.events = window._speeksTestSession ? j.events.concat(_scalSampleEvents()) : j.events;
         if (Array.isArray(j.categories) && j.categories.length) _scalSetTypes(j.categories);
         _scal.loaded = true;
         _scal.error = '';
@@ -53588,6 +53611,10 @@ const STORE_SNAPSHOT_URL = `${_BASE}/store-snapshot`;
 const _qpSnap = { data: null, at: 0, p: null, err: false };
 function _qpSnapGet() {
     if (_qpSnap.data && Date.now() - _qpSnap.at < 600000) return Promise.resolve(_qpSnap.data);
+    // The test login reads a made-up snapshot (_qpSnapSample), like the other
+    // widgets' _QP_TEST_SAMPLES: a test login has no PIN to send, and a test
+    // account's real read was often thin. Nothing is fetched.
+    if (window._speeksTestSession) { _qpSnap.data = _qpSnapSample(); _qpSnap.at = Date.now(); _qpSnap.err = false; return Promise.resolve(_qpSnap.data); }
     if (_qpSnap.p) return _qpSnap.p;
     const pin = sessionStorage.getItem('speeksUserPin') || '';
     _qpSnap.p = fetch(`${STORE_SNAPSHOT_URL}?days=62&v=${Date.now()}`, { headers: { 'x-user-pin': pin } })
@@ -53600,6 +53627,82 @@ function _qpSnapGet() {
         .catch(e => { _qpSnap.err = true; _qpSnap.at = Date.now(); throw e; })
         .finally(() => { _qpSnap.p = null; });
     return _qpSnap.p;
+}
+// THE TEST LOGIN'S SNAPSHOT (Ethan, 2026-10-29: "add dummy data to the test
+// accounts for all of these new widgets so I can see it"). store-snapshot's
+// shape for all five stores: 62 days of Day End rows (no Sundays — the stores
+// are shut), daily NP for this month and last, NP goals, cash for managers and
+// up, sign-ins for DM / CEO / MOCD. Seeded by store and day, so a redraw shows
+// the same numbers. An employee gets only their own team line, as the real
+// read gives. Every name and number is made up.
+function _qpSnapSample() {
+    const today = _qpSampleDay(0);
+    const rnd = (key) => { let h = 2166136261; for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619); return ((h >>> 0) % 10000) / 10000; };
+    const between = (key, lo, hi) => Math.round(lo + rnd(key) * (hi - lo));
+    const SIZE = { OVL: 1.15, LEE: 0.85, WSP: 1, MPL: 1.25, BAL: 0.95 };
+    const NODEAL = { OVL: [3, 8], LEE: [1, 4], WSP: [3, 7], MPL: [5, 11], BAL: [2, 6] };   // so the district's share tags differ
+    const TEAM = {
+        OVL: ['Nathan Zuklin', 'Colin Davis', 'Kaden Fry', 'Maya Ortiz'], LEE: ['Dan Ohanesian', 'Riley Shaw', 'Jordan Pike'],
+        WSP: ['Avery Cole', 'Sam Whitfield', 'Lena Brooks', 'Marco Diaz'], MPL: ['Tess Morgan', 'Owen Hartley', 'Priya Nair', 'Eli Grant', 'Jace Turner'],
+        BAL: ['Noah Fields', 'Hannah Lutz', 'Caleb Reyes'],
+    };
+    const me = sessionStorage.getItem('speeksUserName') || 'Test Employee', emp = _qpIsEmp();
+    const facts = [], np = [];
+    const lmStart = (() => { const d = new Date(today.slice(0, 8) + '01T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() - 1); return d.toISOString().slice(0, 10); })();
+    STORE_CODES.forEach(function (s) {
+        const k = SIZE[s] || 1;
+        let mtd5 = 0, month = '', queue = between(s + 'q', 90, 170);
+        for (let off = -62; off <= -1; off++) {
+            const date = _qpSampleDay(off);
+            if (new Date(date + 'T12:00:00Z').getUTCDay() === 0) continue;
+            const r = x => s + date + x;
+            if (date.slice(0, 7) !== month) { month = date.slice(0, 7); mtd5 = 0; }
+            const fresh = between(r('n'), 6, 14), back = between(r('b'), 8, 18), recyc = between(r('c'), 2, 6), nod = between(r('x'), (NODEAL[s] || [3, 9])[0], (NODEAL[s] || [3, 9])[1]);
+            const est = Math.round(between(r('v'), 3200, 8200) * k), margin = 0.36 + rnd(r('m')) * 0.1;
+            const den = fresh + back + recyc + nod, num = Math.round(den * (0.55 + rnd(r('cv')) * 0.2));
+            const reviews = between(r('r'), 0, 4), five = Math.min(reviews, between(r('f'), 0, 4));
+            mtd5 += five;
+            const proc = Math.round(between(r('p'), 18, 42) * k);
+            queue = Math.max(40, queue + between(r('qd'), -14, 12));
+            const names = TEAM[s] || [];
+            const split = names.map((n, i) => ({ name: n, w: 1 + rnd(r('t' + i)) * 2 }));
+            const wsum = split.reduce((a, x) => a + x.w, 0);
+            let team = split.map(x => ({ name: x.name, processed: Math.max(1, Math.round(proc * x.w / wsum)), value: Math.round(proc * x.w / wsum * between(r('tv' + x.name), 70, 130)) }));
+            const topN = Math.max(...team.map(m => m.processed));
+            team.forEach(m => { m.top = m.processed === topN && !team.some(o => o !== m && o.top); });
+            if (emp) team = [{ name: me, processed: between(r('me'), 4, 11), value: between(r('mev'), 400, 1100), top: false }];
+            const lost = between(r('l'), 1, 6);
+            facts.push({
+                store: s, date, est_value: est, total_spent: Math.round(est * (1 - margin)), est_margin_pct: Number(margin.toFixed(3)),
+                cust_conv_num: num, cust_conv_den: den, failed_deals: lost + between(r('fd'), 0, 3), devices_lost: lost,
+                lost_revenue: Math.round(between(r('lr'), 280, 1900) * k), net_sales: Math.round(between(r('ns'), 3800, 9800) * k),
+                new_customers: fresh, return_customers: back, recycle_customers: recyc, no_deal_customers: nod, total_customers: den,
+                reviews_today: reviews, five_star_today: five, five_star_mtd: mtd5,
+                devices_processed: proc, processed_value: Math.round(proc * between(r('pv'), 85, 120)), listed_devices: Math.round(proc * 0.8),
+                queue_count: queue, available_count: Math.round(between(r('ac'), 140, 260) * k), available_cost: Math.round(between(r('aco'), 18000, 42000) * k),
+                live_count: Math.round(between(r('lc'), 320, 560) * k), team_production: team,
+            });
+            if (date >= lmStart) { const sales = Math.round(between(r('ns2'), 3800, 9800) * k); np.push({ store: s, date, sales, np: Math.round(sales * (0.17 + rnd(r('np')) * 0.1)) }); }
+        }
+    });
+    const goals = {};
+    STORE_CODES.forEach(s => { goals[s] = Math.round(48000 * (SIZE[s] || 1) / 1000) * 1000; });
+    const cash = (_qpIsMgr() || _qpIsDist()) ? [] : null;
+    if (cash) STORE_CODES.forEach(function (s) {
+        for (let off = -14; off <= -1; off++) {
+            const day = _qpSampleDay(off);
+            if (new Date(day + 'T12:00:00Z').getUTCDay() === 0) continue;
+            const drawer = between(s + day + 'dr', 300, 600), safe = between(s + day + 'sf', 2400, 7800);
+            cash.push({ store: s, day, drawer, safe, total: drawer + safe });
+        }
+    });
+    let usage = null;
+    if (_qpIsDist()) {
+        const days = [];
+        for (let off = -14; off <= -1; off++) { const day = _qpSampleDay(off); days.push({ day, people: new Date(day + 'T12:00:00Z').getUTCDay() === 0 ? 2 : between(day + 'u', 11, 17) }); }
+        usage = { days, week: 19, roster: 22, quiet: [{ name: 'Jordan Pike', store: 'LEE' }, { name: 'Caleb Reyes', store: 'BAL' }, { name: 'Eli Grant', store: 'MPL' }] };
+    }
+    return { success: true, today, stores: STORE_CODES.slice(), role: _qpRole(), name: me, facts, np, goals, cash, usage, sample: true };
 }
 const _qpRole = () => (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
 const _qpIsDist = () => ['district manager', 'ceo', 'mocd'].includes(_qpRole());
@@ -53951,7 +54054,8 @@ function _qpHkRows(d, q) {
     if (!hits.length) return '<div class="qp-hl-sub">No hotkey matches “' + escapeHtml(q) + '”.</div>';
     return hits.slice(0, 6).map(x => '<div class="qp-cw-ln"><span class="qp-cw-lt"><span class="qp-cw-st">' + escapeHtml(x.brand) + '</span>'
         + escapeHtml(x.device) + ' · ' + escapeHtml(x.func) + '</span><b class="qp-hk-k" title="' + escapeHtml(x.hotkey) + '">' + escapeHtml(x.hotkey) + '</b></div>').join('')
-        + (hits.length > 6 ? '<div class="qp-hl-sub">' + (hits.length - 6) + ' more — keep typing</div>' : '');
+        // "+21 More", as the Processes & Policies card says it (Ethan, 2026-10-29).
+        + (hits.length > 6 ? '<div class="qp-doc-more">+' + (hits.length - 6) + ' More</div>' : '');
 }
 function _qpHkSearch(input) {
     const st = _qpWState('hotkeys'), list = input.parentElement.querySelector('.qp-hk-list');
@@ -54079,6 +54183,9 @@ function _qpMiniData(src) {
     }
     if (src === 'recycle') {
         const st = _qpMiniSrcState.recycle;
+        // The test login: a few made-up requests waiting (one store's three,
+        // or the district's seven).
+        if (window._speeksTestSession) return { rows: Array.from({ length: _qpIsDist() ? 7 : 3 }, (_, i) => ({ id: 'sample-' + i, reviewed_at: null, deleted_at: null })) };
         if (!st.busy && Date.now() - st.at > 300000) {
             st.busy = true;
             const scope = _qpIsDist() ? '' : _claimStores().join(',');
