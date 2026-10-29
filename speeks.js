@@ -50109,10 +50109,24 @@ function _qpResolve(saved, keys, main) {
             seen[k] = true;
             items.push(k);
         });
-        const kept = items.slice(0, QP_MAX_PER_ROW);
+        // At most three cards a row — counting only the ones that SHOW. A card
+        // past that gets a row of its own, never dropped (Ethan, 2026-10-29:
+        // Buying by Store went full width at the top). It used to be cut off
+        // the row and lost from the layout while its block was still built, so
+        // it sat loose in <main> above every row; and a role's hidden card (the
+        // store Command Center for a DM) counted as one of the three.
+        const kept = [], over = [];
+        let n = 0;
+        items.forEach(function (k) {
+            const vis = !main || _qpKeyShown(main, k);
+            if (vis && n >= QP_MAX_PER_ROW) { over.push(k); return; }
+            kept.push(k);
+            if (vis) n++;
+        });
         if (!kept.length) return;
-        const w = Array.isArray(r.w) && r.w.length === kept.length ? r.w.slice() : null;
+        const w = !over.length && Array.isArray(r.w) && r.w.length === kept.length ? r.w.slice() : null;
         rows.push({ items: kept, w: w });
+        if (over.length) rows.push({ items: over, w: null });
     });
     keys.forEach(function (k) { if (!seen[k]) rows.push({ items: [k], w: null }); });
     if (main) {
@@ -54227,9 +54241,13 @@ Object.assign(_QP_WSPEC, {
                 + (pct == null ? '' : '<span class="qp-trend ' + (pct >= 100 ? 'up' : 'down') + '">Tracking to ' + Math.round(pct) + '%</span>') + '</div>'
                 // "Needed a day" (Ethan asked what it means): the net profit a store
                 // must average on each open day left to reach its goal — what is left of
-                // the goal over the open days left, Sundays off (_qpPaceOf). Said in full.
-                + '<div class="qp-hl-cap">Tracking to Goal · Net Profit Needed Each Open Day to Hit Goal · ' + (rows[0] ? rows[0].p.left : 0) + ' Days Left</div>'
-                + '<div class="qp-drings">' + rows.map(x => _qpRing(x.s, x.p.pct, x.p.hit ? '<b class="good">Goal Hit</b>' : '<b>' + _qpHLK(x.p.need) + '</b> a day')).join('') + '</div>');
+                // the goal over the open days left, Sundays off (_qpPaceOf). Spelled out
+                // in the caption it was "a mouth full" people skim (Ethan, same day), so
+                // the line under each ring says it ("Needs $2.9k/Day") and the full
+                // sentence is the hover.
+                + '<div class="qp-hl-cap">Tracking to Goal · ' + (rows[0] ? rows[0].p.left : 0) + ' Days Left</div>'
+                + '<div class="qp-drings" title="Needs: the net profit a store has to average on each open day left this month to hit its goal (Sundays off).">'
+                + rows.map(x => _qpRing(x.s, x.p.pct, x.p.hit ? '<b class="good">Goal Hit</b>' : 'Needs <b>$' + (x.p.need / 1000).toFixed(1) + 'k</b>/Day')).join('') + '</div>');
         },
     },
     dbuying: {

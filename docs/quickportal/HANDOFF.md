@@ -435,6 +435,15 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **No card ever loose / full width, 10-29** (Ethan: Buying by Store showed full
+  width at the top). His saved row had four cards (feed + actions + command
+  [hidden for a DM] + dbuying): pairing counts only cards that show, but
+  `_qpResolve` cut every row at three counting hidden ones, so dbuying fell out
+  of the layout while its block was still built — loose in <main>, above every
+  row, full width. `_qpResolve` now counts shown cards only and gives any
+  extra a row of its own. Plus HOLES GO TO THE BOTTOM in `_qpPairWidgets`.
+  Goal Pace caption shortened to "Tracking to Goal · N Days Left"; each ring
+  says "Needs $2.9k/Day", the full sentence is the hover.
 - **Looks, not bars, 10-29** (Ethan: the by-store bars "will make it feel super
   repetitive"). District four picked from `prototypes/district-variety.html`
   (A, B, A, A): Goal Pace = rings (`_qpRing`, class `qp-dring` — `qp-ring` is

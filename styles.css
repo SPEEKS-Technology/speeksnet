@@ -26646,3 +26646,6 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .qp-dcols { gap: 5px; }
     .qp-dcols-x { font-size: 9px; }
 }
+/* Goal Pace rings' "Needs $2.9k/Day": one line at ½, two at ⅓ rather than
+   running into the next store's. */
+.qp-dring-n { white-space: normal; line-height: 1.3; }
