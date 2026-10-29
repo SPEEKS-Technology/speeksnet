@@ -439,10 +439,10 @@ designs since have been shown inline in chat.
   Links: `_qlBuild` (run from `samCleanHotbar`, after applyRoleBasedUI) reads the
   VISIBLE links out of the old `.hotbars-stack` (role + store wrappers and every
   data-feature still gate them) and draws `#qlBar`; the old strip gets `.ql-src`
-  (hidden). Icon + kind from name/href (`_qlKind`), store links first. Look A =
-  icon pills, B = app tiles, picked by a TEMPORARY "Preview A | B" switch
-  (localStorage `qlPreview`) — remove the switch and the losing look once Ethan
-  picks. Mockups: `prototypes/quick-links.html`. Expense Report (`exp`): DM /
+  (hidden). Icon + kind from name/href (`_qlKind`), store links first. Ethan picked B
+  (app tiles) with no backdrop, "almost looking like mini widgets": each link a
+  card like `.qp-mn`, 20px apart like the rows; the ↗ sits after the kind so
+  every name keeps one line. Look A and the preview switch are gone. Mockups: `prototypes/quick-links.html`. Expense Report (`exp`): DM /
   MSM (Feature Access tool-expenses / tool-expenses-mgr, like the Tools entry —
   the CEO has no Expense Report by default); own month: total, mileage + miles,
   expenses, latest 3, Filed / Not Filed Yet (only your own filed months come

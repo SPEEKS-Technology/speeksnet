@@ -57076,8 +57076,10 @@ function samCleanHotbar() {
 // data-feature still decide what this person gets — and are only the SOURCE:
 // the visible ones are read off them and drawn as a new bar (#qlBar), the old
 // strip hidden. Each link gets an icon and a kind from its name and address.
-// Two looks, A (icon pills) and B (app tiles), and a Preview A | B switch in
-// the bar until one is picked (localStorage qlPreview). Store links first.
+// Store links first. Picked from two looks on the page: B, app tiles (Ethan:
+// "I like B better but we can probably lose the backdrop and just have the
+// quick links almost looking like mini widgets") — so no bar behind them, and
+// each tile is a mini widget's card: same border, radius, shadow and icon.
 const _QL_ICONS = {
     sheet: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>',
     drive: '<path d="M8 3h8l6 10-4 7H6l-4-7z"/><path d="M8 3l6 10M16 3l-6 10M2 13h20"/>',
@@ -57109,10 +57111,6 @@ function _qlLinks() {
     });
     return out.filter(x => x.store).concat(out.filter(x => !x.store));
 }
-function qlPreview(v) {
-    try { localStorage.setItem('qlPreview', v); } catch (_) {}
-    _qlBuild();
-}
 function _qlBuild() {
     const stack = document.querySelector('.hotbars-stack');
     if (!stack) return;
@@ -57120,23 +57118,12 @@ function _qlBuild() {
     const links = _qlLinks();
     if (!links.length) { if (bar) bar.hidden = true; stack.classList.remove('ql-src'); return; }
     if (!bar) { bar = document.createElement('div'); bar.id = 'qlBar'; stack.parentNode.insertBefore(bar, stack.nextSibling); }
-    let look = 'a';
-    try { look = localStorage.getItem('qlPreview') === 'b' ? 'b' : 'a'; } catch (_) {}
     const ico = l => '<span class="ql-ico ql-' + l.icon + '" aria-hidden="true"><svg viewBox="0 0 24 24">' + _QL_ICONS[l.icon] + '</svg></span>';
     const link = (l, inner) => '<a class="ql-l" href="' + escapeHtml(l.href) + '" target="_blank" rel="noopener" title="' + escapeHtml(l.name + ' · ' + l.kind) + '">' + inner + '</a>';
-    const sw = '<span class="ql-sw" title="Preview: pick one, then this switch goes">Preview<button type="button" class="' + (look === 'a' ? 'on' : '') + '" onclick="qlPreview(\'a\')">A</button>'
-        + '<button type="button" class="' + (look === 'b' ? 'on' : '') + '" onclick="qlPreview(\'b\')">B</button></span>';
-    const nStore = links.filter(l => l.store).length;
-    let html;
-    if (look === 'a') {
-        html = '<span class="ql-lab"><svg viewBox="0 0 24 24" aria-hidden="true">' + _QL_ICONS.link + '</svg>Quick Links</span>'
-            + links.map((l, i) => (i === nStore && nStore ? '<span class="ql-sep"></span>' : '') + link(l, ico(l) + escapeHtml(l.name) + _QL_EXT)).join('') + sw;
-    } else {
-        html = '<div class="ql-tiles" style="--n:' + Math.min(links.length, 5) + '">'
-            + links.map(l => link(l, ico(l) + '<span class="ql-nm"><b>' + escapeHtml((l.store ? l.store + ' ' : '') + l.name) + '</b><span>' + l.kind + '</span></span>' + _QL_EXT)).join('')
-            + '</div>' + sw;
-    }
-    bar.className = 'ql ql-' + look;
+    const html = '<div class="ql-tiles" style="--n:' + Math.min(links.length, 5) + '">'
+        + links.map(l => link(l, ico(l) + '<span class="ql-nm"><b>' + escapeHtml((l.store ? l.store + ' ' : '') + l.name) + '</b><span>' + l.kind + _QL_EXT + '</span></span>')).join('')
+        + '</div>';
+    bar.className = 'ql';
     bar.hidden = false;
     if (bar._qlHtml !== html) { bar.innerHTML = html; bar._qlHtml = html; }
     stack.classList.add('ql-src');
