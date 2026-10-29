@@ -54247,7 +54247,7 @@ Object.assign(_QP_WSPEC, {
                 // sentence is the hover.
                 + '<div class="qp-hl-cap">Tracking to Goal · ' + (rows[0] ? rows[0].p.left : 0) + ' Days Left</div>'
                 + '<div class="qp-drings" title="Needs: the net profit a store has to average on each open day left this month to hit its goal (Sundays off).">'
-                + rows.map(x => _qpRing(x.s, x.p.pct, x.p.hit ? '<b class="good">Goal Hit</b>' : 'Needs <b>$' + (x.p.need / 1000).toFixed(1) + 'k</b>/Day')).join('') + '</div>');
+                + rows.map(x => _qpRing(x.s, x.p.pct, x.p.hit ? '<span class="qp-dring-w">Goal</span><b class="good">Hit</b>' : '<span class="qp-dring-w">Needs</span><b>$' + (x.p.need / 1000).toFixed(1) + 'k</b>/Day')).join('') + '</div>');
         },
     },
     dbuying: {

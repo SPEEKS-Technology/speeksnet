@@ -26649,3 +26649,8 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 /* Goal Pace rings' "Needs $2.9k/Day": one line at ½, two at ⅓ rather than
    running into the next store's. */
 .qp-dring-n { white-space: normal; line-height: 1.3; }
+/* Always two lines, every store alike (Ethan, 2026-10-29: one store fit on a
+   line and the rest wrapped — "the formatting of the text all needs to be the
+   same"): the word on top, the figure under it. */
+.qp-dring-n { white-space: nowrap; }
+.qp-dring-w { display: block; }
