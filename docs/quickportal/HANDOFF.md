@@ -435,6 +435,20 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Quick Links A/B on the real page + Expense Report widget, 10-29.** Quick
+  Links: `_qlBuild` (run from `samCleanHotbar`, after applyRoleBasedUI) reads the
+  VISIBLE links out of the old `.hotbars-stack` (role + store wrappers and every
+  data-feature still gate them) and draws `#qlBar`; the old strip gets `.ql-src`
+  (hidden). Icon + kind from name/href (`_qlKind`), store links first. Look A =
+  icon pills, B = app tiles, picked by a TEMPORARY "Preview A | B" switch
+  (localStorage `qlPreview`) — remove the switch and the losing look once Ethan
+  picks. Mockups: `prototypes/quick-links.html`. Expense Report (`exp`): DM /
+  MSM (Feature Access tool-expenses / tool-expenses-mgr, like the Tools entry —
+  the CEO has no Expense Report by default); own month: total, mileage + miles,
+  expenses, latest 3, Filed / Not Filed Yet (only your own filed months come
+  back from the API); CEO (if granted) sees a line a person. Cents via
+  `_expMoney`. Sample on test logins (`_qpExpSample`). Ethan declined Margin
+  Guide and Preferred Purchases widgets.
 - **No card ever loose / full width, 10-29** (Ethan: Buying by Store showed full
   width at the top). His saved row had four cards (feed + actions + command
   [hidden for a DM] + dbuying): pairing counts only cards that show, but

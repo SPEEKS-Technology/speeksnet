@@ -53927,6 +53927,18 @@ Object.assign(QP_WIDGETS, {
         icon: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
         tone: 't', avail: () => _qpIsDist(),
     },
+    // Ethan, 2026-10-29 ("Lets do expense report"). The people the Expense
+    // Report tool is for — the DM and Multi-Store Managers file, the CEO
+    // reviews — through the same Feature Access keys as its Tools entry.
+    exp: {
+        label: 'Expense Report', sub: 'This month\'s mileage and expenses, and whether it is filed',
+        icon: '<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6M9 13h7M9 17h5"/></svg>',
+        tone: 'g', avail: () => {
+            const ok = k => typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible(k);
+            if (['district manager', 'ceo'].includes(_qpRole())) return ok('tool-expenses');
+            return typeof isMultiStoreManager === 'function' && isMultiStoreManager() && ok('tool-expenses-mgr');
+        },
+    },
 });
 const _QP_WIDGET_SECTION = {
     pace: 'Sales & Goals', dpace: 'Sales & Goals', buying: 'Sales & Goals', dbuying: 'Sales & Goals', monthly: 'Sales & Goals',
@@ -53934,10 +53946,10 @@ const _QP_WIDGET_SECTION = {
     team: 'Team & Production', dteam: 'Team & Production', kpis: 'Team & Production', dkpis: 'Team & Production', variance: 'Team & Production', dvariance: 'Team & Production',
     pipeline: 'Inventory & Listings', dpipeline: 'Inventory & Listings', connect: 'Inventory & Listings', dconnect: 'Inventory & Listings', b2b: 'Inventory & Listings',
     claims: 'Store Operations', dclaims: 'Store Operations', calendar: 'Store Operations', hotkeys: 'Store Operations', qmsgs: 'Customers & Reviews',
-    docs: 'Company', stats: 'Company',
+    docs: 'Company', stats: 'Company', exp: 'Company',
 };
 Object.keys(_QP_WIDGET_SECTION).forEach(id => { if (QP_WIDGETS[id]) QP_WIDGETS[id].section = _QP_WIDGET_SECTION[id]; });
-['reviews', 'dreviews', 'pace', 'lost', 'dlost', 'team', 'pipeline', 'buying', 'calendar', 'hotkeys', 'qmsgs', 'dpace', 'dbuying', 'dteam', 'dpipeline'].forEach(id => {
+['reviews', 'dreviews', 'pace', 'lost', 'dlost', 'team', 'pipeline', 'buying', 'calendar', 'hotkeys', 'qmsgs', 'dpace', 'dbuying', 'dteam', 'dpipeline', 'exp'].forEach(id => {
     QP_WIDGETS[id].added = '2026-10-29';
     _QP_WIDGET_MAXW[id] = 0.5;
 });
@@ -54301,6 +54313,59 @@ Object.assign(_QP_WSPEC, {
                 + '<div class="qp-heat">' + rows.map(x => '<div class="qp-heat-t ' + band(x.days) + '"><div class="qp-heat-s">' + escapeHtml(x.s) + '</div><div class="qp-heat-q">' + _qpN(x.q) + '</div>'
                     + '<div class="qp-heat-l">In Queue</div><div class="qp-heat-d">' + (x.days == null ? '—' : x.days + (x.days === 1 ? ' Day' : ' Days')) + '</div></div>').join('') + '</div>'
                 + '<div class="qp-heat-key"><span><i class="good"></i>3 Days or Less</span><span><i class="warn"></i>4–7 Days</span><span><i class="bad"></i>Over a Week</span></div>');
+        },
+    },
+});
+// EXPENSE REPORT (Ethan, 2026-10-29). The tool's own GET (expenses: PIN-gated,
+// test PINs read). The DM and an MSM see their own month — total, mileage and
+// miles, expenses, the latest lines, and whether they marked it filed (only
+// their OWN filed months come back, so that is all it can say). The CEO, who
+// reviews, sees everyone's month instead: a line a person, "Nothing Yet" for
+// anyone with no lines.
+function _qpExpMonth() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+const _qpExpDay = s => { const p = String(s || '').split('-'); return p.length === 3 ? new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''; };
+function _qpExpSample() {
+    const me = sessionStorage.getItem('speeksUserName') || 'Test DM', m = _qpExpMonth(), day = n => m + '-' + String(n).padStart(2, '0');
+    const trip = (p, n, mi, from, to) => ({ person: p, kind: 'mileage', entry_date: day(n), miles: mi, rate: 0.7, amount: Math.round(mi * 70) / 100, from_loc: from, to_loc: to });
+    const exp = (p, n, amt, cat, d) => ({ person: p, kind: 'expense', entry_date: day(n), amount: amt, category: cat, description: d });
+    const ceo = _qpRole() === 'ceo';
+    const people = ceo ? ['Dana Whitlock', 'Marcus Lee', me] : [me];
+    const entries = [trip(people[0], 3, 42.5, 'OVL', 'LEE'), trip(people[0], 9, 61.2, 'WSP', 'MPL'), exp(people[0], 14, 86.4, 'Supplies', 'Shipping boxes'), trip(people[0], 21, 38, 'BAL', 'OVL'), exp(people[0], 24, 42.18, 'Meals', 'Team lunch at LEE')];
+    if (ceo) entries.push(trip('Marcus Lee', 7, 24.4, 'BAL', 'MPL'), exp('Marcus Lee', 16, 129.99, 'Equipment', 'Label printer'));
+    return { me, isReviewer: ceo || _qpRole() === 'district manager', people, month: m + '-01', filedMonths: [], entries, role: _qpRole() };
+}
+Object.assign(_QP_WSPEC, {
+    exp: {
+        when: () => new Date().toLocaleDateString('en-US', { month: 'long' }), ttl: 300000, tabs: [['main', 'Expenses', 'Expense Report']],
+        where: () => (_qpRole() === 'ceo' ? 'Everyone' : 'Mine'),
+        load: async function () {
+            if (window._speeksTestSession) return _qpExpSample();
+            const r = await fetch(`${EXPENSES_URL}?month=${encodeURIComponent(_qpExpMonth())}&v=${Date.now()}`, { headers: { 'x-user-pin': sessionStorage.getItem('speeksUserPin') || '' } });
+            const j = await r.json();
+            if (!j || j.error) throw new Error((j && j.error) || 'expenses');
+            return j;
+        },
+        card: function (d) {
+            // To the cent, as the tool writes it — this is money owed back to people.
+            const money = n => (typeof _expMoney === 'function' ? _expMoney(n) : _lvMoney(n, false)), all = d.entries || [];
+            const sum = (list, k) => list.reduce((a, e) => a + (Number(e[k]) || 0), 0);
+            const open = _qpAiLink('Open Expense Report', 'openExpenses()');
+            if (_qpRole() === 'ceo') {
+                const rows = (d.people || []).map(p => { const l = all.filter(e => e.person === p); return { p, n: l.length, t: sum(l, 'amount') }; }).sort((a, b) => b.t - a.t);
+                return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + money(sum(all, 'amount')) + '<small>claimed this month · ' + rows.length + ' people</small></div></div>'
+                    + '<div class="qp-hl-cap">Each Person This Month</div>'
+                    + rows.map(x => _qpWLine(x.n ? '' : _qpWChip('Nothing Yet', 'grey'), escapeHtml(x.p) + (x.n ? ' · ' + x.n + (x.n === 1 ? ' line' : ' lines') : ''), x.n ? money(x.t) : '')).join('') + open);
+            }
+            const mine = all.filter(e => e.person === d.me), trips = mine.filter(e => e.kind === 'mileage'), other = mine.filter(e => e.kind === 'expense');
+            const filed = (d.filedMonths || []).indexOf(d.month) !== -1;
+            const recent = mine.slice().sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date))).slice(0, 3);
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + money(sum(mine, 'amount')) + '<small>this month · ' + mine.length + (mine.length === 1 ? ' line' : ' lines') + '</small></div>'
+                + '<span class="qp-trend ' + (filed ? 'up' : 'down') + '">' + (filed ? 'Filed' : 'Not Filed Yet') + '</span></div>'
+                + '<div class="qp-box3 qp-box2"><div><b>' + money(sum(trips, 'amount')) + '</b><span>Mileage · ' + (Math.round(sum(trips, 'miles') * 10) / 10) + ' mi</span></div>'
+                + '<div><b>' + money(sum(other, 'amount')) + '</b><span>Expenses · ' + other.length + (other.length === 1 ? ' line' : ' lines') + '</span></div></div>'
+                + (recent.length ? '<div class="qp-hl-cap">Latest</div>' + recent.map(e => _qpWLine(_qpWChip(_qpExpDay(e.entry_date), 'grey'),
+                    e.kind === 'mileage' ? 'Mileage · ' + escapeHtml((e.from_loc || '') + (e.to_loc ? ' → ' + e.to_loc : '')) : escapeHtml((e.category || 'Expense') + (e.description ? ' · ' + e.description : '')), money(e.amount))).join('')
+                    : '<div class="qp-hl-sub">Nothing added this month yet.</div>') + open);
         },
     },
 });
@@ -57002,7 +57067,81 @@ function samCleanHotbar() {
             w.style.setProperty('display', 'contents', 'important');
         }
     });
+    _qlBuild();
 }
+
+// QUICK LINKS, REDRAWN (Ethan, 2026-10-29: "take a crack at redesigning the
+// quick links bar"; then "Can i see A and B on an actual page"). The links in
+// index.html stay exactly as they are — the role / store wrappers and every
+// data-feature still decide what this person gets — and are only the SOURCE:
+// the visible ones are read off them and drawn as a new bar (#qlBar), the old
+// strip hidden. Each link gets an icon and a kind from its name and address.
+// Two looks, A (icon pills) and B (app tiles), and a Preview A | B switch in
+// the bar until one is picked (localStorage qlPreview). Store links first.
+const _QL_ICONS = {
+    sheet: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>',
+    drive: '<path d="M8 3h8l6 10-4 7H6l-4-7z"/><path d="M8 3l6 10M16 3l-6 10M2 13h20"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/>',
+    folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    cart: '<path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/>',
+    bag: '<path d="M6 7h12l1 13H5z"/><path d="M9 7a3 3 0 0 1 6 0"/>',
+    pc: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+};
+const _QL_EXT = '<svg class="ql-ext" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+function _qlKind(name, href) {
+    const n = String(name).toLowerCase(), h = String(href || '');
+    const kind = /spreadsheets/.test(h) ? 'Google Sheet' : /drive\/folders/.test(h) ? 'Drive Folder' : /docs\.google/.test(h) ? 'Google Doc' : 'Link';
+    const icon = /password/.test(n) ? 'key' : /marketplace/.test(n) ? 'cart' : /employee purchase/.test(n) ? 'bag' : /pc inventory/.test(n) ? 'pc'
+        : /google drive/.test(n) ? 'drive' : /folder/.test(n) ? 'folder' : kind === 'Google Sheet' ? 'sheet' : kind === 'Drive Folder' ? 'folder' : 'link';
+    return { kind, icon };
+}
+function _qlLinks() {
+    const out = [];
+    document.querySelectorAll('.hotbars-stack .hotbar-wrapper').forEach(function (w) {
+        if (getComputedStyle(w).display === 'none') return;
+        const sc = (String(w.className).match(/\bstore-([a-z]{3})\b/) || [])[1];
+        w.querySelectorAll('a.hotbar-btn').forEach(function (a) {
+            if (getComputedStyle(a).display === 'none') return;
+            const name = (a.textContent || '').replace(/^[^\w(]+/, '').trim();
+            out.push(Object.assign({ name, href: a.href, store: sc ? sc.toUpperCase() : '' }, _qlKind(name, a.href)));
+        });
+    });
+    return out.filter(x => x.store).concat(out.filter(x => !x.store));
+}
+function qlPreview(v) {
+    try { localStorage.setItem('qlPreview', v); } catch (_) {}
+    _qlBuild();
+}
+function _qlBuild() {
+    const stack = document.querySelector('.hotbars-stack');
+    if (!stack) return;
+    let bar = document.getElementById('qlBar');
+    const links = _qlLinks();
+    if (!links.length) { if (bar) bar.hidden = true; stack.classList.remove('ql-src'); return; }
+    if (!bar) { bar = document.createElement('div'); bar.id = 'qlBar'; stack.parentNode.insertBefore(bar, stack.nextSibling); }
+    let look = 'a';
+    try { look = localStorage.getItem('qlPreview') === 'b' ? 'b' : 'a'; } catch (_) {}
+    const ico = l => '<span class="ql-ico ql-' + l.icon + '" aria-hidden="true"><svg viewBox="0 0 24 24">' + _QL_ICONS[l.icon] + '</svg></span>';
+    const link = (l, inner) => '<a class="ql-l" href="' + escapeHtml(l.href) + '" target="_blank" rel="noopener" title="' + escapeHtml(l.name + ' · ' + l.kind) + '">' + inner + '</a>';
+    const sw = '<span class="ql-sw" title="Preview: pick one, then this switch goes">Preview<button type="button" class="' + (look === 'a' ? 'on' : '') + '" onclick="qlPreview(\'a\')">A</button>'
+        + '<button type="button" class="' + (look === 'b' ? 'on' : '') + '" onclick="qlPreview(\'b\')">B</button></span>';
+    const nStore = links.filter(l => l.store).length;
+    let html;
+    if (look === 'a') {
+        html = '<span class="ql-lab"><svg viewBox="0 0 24 24" aria-hidden="true">' + _QL_ICONS.link + '</svg>Quick Links</span>'
+            + links.map((l, i) => (i === nStore && nStore ? '<span class="ql-sep"></span>' : '') + link(l, ico(l) + escapeHtml(l.name) + _QL_EXT)).join('') + sw;
+    } else {
+        html = '<div class="ql-tiles" style="--n:' + Math.min(links.length, 5) + '">'
+            + links.map(l => link(l, ico(l) + '<span class="ql-nm"><b>' + escapeHtml((l.store ? l.store + ' ' : '') + l.name) + '</b><span>' + l.kind + '</span></span>' + _QL_EXT)).join('')
+            + '</div>' + sw;
+    }
+    bar.className = 'ql ql-' + look;
+    bar.hidden = false;
+    if (bar._qlHtml !== html) { bar.innerHTML = html; bar._qlHtml = html; }
+    stack.classList.add('ql-src');
+}
+try { window.matchMedia(_compactMediaQuery()).addEventListener('change', function () { _qlBuild(); }); } catch (_) {}
 
 // --- REMINDERS & DUE (aggregate the existing alert bubbles, into the feed) ---
 // Each reminder backs a live outstanding task, read out of the alert bubble the

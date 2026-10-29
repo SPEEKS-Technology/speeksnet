@@ -26654,3 +26654,39 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
    same"): the word on top, the figure under it. */
 .qp-dring-n { white-space: nowrap; }
 .qp-dring-w { display: block; }
+/* QUICK LINKS, REDRAWN (_qlBuild; Ethan, 2026-10-29, previewing A and B on the
+   real page). The old strip stays in the page as the source and is hidden. */
+.hotbars-stack.ql-src { display: none !important; }
+.ql { margin: -6px 0 22px; background: #fff; border: 1px solid #e3e8ee; border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+.ql[hidden] { display: none; }
+.ql-ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; }
+.ql-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ql-sheet { background: #e8f7ee; color: #178048; } .ql-drive { background: #e8f0fb; color: #2563b8; } .ql-key { background: #fdf3e2; color: #a46412; }
+.ql-cart { background: #f3effc; color: #6b4fc9; } .ql-bag { background: #fdecef; color: #c2416b; } .ql-pc { background: #e6f6f4; color: #0f766e; }
+.ql-folder { background: #fff4e0; color: #b7791f; } .ql-link { background: #eef1f4; color: #4b5563; }
+.ql-ext { width: 12px; height: 12px; fill: none; stroke: #9aa4b1; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ql-l { text-decoration: none; transition: border-color .12s, box-shadow .12s, transform .12s; }
+/* A · icon pills */
+.ql-l { color: #1a1c1e; }
+.ql.ql-a { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px 8px 16px; }
+.ql-lab { display: flex; align-items: center; gap: 7px; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; margin-right: 6px; }
+.ql-lab svg { width: 14px; height: 14px; fill: none; stroke: #8a94a3; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.ql.ql-a .ql-l { display: flex; align-items: center; gap: 9px; padding: 5px 12px 5px 5px; border: 1px solid #e6ebf1; border-radius: 12px; font-size: 13px; font-weight: 750; background: #fff; }
+.ql.ql-a .ql-l:hover { border-color: #9fd8b6; box-shadow: 0 2px 8px rgba(31,157,87,.12); }
+.ql-sep { width: 1px; height: 26px; background: #e6ebf1; margin: 0 4px; }
+/* B · app tiles */
+.ql.ql-b { display: flex; align-items: center; gap: 10px; padding: 12px; }
+.ql-tiles { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 10px; }
+.ql.ql-b .ql-l { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid #e6ebf1; border-radius: 14px; background: #fff; min-width: 0; }
+.ql.ql-b .ql-l:hover { border-color: #9fd8b6; box-shadow: 0 4px 12px rgba(16,24,40,.08); transform: translateY(-1px); }
+.ql.ql-b .ql-ico { width: 38px; height: 38px; border-radius: 11px; }
+.ql.ql-b .ql-ico svg { width: 19px; height: 19px; }
+.ql-nm { flex: 1; min-width: 0; }
+.ql-nm b { display: block; font-size: 13.5px; font-weight: 800; color: #1a1c1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ql-nm span { font-size: 11px; font-weight: 700; color: #8a94a3; }
+/* The temporary Preview A | B switch. */
+.ql-sw { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #9aa4b1; padding-left: 8px; flex: none; }
+.ql-sw button { font: inherit; font-size: 11px; font-weight: 800; width: 24px; height: 22px; border-radius: 7px; border: 1px solid #e3e8ee; background: #fff; color: #647082; cursor: pointer; padding: 0; }
+.ql-sw button.on { background: #e8f7ee; border-color: #9fd8b6; color: #146c3c; }
+/* Expense Report widget: two stat boxes (Mileage, Expenses). */
+.qp-box3.qp-box2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
