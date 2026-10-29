@@ -402,6 +402,14 @@ designs since have been shown inline in chat.
   the full panels. Swept DM at 1280 + 1440, every tab, every Live mode, split /
   combined / ⅓ / ½: all 350; CEO's card now sits at ½ beside the feed.
   `scripts/qp-district-check.js` (9 checks, also covers the feed due dates).
+- **Title Case, every word, 10-29** (Ethan on "PayMore audit 98.5%"): `_qpCapLines`
+  now Title Cases every text node in a headline / Action Items card / widget
+  body, not just the first word of three line kinds; small joining words stay
+  lowercase. Kept as written: curly quotes, `.qp-hl-note`, `.qp-dmn-q`,
+  `.qp-hl-ot`, inner-capital words, letters glued to numbers. The rail rows'
+  `.sam-m-s` lines go through it by a MutationObserver (`_qpWatchRailCase`).
+  Swept manager / DM / employee / CEO with every widget added and every tab
+  clicked: no lowercase words left, all rows 350. Feed snippets untouched.
 - When it ships, bump the cache-buster (`?v=`) in all five HTML pages
   (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
 - **Save layouts to the database** so they follow a person across devices

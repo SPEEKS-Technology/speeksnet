@@ -20429,7 +20429,8 @@ async function fetchAndRenderEmployeeKPIs() {
             };
         }
 
-        if (periodLabel) periodLabel.innerText = pTxt;
+        // Title Case beside the card title, as the headline already writes it.
+        if (periodLabel) periodLabel.innerText = String(pTxt || '').replace(/^Week ending/i, 'Week Ending');
 
         // --- NEW: ROBUST VARIANCE FETCH ---
         let formattedMyVar = '-';
@@ -50527,25 +50528,54 @@ const _QP_HL_BUILD = {
 // lines under it are put right after each draw. Letters glued to a number are
 // part of the value and are skipped ("$55.4k", "3d", "1st"), so the first
 // capital lands on the first real word.
-const _QP_CAP_SEL = '.qp-hl-big small, .qp-hl-sub, .qp-hl-bs';
+//
+// EVERY WORD, SINCE 2026-10-29 (Ethan, pointing at "PayMore audit 98.5%": "make
+// sure ... the second word, first letter is capitalized ... a sweep of the newly
+// designed widgets"). So every line a card draws is Title Case — "$77 On Them",
+// "42% Done", "▲ 4 vs Last Week" — not only its first word, and not only the
+// three line kinds this used to touch: the whole headline, Action Items card or
+// widget body. The house rule for labels holds (title-case-labels): the small
+// joining words stay lowercase unless they open the line.
+// Left exactly as written:
+//   · anything in curly quotes, and .qp-hl-note / .qp-dmn-q — what a person said
+//   · a product title (.qp-hl-ot) — the listing's own wording
+//   · a word with a capital inside it — eBay, iPhone, PayMore, SPEEKS
+//   · letters glued to a number — "$55.4k", "3d", "8:30am"
+//   · am / pm after a time, "vs", "e.g."-style abbreviations
+// Not "so" / "yet": in these lines they are never joining words ("$55.4k So Far").
+// "vs" stays lowercase even opening a line: "▲ 4 vs Last Week", never "Vs".
+const _QP_CAP_SMALL = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'nor', 'for', 'to', 'of', 'in', 'on', 'at', 'by', 'as', 'vs', 'per', 'via', 'am', 'pm']);
+const _QP_CAP_KEEP = '.qp-hl-note, .qp-dmn-q, .qp-hl-ot, input, textarea, select, option, script, style';
 function _qpCapLines(root) {
     if (!root) return;
-    root.querySelectorAll(_QP_CAP_SEL).forEach(function (el) {
-        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        let n, prev = '';
-        while ((n = w.nextNode())) {
-            const s = n.nodeValue;
-            for (let i = 0; i < s.length; i++) {
-                const c = s[i];
-                if (/[A-Za-z]/.test(c)) {
-                    if (/[0-9.,A-Za-z]/.test(prev)) { prev = c; continue; }   // part of a value, or mid-word
-                    if (c !== c.toUpperCase()) n.nodeValue = s.slice(0, i) + c.toUpperCase() + s.slice(i + 1);
-                    return;
-                }
-                prev = c;
-            }
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = w.nextNode())) {
+        const el = n.parentElement;
+        if (!el || el.closest(_QP_CAP_KEEP)) continue;
+        const s = n.nodeValue;
+        if (!/[a-z]/.test(s)) continue;
+        // The first word of an element is capitalised even when it is a small
+        // word: "Of 6 in the Green" under a big number reads as a line of its own.
+        let first = !n.previousSibling || !String(n.previousSibling.textContent || '').trim();
+        let quoted = false, out = '', i = 0;
+        while (i < s.length) {
+            const c = s[i];
+            if (c === '“') quoted = true;
+            if (c === '”') quoted = false;
+            if (!/[A-Za-z]/.test(c)) { out += c; i++; continue; }
+            let j = i;
+            while (j < s.length && /[A-Za-z'’]/.test(s[j])) j++;
+            const word = s.slice(i, j), prev = i ? s[i - 1] : '';
+            const keep = quoted || /[0-9.$]/.test(prev) || /[A-Z]/.test(word.slice(1))
+                || /^[A-Z]/.test(word) || word === 'vs'
+                || (!first && prev !== '-' && _QP_CAP_SMALL.has(word.toLowerCase()));
+            out += keep ? word : word.charAt(0).toUpperCase() + word.slice(1);
+            first = false;
+            i = j;
         }
-    });
+        if (out !== s) n.nodeValue = out;
+    }
 }
 let _qpHLBusy = false;
 function _qpRenderHeadlines(rows) {
@@ -51411,10 +51441,28 @@ function _qpAiWithSample(fn) {
         _qpAiSwapping = false;
     }
 }
+// The Action Items rows' small lines ("13 left today", "All five stores today")
+// are written by half a dozen loaders (samSetProgress, samRefreshListing, the
+// district rail sync...). One watcher Title Cases each as it changes, by the
+// same rule as the cards (_qpCapLines); it only writes when a letter changes,
+// so its own write does not set it off again.
+let _qpRailCapObs = null;
+function _qpWatchRailCase(main) {
+    if (_qpRailCapObs || typeof MutationObserver === 'undefined') return;
+    const fix = () => main.querySelectorAll('.sam-m-s').forEach(_qpCapLines);
+    // The whole page, because a row split out into a card of its own leaves
+    // the original rail; only a change inside one of the lines does anything.
+    _qpRailCapObs = new MutationObserver(list => {
+        if (list.some(m => { const t = m.target.nodeType === 3 ? m.target.parentElement : m.target; return t && t.closest && t.closest('.sam-m-s'); })) fix();
+    });
+    _qpRailCapObs.observe(main, { subtree: true, childList: true, characterData: true });
+    fix();
+}
 function _qpRenderActions(rows) {
     if (window._speeksTestSession && !_qpAiSwapping) return _qpAiWithSample(() => _qpRenderActions(rows));
     const main = _qpMain();
     if (!main) return;
+    _qpWatchRailCase(main);
     rows = rows || _qpCurrentRows(main);
     // Every role with Customize gets the cards — an assistant manager's or
     // employee's Listing Goals is their own (_qpAiMyListing), not the roster.
@@ -55405,7 +55453,7 @@ function samRefreshListing() {
         const g = window._empGoalToday, role = window._empRoleToday || '';
         const goalTxt = (g != null && g !== '') ? String(g) : '—';
         // Role sits to the LEFT of the goal, same font size (see .sam-mini-emp CSS).
-        val.innerHTML = `<span class="sam-m-role">${role ? escapeHtml(role) : 'No role'}</span><span class="sam-m-goal">${goalTxt}</span>`;
+        val.innerHTML = `<span class="sam-m-role">${role ? escapeHtml(role) : 'No Role'}</span><span class="sam-m-goal">${goalTxt}</span>`;
         sub.textContent = '';
         const mini = val.closest('.sam-mini');
         if (mini) mini.classList.add('sam-mini-emp');   // CSS hides the bar + sub, sizes role = goal

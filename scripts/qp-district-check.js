@@ -92,6 +92,29 @@ t('a card beside a tab bar puts "Open Full" up by its label; a narrow one shorte
     return true;
 });
 
+// EVERY WORD (Ethan, 2026-10-29, on "PayMore audit 98.5%"): widget lines are
+// Title Case, small joining words aside; quotes, product titles, eBay-style
+// words and anything glued to a number stay as written.
+t('widget lines are Title Case, except what has to stay as written', function () {
+    var box = document.createElement('div');
+    box.innerHTML = '<div class="qp-hl-big">87.3%<small>PayMore audit 98.5% · of 6 in the green</small></div>'
+        + '<div class="qp-hl-sub">▲ 4 vs last week · $55.4k so far · due by 8:30am · trade-in push</div>'
+        + '<div class="qp-cw-lt">Reply — “did we test the battery?” · eBay listing</div>'
+        + '<div class="qp-hl-note">“keep the photos sharp”</div>'
+        + '<div class="qp-hl-ot">Apple iPad Air 64GB wi-fi</div>'
+        + '<div class="qp-hl-bs">of goal</div>';
+    _qpCapLines(box);
+    var got = Array.prototype.map.call(box.children, function (e) { return e.textContent; });
+    var want = ['87.3%PayMore Audit 98.5% · of 6 in the Green',
+        '▲ 4 vs Last Week · $55.4k So Far · Due by 8:30am · Trade-In Push',
+        'Reply — “did we test the battery?” · eBay Listing',
+        '“keep the photos sharp”',
+        'Apple iPad Air 64GB wi-fi',
+        'Of Goal'];
+    for (var i = 0; i < want.length; i++) if (got[i] !== want[i]) return 'got "' + got[i] + '"';
+    return true;
+});
+
 t('a deadline card gets its badge and group from its date', function () {
     var today = _kpiCentralToday();
     var day = function (n) { return _b2bAddDays(today, n); };
