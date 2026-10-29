@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261028n">
+  <link rel="stylesheet" href="styles.css?v=20261028o">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261028n" defer></script>
+  <script src="speeks.js?v=20261028o" defer></script>
 </head>
 
 <body class="preload">
@@ -723,7 +723,7 @@
        top because of what it is). All three carry .speeks-action-menu, because
        every deck rule in styles.css is scoped under it; samInit still reads this
        section's visibility to decide whether the deck is on at all. -->
-  <section class="speeks-action-menu sam-hero-wrap dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" id="speeksActionMenu">
+  <section class="speeks-action-menu sam-hero-wrap dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee" id="speeksActionMenu">
 
     <div class="sam-hero" id="samHero" hidden onclick="toggleNotifs()">
       <div class="sam-hero-ico">
@@ -860,7 +860,7 @@
       </div>
   </div>
 
-  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="feed" data-qp-label="Your Feed">
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee" data-qp-block="feed" data-qp-label="Your Feed">
     <div class="sam-board">
       <!-- LEFT: the feed — announcements + store notes + reminders/due dates -->
       <div class="sam-card">
@@ -880,7 +880,7 @@
     </div>
   </section>
 
-  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" data-qp-block="actions" data-qp-label="Action Items">
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee" data-qp-block="actions" data-qp-label="Action Items">
     <div class="sam-board">
       <!-- RIGHT: action items -->
       <div class="sam-rail">
@@ -898,12 +898,12 @@
           <!-- Order matters: the three side panels (Checklist, Cleaning, Goals &
                Initiatives) sit together as 1-2-3, then Listing Goals — which opens
                a modal, not a panel — comes last. -->
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
             <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Goals &amp; Initiatives</span><span class="sam-m-s">Team goals &amp; initiatives</span></span>
             <span class="sam-m-chev"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></span>
           </button>
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-assistant-manager role-training" data-feature="widget-listing-goals" onclick="openListingGoals()">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-assistant-manager" data-feature="widget-listing-goals" onclick="openListingGoals()">
             <span class="sam-mico sage"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Listing Goals</span><span class="sam-m-s" id="samListSub">This week's listing target</span><span class="sam-m-bar"><i id="samListFill" style="width:0%"></i></span></span>
             <span class="sam-m-val" id="samListVal"></span>
@@ -1411,7 +1411,7 @@
     <div class="manage-content" id="audit-breakdown-body"></div>
 </div>
 
-<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
+<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee">
     <div class="gi-panel-header">
         <div class="gi-panel-header-row">
             <div style="display: flex; align-items: center; gap: 10px;">

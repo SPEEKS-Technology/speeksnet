@@ -88,9 +88,21 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
 // So a test session refuses every non-GET call to Supabase, here, at the one
 // door they all go through, rather than at each of the hundreds of call sites.
 // A refused call rejects like a network failure — the code paths that already
-// handle "offline" handle it — and says so in the console. Localhost only: the
-// flag is sessionStorage, so on speeksnet.com it could be set by hand, and a
-// guard that someone can switch on in production is one that can break it.
+// handle "offline" handle it — and says so in the console.
+//
+// ON THE LIVE SITE TOO, for the test ACCOUNTS (Ethan, 2026-10-28: "live site
+// too … for pure testing new designs"). PINs 0000-0008 (migration 0160, the
+// test_users table; auth returns them in their own `test_users` list) sign in
+// through checkPIN like anyone, which marks the session speeksTestAccount and
+// reloads into it. Off localhost a session counts as a test one ONLY with that
+// mark. Both are sessionStorage, so someone could set them by hand — and all it
+// would do is block their own saves and show them sample data: the guard can
+// only ever limit the person who switches it on. The localStorage restore
+// (below) stays localhost-only: on a real host it would be a login that
+// outlives the browser.
+//
+// EVERY non-GET is refused, not only Supabase's: on the live site a test
+// account must not reach the Apps Script relays (Gmail, Sheets) either.
 //
 // Live sales need a real PIN, which a test user has not got; a test session
 // gets SAMPLE live data instead (_lvTestPayload, beside fetchLiveDashboard).
@@ -116,7 +128,10 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
             Object.keys(keys).forEach(function (k) { sessionStorage.setItem(k, keys[k]); });
         }
     } catch (e) {}
-    try { on = local && sessionStorage.getItem('speeksTestSession') === '1'; } catch (e) {}
+    try {
+        on = sessionStorage.getItem('speeksTestSession') === '1'
+            && (local || sessionStorage.getItem('speeksTestAccount') === '1');
+    } catch (e) {}
     window._speeksTestSession = on;
     if (!on) return;
     const READ_POSTS = [
@@ -133,21 +148,17 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
     window.fetch = function (input, init) {
         const url = typeof input === 'string' ? input : (input && input.url) || '';
         const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
-        if (method !== 'GET' && method !== 'HEAD' && url.indexOf(_SUPABASE_URL) === 0
-            && !isReadPost(url, init)) {
+        if (method !== 'GET' && method !== 'HEAD' && !isReadPost(url, init)) {
             console.warn('[test session] blocked ' + method + ' ' + url.split('?')[0]);
             return Promise.reject(new TypeError('Test session: writes are disabled'));
         }
         return realFetch(input, init);
     };
+    // A beacon is always a write (it is a POST that cannot be read back).
     if (navigator.sendBeacon) {
-        const realBeacon = navigator.sendBeacon.bind(navigator);
-        navigator.sendBeacon = function (url, data) {
-            if (String(url).indexOf(_SUPABASE_URL) === 0) {
-                console.warn('[test session] blocked beacon ' + String(url).split('?')[0]);
-                return true;
-            }
-            return realBeacon(url, data);
+        navigator.sendBeacon = function (url) {
+            console.warn('[test session] blocked beacon ' + String(url).split('?')[0]);
+            return true;
         };
     }
 })();
@@ -3169,7 +3180,7 @@ function populateUsersModal() {
     // Store LAST, and deliberately so: the list above it is people in seniority
     // order, and a Store account is a screen on a sales floor — one per store,
     // never a person. Grouping it at the bottom keeps the staff list readable.
-    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'MOCD', 'Store'];
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
     const groups = {};
     const order = [];
     globalUsersData.forEach(u => {
@@ -3349,7 +3360,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     // Must match ROLE_ORDER in populateManageUsers, including the trailing Store:
     // a role that can be assigned but not grouped lands in the unrecognised
     // bucket, and one that can be grouped but not assigned cannot be created.
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'MOCD', 'Store'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     // A row still stored as TOM selects MOCD, so the dropdown never renders with
@@ -4211,7 +4222,16 @@ async function checkPIN() {
 
         if (!payload || !payload.users) throw new Error("Could not load users.");
 
-        const matched = payload.users.find(u => u.pin === String(pin));
+        // Test accounts (migration 0160) come in their own list; a real PIN
+        // always wins. A cached list from before test accounts existed has no
+        // test_users, so a miss on a cache waits for the fresh read once.
+        const find = p => p.users.find(u => u.pin === String(pin))
+            || (p.test_users || []).find(u => u.pin === String(pin));
+        let matched = find(payload);
+        if (!matched && cachedData && !payload.test_users) {
+            const fresh = await authFetchPromise;
+            if (fresh && fresh.users) matched = find(fresh);
+        }
 
         if (matched) {
             sessionStorage.setItem('speeksUnlocked', 'true');
@@ -4245,6 +4265,17 @@ async function checkPIN() {
             sessionStorage.setItem('speeksUserPin', matched.pin);
             // New-hire announcement baseline: blank for pre-existing users (no filtering).
             sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
+
+            // A TEST ACCOUNT (PINs 0000-0008): a test session — no saves, sample
+            // data (TEST SESSION, top of file). The fetch guard is put in place as
+            // the script loads, so the session starts on a fresh load; nothing
+            // below (the usage beacon included) runs for a test account.
+            if (matched.is_test) {
+                sessionStorage.setItem('speeksTestSession', '1');
+                sessionStorage.setItem('speeksTestAccount', '1');
+                location.reload();
+                return;
+            }
 
             // The foundation of the nightly usage report: without this there is no
             // record anywhere that a person opened the site at all. Board sign-ins
@@ -4704,10 +4735,7 @@ async function loadVarianceStoreEmployees() {
     let storeUsers = [];
     try {
         const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        storeUsers = (authData.users || []).filter(u =>
-            userInStore(u, store) &&
-            (u.role || '').toLowerCase() !== 'training'
-        );
+        storeUsers = (authData.users || []).filter(u => userInStore(u, store));
     } catch (_) {}
 
     // Build a map of existing variance % from the last report for this store
@@ -12265,7 +12293,7 @@ function handleSignOut() {
     // A local test login keeps a copy so the browser pane can't drop it (TEST
     // SESSION, top of file). Signing out has to drop the copy too, or the next
     // load would sign the test user straight back in.
-    try { localStorage.removeItem('speeksTestRestore'); sessionStorage.removeItem('speeksTestSession'); } catch (e) {}
+    try { localStorage.removeItem('speeksTestRestore'); sessionStorage.removeItem('speeksTestSession'); sessionStorage.removeItem('speeksTestAccount'); } catch (e) {}
 
     // Every key the login sets has to be cleared here, plus the comment tracker
     // so store comments pop again next login. speeksUserPin and
@@ -17196,7 +17224,7 @@ function _lvFreshness(d) {
         : '<span class="lv-fresh closed">closed</span>';
 }
 
-// SAMPLE LIVE DATA for the localhost test login (TEST SESSION, top of file).
+// SAMPLE LIVE DATA for a test session (local test login or test account) (TEST SESSION, top of file).
 // shopify-live answers only to a real PIN, and the test user deliberately has
 // none, so Live sat on "Syncing…" and nothing built on it could be looked at
 // (Ethan, 2026-10-21: "put fake data in live dashboard for the test site").
@@ -17204,7 +17232,7 @@ function _lvFreshness(d) {
 // blocks, yesterday's close, recent orders, the district roll-up — from today's
 // real date and Central time, so the day fills up as the clock moves and the
 // month view has a month behind it. Every figure is made up. Never reached on a
-// real login: it needs _speeksTestSession, which is localhost-only, AND no PIN.
+// real login: it needs _speeksTestSession (a local test login or a test account).
 function _lvTestPayload() {
     const now = new Date(Math.floor(Date.now() / 60000) * 60000);   // to the minute: stable order ids
     const p = {};
@@ -17323,7 +17351,9 @@ async function fetchLiveDashboard() {
     // Nothing to paint into on this page — every mount lives on the dashboard.
     if (!document.querySelector('.lv-detail, .lv-dist-detail')) return;
     const pin = sessionStorage.getItem('speeksUserPin');
-    if (!pin) {
+    // A test session draws the sample whether or not it has a PIN: the test
+    // ACCOUNTS (0000-0008) have one, but shopify-live only knows real ones.
+    if (!pin || window._speeksTestSession) {
         if (!window._speeksTestSession) return;
         const t = _lvTestPayload();
         _lvTrackChanges(t);
@@ -20291,7 +20321,7 @@ async function fetchAndRenderEmployeeKPIs() {
     try {
         const response = await fetch(`${WEEKLY_KPI_URL}?store=${store}&v=${Date.now()}`);
         let d = await response.json();
-        // SAMPLE ROW for the localhost test login (Ethan, 2026-10-28: "can I see
+        // SAMPLE ROW for a test session (local test login or test account) (Ethan, 2026-10-28: "can I see
         // what the weekly KPI widget looks like when full?"): a test user is in
         // no store's KPI roster, so this tab only ever said "No KPIs for you
         // yet". A made-up week for them — two of the rules missed, so the
@@ -20784,7 +20814,7 @@ function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
 
 // Employees / trainees help PRICE items but never escalate: no submit, no quote,
 // no listing/complete, no accept. Pricing-edit only.
-function _b2bIsEmployee(){ return ['employee', 'training'].includes(_b2bRole()); }
+function _b2bIsEmployee(){ return _b2bRole() === 'employee'; }
 
 // The stores this user acts for. An MSM covers both of theirs.
 function _b2bMyStores() {
@@ -44314,7 +44344,6 @@ const FA_ROLES = [
     { slug: 'manager',           short: 'MGR', label: 'Manager (Incl. Multi-Store)' },
     { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
     { slug: 'employee',          short: 'EMP', label: 'Employee' },
-    { slug: 'training',          short: 'TRN', label: 'Training' },
     { slug: 'mocd',               short: 'MOCD', label: 'MOCD' },
 ];
 
@@ -44328,7 +44357,7 @@ const FEATURE_CATALOG = [
     // board has no inbox; it is on the ordinary nav now and would otherwise be
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
-    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multistore-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multistore-manager', 'assistant-manager', 'employee'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -44383,7 +44412,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: 'System', def: ['district-manager'] },
     // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
-    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (Sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
+    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (Sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'widget-checklist-panel',   label: 'Checklist (Sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
     { key: 'widget-audit-panel',       label: 'Cleaning Checklist (Sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
     // ONE Command Center for every role. Managers, ASMs and employees all get the
@@ -44419,7 +44448,7 @@ const FEATURE_CATALOG = [
     // to "Store KPIs" — which cost a real support round when KPIs were granted on the
     // widget while the Workspace tab stayed off at the role level.
     { key: 'cc-kpis',                  label: 'Command Center · Weekly KPIs tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'widget-district-live',     label: 'District Live Dashboard',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-watch',    label: 'District Matrix',               tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
@@ -44483,7 +44512,7 @@ const FEATURE_CATALOG = [
     // away -- granting it to anyone else draws nothing.
     { key: 'tool-picture-manage',      label: 'Picture Guide — Edit (DM/CEO only)',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
-    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee'] },
     // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
     // toggles for two things — Upload, Categories, and the tab that contains
     // them — and a parent switch that can contradict its children is a way to
@@ -50881,7 +50910,7 @@ function _qpAiBuild(piece, room, key) {
     if (piece === 'goals') return _qpAiGoals(room);
     return null;
 }
-// SAMPLE ACTION ITEMS for the localhost test login (Ethan, 2026-10-28: "yes,
+// SAMPLE ACTION ITEMS for a test session (local test login or test account) (Ethan, 2026-10-28: "yes,
 // fill those" — Action Items and Your Feed, after the widgets got theirs). The
 // cards read globals the page's loaders fill (checklistDataCache, the listing
 // goal rows, the DM's district reads…), and a test store's are often empty. So
@@ -51652,7 +51681,7 @@ function _qpVarianceSample() {
 // read is (the signed-in store, an MSM's two, or all five for DM/CEO/MOCD), so
 // every model, chip and strip runs as it does on a real login. Nothing is
 // written anywhere: _qpWLoad uses one only when _speeksTestSession is set,
-// which is localhost-only. Variance, district Variance and SPEEKS Connect keep
+// which only a test login or test account has. Variance, district Variance and SPEEKS Connect keep
 // their own samples inside their loads (older). Every name and number is made up.
 const _QP_TEST_SAMPLES = {
     claims: async () => _qpClaimsSample(_claimsDueScope()),
@@ -52448,13 +52477,13 @@ const _QP_WSPEC = {
         tabs: [['explain', 'To Explain', 'Lines To Explain'], ['dm', 'DM Notes', 'DM Notes']],
         where: () => _vrMyStores().join(' · '),
         load: async function () {
-            // SAMPLE REPORT for the localhost test login, like SPEEKS Connect's
+            // SAMPLE REPORT for a test session (local test login or test account), like SPEEKS Connect's
             // sample counts (Ethan, 2026-10-23: "put some dummy data in variance
             // replies"): OVL's real periods are all answered, so the card only
             // ever said "nothing to explain". A made-up report, uploaded
             // yesterday with three lines owed, and a reply-requested DM note on
             // an older one. Never reached on a real login (_speeksTestSession is
-            // localhost-only).
+            // only set for a test login or a test account).
             if (window._speeksTestSession) return _qpVarianceSample();
             const stores = _vrMyStores();
             const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
@@ -52552,7 +52581,7 @@ const _QP_WSPEC = {
         tabs: [['review', 'To Review', 'Ready For Your Review'], ['stores', 'Stores', 'Waiting On Stores']],
         where: () => 'District',
         load: async function () {
-            // SAMPLE REPORTS for the localhost test login (Ethan, 2026-10-28:
+            // SAMPLE REPORTS for a test session (local test login or test account) (Ethan, 2026-10-28:
             // "dummy data for dm variance version"), as the store card's: one
             // store ready, one late, one closed with a reply, one still writing,
             // one in the clear. Never reached on a real login.
@@ -52853,13 +52882,13 @@ const _QP_WSPEC = {
         has: t => _jumpFeatureVisible(t === 'titles' ? 'ec-view-titles' : t === 'photos' ? 'ec-view-photos' : 'ec-view-categories'),
         where: d => ((d && d.scope && d.scope.stores) || []).join(' · ') || (sessionStorage.getItem('speeksUserStore') || ''),
         load: async function () {
-            // SAMPLE COUNTS for the localhost test login, like _lvTestPayload:
+            // SAMPLE COUNTS for a test session (local test login or test account), like _lvTestPayload:
             // ?view=counts answers only to a real PIN, which the test user has
             // not got, so the card sat on "Couldn't load" (Ethan, 2026-10-22: "get
             // SPEEKS Connect to load ... or put dummy data in it"). Same shape as
             // the function's reply; every number is made up. Never reached on a
-            // real login: _speeksTestSession is localhost-only, AND no PIN.
-            if (window._speeksTestSession && !sessionStorage.getItem('speeksUserPin')) {
+            // real login: it needs _speeksTestSession (a test login or test account).
+            if (window._speeksTestSession) {   // test accounts have a PIN the function does not know
                 const s = (sessionStorage.getItem('speeksUserStore') || 'OVL').toUpperCase();
                 const one = n => ({ [s]: n });
                 return { scope: { stores: [s] }, photos: one(3), other: one(9), unmatched: one(2), misfiled: one(1), lt: { titles: one(5) }, sample: true };
@@ -52959,7 +52988,7 @@ const _QP_WSPEC = {
         where: () => 'District',
         load: async function () {
             // The test login has no PIN, so — as the store card — made-up counts.
-            if (window._speeksTestSession && !sessionStorage.getItem('speeksUserPin')) {
+            if (window._speeksTestSession) {   // test accounts have a PIN the function does not know
                 const by = (a) => ({ OVL: a[0], LEE: a[1], WSP: a[2], MPL: a[3], BAL: a[4] });
                 return { scope: { stores: _DMX_STORES.slice() }, photos: by([3, 0, 7, 1, 2]), other: by([9, 4, 12, 0, 6]),
                     unmatched: by([2, 1, 0, 3, 0]), misfiled: by([1, 0, 2, 0, 1]), lt: { titles: by([5, 11, 2, 0, 8]) }, sample: true };
@@ -54875,7 +54904,7 @@ function _speeksRoleClass() {
 // by _canAssignGoalRoles below, so granting an ASM the roster editor costs them
 // nothing at a glance.
 function _isPersonalGoalsUser() {
-    return ['role-employee', 'role-assistant-manager', 'role-training'].includes(_speeksRoleClass());
+    return ['role-employee', 'role-assistant-manager'].includes(_speeksRoleClass());
 }
 
 // May this user assign listing-goal roles for the store?
@@ -54888,7 +54917,7 @@ function _isPersonalGoalsUser() {
 // no backend allow-list that has to be kept in step with this.
 function _canAssignGoalRoles() {
     const cls = _speeksRoleClass();
-    if (cls === 'role-employee' || cls === 'role-training') return false;
+    if (cls === 'role-employee') return false;
     if (cls !== 'role-assistant-manager') return true;
     const ov = _featureOverrideFor('listing-goals-assign', cls,
                                    sessionStorage.getItem('speeksUserName') || '');
@@ -55346,7 +55375,7 @@ function _samGetDismissedRem() {
 }
 function _samSetDismissedRem(map) { try { localStorage.setItem(_samDismKey(), JSON.stringify(map || {})); } catch (_) {} }
 
-// SAMPLE FEED for the localhost test login (Ethan, 2026-10-28, with the Action
+// SAMPLE FEED for a test session (local test login or test account) (Ethan, 2026-10-28, with the Action
 // Items sample above _qpRenderActions). A test user's reminder bubbles are
 // mostly off, so the feed only ever said "You're All Caught Up". These are the
 // real reminders' own config (_samReminderCfg: title, badge, Due / To Do /

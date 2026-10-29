@@ -1013,12 +1013,6 @@ t('3.8.3 opening it goes to the listing screen, not the read-only sheet', functi
         return k === 'listing' || 'routed to "' + k + '" instead of the listing screen';
     });
 });
-t('3.8.3 a trainee gets the same', function () {
-    return _asRole('training', 'LEE', function () {
-        var a = _b2bActionFor(EMP_LISTING);
-        return (a && a.kind === 'listing') || 'trainees still cannot list';
-    });
-});
 t('3.8.3 pricing still works for them', function () {
     return _asRole('employee', 'LEE', function () {
         var a = _b2bActionFor({ id: 'p', stage: 'pricing', pricing_store: 'LEE' });

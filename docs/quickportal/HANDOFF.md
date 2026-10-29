@@ -521,3 +521,21 @@ designs since have been shown inline in chat.
   sample row on the test login. Left: CRM "New Clients 0 → 25" widens its bar
   once when the count first loads; the District card grows when a tab is clicked
   (part A). Cache-buster 20261028n.
+  **10-28 (late night): TEST ACCOUNTS WITH PINS, live site too.** Ethan:
+  "create each role with a test account with pins starting from 0000", "live
+  site too", "keep these test accounts filled with dummy data". Migration 0160
+  `test_users` (its own table — NOT rows in users, which 18 edge functions read
+  for goals/rosters/mail): 0000 CEO · 0001 DM · 0002 MOCD · 0003 Manager OVL ·
+  0004 Owner (Manager) LEE · 0005 MSM BAL&MPL · 0006 ASM WSP · 0007 Employee
+  OVL · 0008 Store OVL. `auth` GET returns them as `test_users` (is_test) beside
+  `users`, so no roster/picker sees them; POST refuses a real PIN that clashes.
+  auth deployed 10-28 (CLI). checkPIN matches test_users too (re-reads a stale
+  cache once), sets speeksTestSession + speeksTestAccount and reloads; the TEST
+  SESSION guard now runs off localhost for speeksTestAccount, and refuses EVERY
+  non-GET (any host) and every beacon. Live / SPEEKS Connect samples no longer
+  need "no PIN". Training role removed (nobody held it; TR the listing-goal
+  day role and the calendar's Training category stay; notify's b2b role list
+  still names it, harmless, not redeployed). The live site gets the PIN sign-in
+  only once this branch reaches main — until then 0000-0008 do nothing there.
+  Layouts a test account saves stay in that browser (the qp-layout POST is
+  blocked like every write).

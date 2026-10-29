@@ -36,7 +36,14 @@ Deno.serve(async (req: Request) => {
       .order("name");
 
     if (error) return json({ error: error.message }, 500);
-    return json({ users: data || [] });
+    // TEST ACCOUNTS (migration 0160) ride in a list of their own. Every roster
+    // and picker in the browser reads `users`, so none of them can show a test
+    // account; only the PIN check reads `test_users`. is_test tells it to start
+    // a test session (no saves, sample data). A failed read just leaves the
+    // list empty — test accounts must never stand between a real person and
+    // signing in.
+    const { data: tests } = await supabase.from("test_users").select("name, pin, store, role").order("pin");
+    return json({ users: data || [], test_users: (tests || []).map((t: any) => ({ ...t, is_test: true })) });
   }
 
   if (req.method === "POST") {
@@ -47,6 +54,13 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Invalid JSON" }, 400);
     }
     if (!Array.isArray(users)) return json({ error: "Expected array" }, 400);
+
+    // A test account's PIN is never a real person's: the PIN check would find
+    // the real person first, and the test account would silently stop working.
+    const { data: testPins } = await supabase.from("test_users").select("pin");
+    const taken = new Set((testPins || []).map((t: any) => String(t.pin)));
+    const clash = users.find((u: any) => taken.has(String(u.pin)));
+    if (clash) return json({ error: `PIN ${clash.pin} belongs to a test account — pick another for ${clash.name}.` }, 400);
 
     // ⚠️ THIS IS A FULL REPLACE: every user row is deleted and reinserted from
     // the posted list. Any column the payload does not carry is therefore LOST
