@@ -495,3 +495,14 @@ designs since have been shown inline in chat.
   district card shows every state. Checked at 1280 as manager, DM, CEO, ASM
   and MSM: every widget filled, all 350. Action Items, Your Feed, eBay and
   Scorecard are still live data (empty for some test stores).
+  **10-28 (later): Action Items and Your Feed samples too.** `_qpRenderActions`
+  runs once inside `_qpAiWithSample` on a test login: the globals the cards
+  read (checklistDataCache, auditDataCache, liveGoalsData, _weekTargetTotal,
+  dmAuditData, allDistrictGoalsData, _dmxGoalsLoaded, _storeTargets,
+  getMonthlyGoals, getStoreInitiatives, window._emp*) are swapped for
+  `_qpAiSample()` for that one synchronous draw and put straight back, so the
+  panels and loaders never see it. Feed: `_samGatherReminders` returns
+  `_samTestReminders()` (real `_samReminderCfg` entries + made-up lines,
+  `_SAM_TEST_REMS` scoped m / d / e by role) and the store notes are
+  `_samTestNotes()`; announcements stay live. Checked manager, DM, employee at
+  1280: all 350. Cache-buster 20261028f.

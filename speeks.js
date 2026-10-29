@@ -50869,7 +50869,79 @@ function _qpAiBuild(piece, room, key) {
     if (piece === 'goals') return _qpAiGoals(room);
     return null;
 }
+// SAMPLE ACTION ITEMS for the localhost test login (Ethan, 2026-10-28: "yes,
+// fill those" — Action Items and Your Feed, after the widgets got theirs). The
+// cards read globals the page's loaders fill (checklistDataCache, the listing
+// goal rows, the DM's district reads…), and a test store's are often empty. So
+// for one synchronous draw, _qpRenderActions swaps in made-up values and puts
+// the real ones straight back: the panels the cards open still show the real
+// (empty) lists, and no loader ever sees the sample. Never on a real login.
+let _qpAiSwapping = false, _qpAiSampleCache = null;
+function _qpAiSample() {
+    if (_qpAiSampleCache) return _qpAiSampleCache;
+    const tasks = (list, done) => list.map((text, i) => ({ text, checked: i < done }));
+    const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
+    const dow = (new Date().getDay() + 6) % 7;   // 0 = Monday
+    // This week Monday → today, and the same seven days last week.
+    const people = [['Colin Davis', 40, 0.95], ['Kaden Fry', 35, 0.8], ['Nathan Zuklin', 30, 1.1], ['Dan Ohanesian', 25, 0.6], ['Temp', 10, 1]];
+    const goalRows = [], storeRows = [];
+    for (let i = -7 - dow; i <= 0; i++) {
+        const thisWeek = i >= -dow, isToday = i === 0;
+        people.forEach(function (p, j) {
+            const goal = Math.round(p[1] / 5), res = Math.round(goal * p[2] * (thisWeek ? 1 : 0.9) * (isToday ? 0.4 : 1));
+            goalRows.push({ employee: p[0], date: day(i), goal, result: res });
+        });
+        _DMX_STORES.forEach(function (s, j) {
+            storeRows.push({ store: s, date: day(i), result: Math.round([42, 31, 36, 22, 27][j] * (thisWeek ? 1 : 0.92) * (isToday ? 0.4 : 1)) });
+        });
+    }
+    const wk = {}, names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    names.forEach(function (d, i) { wk[d] = i > dow ? { goal: 14 } : { goal: 14, result: i === dow ? 6 : [15, 12, 14, 9, 16, 13][i] }; });
+    const audit = (n, done) => { const items = tasks(['Wipe down counters', 'Empty trash cans', 'Vacuum the floor', 'Dust display shelves', 'Clean the front glass',
+        'Organize the testing bench', 'Restock bags and tape', 'Clean the bathroom', 'Tidy the back room', 'Wipe the door handles'].slice(0, n), done);
+        return { items, total: items.length, completed: done }; };
+    _qpAiSampleCache = {
+        checklist: {
+            daily: tasks(['Count the drawer', 'Check the Live dashboard', 'Review yesterday\'s buys', 'Answer customer messages', 'Check call backs',
+                'Price B2B units', 'Walk the sales floor', 'Check Picture Guide', 'Confirm listing roles', 'Update the whiteboard', 'Lock the safe', 'Close out Day End'], 5),
+            weekly: tasks(['Enter weekly KPIs', 'Review variance report', 'Plan next week\'s schedule', 'Coach one buyer', 'Check aging inventory', 'Order supplies'], 2),
+            monthly: tasks(['Set team goals', 'Run the secret shop', 'Review records', 'Deep clean the back room'], 1),
+            quarterly: [],
+        },
+        audit: { daily: audit(10, 7), weekly: audit(5, 1) },
+        goals: goalRows, target: 165,
+        emp: { goal: 98, done: Object.values(wk).reduce((a, d) => a + (d.result || 0), 0), days: wk, roleDesc: '' }, empGoal: 14, empRole: 'Lister 1',
+        monthly: { goals: [{ title: '$60k Net Profit' }, { title: '900 Devices Listed' }, { title: '40 Google Reviews' }, { title: 'Under 8 No-Deals A Week' }], setBy: 'Ethan Kushnir' },
+        inits: { initiatives: [{ title: 'Holiday trade-in push', status: 'current' }, { title: 'Bench photo booth', status: 'current' }, { title: 'Black Friday display', status: 'upcoming' }] },
+        dmAudit: Object.fromEntries(_DMX_STORES.map((s, i) => [s, { daily: audit(10, [10, 7, 4, 9, 2][i]), weekly: audit(5, [5, 2, 1, 3, 0][i]) }])),
+        storeRows,
+        targets: Object.fromEntries(_DMX_STORES.map((s, i) => [s, { target: [240, 180, 200, 140, 160][i], manual: i !== 3 }])),
+        // LEE and MPL with no goals set this month, so the district card shows both pills.
+        dmGoals: s => (['LEE', 'MPL'].includes(s) ? null : _qpAiSampleCache.monthly),
+    };
+    return _qpAiSampleCache;
+}
+function _qpAiWithSample(fn) {
+    const s = _qpAiSample();
+    const keep = [checklistDataCache, auditDataCache, liveGoalsData, _weekTargetTotal, dmAuditData, allDistrictGoalsData, _dmxGoalsLoaded,
+        _storeTargets, getMonthlyGoals, getStoreInitiatives, window._empWeek, window._empGoalToday, window._empRoleToday];
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    _qpAiSwapping = true;
+    checklistDataCache = s.checklist; auditDataCache = s.audit; liveGoalsData = s.goals; _weekTargetTotal = s.target;
+    dmAuditData = s.dmAudit; allDistrictGoalsData = s.storeRows; _dmxGoalsLoaded = true; _storeTargets = s.targets;
+    getMonthlyGoals = st => (String(st || '').toUpperCase() === store ? s.monthly : s.dmGoals(String(st || '').toUpperCase()));
+    getStoreInitiatives = () => s.inits;
+    window._empWeek = s.emp; window._empGoalToday = s.empGoal; window._empRoleToday = s.empRole;
+    try { return fn(); }
+    finally {
+        [checklistDataCache, auditDataCache, liveGoalsData, _weekTargetTotal, dmAuditData, allDistrictGoalsData, _dmxGoalsLoaded,
+            _storeTargets, getMonthlyGoals, getStoreInitiatives] = keep;
+        window._empWeek = keep[10]; window._empGoalToday = keep[11]; window._empRoleToday = keep[12];
+        _qpAiSwapping = false;
+    }
+}
 function _qpRenderActions(rows) {
+    if (window._speeksTestSession && !_qpAiSwapping) return _qpAiWithSample(() => _qpRenderActions(rows));
     const main = _qpMain();
     if (!main) return;
     rows = rows || _qpCurrentRows(main);
@@ -54154,7 +54226,7 @@ function _samRenderFeedNow(rows) {
         };
     });
 
-    const notes = (window._samStoreNotes || []).map(n => {
+    const notes = ((window._speeksTestSession ? _samTestNotes() : window._samStoreNotes) || []).map(n => {
         // Prefer the real send time (created_at) — n.date is date-only, so it
         // rendered as 12:00am and sorted same-day notes by an identical value.
         const d = n.created_at ? new Date(n.created_at) : (n.date ? new Date(n.date) : null);
@@ -55262,7 +55334,52 @@ function _samGetDismissedRem() {
 }
 function _samSetDismissedRem(map) { try { localStorage.setItem(_samDismKey(), JSON.stringify(map || {})); } catch (_) {} }
 
+// SAMPLE FEED for the localhost test login (Ethan, 2026-10-28, with the Action
+// Items sample above _qpRenderActions). A test user's reminder bubbles are
+// mostly off, so the feed only ever said "You're All Caught Up". These are the
+// real reminders' own config (_samReminderCfg: title, badge, Due / To Do /
+// News, where a click goes) with a made-up line under each. Each is
+// [key, who gets it — m store managers, d DM / CEO / MOCD, e ASMs and the
+// store team — line]; a key missing from this role's config is skipped too.
+// Never on a real login.
+const _SAM_TEST_REMS = [
+    ['claimsDue', 'm', '3 claims are due by 4pm — a return, an INR and an unpaid order'],
+    ['kpiWeekly', 'm', 'Week ending Sunday — enter them by Monday 8:30am'],
+    ['b2bPricing', 'me', 'ACME-003 · Acme Corp — 22 units, priced 1 day late'],
+    ['listingGoalsDaily', 'm', 'Today’s roles and goals aren’t set yet for 4 people'],
+    ['variance', 'md', '3 lines to explain on the report uploaded yesterday'],
+    ['gpgoals', 'd', 'LEE and MPL have no goals set for this month'],
+    ['claims', 'md', '2 returns waiting on a reply · 1 eBay case escalated'],
+    ['recycle', 'md', '4 recycle requests awaiting your review'],
+    ['cbMatch', 'me', 'Nintendo Switch OLED White — Dana R. asked 20 days ago'],
+    ['photoAlert', 'mde', '3 live listings have no pictures — a shopper sees an empty box'],
+    ['recatQueue', 'me', '9 listings sit in “Other” — a shelf is suggested for each'],
+    ['b2b', 'md', 'KCPS-004 · KC Public Schools is waiting on your pickup sign-off'],
+    ['preferredOwner', 'd', '2 purchase requests to approve'],
+    ['b2bUnlisted', 'md', '$3,540 of B2B units still unlisted across 5 deals'],
+    ['preferredMine', 'me', 'Your request for a label printer was approved'],
+];
+function _samTestReminders() {
+    const cfg = _samReminderCfg(), now = Date.now();
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const who = ['district manager', 'ceo', 'mocd'].includes(role) ? 'd' : ['manager', 'owner (manager)'].includes(role) ? 'm' : 'e';
+    return _SAM_TEST_REMS.map(function (r) {
+        const c = cfg.find(x => x.key === r[0]);
+        if (!c || r[1].indexOf(who) === -1) return null;
+        return { type: 'rem', key: c.key, sig: r[2], title: c.title, snippet: r[2], due: c.due, dueCls: c.kind === 'due' ? 'sam-due-red' : c.cls,
+            urgency: c.urgency, read: false, dateMs: now + (c.urgency || 0), action: _samDestDead(c.action) ? '' : (c.action || ''), noSnooze: !!c.noSnooze,
+            noDue: !!c.noDue, kind: c.kind || '', readAction: c.readAction || '', doneAction: c.doneAction || '', doneLabel: c.doneLabel || '' };
+    }).filter(Boolean);
+}
+function _samTestNotes() {
+    const store = (sessionStorage.getItem('speeksUserStore') || 'OVL').toUpperCase(), h = 3600000;
+    return [
+        { author: 'Ethan Kushnir', store, text: 'Great week on listings — keep the photo quality up on the laptops.', created_at: new Date(Date.now() - 2 * h).toISOString() },
+        { author: 'Colin Davis', store, text: 'Bench scale is acting up again, using the spare from the back room.', created_at: new Date(Date.now() - 26 * h).toISOString() },
+    ];
+}
 function _samGatherReminders() {
+    if (window._speeksTestSession) return _samTestReminders();
     const dismissed = _samGetDismissedRem();
     const out = [];
     // ONE clock reading for the whole pass. dateMs used to be Date.now() read
