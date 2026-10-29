@@ -435,6 +435,19 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **Polish 1–4, 10-29** (Ethan picked 1–4 of 6; 5 = realistic test sample
+  scales, 6 = check-suite coverage for the mini rules, both left).
+  (1) MOVES SLIDE: FLIP in `_qpCommit` — `_qpFlipSnap` before, `_qpFlipPlay`
+  after (Web Animations, 220ms, off for prefers-reduced-motion). Cards matched
+  by element, minis by id; a drop notes places before slots close
+  (`_qpFlipFrom`), and so do qpAddMini / qpRemoveMini / qpMiniRows (they
+  rename the shelf before committing). (2) PREVIEW: shelves are named by
+  their minis (`_qpPreviewName`); a mini carried out shows the shelf it left
+  without it; over a shelf it lists that shelf as it will be (`_qpShelfAfter`,
+  sizes after fitting). (3) Empty shelf rows: faint dashed outline in
+  Customize only. (4) "Move Shelf" grip pill on each shelf's top edge
+  (`.qp-shelf-grip`, Customize only) — the minis are their own handles, so a
+  full shelf had nothing to grab. Real drag by the grip + 8 animations seen.
 - **Phones/tablets, no mini Add slot, Quick Messages, 10-29** (Ethan: "on
   mobile and tablet, customize is disabled and the new widgets aren't
   active"; "the add mini widget doesn't need to exist"; "the only other
