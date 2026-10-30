@@ -57180,19 +57180,17 @@ function _pvApply() {
             if (main) main.insertAdjacentHTML('afterbegin', '<div class="pv-back"><a href="index.html">' + BACK + 'QuickPortal</a><span>/</span><b>' + escapeHtml(act ? act.textContent : document.title) + '</b></div>');
         }
         // The tabs left to share the bar, once role gating has run.
-        // A tab whose full name will not fit its equal share takes its short name
-        // (data-m — "Processes" for Processes & Policies), not a smaller font for all.
+        // Full names unless the bar runs out of room; then the longest name takes
+        // its short one (data-m — "Processes" for Processes & Policies), and the
+        // next longest, until the tabs fit. Never a smaller font for all.
         const count = function () {
             if (!bar) return;
             const tabs = Array.from(bar.querySelectorAll('.nav-link')).filter(function (l) { return l.getAttribute('href') !== 'index.html' && getComputedStyle(l).display !== 'none'; });
-            bar.style.setProperty('--pv-n', tabs.length || 4);
-            tabs.forEach(function (l) {
-                const sp = l.querySelector('span');
-                if (!sp) return;
-                if (!sp.dataset.full) sp.dataset.full = sp.textContent;
-                sp.textContent = sp.dataset.full;
-                if (l.scrollWidth > l.clientWidth + 1 && l.getAttribute('data-m')) sp.textContent = l.getAttribute('data-m');
-            });
+            tabs.forEach(function (l) { const sp = l.querySelector('span'); if (!sp) return; if (!sp.dataset.full) sp.dataset.full = sp.textContent; sp.textContent = sp.dataset.full; });
+            const over = function () { return bar.scrollWidth > bar.clientWidth + 1; };
+            tabs.slice().filter(function (l) { return l.getAttribute('data-m') && l.querySelector('span'); })
+                .sort(function (x, y) { return y.querySelector('span').textContent.length - x.querySelector('span').textContent.length; })
+                .forEach(function (l) { if (over()) l.querySelector('span').textContent = l.getAttribute('data-m'); });
         };
         window.addEventListener('resize', count);
         count(); setTimeout(count, 1500); setTimeout(count, 4000);
