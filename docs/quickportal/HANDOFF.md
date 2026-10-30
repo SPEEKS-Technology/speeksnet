@@ -435,6 +435,23 @@ designs since have been shown inline in chat.
   tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
   the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
   TILES". Cache-buster 20261029f.
+- **QuickPortal off the nav: the back bar, 10-30** (Ethan picked option C of
+  `prototypes/nav-and-banner.html`; "make sure it will work on the B2B page once
+  pushed live"). DESKTOP ONLY (phones/tablets keep the QuickPortal tab, no bar):
+  the tab is hidden by CSS, the rest spaced evenly at their own widths (equal
+  boxes looked misaligned), a name shortens to its data-m only on overflow
+  (`_qpNavFit`), the logo goes home, and every other page gets "← QuickPortal /
+  <page>" as .main-content's first child (`_qpBackBar`). The SPA router swaps
+  only .main-content, so the router calls `_qpBackBar` right after its scroll
+  reset — it MUST stay ahead of the page inits (B2B's `_wsFitPanels` sizes the
+  panel and deal page from where they sit). Verified against main's real
+  b2b.html in a scratch worktree (main + only this code): tab click and direct
+  load both bar 64–119px, panel 119–900 at 900 tall, deal page 119–900, no page
+  scroll; styles.css gives the bar B2B's 24px gutter via
+  `.main-content:has(> .b2b-wrap)`. MERGE NOTE: main replaced NAV COMPACT with
+  NAV FIT (folds names to icons from the right); they coexisted in the scratch
+  test, but reconcile the two when main is merged in. Slim High Priority banner
+  also picked (10-30). The temporary Preview panel is gone.
 - **Quick Links A/B on the real page + Expense Report widget, 10-29.** Quick
   Links: `_qlBuild` (run from `samCleanHotbar`, after applyRoleBasedUI) reads the
   VISIBLE links out of the old `.hotbars-stack` (role + store wrappers and every

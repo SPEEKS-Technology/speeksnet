@@ -34048,9 +34048,10 @@ document.addEventListener('click', async (e) => {
             // reload and the browser handles that.
             window.scrollTo(0, 0);
             document.documentElement.scrollTop = 0;
-            // The nav preview's back bar and Home state belong to the page, and
-            // this hop only swaps .main-content — redo them (temporary, _pvPage).
-            if (typeof _pvPage === 'function') _pvPage();
+            // The back bar belongs to the page, and this hop only swaps
+            // .main-content: redo it here, BEFORE any page init below measures
+            // the layout (B2B's _wsFitPanels sizes its panel from where it sits).
+            if (typeof _qpBackBar === 'function') _qpBackBar();
 
             if (targetUrl.includes('docs.html')) {
                 if (typeof loadDocs === 'function') loadDocs();
@@ -57133,91 +57134,61 @@ function _qlBuild() {
 }
 try { window.matchMedia(_compactMediaQuery()).addEventListener('change', function () { _qlBuild(); }); } catch (_) {}
 
-// NAV PREVIEW — TEMPORARY (Ethan, 2026-10-30: "I need to be able to see these
-// options on the local site"; mockups in prototypes/nav-and-banner.html). The
-// banner was picked (slim, now the real one). Nothing changes until a nav is
-// picked in the Preview panel (bottom left, desktop): localStorage pvNav, this
-// browser only. This branch has no B2B tab yet (it is on main), so every option
-// but Today adds one where the live nav has it, after Operations ("I need to
-// see what the nav bar looks like with B2B in there"). l = the live nav today:
-// six tabs at their own widths, names showing (main's NAV FIT keeps them).
-// a / b / c take QuickPortal off the bar, the rest equal: A = the logo is home
-// plus a Home pill, B = a Home button, C = a back bar on every other page.
-// Delete this block, its CSS and the pv-* classes once a nav is picked.
-function _pvGet(k) { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } }
-function pvSet(k, v) { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (_) {} location.reload(); }
-// What belongs to the PAGE rather than the nav: the back bar (C) and whether
-// Home shows as "you are here" (A, B). Run on load and after every SPA hop —
-// the router swaps only .main-content, so a bar added on load never reached a
-// page you clicked to (Ethan, 2026-10-30: "I don't think it's there").
-function _pvPage() {
-    const nav = _pvGet('pvNav');
-    if (!nav || nav === 'l') return;
+// THE WAY HOME: QUICKPORTAL OFF THE NAV, A BACK BAR ON EVERY OTHER PAGE (Ethan,
+// 2026-10-30: "take a crack at removing quick portal from the top nav bar,
+// realigning all ... the other tabs ... and then make a new way for people to get
+// back to quick portal without it being on the nav bar. But I want it to still be
+// obvious"; picked C of prototypes/nav-and-banner.html — "Lets do the back bar!
+// Just make sure it will work on the B2B page once pushed live").
+//
+// DESKTOP ONLY. Phones and tablets keep QuickPortal in their tab bar (it is their
+// only way home there, and Customize and the widgets are desktop-only anyway), so
+// the CSS hides the tab and shows the bar only outside the compact tier.
+//   - Every other page opens with "← QuickPortal / <page>" under the nav, and the
+//     SPEEKSNET logo goes home too.
+//   - THE BAR BELONGS TO THE PAGE, NOT THE NAV: the SPA router swaps only
+//     .main-content on a tab click, so _qpBackBar runs on load AND after every hop
+//     (a bar added only on load never reached a page you clicked to).
+//   - B2B (b2b.html, on main) runs edge to edge and sizes its panel and deal page
+//     from where they sit (_wsFitPanels reads getBoundingClientRect: --ws-top,
+//     --b2b-top). The bar goes in as .main-content's first child BEFORE the page
+//     init measures, so the panel sizes below it; styles.css gives it the page's
+//     24px gutter there. The router hook must stay ahead of initB2bPage.
+//   - The tabs left are spaced evenly, each its own width ("same size but don't
+//     look aligned" ruled out equal boxes). A name shortens to its data-m only if
+//     the bar runs out of room, longest first.
+const _QP_PAGE_NAMES = { operations: 'Operations', workspace: 'Workspace', stats: 'Stats & Awards', docs: 'Processes & Policies', b2b: 'B2B' };
+function _qpBackBar() {
+    document.querySelectorAll('.qp-back').forEach(function (b) { b.remove(); });
     const page = (location.pathname.match(/\/(operations|workspace|stats|docs|b2b)\.html/i) || [])[1];
-    document.querySelectorAll('.pv-homepill, .pv-homebtn').forEach(function (h) { h.classList.toggle('on', !page); });
-    document.querySelectorAll('.pv-back').forEach(function (b) { b.remove(); });
-    if (nav !== 'c' || !page) return;
-    const NAMES = { operations: 'Operations', workspace: 'Workspace', stats: 'Stats & Awards', docs: 'Processes & Policies', b2b: 'B2B' };
     const main = document.querySelector('.main-content');
-    if (main) main.insertAdjacentHTML('afterbegin', '<div class="pv-back"><a href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>QuickPortal</a><span>/</span><b>'
-        + escapeHtml(NAMES[page.toLowerCase()] || document.title) + '</b></div>');
+    if (!page || !main) return;
+    main.insertAdjacentHTML('afterbegin', '<nav class="qp-back" aria-label="Back to QuickPortal"><a href="index.html">'
+        + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>QuickPortal</a><span aria-hidden="true">/</span><b>'
+        + escapeHtml(_QP_PAGE_NAMES[page.toLowerCase()] || document.title) + '</b></nav>');
 }
-function _pvApply() {
-    const nav = _pvGet('pvNav'), body = document.body;
-    const HOME = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>';
-    if (nav) {
-        const bar = document.querySelector('.top-nav .nav-bar'), ops = bar && bar.querySelector('.nav-link[href="operations.html"]');
-        if (ops) ops.insertAdjacentHTML('afterend', '<a href="#" data-m="B2B" class="nav-link pv-b2b" title="B2B — its own page on the live site, not on this branch yet" onclick="return false"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></i><span>B2B</span></a>');
-        body.classList.add(nav === 'l' ? 'pv-live' : 'pv-nav', 'pv-nav-' + nav);
-    }
-    // Live Today: fold tab names to icons from the right until the last tab clears
-    // the right-hand buttons — what main's NAV FIT does (the current page keeps its name).
-    if (nav === 'l') {
-        const fit = function () {
-            const bar = document.querySelector('.top-nav .nav-bar'), right = document.querySelector('.top-nav .nav-right');
-            if (!bar || !right) return;
-            const tabs = Array.from(bar.querySelectorAll('.nav-link')).filter(function (l) { return getComputedStyle(l).display !== 'none'; });
-            tabs.forEach(function (l) { l.classList.remove('pv-fold'); });
-            for (let i = tabs.length - 1; i >= 0; i--) {
-                const last = tabs[tabs.length - 1].getBoundingClientRect().right;
-                if (last <= right.getBoundingClientRect().left - 12) break;
-                if (!tabs[i].classList.contains('active')) { tabs[i].classList.add('pv-fold'); tabs[i].title = (tabs[i].querySelector('span') || {}).textContent || ''; }
-            }
-        };
-        fit(); setTimeout(fit, 1500); setTimeout(fit, 4000); window.addEventListener('resize', fit);
-    }
-    if (nav && nav !== 'l') {
-        const bar = document.querySelector('.top-nav .nav-bar');
-        const brand = document.querySelector('.top-nav .brand-area');
-        if (brand) { brand.style.cursor = 'pointer'; brand.title = 'QuickPortal'; brand.addEventListener('click', function () { location.href = 'index.html'; }); }
-        if (nav === 'a' && brand) brand.insertAdjacentHTML('beforeend', '<a class="pv-homepill" href="index.html" onclick="event.stopPropagation()">' + HOME + 'Home</a>');
-        if (nav === 'b') { const nl = document.querySelector('.top-nav .nav-left'); if (nl) nl.insertAdjacentHTML('beforeend', '<a class="pv-homebtn" href="index.html">' + HOME + 'Home</a>'); }
-        _pvPage();
-        // The tabs left to share the bar, once role gating has run.
-        // Full names unless the bar runs out of room; then the longest name takes
-        // its short one (data-m — "Processes" for Processes & Policies), and the
-        // next longest, until the tabs fit. Never a smaller font for all.
-        const count = function () {
-            if (!bar) return;
-            const tabs = Array.from(bar.querySelectorAll('.nav-link')).filter(function (l) { return l.getAttribute('href') !== 'index.html' && getComputedStyle(l).display !== 'none'; });
-            tabs.forEach(function (l) { const sp = l.querySelector('span'); if (!sp) return; if (!sp.dataset.full) sp.dataset.full = sp.textContent; sp.textContent = sp.dataset.full; });
-            const over = function () { return bar.scrollWidth > bar.clientWidth + 1; };
-            tabs.slice().filter(function (l) { return l.getAttribute('data-m') && l.querySelector('span'); })
-                .sort(function (x, y) { return y.querySelector('span').textContent.length - x.querySelector('span').textContent.length; })
-                .forEach(function (l) { if (over()) l.querySelector('span').textContent = l.getAttribute('data-m'); });
-        };
-        window.addEventListener('resize', count);
-        count(); setTimeout(count, 1500); setTimeout(count, 4000);
-    }
-    const row = function (label, key, cur, opts) {
-        return '<div class="pv-row"><span>' + label + '</span>' + opts.map(function (o) {
-            return '<button type="button" class="' + (cur === o[0] ? 'on' : '') + '" onclick="pvSet(\'' + key + '\', \'' + o[0] + '\')">' + o[1] + '</button>';
-        }).join('') + '</div>';
-    };
-    body.insertAdjacentHTML('beforeend', '<div class="pv-panel" title="Temporary: pick a nav, then this goes"><div class="pv-h">Preview</div>'
-        + row('Nav', 'pvNav', nav, [['', 'This Branch'], ['l', 'Live Today'], ['a', 'A · Logo'], ['b', 'B · Home'], ['c', 'C · Back Bar']]) + '</div>');
+function _qpNavFit() {
+    const bar = document.querySelector('.top-nav .nav-bar');
+    if (!bar) return;
+    const tabs = Array.from(bar.querySelectorAll('.nav-link')).filter(function (l) { return getComputedStyle(l).display !== 'none'; });
+    tabs.forEach(function (l) { const sp = l.querySelector('span'); if (!sp) return; if (!sp.dataset.full) sp.dataset.full = sp.textContent; sp.textContent = sp.dataset.full; });
+    if (_isMobileLayout()) return;
+    const over = function () { return bar.scrollWidth > bar.clientWidth + 1; };
+    tabs.filter(function (l) { return l.getAttribute('data-m') && l.querySelector('span'); })
+        .sort(function (x, y) { return y.querySelector('span').textContent.length - x.querySelector('span').textContent.length; })
+        .forEach(function (l) { if (over()) l.querySelector('span').textContent = l.getAttribute('data-m'); });
 }
-document.addEventListener('DOMContentLoaded', _pvApply);
+document.addEventListener('DOMContentLoaded', function () {
+    const brand = document.querySelector('.top-nav .brand-area');
+    if (brand) {
+        brand.classList.add('qp-home');
+        brand.title = 'QuickPortal';
+        brand.addEventListener('click', function () { if (/\/(operations|workspace|stats|docs|b2b)\.html/i.test(location.pathname)) location.href = 'index.html'; });
+    }
+    _qpBackBar();
+    _qpNavFit(); setTimeout(_qpNavFit, 1500); setTimeout(_qpNavFit, 4000);
+    window.addEventListener('resize', _qpNavFit);
+});
 
 // --- REMINDERS & DUE (aggregate the existing alert bubbles, into the feed) ---
 // Each reminder backs a live outstanding task, read out of the alert bubble the
