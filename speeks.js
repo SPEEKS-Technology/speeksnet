@@ -57130,6 +57130,63 @@ function _qlBuild() {
 }
 try { window.matchMedia(_compactMediaQuery()).addEventListener('change', function () { _qlBuild(); }); } catch (_) {}
 
+// NAV + BANNER PREVIEW — TEMPORARY (Ethan, 2026-10-30: "I need to be able to see
+// these options on the local site to really see it on the dashboard"; the
+// mockups are prototypes/nav-and-banner.html). Nothing changes until an option
+// is picked in the Preview panel (bottom left, desktop): localStorage pvNav
+// ('' | a | b | c) and pvBanner ('' | a | b | c), this browser only. Nav: every
+// option takes QuickPortal off the bar and gives the other tabs equal widths;
+// A = the logo is home plus a Home pill, B = a Home button, C = a back bar on
+// every other page. Banner: restyles the High Priority bar in place (styles.css).
+// Delete this block, its CSS and the pv-* classes once both are picked.
+function _pvGet(k) { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } }
+function pvSet(k, v) { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (_) {} location.reload(); }
+function _pvApply() {
+    const nav = _pvGet('pvNav'), bn = _pvGet('pvBanner'), body = document.body;
+    const HOME = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>';
+    const BACK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>';
+    const onHome = !/\/(operations|workspace|stats|docs|b2b)\.html/i.test(location.pathname);
+    if (nav) {
+        body.classList.add('pv-nav', 'pv-nav-' + nav);
+        const bar = document.querySelector('.top-nav .nav-bar');
+        const brand = document.querySelector('.top-nav .brand-area');
+        if (brand) { brand.style.cursor = 'pointer'; brand.title = 'QuickPortal'; brand.addEventListener('click', function () { location.href = 'index.html'; }); }
+        if (nav === 'a' && brand) brand.insertAdjacentHTML('beforeend', '<a class="pv-homepill' + (onHome ? ' on' : '') + '" href="index.html" onclick="event.stopPropagation()">' + HOME + 'Home</a>');
+        if (nav === 'b') { const nl = document.querySelector('.top-nav .nav-left'); if (nl) nl.insertAdjacentHTML('beforeend', '<a class="pv-homebtn' + (onHome ? ' on' : '') + '" href="index.html">' + HOME + 'Home</a>'); }
+        if (nav === 'c' && !onHome) {
+            const main = document.querySelector('.main-content'), act = document.querySelector('.top-nav .nav-link.active span');
+            if (main) main.insertAdjacentHTML('afterbegin', '<div class="pv-back"><a href="index.html">' + BACK + 'QuickPortal</a><span>/</span><b>' + escapeHtml(act ? act.textContent : document.title) + '</b></div>');
+        }
+        // The tabs left to share the bar, once role gating has run.
+        // A tab whose full name will not fit its equal share takes its short name
+        // (data-m — "Processes" for Processes & Policies), not a smaller font for all.
+        const count = function () {
+            if (!bar) return;
+            const tabs = Array.from(bar.querySelectorAll('.nav-link')).filter(function (l) { return l.getAttribute('href') !== 'index.html' && getComputedStyle(l).display !== 'none'; });
+            bar.style.setProperty('--pv-n', tabs.length || 4);
+            tabs.forEach(function (l) {
+                const sp = l.querySelector('span');
+                if (!sp) return;
+                if (!sp.dataset.full) sp.dataset.full = sp.textContent;
+                sp.textContent = sp.dataset.full;
+                if (l.scrollWidth > l.clientWidth + 1 && l.getAttribute('data-m')) sp.textContent = l.getAttribute('data-m');
+            });
+        };
+        window.addEventListener('resize', count);
+        count(); setTimeout(count, 1500); setTimeout(count, 4000);
+    }
+    if (bn) body.classList.add('pv-bn-' + bn);
+    const row = function (label, key, cur, opts) {
+        return '<div class="pv-row"><span>' + label + '</span>' + opts.map(function (o) {
+            return '<button type="button" class="' + (cur === o[0] ? 'on' : '') + '" onclick="pvSet(\'' + key + '\', \'' + o[0] + '\')">' + o[1] + '</button>';
+        }).join('') + '</div>';
+    };
+    body.insertAdjacentHTML('beforeend', '<div class="pv-panel" title="Temporary: pick a nav and a banner, then this goes"><div class="pv-h">Preview</div>'
+        + row('Nav', 'pvNav', nav, [['', 'Today'], ['a', 'A · Logo'], ['b', 'B · Home'], ['c', 'C · Back Bar']])
+        + (onHome ? row('Banner', 'pvBanner', bn, [['', 'Today'], ['a', 'A · Slim'], ['b', 'B · Card'], ['c', 'C · Bold']]) : '') + '</div>');
+}
+document.addEventListener('DOMContentLoaded', _pvApply);
+
 // --- REMINDERS & DUE (aggregate the existing alert bubbles, into the feed) ---
 // Each reminder backs a live outstanding task, read out of the alert bubble the
 // app already computes. Dismissing hides it for TODAY only; if it's still due

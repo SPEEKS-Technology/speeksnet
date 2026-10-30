@@ -26683,3 +26683,62 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
    wrapping only some names made the tiles disagree. */
 .ql-nm span { display: flex; align-items: center; gap: 5px; }
 .ql-nm .ql-ext { width: 10px; height: 10px; }
+/* NAV + BANNER PREVIEW — TEMPORARY (_pvApply; prototypes/nav-and-banner.html).
+   Remove with the JS block once Ethan picks. */
+body.pv-nav .top-nav .nav-bar .nav-link[href="index.html"] { display: none !important; }
+body.pv-nav .top-nav .nav-bar { display: grid !important; grid-template-columns: repeat(var(--pv-n, 4), minmax(0, 1fr)); gap: 4px; flex: 1 1 auto; max-width: 820px; margin: 0 12px; }
+body.pv-nav .top-nav .nav-bar a.nav-link { justify-content: center; width: 100% !important; box-sizing: border-box; margin: 0 !important; padding: 0 6px !important; white-space: nowrap; min-width: 0; }
+body.pv-nav .top-nav .brand-area { border-radius: 12px; transition: background .12s; }
+body.pv-nav .top-nav .brand-area:hover { background: rgba(255,255,255,.08); }
+.pv-homepill { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 11.5px; font-weight: 800; color: #8fe0b0; background: rgba(31,157,87,.18); border: 1px solid rgba(143,224,176,.35); border-radius: 999px; padding: 4px 10px 4px 8px; white-space: nowrap; text-decoration: none; }
+.pv-homepill.on { opacity: .55; }
+.pv-homepill svg, .pv-homebtn svg, .pv-back a svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.pv-homebtn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 10px; margin-left: 8px; border-radius: 12px; background: #1f9d57; color: #fff; font-size: 13px; font-weight: 800; white-space: nowrap; text-decoration: none; box-shadow: 0 2px 8px rgba(31,157,87,.35); }
+.pv-homebtn svg { width: 17px; height: 17px; }
+.pv-homebtn.on { background: transparent; color: #cfd8d3; box-shadow: none; border: 1px solid rgba(255,255,255,.18); }
+body.pv-nav-b .top-nav .nav-left { flex-direction: row !important; align-items: center; max-width: none; }
+/* Off the bar, QuickPortal leaves each tab ~157px at 1440 — room for every name,
+   so the icons-only mode (.nav-compact, measured with six tabs) is overridden. */
+body.pv-nav .top-nav.nav-compact .nav-bar a.nav-link span { display: inline !important; }
+body.pv-nav .top-nav.nav-compact .nav-bar a.nav-link { font-size: 13px !important; gap: 7px !important; }
+body.pv-nav .top-nav.nav-compact .nav-bar a.nav-link i { width: auto !important; font-size: inherit !important; }
+body.pv-nav .top-nav.nav-compact .nav-bar a.nav-link[data-m]::after { content: none !important; }
+.pv-back { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
+.pv-back a { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; color: #146c3c; background: #e8f7ee; border: 1px solid #b9e3c9; border-radius: 999px; padding: 6px 14px 6px 10px; text-decoration: none; }
+.pv-back span { font-size: 13px; font-weight: 700; color: #8a94a3; }
+.pv-back b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
+/* Banner A · slim ribbon */
+body.pv-bn-a .speeks-action-menu .sam-hero { padding: 8px 10px 8px 12px; gap: 12px; background: #fff; border-color: #f3c4c4; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+body.pv-bn-a .speeks-action-menu .sam-hero::before, body.pv-bn-a .speeks-action-menu .sam-hero-ico { display: none; }
+body.pv-bn-a .speeks-action-menu .sam-hero-body { display: flex; align-items: center; gap: 12px; }
+body.pv-bn-a .speeks-action-menu .sam-hero-lab { flex: none; color: #fff; background: #e05252; border-radius: 7px; padding: 4px 8px; font-size: 10px; font-weight: 900; }
+body.pv-bn-a .speeks-action-menu .sam-hero-t { flex: none; font-size: 14px; font-weight: 800; white-space: nowrap; }
+body.pv-bn-a .speeks-action-menu .sam-hero-s { flex: 1; min-width: 0; font-size: 13px; }
+body.pv-bn-a .speeks-action-menu .sam-hero-cta { border: 0; background: #fdecec; color: #c53030; }
+/* Banner B · widget card */
+body.pv-bn-b .speeks-action-menu .sam-hero { align-items: flex-start; background: #fff; border-color: #e6ebf1; border-radius: 16px; padding: 16px 18px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+body.pv-bn-b .speeks-action-menu .sam-hero::before { background: #e05252; }
+body.pv-bn-b .speeks-action-menu .sam-hero-ico { background: #fdecec; color: #c53030; border-radius: 11px; }
+body.pv-bn-b .speeks-action-menu .sam-hero-lab { color: #c53030; }
+body.pv-bn-b .speeks-action-menu .sam-hero-t { font-size: 16px; font-weight: 900; margin: 2px 0 3px; }
+body.pv-bn-b .speeks-action-menu .sam-hero-s { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.5; max-width: 1000px; }
+body.pv-bn-b .speeks-action-menu .sam-hero-cta { align-self: center; border: 0; background: #e05252; color: #fff; }
+body.pv-bn-b .speeks-action-menu .sam-hero-read { align-self: center; }
+/* Banner C · bold strip */
+body.pv-bn-c .speeks-action-menu .sam-hero { border: 0; border-radius: 16px; padding: 14px 16px 14px 14px; background: linear-gradient(100deg, #c53030 0%, #e05252 55%, #ef7a6b 100%); box-shadow: 0 6px 18px rgba(224,82,82,.25); }
+body.pv-bn-c .speeks-action-menu .sam-hero::before { display: none; }
+body.pv-bn-c .speeks-action-menu .sam-hero-ico { background: rgba(255,255,255,.18); color: #fff; width: 42px; height: 42px; }
+body.pv-bn-c .speeks-action-menu .sam-hero-lab, body.pv-bn-c .speeks-action-menu .sam-hero-t { color: #fff; }
+body.pv-bn-c .speeks-action-menu .sam-hero-lab { opacity: .85; }
+body.pv-bn-c .speeks-action-menu .sam-hero-t { font-size: 16px; font-weight: 900; }
+body.pv-bn-c .speeks-action-menu .sam-hero-s { color: rgba(255,255,255,.9); }
+body.pv-bn-c .speeks-action-menu .sam-hero-cta { border: 0; background: #fff; color: #c53030; }
+body.pv-bn-c .speeks-action-menu .sam-hero-read { background: rgba(255,255,255,.15); border-color: rgba(255,255,255,.3); color: #fff; }
+/* The panel */
+.pv-panel { position: fixed; left: 14px; bottom: 14px; z-index: 9500; background: #fff; border: 1px solid #e3e8ee; border-radius: 14px; box-shadow: 0 8px 28px rgba(16,24,40,.16); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.pv-panel .pv-h { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+.pv-panel .pv-row { display: flex; align-items: center; gap: 4px; }
+.pv-panel .pv-row > span { width: 52px; font-size: 11.5px; font-weight: 800; color: #1a1c1e; }
+.pv-panel button { font: inherit; font-size: 11.5px; font-weight: 750; border: 1px solid #e3e8ee; background: #fff; color: #4b5563; border-radius: 8px; padding: 4px 9px; cursor: pointer; }
+.pv-panel button.on { background: #e8f7ee; border-color: #9fd8b6; color: #146c3c; }
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) { .pv-panel { display: none; } }
