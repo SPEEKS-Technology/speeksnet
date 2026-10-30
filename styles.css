@@ -26707,33 +26707,6 @@ body.pv-nav .top-nav.nav-compact .nav-bar a.nav-link[data-m]::after { content: n
 .pv-back a { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; color: #146c3c; background: #e8f7ee; border: 1px solid #b9e3c9; border-radius: 999px; padding: 6px 14px 6px 10px; text-decoration: none; }
 .pv-back span { font-size: 13px; font-weight: 700; color: #8a94a3; }
 .pv-back b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
-/* Banner A · slim ribbon */
-body.pv-bn-a .speeks-action-menu .sam-hero { padding: 8px 10px 8px 12px; gap: 12px; background: #fff; border-color: #f3c4c4; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
-body.pv-bn-a .speeks-action-menu .sam-hero::before, body.pv-bn-a .speeks-action-menu .sam-hero-ico { display: none; }
-body.pv-bn-a .speeks-action-menu .sam-hero-body { display: flex; align-items: center; gap: 12px; }
-body.pv-bn-a .speeks-action-menu .sam-hero-lab { flex: none; color: #fff; background: #e05252; border-radius: 7px; padding: 4px 8px; font-size: 10px; font-weight: 900; }
-body.pv-bn-a .speeks-action-menu .sam-hero-t { flex: none; font-size: 14px; font-weight: 800; white-space: nowrap; }
-body.pv-bn-a .speeks-action-menu .sam-hero-s { flex: 1; min-width: 0; font-size: 13px; }
-body.pv-bn-a .speeks-action-menu .sam-hero-cta { border: 0; background: #fdecec; color: #c53030; }
-/* Banner B · widget card */
-body.pv-bn-b .speeks-action-menu .sam-hero { align-items: flex-start; background: #fff; border-color: #e6ebf1; border-radius: 16px; padding: 16px 18px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
-body.pv-bn-b .speeks-action-menu .sam-hero::before { background: #e05252; }
-body.pv-bn-b .speeks-action-menu .sam-hero-ico { background: #fdecec; color: #c53030; border-radius: 11px; }
-body.pv-bn-b .speeks-action-menu .sam-hero-lab { color: #c53030; }
-body.pv-bn-b .speeks-action-menu .sam-hero-t { font-size: 16px; font-weight: 900; margin: 2px 0 3px; }
-body.pv-bn-b .speeks-action-menu .sam-hero-s { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.5; max-width: 1000px; }
-body.pv-bn-b .speeks-action-menu .sam-hero-cta { align-self: center; border: 0; background: #e05252; color: #fff; }
-body.pv-bn-b .speeks-action-menu .sam-hero-read { align-self: center; }
-/* Banner C · bold strip */
-body.pv-bn-c .speeks-action-menu .sam-hero { border: 0; border-radius: 16px; padding: 14px 16px 14px 14px; background: linear-gradient(100deg, #c53030 0%, #e05252 55%, #ef7a6b 100%); box-shadow: 0 6px 18px rgba(224,82,82,.25); }
-body.pv-bn-c .speeks-action-menu .sam-hero::before { display: none; }
-body.pv-bn-c .speeks-action-menu .sam-hero-ico { background: rgba(255,255,255,.18); color: #fff; width: 42px; height: 42px; }
-body.pv-bn-c .speeks-action-menu .sam-hero-lab, body.pv-bn-c .speeks-action-menu .sam-hero-t { color: #fff; }
-body.pv-bn-c .speeks-action-menu .sam-hero-lab { opacity: .85; }
-body.pv-bn-c .speeks-action-menu .sam-hero-t { font-size: 16px; font-weight: 900; }
-body.pv-bn-c .speeks-action-menu .sam-hero-s { color: rgba(255,255,255,.9); }
-body.pv-bn-c .speeks-action-menu .sam-hero-cta { border: 0; background: #fff; color: #c53030; }
-body.pv-bn-c .speeks-action-menu .sam-hero-read { background: rgba(255,255,255,.15); border-color: rgba(255,255,255,.3); color: #fff; }
 /* The panel */
 .pv-panel { position: fixed; left: 14px; bottom: 14px; z-index: 9500; background: #fff; border: 1px solid #e3e8ee; border-radius: 14px; box-shadow: 0 8px 28px rgba(16,24,40,.16); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .pv-panel .pv-h { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
@@ -26742,3 +26715,33 @@ body.pv-bn-c .speeks-action-menu .sam-hero-read { background: rgba(255,255,255,.
 .pv-panel button { font: inherit; font-size: 11.5px; font-weight: 750; border: 1px solid #e3e8ee; background: #fff; color: #4b5563; border-radius: 8px; padding: 4px 9px; cursor: pointer; }
 .pv-panel button.on { background: #e8f7ee; border-color: #9fd8b6; color: #146c3c; }
 @media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) { .pv-panel { display: none; } }
+
+/* THE HIGH PRIORITY BANNER, SLIM (Ethan, 2026-10-30: "for high priority I like
+   slim" — option A of prototypes/nav-and-banner.html). One line on a white card
+   like the widgets: a red High Priority tag, the title, as much of the message
+   as fits, then Read now (or Mark read). About half the height it was. The whole
+   bar still opens the announcement. */
+.speeks-action-menu .sam-hero { padding: 8px 10px 8px 12px; gap: 12px; background: #fff; border-color: #f3c4c4; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+.speeks-action-menu .sam-hero::before, .speeks-action-menu .sam-hero-ico { display: none; }
+.speeks-action-menu .sam-hero-body { display: flex; align-items: center; gap: 12px; }
+.speeks-action-menu .sam-hero-lab { flex: none; color: #fff; background: #e05252; border-radius: 7px; padding: 4px 8px; font-size: 10px; font-weight: 900; }
+.speeks-action-menu .sam-hero-t { flex: none; max-width: 40%; font-size: 14px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.speeks-action-menu .sam-hero-s { flex: 1; min-width: 0; font-size: 13px; }
+.speeks-action-menu .sam-hero-cta { border: 0; background: #fdecec; color: #c53030; }
+/* Phones: the tag, the title and Read — the snippet has no room on one line. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .speeks-action-menu .sam-hero { padding: 8px 10px; gap: 10px; }
+    .speeks-action-menu .sam-hero-s { display: none; }
+    .speeks-action-menu .sam-hero-t { flex: 1; max-width: none; min-width: 0; }
+    /* ...and no tag, which took most of a phone line: a red edge says it. */
+    .speeks-action-menu .sam-hero-lab { display: none; }
+    .speeks-action-menu .sam-hero { border-left: 4px solid #e05252; }
+}
+/* Nav preview "Live Today": six tabs at their own widths with their names, as
+   main's NAV FIT shows them (this branch's icons-only .nav-compact overridden). */
+body.pv-live .top-nav.nav-compact .nav-bar a.nav-link span { display: inline !important; }
+body.pv-live .top-nav.nav-compact .nav-bar a.nav-link { font-size: 13px !important; gap: 7px !important; padding: 0 10px !important; }
+body.pv-live .top-nav.nav-compact .nav-bar a.nav-link i { width: auto !important; font-size: inherit !important; }
+body.pv-live .top-nav.nav-compact .nav-bar a.nav-link[data-m]::after { content: none !important; }
+body.pv-live .top-nav .nav-bar a.nav-link.pv-fold span { display: none !important; }
+body.pv-live .top-nav .nav-bar a.nav-link.pv-fold { gap: 0 !important; padding: 0 10px !important; }

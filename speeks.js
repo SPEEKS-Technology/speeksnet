@@ -57130,24 +57130,46 @@ function _qlBuild() {
 }
 try { window.matchMedia(_compactMediaQuery()).addEventListener('change', function () { _qlBuild(); }); } catch (_) {}
 
-// NAV + BANNER PREVIEW — TEMPORARY (Ethan, 2026-10-30: "I need to be able to see
-// these options on the local site to really see it on the dashboard"; the
-// mockups are prototypes/nav-and-banner.html). Nothing changes until an option
-// is picked in the Preview panel (bottom left, desktop): localStorage pvNav
-// ('' | a | b | c) and pvBanner ('' | a | b | c), this browser only. Nav: every
-// option takes QuickPortal off the bar and gives the other tabs equal widths;
-// A = the logo is home plus a Home pill, B = a Home button, C = a back bar on
-// every other page. Banner: restyles the High Priority bar in place (styles.css).
-// Delete this block, its CSS and the pv-* classes once both are picked.
+// NAV PREVIEW — TEMPORARY (Ethan, 2026-10-30: "I need to be able to see these
+// options on the local site"; mockups in prototypes/nav-and-banner.html). The
+// banner was picked (slim, now the real one). Nothing changes until a nav is
+// picked in the Preview panel (bottom left, desktop): localStorage pvNav, this
+// browser only. This branch has no B2B tab yet (it is on main), so every option
+// but Today adds one where the live nav has it, after Operations ("I need to
+// see what the nav bar looks like with B2B in there"). l = the live nav today:
+// six tabs at their own widths, names showing (main's NAV FIT keeps them).
+// a / b / c take QuickPortal off the bar, the rest equal: A = the logo is home
+// plus a Home pill, B = a Home button, C = a back bar on every other page.
+// Delete this block, its CSS and the pv-* classes once a nav is picked.
 function _pvGet(k) { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } }
 function pvSet(k, v) { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (_) {} location.reload(); }
 function _pvApply() {
-    const nav = _pvGet('pvNav'), bn = _pvGet('pvBanner'), body = document.body;
+    const nav = _pvGet('pvNav'), body = document.body;
     const HOME = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>';
     const BACK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>';
     const onHome = !/\/(operations|workspace|stats|docs|b2b)\.html/i.test(location.pathname);
     if (nav) {
-        body.classList.add('pv-nav', 'pv-nav-' + nav);
+        const bar = document.querySelector('.top-nav .nav-bar'), ops = bar && bar.querySelector('.nav-link[href="operations.html"]');
+        if (ops) ops.insertAdjacentHTML('afterend', '<a href="#" data-m="B2B" class="nav-link pv-b2b" title="B2B — its own page on the live site, not on this branch yet" onclick="return false"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></i><span>B2B</span></a>');
+        body.classList.add(nav === 'l' ? 'pv-live' : 'pv-nav', 'pv-nav-' + nav);
+    }
+    // Live Today: fold tab names to icons from the right until the last tab clears
+    // the right-hand buttons — what main's NAV FIT does (the current page keeps its name).
+    if (nav === 'l') {
+        const fit = function () {
+            const bar = document.querySelector('.top-nav .nav-bar'), right = document.querySelector('.top-nav .nav-right');
+            if (!bar || !right) return;
+            const tabs = Array.from(bar.querySelectorAll('.nav-link')).filter(function (l) { return getComputedStyle(l).display !== 'none'; });
+            tabs.forEach(function (l) { l.classList.remove('pv-fold'); });
+            for (let i = tabs.length - 1; i >= 0; i--) {
+                const last = tabs[tabs.length - 1].getBoundingClientRect().right;
+                if (last <= right.getBoundingClientRect().left - 12) break;
+                if (!tabs[i].classList.contains('active')) { tabs[i].classList.add('pv-fold'); tabs[i].title = (tabs[i].querySelector('span') || {}).textContent || ''; }
+            }
+        };
+        fit(); setTimeout(fit, 1500); setTimeout(fit, 4000); window.addEventListener('resize', fit);
+    }
+    if (nav && nav !== 'l') {
         const bar = document.querySelector('.top-nav .nav-bar');
         const brand = document.querySelector('.top-nav .brand-area');
         if (brand) { brand.style.cursor = 'pointer'; brand.title = 'QuickPortal'; brand.addEventListener('click', function () { location.href = 'index.html'; }); }
@@ -57175,15 +57197,13 @@ function _pvApply() {
         window.addEventListener('resize', count);
         count(); setTimeout(count, 1500); setTimeout(count, 4000);
     }
-    if (bn) body.classList.add('pv-bn-' + bn);
     const row = function (label, key, cur, opts) {
         return '<div class="pv-row"><span>' + label + '</span>' + opts.map(function (o) {
             return '<button type="button" class="' + (cur === o[0] ? 'on' : '') + '" onclick="pvSet(\'' + key + '\', \'' + o[0] + '\')">' + o[1] + '</button>';
         }).join('') + '</div>';
     };
-    body.insertAdjacentHTML('beforeend', '<div class="pv-panel" title="Temporary: pick a nav and a banner, then this goes"><div class="pv-h">Preview</div>'
-        + row('Nav', 'pvNav', nav, [['', 'Today'], ['a', 'A · Logo'], ['b', 'B · Home'], ['c', 'C · Back Bar']])
-        + (onHome ? row('Banner', 'pvBanner', bn, [['', 'Today'], ['a', 'A · Slim'], ['b', 'B · Card'], ['c', 'C · Bold']]) : '') + '</div>');
+    body.insertAdjacentHTML('beforeend', '<div class="pv-panel" title="Temporary: pick a nav, then this goes"><div class="pv-h">Preview</div>'
+        + row('Nav', 'pvNav', nav, [['', 'This Branch'], ['l', 'Live Today'], ['a', 'A · Logo'], ['b', 'B · Home'], ['c', 'C · Back Bar']]) + '</div>');
 }
 document.addEventListener('DOMContentLoaded', _pvApply);
 
