@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nav and Banner</title>
+<!-- Ethan, 2026-10-29: (1) redesign the High Priority announcement bar; (2) the
+     live site's B2B tab throws the nav off — take QuickPortal off the nav,
+     make the other tabs the same size again, and give people an obvious way
+     back to QuickPortal that is not a tab. The header is the LIVE one (main's
+     index.html and styles.css, copied into prototypes/_live/ by the generator,
+     not committed), at 1440. Not linked from the app. -->
+<link rel="stylesheet" href="_live/styles.css">
+<style>
+  html, body { height: auto !important; overflow: auto !important; }
+  body { background: #f4f6f8 !important; display: block !important; padding: 0 0 60px !important; margin: 0; }
+  .pv { padding: 0 24px; max-width: 1392px; margin: 0 auto; }
+  .pv-lab { font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #1a1c1e; margin: 30px 24px 4px; }
+  .pv-why { font-size: 12px; font-weight: 600; color: #647082; margin: 0 24px 10px; max-width: 1100px; line-height: 1.5; }
+  .pv-hdr { position: relative; }
+  .pv-hdr .top-nav { position: relative !important; top: auto !important; left: auto !important; right: auto !important; z-index: 1 !important; }
+  .pv-hdr #dailyMessageBubble, .pv-hdr #claimAlertBubble, .pv-hdr .msm-store-switch { display: none !important; }
+  .pv-page { background: #f4f6f8; padding: 18px 24px 4px; }
+  .pv-ghost { height: 90px; border-radius: 16px; background: repeating-linear-gradient(135deg, #eef1f4 0 10px, #f4f6f8 10px 20px); border: 1px dashed #dfe5ec; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #9aa4b1; letter-spacing: .05em; text-transform: uppercase; }
+  /* equal tabs */
+  .pv-eq .nav-bar { display: grid !important; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 4px; flex: 1 1 auto; max-width: none; margin: 0 12px; }
+  .pv-eq .nav-bar .nav-link { justify-content: center; min-width: 0; width: 100% !important; box-sizing: border-box; margin: 0 !important; padding-left: 4px !important; padding-right: 4px !important; white-space: nowrap; font-size: 12.5px !important; }
+  .pv-hdr.pv-eq .top-nav .nav-bar a.nav-link { padding: 0 6px !important; gap: 6px !important; }
+  .pv-b .nav-left { display: flex !important; flex-direction: row !important; align-items: center !important; }
+  /* A · logo is home */
+  .pv-a .brand-area { cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 4px 10px 4px 4px; border-radius: 12px; transition: background .12s; }
+  .pv-a .brand-area:hover { background: rgba(255,255,255,.08); }
+  .pv-homepill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 800; color: #8fe0b0; background: rgba(31,157,87,.18); border: 1px solid rgba(143,224,176,.35); border-radius: 999px; padding: 4px 10px 4px 8px; white-space: nowrap; }
+  .pv-homepill svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  /* B · home button */
+  .pv-homebtn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 10px; border-radius: 12px; background: #1f9d57; color: #fff; font-size: 13px; font-weight: 800; margin-left: 8px; white-space: nowrap; box-shadow: 0 2px 8px rgba(31,157,87,.35); }
+  .pv-homebtn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; }
+  .pv-homebtn.off { background: transparent; color: #cfd8d3; box-shadow: none; border: 1px solid rgba(255,255,255,.18); }
+  /* C · back bar */
+  .pv-back { display: flex; align-items: center; gap: 12px; background: #fff; border-bottom: 1px solid #e3e8ee; padding: 10px 24px; }
+  .pv-back a { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; color: #146c3c; background: #e8f7ee; border: 1px solid #b9e3c9; border-radius: 999px; padding: 6px 14px 6px 10px; text-decoration: none; }
+  .pv-back a svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  .pv-back span { font-size: 13px; font-weight: 700; color: #8a94a3; }
+  .pv-back b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
+
+  /* Banners */
+  .bn-ico { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; flex: none; }
+  .bn-ico svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .bn-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 800; border-radius: 10px; padding: 8px 14px; white-space: nowrap; }
+  .bn-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  /* A · slim ribbon */
+  .bn-a { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #f3c4c4; border-radius: 14px; padding: 8px 10px 8px 12px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+  .bn-a .tag { flex: none; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #fff; background: #e05252; border-radius: 7px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 5px; }
+  .bn-a .tag svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+  .bn-a .t { font-size: 14px; font-weight: 800; color: #1a1c1e; white-space: nowrap; }
+  .bn-a .s { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bn-a .bn-btn { color: #c53030; background: #fdecec; }
+  /* B · widget card */
+  .bn-b { display: flex; align-items: flex-start; gap: 14px; background: #fff; border: 1px solid #e6ebf1; border-radius: 16px; padding: 16px 18px; box-shadow: 0 1px 2px rgba(16,24,40,.04); position: relative; overflow: hidden; }
+  .bn-b::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #e05252; }
+  .bn-b .bn-ico { background: #fdecec; color: #c53030; }
+  .bn-b .body { flex: 1; min-width: 0; }
+  .bn-b .eb { font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #c53030; display: flex; gap: 8px; align-items: center; }
+  .bn-b .eb span { color: #8a94a3; letter-spacing: .04em; }
+  .bn-b .t { font-size: 16px; font-weight: 900; color: #1a1c1e; margin: 2px 0 3px; }
+  .bn-b .s { font-size: 13px; font-weight: 600; color: #647082; line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-width: 1000px; }
+  .bn-b .acts { display: flex; flex-direction: column; gap: 6px; align-self: center; }
+  .bn-b .bn-btn.p { background: #e05252; color: #fff; }
+  .bn-b .bn-btn.g { background: #fff; color: #647082; border: 1px solid #e3e8ee; }
+  /* C · bold strip */
+  .bn-c { display: flex; align-items: center; gap: 16px; border-radius: 16px; padding: 14px 16px 14px 14px; background: linear-gradient(100deg, #c53030 0%, #e05252 55%, #ef7a6b 100%); color: #fff; box-shadow: 0 6px 18px rgba(224,82,82,.25); }
+  .bn-c .bn-ico { background: rgba(255,255,255,.18); color: #fff; width: 42px; height: 42px; }
+  .bn-c .body { flex: 1; min-width: 0; }
+  .bn-c .eb { font-size: 10.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; opacity: .85; }
+  .bn-c .t { font-size: 16px; font-weight: 900; }
+  .bn-c .s { font-size: 13px; font-weight: 600; opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bn-c .bn-btn { background: #fff; color: #c53030; }
+  .bn-c .x { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: rgba(255,255,255,.15); }
+  .bn-c .x svg { width: 14px; height: 14px; fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; }
+</style>
+</head>
+<body class="is-authenticated">
+<div id="pv"></div>
+<script>
+const HEADER = "<header class=\"top-nav\">\n  <div class=\"nav-left\">\n    <div class=\"brand-area\">\n      <img src=\"../images/SPEEKS%20Logo%20Short%20White.png\" alt=\"SPEEKS\" class=\"brand-mark\">\n      <span class=\"brand-wordmark\">SPEEKSNET</span>\n    </div>\n  </div>\n  \n  <nav class=\"nav-bar\">\n    <a href=\"index.html\" data-m=\"Quick Portal\" class=\"nav-link active\"><i><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polygon points=\"13 2 3 14 12 14 11 22 21 10 12 10 13 2\"/></svg></i><span>QuickPortal</span></a>\n    <a data-mobile=\"hide\" data-tablet=\"show\" href=\"operations.html\" data-m=\"Ops\" class=\"nav-link\"><i><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z\"/></svg></i><span>Operations</span></a>\n    <a href=\"b2b.html\" data-m=\"B2B\" class=\"nav-link\"><i><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"2\" y=\"7\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16\"/></svg></i><span>B2B</span></a>\n    <a data-mobile=\"hide\" href=\"workspace.html\" data-m=\"Work\" class=\"nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager\"><i><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"23 6 13.5 15.5 8.5 10.5 1 18\"/><polyline points=\"17 6 23 6 23 12\"/></svg></i><span>Workspace</span></a>\n    <a href=\"docs.html\" data-m=\"Processes\" class=\"nav-link\"><i><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z\"/><path d=\"M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z\"/></svg></i><span>Processes & Policies</span></a>\n    <a href=\"stats.html\" data-m=\"Stats\" class=\"nav-link\"><i><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"8\" r=\"7\"/><polyline points=\"8.21 13.89 7 23 12 20 17 23 15.79 13.88\"/></svg></i><span>Stats & Awards</span></a>\n  </nav>\n\n  <div class=\"nav-right\">\n    <div class=\"user-profile-nav\">\n\n      <div class=\"msm-store-switch\" title=\"Switch the store you're managing\">\n        <select id=\"msmStoreSelect\" class=\"msm-store-select\"  aria-label=\"Managed store\"></select>\n      </div>\n\n      <button class=\"tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager\" id=\"toolsNavBtn\"  data-tip=\"SPEEKS Tools\">\n        <svg class=\"tools-icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n          <rect x=\"3\" y=\"3\" width=\"7.5\" height=\"7.5\" rx=\"1.6\"></rect><rect x=\"13.5\" y=\"3\" width=\"7.5\" height=\"7.5\" rx=\"1.6\"></rect><rect x=\"3\" y=\"13.5\" width=\"7.5\" height=\"7.5\" rx=\"1.6\"></rect><rect x=\"13.5\" y=\"13.5\" width=\"7.5\" height=\"7.5\" rx=\"1.6\"></rect></svg>\n        <span class=\"tools-nav-label\">Tools</span>\n      </button>\n\n    <div id=\"dailyMessageBubble\">\n            <span id=\"dailyMessageBubbleIcon\">📣</span>\n            <span id=\"dailyMessageBubbleText\"></span>\n            <button  class=\"daily-bubble-close\" title=\"Dismiss\">\n                <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"></line><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"></line></svg>\n            </button>\n        </div>\n    <div id=\"claimAlertBubble\">\n    <span id=\"claimAlertBubbleIcon\">⚠️</span>\n    <span id=\"claimAlertBubbleText\"></span>\n    <button  class=\"daily-bubble-close\" title=\"Dismiss\">\n        <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"></line><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"></line></svg>\n    </button>\n</div>\n        <a href=\"#\"  class=\"idea-btn action-btn\" data-tip=\"Have an Idea?\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9 18h6\"/><path d=\"M10 22h4\"/><path d=\"M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z\"/></svg></a>\n      <div class=\"action-btn\"  data-tip=\"Quick Messages\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/></svg></div>\n      <div class=\"action-btn\"  data-mobile=\"hide\" data-tip=\"Hotkeys &amp; Commands\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z\"/></svg></div>\n      <div class=\"action-btn\"  data-mobile=\"hide\" data-tablet=\"show\" data-tip=\"Store Calendar\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><line x1=\"16\" y1=\"2\" x2=\"16\" y2=\"6\"/><line x1=\"8\" y1=\"2\" x2=\"8\" y2=\"6\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\"/></svg></div>\n      <!-- The Announcements bell stood here. Removed 2026-09-07: the Feed Hub it opened is now reached from the QuickPortal deck, which every role sees, so a second door in the nav was one too many. #notifDropdown itself is still on this page — openHubTo() and the realtime ping both use it. -->\n      <div class=\"action-btn\" id=\"notifySettingsBtn\" data-feature=\"nav-settings\" data-mobile=\"hide\" data-tablet=\"show\"  data-tip=\"Settings\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/></svg></div>\n    </div>\n    <div class=\"greeting-stack\">\n        <h2 id=\"userGreeting\">Welcome Ethan!</h2>\n        <div class=\"version-signout-row\">\n            <!-- Stamped by _stampVersion() from APP_VERSION in speeks.js, which is the\n                 one place the version number lives. Do not hardcode it here. -->\n            <span class=\"version-tag\">v3.11.0</span>\n            <button  class=\"sign-out-mini\">Sign Out</button>\n        </div>\n      </div>\n    </div>\n</header>";
+const HOME = '<svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>';
+const BACK = '<svg viewBox="0 0 24 24"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>';
+function header(opts) {
+  const box = document.createElement('div');
+  box.className = 'pv-hdr' + (opts.eq ? ' pv-eq' : '') + (opts.cls ? ' ' + opts.cls : '');
+  box.innerHTML = HEADER;
+  const links = [...box.querySelectorAll('.nav-bar .nav-link')];
+  links.forEach(l => l.classList.remove('active'));
+  if (opts.dropQP) links[0].remove();
+  const on = [...box.querySelectorAll('.nav-bar .nav-link')].find(l => l.textContent.trim() === opts.active);
+  if (on) on.classList.add('active');
+  if (opts.eq) box.querySelector('.nav-bar').style.setProperty('--n', box.querySelectorAll('.nav-bar .nav-link').length);
+  if (opts.after) opts.after(box);
+  return box.outerHTML;
+}
+const page = inner => '<div class="pv-page">' + inner + '</div>';
+const ghost = '<div class="pv-ghost">The page below</div>';
+const sec = (lab, why, html) => '<div class="pv-lab">' + lab + '</div><div class="pv-why">' + why + '</div>' + html;
+
+// Banners
+const WARN = '<svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>';
+const ARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+const TICK = '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
+const T = 'September Monthly Recap', S = 'September showed us what we\'re capable of. We came back from a rough start and finished the month with a huge push. We still fell short of the company goal, but that comeback proves we can do it, and October is set up to be our best month yet.';
+const today = '<div class="speeks-action-menu sam-hero-wrap" style="display:block"><div class="sam-hero"><div class="sam-hero-ico">' + WARN + '</div><div class="sam-hero-body"><div class="sam-hero-lab">High Priority</div><div class="sam-hero-t">' + T + '</div><div class="sam-hero-s">' + S + '</div></div><div class="sam-hero-cta">Read now ' + ARROW + '</div></div></div>';
+const bnA = '<div class="bn-a"><span class="tag">' + WARN + 'High Priority</span><span class="t">' + T + '</span><span class="s">' + S + '</span><span class="bn-btn">Read ' + ARROW + '</span></div>';
+const bnB = '<div class="bn-b"><span class="bn-ico">' + WARN + '</span><div class="body"><div class="eb">High Priority <span>· From Ethan · Oct 2</span></div><div class="t">' + T + '</div><div class="s">' + S + '</div></div>'
+  + '<div class="acts"><span class="bn-btn p">Read Now ' + ARROW + '</span><span class="bn-btn g">' + TICK + 'Mark Read</span></div></div>';
+const bnC = '<div class="bn-c"><span class="bn-ico">' + WARN + '</span><div class="body"><div class="eb">High Priority · Oct 2</div><div class="t">' + T + '</div><div class="s">' + S + '</div></div><span class="bn-btn">Read Now ' + ARROW + '</span><span class="x"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>';
+
+document.getElementById('pv').innerHTML =
+  '<div class="pv-lab" style="font-size:16px">1 · The Nav</div>'
+  + sec('Today (live)', 'Six tabs since B2B came in; QuickPortal is one of them, and the tabs are different widths.', header({ active: 'QuickPortal' }) + page(ghost))
+  + sec('A · The Logo Is Home', 'QuickPortal off the bar; the five tabs share it evenly. The SPEEKSNET logo goes home, and on every other page a green "Home" pill sits beside it so it is obvious.',
+      header({ dropQP: true, eq: true, active: 'Operations', cls: 'pv-a', after: b => b.querySelector('.brand-area').insertAdjacentHTML('beforeend', '<span class="pv-homepill">' + HOME + 'Home</span>') }) + page(ghost))
+  + sec('B · A Home Button', 'QuickPortal off the bar; a green Home button left of the tabs, always there. Outlined while you are on QuickPortal, filled green when you are somewhere else.',
+      header({ dropQP: true, eq: true, active: 'Operations', cls: 'pv-b', after: b => b.querySelector('.nav-left').insertAdjacentHTML('beforeend', '<span class="pv-homebtn">' + HOME + 'Home</span>') }) + page(ghost))
+  + sec('C · A Back Bar', 'QuickPortal off the bar; every other page opens with a slim bar under the nav: "← QuickPortal / Operations". The logo goes home too.',
+      header({ dropQP: true, eq: true, active: 'Operations' }) + '<div class="pv-back"><a>' + BACK + 'QuickPortal</a><span>/</span><b>Operations</b></div>' + page(ghost))
+  + '<div class="pv-lab" style="font-size:16px;margin-top:50px">2 · The High Priority Banner</div>'
+  + sec('Today', 'Red bar with a left stripe, label, title, one cut-off line and Read now.', page(today))
+  + sec('A · Slim Ribbon', 'One line: a red High Priority tag, the title, as much of the message as fits, Read. Half the height.', page(bnA))
+  + sec('B · Widget Card', 'Looks like the cards under it: icon square, who posted it and when, title, two lines of the message, Read Now and Mark Read.', page(bnB))
+  + sec('C · Bold Strip', 'Impossible to miss: a red gradient strip, white text, Read Now and a dismiss ×. Loudest of the three.', page(bnC));
+</script>
+</body>
+</html>
