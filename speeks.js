@@ -7929,10 +7929,9 @@ function _wsFitPanels() {
         if (!panel.offsetParent) return;                    // hidden pane
         const top = panel.getBoundingClientRect().top + window.scrollY;
         const docTop = top - window.scrollY;                // viewport-relative
-        // The B2B page runs edge to edge (2026-10), so its panel goes to the
-        // bottom of the window with no gap under it.
-        const gap = panel.closest('.b2b-wrap') ? 0 : GAP;
-        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + gap}px`);
+        // B2B ran edge to edge with no gap here until 2026-10-31; it has the
+        // standard page header and card now, so it keeps the same gap as the rest.
+        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + GAP}px`);
     });
     // The deal page takes the hub's place, so it needs the same top to size to
     // -- measured off the wrapper, which is there whether or not a deal is open.
@@ -22478,7 +22477,7 @@ function b2bRender() {
     const queue  = scoped.filter(d => _b2bActionFor(d));
 
     // Header chrome
-    document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => {
+    document.querySelectorAll('.b2b-view-tabs .ws-tab').forEach(b => {
         b.classList.remove('active');
         // The active tab was conveyed by colour and a border only, so a screen
         // reader had no way to know which view it was on. role="tab" is in the
@@ -22491,8 +22490,16 @@ function b2bRender() {
     const activeBtn = document.getElementById(btn);
     activeBtn?.classList.add('active');
     activeBtn?.setAttribute('aria-selected', 'true');
-    // Keeps the chosen tab in view once the strip scrolls (see .b2b-view-toggle).
-    try { activeBtn?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
+    // Keeps the chosen tab in view once the strip scrolls (.ws-subtabs scrolls on
+    // phones). Scrolls the strip only: since it moved out of the card head
+    // (2026-10-31) scrollIntoView could also scroll the PAGE, and b2bRender runs
+    // on every 60s poll.
+    const strip = activeBtn?.parentElement;
+    if (strip && strip.scrollWidth > strip.clientWidth) {
+        const l = activeBtn.offsetLeft - strip.offsetLeft, r = l + activeBtn.offsetWidth;
+        if (l < strip.scrollLeft) strip.scrollLeft = l;
+        else if (r > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = r - strip.clientWidth;
+    }
 
     // Evaluations waiting on somebody. Not folded into the Needs You queue: that
     // queue derives ownership from a deal's stage, and an evaluation has no

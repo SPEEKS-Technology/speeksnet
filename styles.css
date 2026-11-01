@@ -13424,38 +13424,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 /* Everything in the controls row sits on --b2b-h-md so the segmented control,
    the scope chip and the New Deal button share one baseline and one radius. */
 .b2b-panel .cb-head-controls { gap: 10px; }
-/* Six tabs, a scope chip, Delete Requests, CRM Settings and + New Deal share
- * this row. Without a shrink rule the tab strip took the whole line at around
- * 1100px, which did two visible things: the last tab (Overview) was clipped by
- * the card edge with no way to scroll to it, and + New Deal -- the primary
- * action -- was pushed onto a second line on its own, left-aligned, reading
- * like a rendering accident.
- *
- * So the strip is the thing that gives: it shrinks and scrolls, and the actions
- * stay on the first line beside it. min-width: 0 is required or a flex item
- * refuses to shrink below its content. */
-.b2b-view-toggle {
-    height: var(--b2b-h-md); padding: 3px; border-radius: var(--b2b-r-md);
-    flex: 1 1 auto; min-width: 0;
-    overflow-x: auto; overflow-y: hidden;
-    scrollbar-width: thin; scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
-}
-/* A 3px-tall bar inside a 34px pill would eat the labels, so the strip scrolls
-   without painting a track. The tabs stay reachable by drag, wheel and keyboard. */
-.b2b-view-toggle::-webkit-scrollbar { height: 0; }
-.b2b-view-toggle .mb-view-btn {
-    display: inline-flex; align-items: center; gap: 6px; height: 100%;
-    padding: 0 12px; border-radius: var(--b2b-r-sm); font-size: 12.5px;
-    /* "Needs You" was wrapping to "Needs / You" while every other tab stayed on
-       one line, which grew that pill to 41px against its neighbours' 28px and
-       left the whole row's baseline crooked. */
-    white-space: nowrap; flex: 0 0 auto; scroll-snap-align: start;
-}
-.b2b-view-toggle .mb-view-btn svg {
-    width: 14px; height: 14px; fill: none; stroke: currentColor;
-    stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
-}
+/* The view tabs (Pipeline / Completed / Evaluations / Clients) were a
+ * segmented pill strip in this row until 2026-10-31. They are the page's
+ * .ws-subtabs row now, above the card, the same as Operations and Workspace --
+ * .ws-tab is nowrap and the row scrolls on phones, which covers what the
+ * strip's own shrink-and-scroll rules here used to. */
 .b2b-pip {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 17px; height: 17px; padding: 0 5px; margin-left: 2px;
@@ -26676,10 +26649,8 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .qp-back a svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
     .qp-back span { font-size: 13px; font-weight: 700; color: #8a94a3; }
     .qp-back b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
-    /* B2B runs edge to edge (.main-content:has(> .b2b-wrap) has no side padding):
-       the bar takes the page's own 24px gutter and a white strip, and the panel
-       under it is sized by _wsFitPanels from wherever it then sits. */
-    .main-content:has(> .b2b-wrap) > .qp-back { margin: 0; padding: 10px 24px; background: #fff; border-bottom: 1px solid #e3e8ee; }
+    /* B2B used to run edge to edge and gave this bar a white strip of its own;
+       since 2026-10-31 it has the page gutters, so it gets the plain bar too. */
 }
 /* THE HIGH PRIORITY BANNER, SLIM (Ethan, 2026-10-30: "for high priority I like
    slim" — option A of prototypes/nav-and-banner.html). One line on a white card
@@ -26974,32 +26945,43 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
    inside .b2b-wrap, keeps .modal-menu so every closeAllModals() still closes
    it, and is pulled out of the fixed/centred/animated modal treatment here.
    The rules key off .b2b-wrap via :has() rather than a body class, because the
-   SPA router swaps .main-content and never touches <body>. */
-.main-content:has(> .b2b-wrap) { padding: 64px 0 0 !important; }   /* the top nav is 64px */
-.b2b-wrap { display: flex; flex-direction: column; min-width: 0; }
+   SPA router swaps .main-content and never touches <body>.
+
+   STANDARDIZED (2026-10-31, Ethan: "fix the B2B tab design to match the other
+   ones"). The edge-to-edge frame is gone: B2B has the page gutters, the
+   .page-header.dp-header hero and the .ws-subtabs row that Operations and
+   Workspace have, and the hub is an ordinary rounded .cb-panel card under them.
+   Only the frame changed -- the hub's contents, the deal page's insides and
+   every handler are as they were. The deal page still takes the hub's place;
+   it hides the hero and the tabs too, and wears the same card frame. */
+.b2b-wrap { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* trim the base .page-header 40px margin -- .b2b-wrap already gaps 16px */
+.b2b-wrap > .b2b-header { margin-bottom: 0; }
+.b2b-wrap .ws-tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .b2b-wrap > .ws-pane > .b2b-panel.card {
-    border-radius: 0; box-shadow: none; border: 0; margin: 0 !important;
+    margin: 0 !important;
     /* .card animates `all`, which here meant the panel's height: it painted at
-       the 250px fallback below and then grew into place once _wsFitPanels ran. */
+       the 250px fallback and then grew into place once _wsFitPanels ran. */
     transition: none;
 }
-/* The panel always starts right under the nav on this page, so that is the
-   fallback, and the first frame is already the right height. The phone layer
-   restates this with its own top and tab bar. */
-.b2b-wrap .ws-panel { height: calc(100dvh - var(--ws-top, 64px)) !important; }
-.b2b-wrap > .ws-pane > .b2b-panel > .cb-head { padding-left: 24px; padding-right: 24px; }
-.b2b-wrap > .ws-pane > .b2b-panel > .cb-scroll { padding-left: 24px; padding-right: 24px; }
+/* The card head holds only the controls now (the title moved up into the
+   hero), so they sit at the right like the other pages' card actions. */
+.b2b-wrap > .ws-pane > .b2b-panel > .cb-head { justify-content: flex-end; }
+.b2b-wrap > .ws-pane > .b2b-panel > .cb-head > .cb-head-controls { margin-left: auto; justify-content: flex-end; }
 
 /* --- the deal page ------------------------------------------------------- */
 .b2b-wrap > .modal-menu.b2b-dealpage {
     display: none; position: static; inset: auto; z-index: auto;
     transform: none !important; opacity: 1; visibility: visible; transition: none;
     width: auto !important; max-width: none !important; margin: 0;
-    height: calc(100dvh - var(--b2b-top, 64px)) !important; max-height: none !important;
-    border-radius: 0; box-shadow: none; border: 0; background: #fff;
+    height: calc(100dvh - var(--b2b-top, 250px) - 16px) !important; max-height: none !important;
+    border: 0; background: #fff; overflow: hidden;
+    border-radius: 18px; box-shadow: 0 8px 28px rgba(16, 24, 40, 0.07);
 }
 .b2b-wrap > .modal-menu.b2b-dealpage.show { display: flex; }
-.b2b-wrap:has(> .b2b-dealpage.show) > #ops-pane-b2b { display: none !important; }
+.b2b-wrap:has(> .b2b-dealpage.show) > #ops-pane-b2b,
+.b2b-wrap:has(> .b2b-dealpage.show) > .b2b-header,
+.b2b-wrap:has(> .b2b-dealpage.show) > .b2b-view-tabs { display: none !important; }
 .b2b-dealpage > .manage-content { flex: 1 1 auto; min-height: 0; }
 .b2b-dealpage > .modal-header.tool-head { padding-left: 16px; }
 /* The back button replaces the x on a page. */
@@ -27015,16 +26997,11 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 .modal-menu:not(.b2b-dealpage) .b2b-dealpage-back { display: none; }
 
 @media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
-    .main-content:has(> .b2b-wrap) {
-        padding: 68px 0 calc(78px + env(safe-area-inset-bottom, 0px)) 0 !important;
-    }
-    .b2b-wrap > .ws-pane > .b2b-panel > .cb-head,
-    .b2b-wrap > .ws-pane > .b2b-panel > .cb-scroll { padding-left: 14px; padding-right: 14px; }
     /* The phone slide-in every tool modal gets would push the page off-screen. */
     .b2b-wrap > .modal-menu.b2b-dealpage.tool-modal,
     .b2b-wrap > .modal-menu.b2b-dealpage.tool-modal.show { transform: none !important; }
     .b2b-wrap > .modal-menu.b2b-dealpage {
-        height: calc(100dvh - var(--b2b-top, 68px) - 78px - env(safe-area-inset-bottom, 0px)) !important;
+        height: calc(100dvh - var(--b2b-top, 250px) - 16px - 78px - env(safe-area-inset-bottom, 0px)) !important;
     }
     .b2b-dealpage-back span { display: none; }
     .b2b-dealpage-back { padding: 0 8px; }
@@ -27113,9 +27090,8 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
    =========================================================================
    Each of these was a real rule losing to an older, stronger one. */
 
-/* The edge-to-edge hub kept its card frame: .cb-panel sets border, radius and
-   shadow with !important (twice), which beat the plain declarations above. */
-.b2b-wrap > .ws-pane > .b2b-panel.card { border: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+/* (The rule that stripped the hub's card frame stood here. Removed 2026-10-31:
+   the hub wears the standard .cb-panel card again -- see "STANDARDIZED".) */
 
 /* On phones .manage-content{padding:14px !important} doubled the workspace's
    own gutters (~30px a side) and kept the side band off the screen edges. */
