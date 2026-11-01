@@ -44648,7 +44648,9 @@ const FEATURE_CATALOG = [
     // and Listing Health draws No Photos the way it did before the grader (see
     // _pqHtml, _lhHtml and the All Stores card). The function, the data and the
     // nightly (paused anyway) are untouched. Restore by uncommenting this line.
-    { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // (2026-10-31: 31dfda8 had uncommented it by accident on Update 3 —
+    // re-parked before the merge to pre-release.)
+    // { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     // LENDS the corp hat to someone outside the corp roles. DM, CEO and MOCD have
     // corp powers by role whatever this says (_b2bIsCorp), which is why only the
     // DM column is on and switching CEO/MOCD off does nothing.
