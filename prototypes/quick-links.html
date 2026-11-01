@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick Links Bar</title>
+<!-- Ethan, 2026-10-29: "take a crack at redesigning the quick links bar, since
+     we are pretty much overhauling quick portal". Today: one strip per role
+     (CEO / DM / MOCD / MGR / ASM) and one per store, emoji buttons stretched to
+     fill the width, all looking alike whether a link is a spreadsheet or a Drive
+     folder. Three looks, each with a DM's links and an OVL manager's (role +
+     store), drawn with styles.css at the 1440 page width. Not linked. -->
+<link rel="stylesheet" href="../styles.css?v=20261029zb">
+<style>
+  html, body { height: auto !important; overflow: auto !important; }
+  body { background: #f4f6f8; display: block !important; }
+  .main-content { padding: 20px 24px 60px !important; height: auto !important; overflow: visible !important; max-width: 1392px; }
+  .pv-lab { font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #1a1c1e; margin: 30px 0 4px; }
+  .pv-why { font-size: 12px; font-weight: 600; color: #647082; margin: 0 0 10px; }
+  .pv-who { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; margin: 12px 0 6px 4px; }
+  .card-ql { background: #fff; border: 1px solid #e6ebf1; border-radius: 16px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+  .ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; }
+  .ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .t-sheet { background: #e8f7ee; color: #178048; } .t-drive { background: #e8f0fb; color: #2563b8; } .t-key { background: #fdf3e2; color: #a46412; }
+  .t-cart { background: #f3effc; color: #6b4fc9; } .t-bag { background: #fdecef; color: #c2416b; } .t-pc { background: #e6f6f4; color: #0f766e; } .t-folder { background: #fff4e0; color: #b7791f; }
+  .ext { width: 12px; height: 12px; fill: none; stroke: #9aa4b1; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* A · Icon Pills */
+  .qa { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px; flex-wrap: wrap; }
+  .qa-lab { display: flex; align-items: center; gap: 7px; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; margin-right: 6px; }
+  .qa-lab svg { width: 14px; height: 14px; fill: none; stroke: #8a94a3; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .qa a { display: flex; align-items: center; gap: 9px; padding: 5px 12px 5px 5px; border: 1px solid #e6ebf1; border-radius: 12px; text-decoration: none; color: #1a1c1e; font-size: 13px; font-weight: 750; background: #fff; transition: border-color .12s, box-shadow .12s; }
+  .qa a:hover { border-color: #9fd8b6; box-shadow: 0 2px 8px rgba(31,157,87,.12); }
+  .qa .sep { width: 1px; height: 26px; background: #e6ebf1; margin: 0 4px; }
+
+  /* B · App Tiles */
+  .qb { display: grid; gap: 10px; padding: 12px; }
+  .qb a { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid #e6ebf1; border-radius: 14px; text-decoration: none; background: #fff; min-width: 0; transition: border-color .12s, box-shadow .12s, transform .12s; }
+  .qb a:hover { border-color: #9fd8b6; box-shadow: 0 4px 12px rgba(16,24,40,.08); transform: translateY(-1px); }
+  .qb .ico { width: 38px; height: 38px; border-radius: 11px; }
+  .qb .ico svg { width: 19px; height: 19px; }
+  .qb b { display: block; font-size: 13.5px; font-weight: 800; color: #1a1c1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qb span.k { font-size: 11px; font-weight: 700; color: #8a94a3; }
+  .qb .nm { flex: 1; min-width: 0; }
+
+  /* C · Two Groups */
+  .qc { display: flex; align-items: stretch; padding: 0; overflow: hidden; }
+  .qc-g { display: flex; align-items: center; gap: 8px; padding: 10px 14px; flex-wrap: wrap; }
+  .qc-g + .qc-g { border-left: 1px solid #eef1f4; }
+  .qc-h { display: flex; flex-direction: column; justify-content: center; margin-right: 6px; }
+  .qc-h small { font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+  .qc-h b { font-size: 13px; font-weight: 900; color: #1a1c1e; display: flex; align-items: center; gap: 6px; }
+  .qc a { display: flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; background: #f4f6f8; text-decoration: none; color: #1a1c1e; font-size: 12.5px; font-weight: 750; transition: background .12s; }
+  .qc a:hover { background: #e8f7ee; color: #146c3c; }
+  .qc a .ico { width: 22px; height: 22px; border-radius: 7px; }
+  .qc a .ico svg { width: 13px; height: 13px; }
+  .qc .store b i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body class="is-authenticated">
+<main class="main-content" id="pv"></main>
+<script>
+const I = {
+  sheet: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>',
+  drive: '<path d="M8 3h8l6 10-4 7H6l-4-7z"/><path d="M8 3l6 10M16 3l-6 10M2 13h20"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/>',
+  folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  cart: '<path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/>',
+  bag: '<path d="M6 7h12l1 13H5z"/><path d="M9 7a3 3 0 0 1 6 0"/>',
+  pc: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+};
+const EXT = '<svg class="ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+const ico = (k, t) => '<span class="ico t-' + t + '"><svg viewBox="0 0 24 24">' + I[k] + '</svg></span>';
+// [name, icon, tone, kind]
+const DM = { role: 'DM', company: [['Store Passwords', 'key', 'key', 'Drive Folder'], ['Sales Summary', 'sheet', 'sheet', 'Google Sheet'], ['SPEEKSNET Google Drive', 'drive', 'drive', 'Drive Folder'], ['PayMore Google Drive', 'drive', 'drive', 'Drive Folder']], store: null };
+const MGR = { role: 'Manager', company: [['Sales Summary', 'sheet', 'sheet', 'Google Sheet']], store: ['OVL', '#7c6fd6', [['Passwords', 'key', 'key', 'Google Sheet'], ['Marketplace', 'cart', 'cart', 'Google Sheet'], ['Employee Purchases', 'bag', 'bag', 'Google Sheet'], ['PC Inventory', 'pc', 'pc', 'Google Sheet']]] };
+
+const optA = s => { const pill = l => '<a href="#">' + ico(l[1], l[2]) + l[0] + EXT + '</a>';
+  return '<div class="card-ql qa"><span class="qa-lab"><svg viewBox="0 0 24 24">' + I.link + '</svg>Quick Links</span>'
+    + (s.store ? s.store[2].map(pill).join('') + '<span class="sep"></span>' : '') + s.company.map(pill).join('') + '</div>'; };
+const optB = s => { const all = (s.store ? s.store[2] : []).concat(s.company);
+  return '<div class="card-ql qb" style="grid-template-columns:repeat(' + Math.min(all.length, 5) + ',minmax(0,1fr))">' + all.map(l => '<a href="#">' + ico(l[1], l[2]) + '<div class="nm"><b>' + (s.store && s.store[2].indexOf(l) !== -1 ? s.store[0] + ' ' : '') + l[0] + '</b><span class="k">' + l[3] + '</span></div>' + EXT + '</a>').join('') + '</div>'; };
+const optC = s => { const chip = l => '<a href="#">' + ico(l[1], l[2]) + l[0] + '</a>';
+  return '<div class="card-ql qc">' + (s.store ? '<div class="qc-g store"><div class="qc-h"><small>My Store</small><b><i style="background:' + s.store[1] + '"></i>' + s.store[0] + '</b></div>' + s.store[2].map(chip).join('') + '</div>' : '')
+    + '<div class="qc-g"><div class="qc-h"><small>For the ' + s.role + '</small><b>Company</b></div>' + s.company.map(chip).join('') + '</div></div>'; };
+
+const today = s => '<div class="hotbars-stack" style="margin:0">' + [[s.role.toUpperCase().slice(0, 3), s.company, 'hb-role']].concat(s.store ? [[s.store[0], s.store[2], 'store-ovl']] : []).map(g =>
+  '<div class="hotbar-wrapper ' + (g[2] === 'store-ovl' ? 'store-ovl' : '') + '" style="display:flex"><div class="hotbar-container"><span class="hotbar-label">' + g[0] + '</span><div class="hotbar-links">'
+  + g[1].map(l => '<a href="#" class="hotbar-btn">' + ({ key: '🔑', sheet: '📊', drive: '☁️', cart: '🛒', bag: '🛍️', pc: '💻', folder: '📁' }[l[1]]) + ' ' + l[0] + '</a>').join('') + '</div></div></div>').join('') + '</div>';
+
+const block = (lab, why, f) => '<div class="pv-lab">' + lab + '</div><div class="pv-why">' + why + '</div><div class="pv-who">DM</div>' + f(DM) + '<div class="pv-who">Manager at OVL</div>' + f(MGR);
+document.getElementById('pv').innerHTML =
+  block('Today', 'A strip per role and per store, emoji buttons stretched across the page.', today)
+  + block('A · Icon Pills', 'One slim bar. Each link a pill sized to its name, with an icon by kind (sheet, Drive, key, cart…) and ↗ because it opens Google. The store\'s links first, a divider, then the role\'s.', optA)
+  + block('B · App Tiles', 'Each link a tile with a bigger icon and what it is under the name (Google Sheet, Drive Folder). Store links say the store. Reads like an app launcher.', optB)
+  + block('C · Two Groups', 'One bar in two halves: My Store (with its colour) and Company. Small chips. Says whose link is whose without the CEO / DM / OVL strips.', optC);
+</script>
+</body>
+</html>

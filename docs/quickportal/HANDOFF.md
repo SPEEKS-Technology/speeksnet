@@ -1,0 +1,797 @@
+# QuickPortal revamp — handoff (2026-10-22)
+
+Picking this up in a new session? Read this first, then `CLAUDE.md`.
+
+## Where the work is
+
+- **Folder:** the main checkout, `C:\Users\User\Documents\GitHub\speeksnet`.
+  The `speeksnet-nov3` worktree was removed on 2026-10-22 (Update 3 became a
+  normal branch here; Update 2 was deleted). Any older note naming
+  `speeksnet-nov3` now means this folder.
+- **Branch:** `Main-November-Update-3---Ethan`, cut from `origin/pre-release` at `b8dbb73`.
+- Other sessions work in this same folder and branch (Listing Health, reports…),
+  so commit only the QuickPortal files and check `git diff` for anyone else's
+  edits before committing.
+- Shared: the git stash stack, and the live Supabase database (migrations and
+  edge-function deploys hit production).
+
+## What the project is
+
+Ethan's plan: turn QuickPortal into a customizable dashboard — move cards,
+resize, split and combine them, and later add widgets (email/notification
+connectors, usage-based "suggested for you", Claude-backed report/Ask widgets).
+He wants it done **very slowly, one small step at a time, in the site's
+existing look**, starting with the manager role (then DM). Show a design
+before building anything new; labels in Title Case.
+
+Design mockups (private Claude artifact, two artboards — the DM dashboard
+vision and the split/combine interaction):
+https://claude.ai/artifact/EKHSeqS3NmN2jhbfunPdM8 — 404s from Claude's account;
+designs since have been shown inline in chat.
+
+## What's built
+
+**Customize mode** on QuickPortal, managers only (`qp-customize` in
+`FEATURE_CATALOG` — widen it from Feature Access):
+
+- Top of page: a bar with **Customize** → in edit mode **Reset to Default** +
+  **Save**, then the High Priority bar, then **Quick Links** — both pinned, never
+  move. Quick Links is not a block any more (2026-10-22); a saved layout naming
+  `links` just drops the key.
+- **Edit mode = dashed outline on every card, the whole card is the handle**
+  (no drag bars — tried twice, dropped). Nothing inside a card can be clicked
+  in edit mode (pointer off in CSS + capture-phase `_qpBlockClicks`); piece
+  grips stay draggable only.
+- **Nothing moves when a drag starts**: drop slots live inside the 22px row
+  gaps (green line); width strips go `visibility: hidden`. **Edge scrolling**:
+  hold a card near the top/bottom of the window and the page scrolls
+  (`_qpEdgeScroll`).
+- **Rows of 1–3 cards**; **Card Widths** strip above a two-card row:
+  "X Wider | Same Width | Y Wider" (Same Width in the middle).
+- **Card pieces:** the Command Center (Live Dashboard, eBay, Scorecard & Audit)
+  and Action Items (one per row) split and recombine. A split-out card has an
+  **×** in edit mode that puts it back into its family's original card in its
+  usual place (`qpPutBack`).
+- **ONE CARD HEIGHT:** every card in a row is at least 350px, so every row is
+  350 (Quick Links excepted). The Performance chart and Leaderboard fill their
+  card instead of the old fixed 380px.
+- **Command Center — no summary view.** Tabs only switch, never collapse; a
+  card opens on its first tab (Live Dashboard first, `CC_TABS` order).
+  - **One tab** (`data-qp-single`): no tab button; title "OVL Command Center ·
+    eBay"; shows a **headline view** (`_QP_HL_BUILD` live / score / ebay) that
+    opens nothing. eBay and Scorecard show everything their panel did; Live has
+    **Today / Yesterday / Month**, Projected Month-End boxes, the latest order,
+    **Open Full Dashboard** (the board over the page, not in the card),
+    Daily Breakdown and the sale chime.
+  - **Two or more tabs** (`data-qp-hl`): normal-size tab buttons, title "OVL
+    Command Center", and the OPEN tab's headline in place of the panel — a
+    leaner version (`h.compact`) so it fits 350 with the tab bar.
+  - Headline data comes from each tab's own loader (`_qpSetHeadline` in
+    `fetchScorecardData`, `fetchAlertsData`, `renderLiveDashboard`) — no second
+    fetch. Desktop only: phones keep the tab panels.
+- **Action Items cards** (`_qpRenderActions`, 2026-10-22): a card holding one
+  piece shows it as a card — count + bar + Next Up for the two checklists (with a
+  Daily / Weekly / Monthly / Quarterly switch, only periods that have tasks),
+  each person's listed/goal for Listing Goals (results vs assigned — the old rail
+  "200/292" was ASSIGNED goals, not listings), the month's goals/initiatives for
+  Goals & Initiatives. Two or more pieces → "Action Items" with tabs + counts. The
+  rows stay in the card, hidden (the layout reads them); in Customize the TABS
+  are the drag handles (`data-qp-drag-piece`). Managers only, desktop only.
+- **Your Feed tabs and pieces** (2026-10-22): Customize users on desktop get
+  All · Due · To Do · News tabs (equal width, a grid), and All shows the three
+  groups under labels. Due = a reminder with `kind: 'due'` in
+  `_samReminderCfg` (always red); News = announcements, messages, patch notes
+  and `noDue` reminders; To Do = the rest. The feed is a third family
+  (`QP_FAMILIES.feed`): its pieces are empty markers (`.sam-fpiece` in
+  index.html) the layout moves between cards, and `_samPaintFeedCard` paints
+  each feed card from the markers it holds. One-kind cards are titled by the
+  kind and have no tabs; in Customize the tabs are the drag handles.
+  **Due dates DONE 10-29:** every deadline card stamps `data-due-on`
+  (YYYY-MM-DD Central) on its state-carrier — Weekly / Monthly KPIs (the
+  Monday), 4pm claims (earliest line), B2B pricing (soonest deal), variance
+  (explanations or DM-note reply, sooner), aging, today's listing goals.
+  `_samDueInfo` turns it into the badge (Overdue / Due Today / Due Tomorrow /
+  Due Sat / Due Nov 9) and the group; on the QuickPortal the Due list is
+  labelled Overdue (red) / Due Today / Due This Week (next 6 days) / Due Later /
+  No Set Date, soonest first. No Set Date = expense report (no written
+  deadline) and the DM's variance review. Variance / aging titles lost their
+  "— Oct 31" suffix (the badge says it). Test login sample covers every group.
+- **Customize is a corner button** (2026-10-22): 30px round icons fixed
+  bottom-right in `.main-content`'s 50px right padding (never over a card);
+  Reset stacks above Save. z-index 100, under the side panels (101).
+- **One tab look** (2026-10-22): every tab bar and switch on the QuickPortal
+  uses the Command Center's `.cc-seg` design (styles.css, ONE TAB LOOK at the
+  end). Tab bars (feed, Action Items) at the CC size, max 440px; small switches
+  (Daily/Weekly, Today/Yesterday/Month, chart and leaderboard toggles) the same
+  look at 26px tall so cards stay 350. The one-tab Live card was 351–352px on
+  Yesterday/Month (older than the tab change); `.qp-hl-footrow` padding-top
+  10→8 fixed it — 350 everywhere at 1280/1366/1440.
+- **Added widgets + the Side Drawer** (2026-10-22, Ethan picked Option A):
+  "+" in the corner (Customize only) opens `qpLibraryOpen` — search, each
+  widget with Add / On Page. `QP_WIDGETS` is the registry (label, sub, icon,
+  `avail` = the source tool's own gate, `render`). A widget is a block that
+  exists only while the saved layout names it (`w:claims`):
+  `_qpEnsureWidgets` builds them before `_qpResolve` (which drops unknown
+  keys), × removes (`qpRemoveWidget`), Reset clears them, and
+  `_qpOriginalKeys` leaves them out so a page with one is never "default".
+  First widget: **Claims & Disputes** — the tool's four tabs (card label
+  "Cases", tooltip "Cases & Disputes"), counts by `_HOLD_VIEWS.due`, Due Next
+  by `due_on`, the tool's GET only (never its eBay sync POST), 2-min cache +
+  `_RT_TOOL_CHECKS.claims`. Store managers only (`_claimsDueScope`).
+  **Later the same day:** the key is now the plain id (`claims`, not
+  `w:claims` — its colon clashed with `family:pieces`), and Claims is a card
+  family (`QP_FAMILIES.claims`, kind `widget`): its four tabs are pieces
+  (markers in the widget's `.sam-card`), split into `claims:returns` etc.,
+  combine, × puts a piece back; × on the widget's own card removes it and
+  every split-out piece. A one-piece card is titled by the piece ("Returns",
+  eyebrow "OVL · Claims & Disputes"). `_qpSetEditing` redraws widgets so their
+  tabs become drag handles. **Drawer rows drag onto the page**
+  (`_qpLibDragStart`: `_qpDrag = {key, add}`; the drawer slides away via
+  `.qp-lib-carrying`; the drop builds it with `qpAddWidget(id, t)`).
+  **Operations widgets** (Ethan: build Call Backs, B2B, SPEEKS Connect; NOT
+  Margin Guide or Picture Guide): every widget now draws through one painter,
+  `_qpWidgetCard`, from `_QP_WSPEC[id]` = { tabs, load (the tool's own GET),
+  model(data, tab) → {n, big, small, aside, sub, cap, lines, link}, ttl }.
+  `_qpWLoad` caches and backs off a minute after a failure (the first Claims
+  code retried on every redraw, which looped). Call Backs = In Stock (the feed
+  card's suggested-match rule) · Open · Contacted; B2B = Pricing
+  (`_b2bPricingDue`) · Need You (`_b2bActionFor`) · Unlisted value; SPEEKS
+  Connect = Pictures · Categories from `?view=counts` (counts only — no item
+  list; Titles is DM-only so left out). Realtime: `_qpWReloadB2b`,
+  `_qpWReloadCallbacks` in `_RT_TOOL_CHECKS`. SPEEKS Connect needs a PIN, so
+  on the test login it says "Couldn't load" — it was checked with a stubbed
+  `_rcFetch` in the pane only.
+  **Locked sizes:** a widget's cell never takes more than `_QP_WIDGET_MAXW`
+  of a row (0.5 for all four — Ethan: stretched full width it "feels odd");
+  set as an inline max-width in `_qpBuild`, lifted on phones, and the Card
+  Widths strip drops options that would pass it. **No dead space** (Ethan,
+  same day): sizes are ⅓·½·Full by default, the three Operations widgets
+  built without Full (`_QP_WIDGET_MAXW` 0.5; Claims 1). A widget under Full
+  never sits alone: `_qpPairWidgets` (in `_qpLayout` and `_qpCommit`) moves a
+  lone one into the nearest row with room; Add puts it in the first row with
+  room; new-row slots refuse it while dragging (red, "Needs a Card Beside
+  It"); edge hints say the size it will be ("Place Beside · ⅓ Row"); with no
+  room anywhere Customize shows a dashed "Add a Card Beside It" (`.qp-lone`).
+  **Drawer, final shape:** slides in/out like the Checklist panel (under the
+  nav, 420px, no dim; `.open`, and `qpLibraryClose` waits for the slide); no
+  size pills (the drag hints say the size); widgets on the page show On Page
+  + **Remove** (`qpLibraryRemove`). SPEEKS Connect has a **Titles** tab
+  (listing-titles `?view=counts` → `titles` per store; `has` per tab drops a
+  tab the person lacks, by its Feature Access key); `operations.html#titles`
+  opens it. **Workspace widgets** (2026-10-23): Monthly Breakdown (the latest
+  month the DM has filled — the tool has NO goals or projection — Net Profit
+  first, four key rows with change vs the month before and place among the 5
+  stores; one tab, no pieces; 5 GETs cached 10 min), Store KPIs (Weekly /
+  Monthly by the reminder's own due rules; done = the Store Total judged by
+  `_kpiThresholdCls` via the new shared `_kpiStoreTotals`), Variance Replies
+  (To Explain / DM Notes, manager side, by `_vrMaybePopup`'s rules). Margin
+  Replies was deleted from the site in its own session (a1ce290). The drawer
+  has sections (`_QP_LIB_SECTIONS`: Operations, Workspace). ⚠️ speeks.js is
+  CRLF in the working copy now — scripted edits must match `\r\n`.
+  **2026-10-23 later:** every widget is ⅓/½ now (Claims and Monthly
+  Breakdown lost Full). Variance Replies gets a made-up report on the test
+  login (`_qpVarianceSample`). **First word capitalised after numbers**
+  (Ethan's site-wide rule, as the feed's "1 Delete request…"):
+  `_qpCapLines` fixes `.qp-hl-big small, .qp-hl-sub, .qp-hl-bs` after every
+  headline / Action Items / widget draw, skipping letters glued to a number
+  ("$55.4k", "3d"). A DOM scan of all five pages (test manager, visible tabs)
+  found the rest only in B2B deal cards and the Call Backs header — fixed at
+  the source ("33 Units", "$450 Offer", "3d In stage", "2 You can answer").
+  Not scanned: modals, panels and other roles' views.
+  **Sizes, final (2026-10-23):** Variance, Store KPIs, Monthly Breakdown ⅓
+  only; Claims and the Operations widgets ⅓·½. `_QP_MIN_W` gives the
+  Performance Chart a ½ minimum: `_qpRowLimit` caps its row at 2 cards,
+  `_qpRoomIn` / Add / pairing respect it, and Card Widths offers only splits
+  that keep every card within its min and max. `_qpPairWidgets` also fixes
+  rows over their limit and rows of only-capped cards that leave a gap.
+  **Drop to Swap:** a whole card dropped on the middle of a card from another
+  group trades places with it (`_qpSwapRows`; widths kept, reset to equal if
+  they break a size); if a row can't take its new card the overlay goes red
+  with the reason (`_qpRowWhyNot`). **Split middle (10-23):** a whole card
+  over the middle of a card from its OWN group (where either makes sense)
+  gets both: top half Combine, bottom half Swap (`_qpTargetAt` takes the
+  pointer's y; target carries `split: true`; `_qpShowHint` draws
+  `.qp-ov-split` with two labelled `.qp-ov-half`s, the live one lit, a
+  refused swap red). A tab dragged out (a piece) still only combines.
+  **No full-width cards (10-23):** every card is held to ½ unless already
+  held tighter (⅓-only Variance/KPIs/Monthly; chart min ½ so exactly ½):
+  `_QP_DEFAULT_MAXW` in `_qpMaxW`. Defaults are now two to a row
+  (feed+actions, command+district, chart+leaderboard, all equal) and go
+  through `_qpPairWidgets` too (`_qpDefaultRows`), so a manager's lone
+  Command Center joins the feed row. When a short row has nowhere to go,
+  `_qpPairWidgets` BORROWS a ½-capable card from the nearest three-card row
+  whose other two still fill it. Due Dates on its own is ⅓
+  (`_QP_PIECE_MAXW['feed/due']`; a combined card takes its widest piece's cap).
+  **Replace (10-23):** something NEW (a drawer widget, or a tab dragged out)
+  over a card's middle shows red "Drop to Replace" (`t.zone === 'replace'`).
+  Over a split-out card of the tab's own group the middle splits: top
+  Combine, bottom Replace (`split: 'replace'`). `_qpRetire` puts the new card
+  in its place: a widget's own card takes the whole widget off (back in the
+  drawer); a split-out card's tabs go home (built-in ones too, e.g. To Do back
+  into Your Feed). Built-in cards themselves refuse ("… Stays on Your Page"),
+  and so does a replace that would leave a gap (`_qpReplaceWhyNot`).
+  **⅔ beside a ⅓ + make room (10-25):** a manager's default page was full
+  everywhere, and one ⅓-only widget had NO gap-free layout, so it could not be
+  placed. `_qpCap(key, rowKeys)`: a built-in card (not a widget, held to ½ —
+  chart included) may take ⅔ when its only partner is ⅓-only; used by
+  `_qpBuild`'s max-width, `_qpRowWhyNot`, `_qpPairWidgets`, Card Widths and the
+  drag hint (`_qpShareIn`, `_qpShareWords`). `_qpBumpPlan`: a whole card or
+  drawer widget dropped on a full row's edge (or a new-row slot it can't have
+  alone) is placed and the row's last card without a minimum moves to a new row
+  below, then pairing fixes the rest; the hint says "… · Leaderboard Moves
+  Down", a slot says "⅓ Row · Beside …" in green. Only if no gap is left —
+  else the old red. **Never locked out (same day):** tabs dragged out of a card
+  (Need You out of B2B) go through `_qpBumpPlan` too (it takes the drag, lifts
+  the tab the way `_qpDropAt` does); every card in a full row is tried as the
+  one to bump; last resort `_qpRepack` re-fits the whole page in order (hint
+  "Cards Rearrange to Fit"). Add uses the same plan when no row has room.
+  **Keeps its side:** a card `_qpPairWidgets` moves to another row goes in at
+  the same place from the left it had (`moveTo`) — far-left B2B stays far
+  left; a borrowed card goes on the far side of the one waiting.
+  `scripts/qp-size-check.js` (13 pass, incl. a 60-page random sweep).
+  **Processes & Policies widget (10-25):** `QP_WIDGETS.docs`, ⅓·½, everyone
+  (docs.html has no Feature Access switch), own drawer section. Ethan picked
+  "search bar and the pinned ones" (no category chips). `_QP_WSPEC.docs.card`
+  — a new hook in `_qpWidgetCard` for a widget that is not a count — draws a
+  search box + `_qpDocRows` (pinned with nothing typed; every-word match over
+  title/desc/category otherwise; 5 rows then "+N More"). `_qpDocSearch` swaps
+  only the list so the box keeps focus; a click counts as `doc:open`. DOCS_URL,
+  10-min cache. `scripts/qp-docs-check.js` (6 pass).
+  **Stats & Awards widget (10-25):** `QP_WIDGETS.stats` + `QP_FAMILIES.stats`
+  (Champions / Awards / Records, split out like any widget's), ⅓·½, everyone,
+  own drawer section. Ethan picked option A (the page's three views as tabs).
+  The champion rules moved out of `fetchChampions` into `_champData()` (one
+  WEEKLY_KPI_URL read per store, was two; result kept in `_champLast`, which
+  every page fills at load for the ticker) — the page and the widget share it.
+  Awards/records reuse `fetchAwardsData` / `fetchRecordsData`. Records leaves
+  out GP (NP switch) and the person-held Google Reviews record. A tab may have
+  no big number now (`big: null`, `room: n` in `_qpWidgetCard`). Links go
+  through `_qpStatsOpen(view)` → `_statsOpenSaved()` on stats.html.
+  `scripts/qp-stats-check.js` (5 pass).
+  **Drag-and-drop review (10-25, Ethan approved all but touch — desktop only):**
+  - **Undo:** `_qpCommit` records the layout before every change
+    (`_qpUndoPush`, 30 steps, widgets included); corner button `#qpUndoBtn`
+    (shown when there is a step) + Ctrl+Z; Reset is a step too (its dialog now
+    says Undo brings it back). History ends at Save.
+  - **One action per card middle:** the split halves (Combine/Swap,
+    Combine/Replace) are gone. Same group → Combine; whole card of another
+    group → Swap; something new over another group → Replace.
+  - **Live preview:** `_qpPreview` — a map of the page after the drop, docked
+    left of the corner buttons while dragging (green = moving, amber = moves
+    too). Worked out by `_qpDropAt(main, drag, t, dry)`, so it can't disagree.
+  - **Saved to the person:** `qp_layouts` (0158) + `qp-layout` function
+    (GET ?user=, POST {user, rows|seen}). localStorage stays as the instant
+    copy; `_qpLayoutSync` after load — server wins, a browser-only layout goes
+    up the first time; never mid-Customize; saves debounced 600ms. The test
+    login blocks the POST, like every write.
+  - **New mark:** `_QP_WIDGET_ADDED` dates; `_qpIsNew` = added ≤30 days and not
+    in `seen`; opening the drawer marks what it lists as seen (`_qpLibSeen`).
+  `scripts/qp-customize-check.js` (6 pass).
+  **Every role from manager down (10-26):** Customize is on by role, not
+  Feature Access — `#qpBar` carries role-manager/owner-manager/assistant-
+  manager/employee and no data-feature; the `qp-customize` catalog line is
+  commented out. Store (board) and Training are left alone; DM/CEO/MOCD come
+  with their own conversion. With Customize, `_qpHeadlinesOn` turns the
+  headline cards on for those roles too. **Weekly KPIs** (the employee/ASM
+  Command Center tab, cc-kpis) is now a piece (`kpis`) with a headline
+  (`_QP_HL_BUILD.kpis`, Ethan's option A: "N of M on target", the misses with
+  goal + store, on target on one line), fed by `fetchAndRenderEmployeeKPIs`
+  through the same `checkRule`. Four tabs in a ⅓ card use short labels
+  (`.qp-many-tabs`, `.cc-tl`/`.cc-ts`). `_qpSettle` = pairing + a re-fit
+  (`_qpRepack`) whenever a row still breaks a size rule — commit, load and
+  default all go through it. Checks: 15 pass in qp-customize-check.js. A test row `zz-claude-test` may
+  still be in qp_layouts (its delete was declined).
+  The Leaderboard card is white on its own (`.ew-perf-lb .ew-standings`).
+  **Test login:** SPEEKS
+  Connect gets SAMPLE counts when `_speeksTestSession` and no PIN (like
+  `_lvTestPayload`).
+  Not yet: drawer categories, DM oversight versions, more widgets (Variance,
+  Recycle suggested).
+- **Site-wide tab look** (2026-10-22): every `.notif-tabs` bar of `.tab-btn`
+  (all five pages: Claims, Checklist/Cleaning panels, Feature Access, Quick
+  Messages, manage modals…) and the Listing Goals `.timeframe-toggle` take the
+  `.cc-seg` look — LOOK ONLY, sizes stay each bar's own (styles.css, ONE TAB
+  LOOK, SITE-WIDE, at the end; doubled classes + !important outrank the
+  Checklist panel's own !important). Left alone: `.ws-subtabs` (the underlined
+  page menu at the top of Workspace/Operations) — a different control.
+- **Reset to Default asks first** (2026-10-22): an HTML dialog (`qpReset` →
+  `_qpResetNow`), Cancel focused; Escape and the backdrop cancel.
+- **Quick links removed for everyone** (2026-10-22): B2B Records and Training,
+  links and catalog keys; the DM's Resources bar went with them.
+- **Headline views are for Customize users only** (`_qpHeadlinesOn`): everyone
+  else, and the store TV board, keep the full Command Center panels and rows.
+- Layout saves **per person in localStorage** (`speeksQpLayout_<name>`), not the
+  database yet.
+
+## Where the code is
+
+- `speeks.js`
+  - `// QUICKPORTAL LAYOUT` — the whole module. Entry point `_qpApplyLayout()`,
+    called at the end of `applyRoleBasedUI`. Headlines: `_qpRenderHeadlines`,
+    `_QP_HL_BUILD`, `_qpLivePast`, `qpLiveMode`.
+  - `// --- TEST SESSION` (~68) — local test login support (see below);
+    `_lvTestPayload` (beside `fetchLiveDashboard`) — sample live data.
+  - `_tabSwitch`, `switchCommandTab`, `_ccSyncCompactOpen`, `_ccOpenDefaultTab`
+    — Command Center tabs never collapse; card-scoped for split cards.
+  - `openLiveFullscreen(false)` — the board filling the window without the
+    browser's real full screen (Live's "Open Full Dashboard").
+- `styles.css` — the `QUICKPORTAL LAYOUT` section at the end: ONE CARD HEIGHT,
+  ONE-TAB CARDS, HEADLINE VIEW.
+- `index.html` — `CUSTOMIZE BAR`, `QUICK LINKS — pinned`, `.qp-cc-piece` in the
+  Command Center title, and the `data-qp-block` tags.
+
+## How to run and test it
+
+1. `preview_start` with the **`speeksnet`** launch config → port **8080**
+   (`python scripts/serve-local.py`).
+2. Open `http://localhost:8080/scripts/test-login.html` → **Sign in as OVL
+   Manager (test)**. There is deliberately **no account in the database**: a
+   real OVL manager row would change OVL's listing goal (`store-targets`), KPI
+   roster, usage report and nudges. The test session (localhost only) blocks
+   every non-GET call to Supabase (allow-list `READ_POSTS` for read-only POSTs).
+   Live sales need a real PIN, so the test session gets made-up SAMPLE live data
+   (`_lvTestPayload`) — Live card, full Live view and Leaderboard fill from it.
+   Buying, Scorecard, eBay, Daily Breakdown and the chart are real.
+3. The Claude desktop browser pane wipes sessionStorage when it re-opens a tab;
+   the test login keeps a localhost-only copy (`speeksTestRestore`) and restores
+   itself. Sign Out clears it.
+4. **The pane is often ~800px wide = the phone layout**, where headlines and
+   Customize are off. Use `resize_window` 1440×900 to test desktop, and reset
+   it with preset "desktop" afterwards.
+5. `powershell -File scripts/browser-check.ps1 b2b-check.js` — last run 292
+   passed, 0 failed (2026-10-22).
+6. Ethan's test layout lives in the pane's localStorage per PORT
+   (`speeksQpLayout_test manager ovl`) — back it up to a file before testing
+   and put it back after. He rearranges it between turns; restore the latest.
+
+## Lessons that cost time (don't relearn them)
+
+- **Never change the layout inside `dragstart`** — Chrome cancels the drag.
+  Defer to `requestAnimationFrame`. Always also test with a **real mouse drag**.
+- Rebuilding rows briefly shrinks the page → scroll jumps to top; wrap commits
+  in `_qpKeepScroll`.
+- `.employee-widget-card` carries `max-width: calc(33.33% - 20px)`; split
+  Command Center cards need `max-width: none !important`.
+- **Anything added to or removed from the flow when a drag starts moves the
+  page under the mouse.** Keep drop targets inside existing space.
+- A drag near the window edge auto-scrolls the page: take a fresh screenshot
+  (or click by element ref) before the next action.
+- With an emulated viewport, screenshot positions and click positions don't
+  match — click by `find` ref instead.
+- A split-out shell never passes through `applyRoleBasedUI`, so it doesn't get
+  the inline `display:flex` the originals get — give shells layout in CSS.
+- The original Command Center's `data-qp-block` is on the `.ew-dash` wrapper,
+  not on `#ccWidget` — selectors need both (`:is(...)`).
+- **Real drags in the pane under emulation** (2026-10-22): `left_click_drag`
+  scales its START by viewport/800 (1.8 at 1440) but its END by ~1.22, so
+  compute both from `getBoundingClientRect` and divide separately. A missed
+  drag that started on page text leaves a selection behind, and the next drag
+  becomes a text drag (dragstart target is a #text node) — clear it with
+  `getSelection().removeAllRanges()` first. Log dragstart/dragover/drop.
+- Every new line on a headline card costs height: measure all three Live modes
+  × every tab at 1/3 width before calling it done (target 350).
+
+## Not done / next steps
+
+- DM design (shown inline 10-26): A = District Command Center pieces with
+  headlines (Live, Matrix, Store Breakdown, eBay, Scorecard); B = DM Action
+  Items cards — DONE 10-26; C = district versions of drawer widgets (Variance
+  review queue, Claims by store, Store KPIs by store; later B2B, Call Backs,
+  Connect Titles). Ethan: B first, then A, then C one widget at a time.
+- **Part A DONE 10-29** (picked from real renderings in
+  `prototypes/district-headlines.html`; Ethan: "look relatively like the same
+  style as the other role versions ... not have every widget look exactly the
+  same"; "if it's not going to look good at 33% it can be designed for just
+  50%"). `QP_FAMILIES.district` (kind `cc`, pieces live / watch / stores /
+  ebay / score on the dc-* ids) — the district board splits and combines like
+  the store one; `_qpRenderHeadlinesNow` draws both families, district via
+  `_qpDistrictHL` (reads `_lvData`, `_dcWatch`, `_dccRows` at draw time, no
+  fetch) and `_QP_DHL_BUILD`. Live = the store Live card's layout with five
+  store boxes (own Today / Yesterday / Month, `qpDLiveMode`); Matrix = status
+  bar + Critical/Warning/Watch/On Target lines; Stores = NP tracking + the
+  rail's own line a store; eBay = status bar + In Danger/At Risk/Clear lines
+  (category chips became a count: they wrapped to 382px); Scorecard = audit
+  bars like the district Action Items. Every non-Live card has "Open Full …"
+  (`openDistrictFull`: MOVES the real panel into Live's full-window view and
+  back, so its rail and drill-downs still work). Sizes: held to ½ like
+  everything; `_qpMinW` keeps any card holding Live at ½, the rest may take ⅓
+  (the original card counts as holding Live unless the SAVED layout has it
+  split out — never ask the page mid-rebuild). Combined cards (h.compact) move
+  the link up beside the label and drop bars; ⅓ (h.narrow) says less again.
+  District tabs are selectors when headlines are on (no collapse). Phones keep
+  the full panels. Swept DM at 1280 + 1440, every tab, every Live mode, split /
+  combined / ⅓ / ½: all 350; CEO's card now sits at ½ beside the feed.
+  `scripts/qp-district-check.js` (9 checks, also covers the feed due dates).
+- **New widgets + mini shelves, 10-29** (Ethan: widgets for "aspects of the
+  site we track that we not have had a dedicated widget for", and "in one of
+  the 33% blocks ... a mini one row widget ... 3 of them in there or a 66% size
+  one"; picked from `prototypes/new-widgets.html`; Customer Shoutouts dropped,
+  Box Order has no order history). Data: new edge function **store-snapshot**
+  (DEPLOYED 10-29 on Ethan's yes) — GET + x-user-pin (test PINs read), Day End
+  rows / daily NP + goal / cash (managers+) / sign-ins (DM, CEO, MOCD), scoped
+  by role; employees get only their own team line. `_qpSnapGet` shares one copy.
+  Full widgets (QP_WIDGETS + _QP_WSPEC `card`): reviews, dreviews, pace, lost,
+  dlost, team, pipeline, buying, calendar (the Store Calendar's own read),
+  hotkeys (Hotkeys & Commands, filters in place like docs). Minis: `QP_MINIS`
+  (14; `double` takes two slots; src snap / page / cal / recycle). A SHELF is a
+  ⅓ block keyed by its contents `shelf:a,b,c` (`_qpMakeShelf`,
+  `_qpEnsureWidgets` builds them from the layout, `_qpShelfRekey` renames on
+  change). Add a mini → first shelf with room, else a new shelf placed like a ⅓
+  widget (`qpAddMini` → `qpAddWidget('shelf:id')`); drawer drag onto a shelf's
+  middle = zone 'shelf' (adds there), elsewhere = new shelf; last mini off takes
+  the shelf (no shelf ×: it sat on the first mini's ×). Customize: mini × and
+  "+ Add a Mini Widget" (opens the drawer at Mini Widgets) are
+  `[data-qp-edit-ok]` (exempt from `_qpBlockClicks`). DRAWER CATEGORIES now by
+  purpose for every widget (`_QP_WIDGET_SECTION`): Sales & Goals, Customers &
+  Reviews, Team & Production, Inventory & Listings, Store Operations, Company,
+  Mini Widgets. `_qpCapLines` keeps a letter glued to a following number
+  ("v3.10.2"). Checked manager / DM / employee at 1440: all 350, real figures.
+  `scripts/qp-shelf-check.js` (8). Not done: reordering minis inside a shelf.
+- **Drawer as tiles, 10-29** (Ethan: with 31 rows the drawer "looks a bit
+  chaotic"; picked option C of `prototypes/widget-drawer.html` over a
+  Widgets/Minis switch and folding sections). 460px drawer; widgets two across,
+  minis three across. The tile is the Add (click, Enter, or drag; no Add
+  button); New, or Remove on a widget already on the page, is a pill in the
+  tile's top-right corner. A mini shows only its name (+ 2 Rows); its line is
+  the tooltip. `tile()` inside `_qpLibraryList`; CSS under "THE DRAWER AS
+  TILES". Cache-buster 20261029f.
+- **QuickPortal off the nav: the back bar, 10-30** (Ethan picked option C of
+  `prototypes/nav-and-banner.html`; "make sure it will work on the B2B page once
+  pushed live"). DESKTOP ONLY (phones/tablets keep the QuickPortal tab, no bar):
+  the tab is hidden by CSS, the rest spaced evenly at their own widths (equal
+  boxes looked misaligned), a name shortens to its data-m only on overflow
+  (`_qpNavFit`), the logo goes home, and every other page gets "← QuickPortal /
+  <page>" as .main-content's first child (`_qpBackBar`). The SPA router swaps
+  only .main-content, so the router calls `_qpBackBar` right after its scroll
+  reset — it MUST stay ahead of the page inits (B2B's `_wsFitPanels` sizes the
+  panel and deal page from where they sit). Verified against main's real
+  b2b.html in a scratch worktree (main + only this code): tab click and direct
+  load both bar 64–119px, panel 119–900 at 900 tall, deal page 119–900, no page
+  scroll; styles.css gives the bar B2B's 24px gutter via
+  `.main-content:has(> .b2b-wrap)`. MERGE NOTE: main replaced NAV COMPACT with
+  NAV FIT (folds names to icons from the right); they coexisted in the scratch
+  test, but reconcile the two when main is merged in. Slim High Priority banner
+  also picked (10-30). The temporary Preview panel is gone.
+- **Quick Links A/B on the real page + Expense Report widget, 10-29.** Quick
+  Links: `_qlBuild` (run from `samCleanHotbar`, after applyRoleBasedUI) reads the
+  VISIBLE links out of the old `.hotbars-stack` (role + store wrappers and every
+  data-feature still gate them) and draws `#qlBar`; the old strip gets `.ql-src`
+  (hidden). Icon + kind from name/href (`_qlKind`), store links first. Ethan picked B
+  (app tiles) with no backdrop, "almost looking like mini widgets": each link a
+  card like `.qp-mn`, 20px apart like the rows; the ↗ sits after the kind so
+  every name keeps one line. Look A and the preview switch are gone. Mockups: `prototypes/quick-links.html`. Expense Report (`exp`): DM /
+  MSM (Feature Access tool-expenses / tool-expenses-mgr, like the Tools entry —
+  the CEO has no Expense Report by default); own month: total, mileage + miles,
+  expenses, latest 3, Filed / Not Filed Yet (only your own filed months come
+  back from the API); CEO (if granted) sees a line a person. Cents via
+  `_expMoney`. Sample on test logins (`_qpExpSample`). Ethan declined Margin
+  Guide and Preferred Purchases widgets.
+- **No card ever loose / full width, 10-29** (Ethan: Buying by Store showed full
+  width at the top). His saved row had four cards (feed + actions + command
+  [hidden for a DM] + dbuying): pairing counts only cards that show, but
+  `_qpResolve` cut every row at three counting hidden ones, so dbuying fell out
+  of the layout while its block was still built — loose in <main>, above every
+  row, full width. `_qpResolve` now counts shown cards only and gives any
+  extra a row of its own. Plus HOLES GO TO THE BOTTOM in `_qpPairWidgets`.
+  Goal Pace caption shortened to "Tracking to Goal · N Days Left"; each ring
+  says "Needs $2.9k/Day", the full sentence is the hover.
+- **Looks, not bars, 10-29** (Ethan: the by-store bars "will make it feel super
+  repetitive"). District four picked from `prototypes/district-variety.html`
+  (A, B, A, A): Goal Pace = rings (`_qpRing`, class `qp-dring` — `qp-ring` is
+  Action Items' ring, the clash drew them over their caption), Buying = share
+  strip + store tiles, Team = top-producer leaderboard, Pipeline = heat tiles.
+  Then "All eight" of `prototypes/widget-spruce.html`: Google Reviews by Store =
+  a card a store with its reviews-a-day line, leader gold (`qp-rvc`,
+  `_qpSparkFill`); Lost Deals by Store = donut + legend (`_qpDonut`); store
+  Buying = a column a day, margin on top (`_qpDayCols` blue); store Lost Deals
+  = three stat boxes + red day columns; district two-row minis Five-Star =
+  star chips, Cash = store tiles (low < 60% of the average in red), Live
+  Listings = colour columns, Available Inventory = share strip + legend. The
+  card body is a flex column — new blocks need `flex: none`. `.qp-widget` is a
+  size container; `@container (max-width: 500px)` tightens everything at ⅓
+  and hides `.qp-wide-only` words. Swept ½ / ⅓ / shelves, Test MOCD + Test
+  Manager: all 350 (minis 230), nothing clipped.
+- **District versions of the store-only four, 10-29** (Ethan: "make a district
+  version of those so the DM at least has something of everything"). `dpace`
+  (Goal Pace by Store: tracking %, needed a day or Hit), `dbuying` (latest
+  report's bought + margin tag), `dteam` (processed + top producer), `dpipeline`
+  (queue + days to clear at the store's own 7-report pace). DM / CEO / MOCD
+  only (`_qpIsDist`), from the same store-snapshot read, ranked rows via
+  `_qpAiStoreRow` like Lost Deals by Store. 350 at ½ and ⅓. Every new full
+  widget now has a district version or is role-neutral (Calendar, Hotkeys,
+  Quick Messages).
+- **Polish 1–4, 10-29** (Ethan picked 1–4 of 6; 5 = realistic test sample
+  scales, 6 = check-suite coverage for the mini rules, both left).
+  (1) MOVES SLIDE: FLIP in `_qpCommit` — `_qpFlipSnap` before, `_qpFlipPlay`
+  after (Web Animations, 220ms, off for prefers-reduced-motion). Cards matched
+  by element, minis by id; a drop notes places before slots close
+  (`_qpFlipFrom`), and so do qpAddMini / qpRemoveMini / qpMiniRows (they
+  rename the shelf before committing). (2) PREVIEW: shelves are named by
+  their minis (`_qpPreviewName`); a mini carried out shows the shelf it left
+  without it; over a shelf it lists that shelf as it will be (`_qpShelfAfter`,
+  sizes after fitting). (3) Empty shelf rows: faint dashed outline in
+  Customize only. (4) "Move Shelf" grip pill on each shelf's top edge
+  (`.qp-shelf-grip`, Customize only) — the minis are their own handles, so a
+  full shelf had nothing to grab. Real drag by the grip + 8 animations seen.
+- **Phones/tablets, no mini Add slot, Quick Messages, 10-29** (Ethan: "on
+  mobile and tablet, customize is disabled and the new widgets aren't
+  active"; "the add mini widget doesn't need to exist"; "the only other
+  widget we can make is the quick messages one"). The "full size" What's New
+  he saw was his 783px pane = the phone tier, where every card stacks full
+  width — not a desktop sizing bug. COMPACT TIER (`_compactMediaQuery()`: ≤900px,
+  or ≤1366 touch): styles.css hides the corner buttons' CONTENTS (`.qp-bar > *`
+  — applyRoleBasedUI puts an inline `display:flex !important` on #qpBar itself,
+  which no stylesheet beats) and every widget/shelf cell (`:has`). Customize
+  ends on crossing into it (`_qpCompactCheck`, matchMedia change + a resize
+  fallback, since the pane's emulation fired no change event) and
+  `qpToggleEdit` won't start it there. The saved layout is untouched (only a
+  Customize edit saves), so widgets return at desktop size. NOTE: since
+  `_qpHeadlinesOn` reads #qpBar's display and the bar itself stays flex,
+  headline cards are unchanged on phones. Empty shelf rows are blank (no
+  button). New widget `qmsgs` (Quick Messages): every tab's messages scoped
+  like renderQMTab (store + Everyone; Networking for DM / manager / owner),
+  search in place, the window's Copy (`copyQMToClipboard`), "+N More", Open
+  Quick Messages; 350 at ⅓ with a small Copy. Swept 1440 / 768 / 375.
+- **Grab a mini, not the shelf; sizes fit, 10-29** (Ethan: "I can't split
+  the shelf up now ... grab each row in the shelf and move it either within or
+  outside of the shelf"; "grabbing a 2 row and putting it in a shelf with only
+  1 row available it should collapse it to 1 row and vice versa"). The WHOLE
+  mini is the handle now (`.qp-mshelf > .qp-mn`, `_qpMiniGrips`; the icon-only
+  grip is gone); a shelf's free rows / empty slots still carry the whole
+  shelf. Sizes: token `id~c` = one row that wants two (`_qpFitTok`,
+  `_qpTokWants2`): a two-row mini dropped where one row is free lands as `~c`;
+  moved where two rows are free (another shelf, or out on its own) it is `~2`
+  again. Room is checked against the fewest rows a mini can take
+  (`_qpMiniMinRows`); the overlay says "· As 1 Row / As 2 Rows". Picking 1 on
+  the switch forgets the wish. Real mouse drags: two-row onto a 1-free shelf →
+  `~c` (110px); that onto a 2-free shelf → `~2` (230px). Out to a + slot and
+  a lone `~c` moving out → `~2` checked with dispatched events (the pane's
+  drag end can't reach that far down).
+- **Shelf onto shelf combines, 10-29** (Ethan: "Can I not drag the one on the
+  left into the one on the right?" — he grabbed the shelf's card, which used
+  to SWAP). A whole shelf over another shelf's middle now combines into it
+  (`_qpTargetAt` merge → `_qpMergeShelves`, one Undo, sizes kept) when their
+  minis fit in three rows; no room, it still swaps. Real mouse drag confirmed.
+- **Two-row minis, 10-29** (Ethan: "All of them", from
+  `prototypes/mini-two-row.html`; "are the bars and charts going to be on a
+  daily basis" — yes: every chart is one bar/point a Day End report, or a
+  calendar day for cash and sign-ins, and its caption says so; bars beside a
+  store or a name are that store/person). A shelf key names each mini as a
+  TOKEN: `id`, or `id~2` for two rows (`_qpTokId`, `_qpTokTwo`, `_qpMiniSize`),
+  so the size saves with the layout. Every single mini has `draw2` (helpers
+  `_qpX2`); Customer Mix / Coming Up stay `double`. Customize: a 1 | 2 switch
+  beside the × (`qpMiniRows`, one Undo; 2 greyed out on a full shelf via
+  `_qpShelfFreeNow`). A moved mini keeps its size (`_qpDrag.tok`). What's New
+  two-row lists the latest release's lines (`window._qpLatestPatch`). Swept
+  Test Manager (12) + Test DM (8) at two rows: all 230px, nothing clipped.
+- **Moving minis, 10-29** (Ethan: "how do I move something from a shelf out
+  of a shelf"). In Customize a mini is carried by its ICON (`.qp-mn-grip`,
+  draggable via `_qpMiniGrips`); the rest of the shelf still carries the whole
+  shelf. The drag travels as `shelf:<id>` with `_qpDrag.mini` + `.from`, so
+  every target already knows it: over a shelf's middle = zone 'shelf' with
+  `at` (its place, by pointer height) — its own shelf reorders; another shelf
+  takes it if there is room; beside a card / a + = a new shelf of its own.
+  Never Replace. `_qpMoveMini` does it as ONE Undo. Fixed on the way: adding
+  or removing a mini never made an Undo step (`_qpShelfRekey` renames the block
+  before `_qpCommit` reads "before"), so those push their own now. Confirmed
+  with real mouse drags (reorder, onto another shelf, out beside the
+  Leaderboard) + Undo. Pane drag scaling at 1440 emulation, measured 10-29:
+  START x×1.8, y×~0.99; END x×~0.98, y×~0.54 — an end point can only reach
+  CSS y ≲ 489, so put the target high on screen. Two-row versions of the single
+  minis: `prototypes/mini-two-row.html`, awaiting Ethan's pick (would be a
+  1 Row / 2 Rows switch per mini in Customize).
+- **Test-login samples for the new widgets, 10-29** (Ethan: "add dummy data to
+  the test accounts for all of these new widgets"). `_qpSnapGet` returns
+  `_qpSnapSample()` in the test session (no fetch; test-login has no PIN, so
+  the real read failed): 62 days of Day End rows for all five stores, NP this
+  month + last, goals, cash (managers+), sign-ins (DM/CEO/MOCD), an employee's
+  own team line only. Seeded by store + day so redraws match. Calendar:
+  `_scalSampleEvents()` is added to the real events in the test session.
+  Recycle mini: 3 waiting (7 for district). Hotkeys says "+21 More" like
+  Processes & Policies. Cache-buster 20261029g. Swept Test Manager / DM /
+  Employee with every new widget + mini: all filled, no errors.
+- **Store Breakdown removed, 10-29** (Ethan: "Live dashboard, eBay widget,
+  and Matrix kind of handling that"). Tab, panel, piece and headline gone;
+  `DC_TABS` is live / watch / ebay / scorecard. `fetchMasterDistrictDashboard`
+  still builds `_dccRows` (eBay, Scorecard, summary read them) without
+  `#district-master-body`. eBay / Scorecard rows no longer drill (`_dcDrill`
+  is a no-op). Run daily import / Run weekly summary moved, on Ethan's pick, to
+  the full Live view's top bar (`#lvFsTools`, `_dcImportsPaint`, same Feature
+  Access keys `dcc-sales-import` / `dcc-weekly-summary`). Lost with the tab:
+  the one-store deep dive (reviews, variance total, buy tracking, weekly
+  metrics, store folder links).
+- **Title Case, every word, 10-29** (Ethan on "PayMore audit 98.5%"): `_qpCapLines`
+  now Title Cases every text node in a headline / Action Items card / widget
+  body, not just the first word of three line kinds; small joining words stay
+  lowercase. Kept as written: curly quotes, `.qp-hl-note`, `.qp-dmn-q`,
+  `.qp-hl-ot`, inner-capital words, letters glued to numbers. The rail rows'
+  `.sam-m-s` lines go through it by a MutationObserver (`_qpWatchRailCase`).
+  Swept manager / DM / employee / CEO with every widget added and every tab
+  clicked: no lowercase words left, all rows 350. Feed snippets untouched.
+- When it ships, bump the cache-buster (`?v=`) in all five HTML pages
+  (`CLAUDE.md` rule 3). `APP_VERSION` with the release.
+- **Save layouts to the database** so they follow a person across devices
+  (new table + edge function; check `list_migrations` before numbering).
+- Customize is hidden on phones; drag doesn't work on touch.
+- Then, per the mockup: DM role, widget library ("Add widget"), "Needs you"
+  alerts widget, usage-based suggestions, Gmail connector, Ask/report widgets.
+- A real test account for other people needs a "test" marker that every
+  backend skips (`store-targets`, `kpi-manage`, `usage-report`, `notify`).
+  **10-26 later:** ASM/employee Action Items get their cards too (the
+  `_isPersonalGoalsUser` gate in `_qpRenderActions` is gone); their Listing
+  Goals card is their own (`_qpAiMyListing` — today's role + goal, the week day
+  by day, from `window._empWeek` set in the employee goals loader). Weekly KPIs
+  misses show Goal and Store as separate tags (`_qpKpiTag`). **Multi-store
+  managers keep a layout per store**: `_qpLayoutStore()`; local key
+  `…<name>@<store>`, qp-layout takes `store=` (row `<name>@<store>`, falls back
+  to the plain row until that store has its own; `seen` stays on the plain row).
+  qp-layout redeployed 10-26. Feed lists stop 14px above the card corner.
+  **10-26, DM/CEO/MOCD:** Customize for DM, CEO and MOCD (`#qpBar` role
+  classes). **District Action Items cards** (`_qpAiDmCleaning` / `_qpAiDmGoals`
+  / `_qpAiDmListing`, `district: true` in `_QP_AI_PIECES`): five stores worst
+  first, from the popups' own reads; Cleaning has Daily / Weekly; Listing counts
+  RESULTS like the manager card (the popup's "listed" is assigned goals); a
+  store with no goal this week says Not Set. Eyebrow "District · …".
+  `_dmxSyncRail` redraws them. **Only Customize pages are held to ½**:
+  `_qpMaxW` returns 1 when `!_qpHeadlinesOn()` — the store board's one Live
+  card is full width again, and anyone without Customize keeps full panels.
+  The size/docs/stats checks stub `_qpHeadlinesOn` true for that reason.
+  **District card keeps a full row** (`_QP_BLOCK_MAXW`, min ½) until part A.
+  **10-26, even tabs, site-wide:** every button in a tab bar or switch is
+  as wide as its widest (`_eqTabsRun`, EVEN TABS at the end of speeks.js:
+  inline min-width from offsetWidth, re-run by a MutationObserver, backs off
+  if the bar would overflow). Groups are listed in `_EQ_TAB_GROUPS` — a new
+  kind of tab bar has to be added there. Team Goals (district) rows are
+  Set / Not Set pills now, all five stores. Feed empty lines Title Case.
+  Recent Activity title capped at 30ch.
+  **10-26, part C (district widgets):** three drawer widgets for DM/CEO —
+  `dvariance` Variance Review (To Review / Stores, from `_vrDmTriage`, lifted
+  out of checkVarianceDmReminders so both read one rule; DM only),
+  `dclaims` Claims & Disputes (oversight read, `_qpClaimsSplit`, a line a
+  store, overdue first; gate tool-claims-oversight), `dkpis` Store KPIs
+  (Due / Overdue / N Of M green a store, 10 GETs cached 10 min). Realtime via
+  the existing _qpClaimsReload / _qpWReloadKpis / _qpWReloadVariance.
+  **District card never shares its row** now (`_QP_MIN_W.district = 1`):
+  a widget added beside it made the row 900px. So the CEO's feed sits alone
+  at ½ until something is added beside it (dclaims/dkpis fill it).
+  Not built yet from part C: B2B pricing, Call Backs by store, Connect Titles.
+  APP_VERSION 3.11.0 (main is 3.10.1; patch notes for v3.11.0 still to
+  write), cache-buster 20261026i.
+  **10-26 late:** `dconnect` (district SPEEKS Connect: Pictures / Categories /
+  Titles a line a store; same ?view=counts reads, corp-scoped for DM/CEO).
+  District cards show all five stores (`room: 5` → `.qp-ai-dense` and a
+  `.qp-cw-grid` subgrid so pills are one width). Records with no store (DM/
+  CEO/MOCD) shows who holds each record. Stats & Awards on its own: a card
+  holding only Champions or only Awards draws `_QP_WSPEC.stats.solo[tab]`
+  (podium tiles; award hero + past winners + year tally; container query at
+  ⅓). Drawer X = .modal-close-btn, rows 10px side padding, two-line subs.
+  B2B already covers DM/CEO (All Stores) — not a part C item.
+  **10-26, widget enhancements (ideas 1, 2, 3, 4, 6; 5 = clickable lines left
+  out):** store dots in `_qpWLineS` / `_qpAiStoreRow` / Records; all-clear
+  state (`clear: [title, line, last?]` on a model → `.qp-clear`); trend vs
+  last week (`_qpWeekTrend` Mon–yesterday vs same days, so none on a Monday;
+  KPIs `trend` vs the period before); checklist progress ring
+  (`_qpAiChecklist`, Next Up one line shorter); "Updated … ago" + refresh
+  (`.qp-upd`, lv-ago, `_qpAgoTimer`). Height sweep: every widget, every tab,
+  every piece split out, six roles at 1440 + manager at 1280 — all 350.
+  **10-26 (later):** time-ago text is Title Case everywhere it is generated
+  (`_lvAgo`, `_siRelTime`, `_ecAgo`: "Just Now", "4m Ago"). The refresh pill
+  is ONLY on Claims (store + district) and SPEEKS Connect (store + district)
+  (`spec.synced`); Claims shows "Synced N Ago" from the read's sync /
+  disputeSync / paymentSync `synced_at`, the OLDEST store's (`_qpClaimsSyncedAt`);
+  Connect has no sync time in its counts, so it shows when the card read it.
+  The Champions / Awards views also draw under the Stats & Awards tabs
+  (`qp-solo-tabbed`), for every role; no-store eyebrow is "Company · All Stores".
+  **10-28, six redesigns:** Records trophy shelf (`stats.solo.records`, badge
+  floats in the name; no-store = who holds it), Store KPIs six tiles
+  (`_qpKpiTiles`, `block` on a model), Processes & Policies pinned as six tiles
+  (`_QP_DOC_TILES`; a search still lists five), B2B Unlisted split bar,
+  Call Backs In Stock what/who/where (`room: 3`), Monthly Breakdown metric
+  switch over the stores' bars (`qpMbMetric`; Net Margin replaces the GP row).
+  Tiles are one fixed size with a two-line name slot. A tabbed Command Center
+  at ⅓ of 1280 was 351 → 53px foot room. Sweep: manager/DM/ASM/employee/CEO/
+  MOCD at 1280 + manager 1440 all 350 (one MOCD run showed 353 once, did not
+  repeat twice).
+  **10-28 later:** Claims & Disputes timeline strip (`_qpClaimsBuckets` /
+  `_qpClaimsStrip`: Overdue / Today / This Week = next 6 days / Later; lines
+  under it are overdue + today, room 2; one-line strip on the district card).
+  Leaderboard podium (`drawLeaderboard`: steps by place, not scaled). Every
+  widget may be ½ now (`_QP_WIDGET_MAXW` all 0.5; qp-size-check pins kpis to ⅓
+  for its ⅓-rule tests). Sweep at 1280: manager 524, DM 342, CEO 168, ASM 305.
+  Round-2 ideas still open: Goals & Initiatives (initiatives are only Current /
+  Upcoming — no done state), Variance severity, Connect store tiles, B2B age
+  bars (B2B_PRICING_DUE_DAYS is the only stage deadline), Call Backs Open /
+  Contacted. eBay and Scorecard stay as they are (Ethan).
+  **10-28, round 2 built:** Goals & Initiatives (goal tiles, Current /
+  Upcoming pills — the tool has no done state), Variance severity bars +
+  countdown pill (`_qpCountdown`) and DM Notes quoted with Reply Needed /
+  Replied, district Variance sample data on the test login, SPEEKS Connect
+  store tiles (`spec.combined`, each tile opens its section; tiles are the
+  drag handles in Customize), B2B Waiting On You age bars on `_b2bAgeTone`
+  (4 amber / 7 red, fills over 7 days), Call Backs Open / Contacted what /
+  who / when (Contacted uses updated_at + status_by). Live B2B Need You and
+  Call Backs were empty, so their filled heights were measured with stubbed
+  rows in the real markup.
+  **10-28, role gallery:** a CDP capture script (scratchpad gallery.mjs, not in
+  the repo) signs into the test login as manager / ASM / employee / DM / CEO /
+  MOCD, stubs empty widget loads with sample data in that browser only, adds
+  every widget and captures combined + every-tab-split layouts at 1280. Fixes
+  it found: SPEEKS Connect tiles got a What Is Waiting breakdown; Live card
+  foot room 52px + ord1/lines margins 5px (MOCD one-tab Live was 353 at ½);
+  narrow-card fixes (Champions labels, Awards video pill, Monthly switch
+  1.25fr first column + 3px padding — `[data-qp-block] .qp-hl-switch` outranks
+  plain .qp-mb-sw rules). All roles 350 in both layouts.
+  **10-28 (evening): sample data for every role on the test login** — Ethan:
+  "put a ton of dummy data in those accounts". `_QP_TEST_SAMPLES` (beside
+  `_qpVarianceSample`) gives Claims, district Claims, Store KPIs, district
+  KPIs, Call Backs and B2B a made-up read in the tool's own shape, scoped like
+  the real read; `_qpWLoad` uses it only when `_speeksTestSession`. KPIs give
+  each store a different week (green / overdue / due / red / close) so the
+  district card shows every state. Checked at 1280 as manager, DM, CEO, ASM
+  and MSM: every widget filled, all 350. Action Items, Your Feed, eBay and
+  Scorecard are still live data (empty for some test stores).
+  **10-28 (later): Action Items and Your Feed samples too.** `_qpRenderActions`
+  runs once inside `_qpAiWithSample` on a test login: the globals the cards
+  read (checklistDataCache, auditDataCache, liveGoalsData, _weekTargetTotal,
+  dmAuditData, allDistrictGoalsData, _dmxGoalsLoaded, _storeTargets,
+  getMonthlyGoals, getStoreInitiatives, window._emp*) are swapped for
+  `_qpAiSample()` for that one synchronous draw and put straight back, so the
+  panels and loaders never see it. Feed: `_samGatherReminders` returns
+  `_samTestReminders()` (real `_samReminderCfg` entries + made-up lines,
+  `_SAM_TEST_REMS` scoped m / d / e by role) and the store notes are
+  `_samTestNotes()`; announcements stay live. Checked manager, DM, employee at
+  1280: all 350. Cache-buster 20261028f.
+  **10-28 (night): tab glitches, site-wide.** Ethan saw the Performance chart and
+  Action Items switches "glitch". Causes found by measuring every tab bar after
+  each click (headless sweep in the pane, all five pages, panels, the full Live
+  view): (1) the chosen tab is bolder (800 vs 750), so `_eqTabsRun` evened bars
+  to a width the bold label then outgrew — it now measures every button at the
+  bold weight (`setProperty(..., 'important')`, the tab rules are !important)
+  and sets every bar, not only uneven ones (Claims & Disputes' equal grid
+  columns grew 15px when "Cases & Disputes" went bold); (2) the full Live view
+  gained a scrollbar on Yesterday / Month — `scrollbar-gutter: stable` on
+  `.lv-fs`. Also: the full Live view's Today / Yesterday / Month takes the new
+  switch look (`.lv-modes`, now in `_EQ_TAB_GROUPS`); Monthly Breakdown's five
+  metric buttons are equal (no 1.25fr); the ASM / employee Weekly KPIs tab gets a
+  sample row on the test login. Left: CRM "New Clients 0 → 25" widens its bar
+  once when the count first loads; the District card grows when a tab is clicked
+  (part A). Cache-buster 20261028n.
+  **10-28 (late night): TEST ACCOUNTS WITH PINS, live site too.** Ethan:
+  "create each role with a test account with pins starting from 0000", "live
+  site too", "keep these test accounts filled with dummy data". Migration 0160
+  `test_users` (its own table — NOT rows in users, which 18 edge functions read
+  for goals/rosters/mail): 0000 CEO · 0001 DM · 0002 MOCD · 0003 Manager OVL ·
+  0004 Owner (Manager) LEE · 0005 MSM BAL&MPL · 0006 ASM WSP · 0007 Employee
+  OVL · 0008 Store OVL. `auth` GET returns them as `test_users` (is_test) beside
+  `users`, so no roster/picker sees them; POST refuses a real PIN that clashes.
+  auth deployed 10-28 (CLI). checkPIN matches test_users too (re-reads a stale
+  cache once), sets speeksTestSession + speeksTestAccount and reloads; the TEST
+  SESSION guard now runs off localhost for speeksTestAccount, and refuses EVERY
+  non-GET (any host) and every beacon. Live / SPEEKS Connect samples no longer
+  need "no PIN". Training role removed (nobody held it; TR the listing-goal
+  day role and the calendar's Training category stay; notify's b2b role list
+  still names it, harmless, not redeployed). The live site gets the PIN sign-in
+  only once this branch reaches main — until then 0000-0008 do nothing there.
+  Layouts a test account saves stay in that browser (the qp-layout POST is
+  blocked like every write).
+  **10-28 (later still): short test names + test PINs may READ in 7 functions.**
+  0161 renamed the test accounts (Test CEO … Test Store, none longer than 13
+  characters) — the long names pushed the top nav into icons-only at widths
+  where a real person's did not (NAV COMPACT MODE; at 1440 every manager-level
+  account is icons-only anyway). The test-session guard now logs every refused
+  read as `[test session] read refused` and keeps `window._testReadFails`.
+  A survey of six roles × every page/sub-tab found ONLY these failing, all 401
+  for "no such PIN": notify, daily-brief, sales-ingest (status), expenses,
+  shopify-recat, listing-titles, ebay-channel. Each now looks a GET's PIN up in
+  test_users when it is not in users (writes still refused). **DEPLOYED 10-28**
+  on Ethan's yes (ebay-channel from the live copy below); all seven byte-checked
+  after, smoke-tested (test PIN reads 200, bogus PIN 401, test-PIN POST 401), and
+  SPEEKS Connect loads for Test DM / Manager / Employee. How it was deployed:
+    npx --yes supabase functions deploy notify --no-verify-jwt --project-ref ejzaqmyxxrkmxvzbjeuo
+    (same for daily-brief, sales-ingest, expenses, shopify-recat, listing-titles)
+  ⚠️ ebay-channel: the REPO copy carries an undeployed Aug-24 "standby" feature
+  (ea32d4d, 146 lines). Deploy the LIVE copy plus the test-PIN change, kept at
+  docs/quickportal/ebay-channel-live/index.ts — copy it over
+  supabase/functions/ebay-channel/index.ts in a scratch checkout, deploy, then
+  restore. All seven were byte-identical to live before the edit (6) or diffed
+  (ebay-channel).

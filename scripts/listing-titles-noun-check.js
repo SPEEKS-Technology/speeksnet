@@ -554,5 +554,25 @@ ok(isProductNoun('laser'), '"Green Laser- Cross Line" says what it is (3624-20)'
        'and missing-noun is the code that calls it');
 }
 
+// ⚠️ SAY WHAT STILL CARRIES IT. LEE 2026-10-10: "Removing the core and speed
+// for the cpu removes important info" — the i9-12900K beside them says both.
+console.log('\n== The trade names the model number that still says it ==');
+{
+    const fnSrc = src.slice(src.indexOf('function impliedByCpu'), src.indexOf('\n}\n', src.indexOf('function impliedByCpu')) + 2)
+        .replace(/\(title: string, trimmed: string\[\]\): string \| null/, '(title, trimmed)')
+        .replace(/\(v =>/, '(v =>');
+    const impliedByCpu = new Function(fnSrc + '\nreturn impliedByCpu;')();
+    const T = 'Asus PRIME Z790-V WIFI LGA 1700 Intel Core i9-12900K 16 Core 3.20GHz ATX';
+    ok(impliedByCpu(T, ['3.20GHz', '16 Core']) === 'Core i9-12900K', 'the LEE combo names its CPU',
+       impliedByCpu(T, ['3.20GHz', '16 Core']));
+    ok(impliedByCpu('AMD Ryzen 7 7800X3D 8 Core 4.2GHz', ['4.2GHz']) === 'Ryzen 7 7800X3D', 'a Ryzen too');
+    ok(impliedByCpu('Dell PowerEdge 2x Xeon E5-2630V3 2.40GHz R530', ['2.40GHz']) === 'Xeon E5-2630V3', 'and a Xeon');
+    ok(impliedByCpu(T, ['ATX']) === null, 'a form factor is not implied by a CPU');
+    ok(impliedByCpu(T, ['3.20GHz', 'ATX']) === null, 'and one non-CPU value spoils the claim');
+    ok(impliedByCpu('Asus PRIME Z790-V 3.20GHz ATX', ['3.20GHz']) === null, 'no CPU in the title, no claim');
+    const block = src.slice(src.indexOf('code: "missing-noun"'), src.indexOf('code: "missing-noun"') + 2400);
+    ok(/impliedByCpu\(original, trimmed\)/.test(block), 'and missing-noun uses it in the trade sentence');
+}
+
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
 process.exit(fails ? 1 : 0);

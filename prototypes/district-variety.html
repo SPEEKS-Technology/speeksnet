@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>District Widget Looks</title>
+<!-- Ethan, 2026-10-29, on Goal Pace / Buying / Team Production / Inventory
+     Pipeline by Store: "Any way to make them not look all the same. the bars
+     give off the same style and will make it feel super repetitive." Two looks
+     each, none of them a bar a store. The real widget card markup and
+     styles.css at the real ½-row width (652px at 1440) and 350px height.
+     Figures are the Test MOCD sample on 2026-10-29. Not linked from the app. -->
+<link rel="stylesheet" href="../styles.css?v=20261029q">
+<style>
+  html, body { height: auto !important; overflow: auto !important; }
+  body { background: #f4f6f8; display: block !important; }
+  .main-content { padding: 20px 24px 60px !important; height: auto !important; overflow: visible !important; max-width: 1400px; }
+  .pv-lab { font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #1a1c1e; margin: 26px 0 10px; }
+  .pv-lab small { font-weight: 600; text-transform: none; letter-spacing: 0; margin-left: 8px; color: #647082; }
+  .pv-row { display: flex; gap: 20px; }
+  .pv-row > .qp-cell { flex: 0 0 calc(50% - 10px); }
+  .pv-opt { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; margin: 0 0 6px 4px; }
+  .qp-widget { height: 350px; box-sizing: border-box; }
+  .qp-widget .sam-board, .qp-widget .sam-card { height: 100%; }
+
+  /* Goal Pace A: rings */
+  .x-rings { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 8px; }
+  .x-ring { text-align: center; }
+  .x-ring svg { width: 74px; height: 74px; display: block; margin: 0 auto; }
+  .x-ring .s { font-size: 12px; font-weight: 800; color: #1a1c1e; margin-top: 4px; display: flex; align-items: center; justify-content: center; gap: 5px; }
+  .x-ring .n { font-size: 11px; font-weight: 700; color: #647082; margin-top: 2px; }
+  .x-ring .n b { color: #1a1c1e; }
+  /* Goal Pace B: race track */
+  .x-track { position: relative; height: 64px; margin: 18px 6px 6px; }
+  .x-track .line { position: absolute; left: 0; right: 0; top: 30px; height: 6px; border-radius: 99px; background: linear-gradient(90deg, #fdecec 0 28.6%, #fdf3e2 28.6% 57.1%, #e8f7ee 57.1% 100%); }
+  .x-track .goal { position: absolute; top: 14px; bottom: 6px; width: 2px; background: #1a1c1e; opacity: .55; }
+  .x-track .goal span { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 9.5px; font-weight: 800; letter-spacing: .05em; color: #647082; white-space: nowrap; }
+  .x-track .m { position: absolute; top: 22px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; }
+  .x-track .m i { width: 20px; height: 20px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .x-track .m span { font-size: 10.5px; font-weight: 800; color: #1a1c1e; margin-top: 3px; }
+  .x-track .m.up span { position: absolute; top: -18px; margin: 0; }
+  .x-scale { position: relative; height: 14px; font-size: 9.5px; font-weight: 700; color: #9aa4b1; margin: 0 6px 10px; }
+  .x-scale span { position: absolute; transform: translateX(-50%); }
+  .x-need { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .x-need div { background: #f6f8fa; border-radius: 9px; padding: 6px 8px; }
+  .x-need b { display: block; font-size: 14px; font-weight: 900; color: #1a1c1e; }
+  .x-need span { display: flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 800; color: #8a94a3; letter-spacing: .04em; }
+  /* Buying A: columns */
+  .x-cols { display: flex; align-items: flex-end; gap: 14px; height: 168px; margin: 10px 6px 0; border-bottom: 1px solid #e6ebf1; }
+  .x-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .x-col .tag { font-size: 10px; font-weight: 800; border-radius: 6px; padding: 1px 6px; margin-bottom: 4px; }
+  .x-col .v { font-size: 12px; font-weight: 900; color: #1a1c1e; margin-bottom: 4px; }
+  .x-col i { display: block; width: 100%; max-width: 64px; border-radius: 8px 8px 2px 2px; }
+  .x-colx { display: flex; gap: 14px; margin: 6px 6px 0; }
+  .x-colx span { flex: 1; text-align: center; font-size: 11px; font-weight: 800; color: #1a1c1e; }
+  .good-t { background: #e8f7ee; color: #146c3c; } .warn-t { background: #fdf3e2; color: #a46412; } .bad-t { background: #fdecec; color: #c53030; }
+  /* Buying B: share strip + tiles */
+  .x-strip { display: flex; height: 14px; border-radius: 99px; overflow: hidden; gap: 2px; margin: 10px 0 12px; }
+  .x-strip i { display: block; }
+  .x-tiles5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .x-t { border: 1px solid #e6ebf1; border-radius: 12px; padding: 9px 9px 8px; position: relative; overflow: hidden; }
+  .x-t .s { font-size: 11px; font-weight: 800; color: #647082; }
+  .x-t .v { font-size: 16px; font-weight: 900; color: #1a1c1e; margin: 2px 0 4px; }
+  .x-t .tag { font-size: 10px; font-weight: 800; border-radius: 6px; padding: 1px 6px; display: inline-block; }
+  .x-t .sub { font-size: 10.5px; font-weight: 700; color: #647082; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Team A: leaderboard */
+  .x-lb { margin-top: 6px; }
+  .x-lb .r { display: flex; align-items: center; gap: 10px; padding: 3px 2px; border-top: 1px solid #eef1f4; }
+  .x-lb .r:first-child { border-top: 0; }
+  .x-lb .k { width: 20px; font-size: 13px; font-weight: 900; color: #9aa4b1; text-align: center; }
+  .x-lb .r:nth-child(1) .k { color: #c9971c; } .x-lb .r:nth-child(2) .k { color: #8f9aa7; } .x-lb .r:nth-child(3) .k { color: #b0703a; }
+  .x-lb .av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 900; flex: none; }
+  .x-lb .nm { flex: 1; min-width: 0; }
+  .x-lb .nm b { display: inline; font-size: 12.5px; margin-right: 6px; font-weight: 800; color: #1a1c1e; }
+  .x-lb .nm span { font-size: 11px; font-weight: 700; color: #8a94a3; }
+  .x-lb .dv { text-align: right; }
+  .x-lb .dv b { display: inline; font-size: 15px; margin-right: 4px; font-weight: 900; color: #1a1c1e; line-height: 1.1; }
+  .x-lb .dv span { font-size: 10px; font-weight: 800; color: #8a94a3; letter-spacing: .04em; }
+  /* Pipeline A: heat tiles */
+  .x-heat { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 8px; }
+  .x-h { border-radius: 14px; padding: 12px 10px; text-align: center; }
+  .x-h .s { font-size: 11px; font-weight: 900; letter-spacing: .04em; }
+  .x-h .q { font-size: 24px; font-weight: 900; margin: 4px 0 0; line-height: 1.1; }
+  .x-h .ql { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .75; }
+  .x-h .d { margin-top: 8px; font-size: 12px; font-weight: 900; border-radius: 99px; background: rgba(255,255,255,.7); padding: 2px 0; }
+  .x-h.good { background: #e8f7ee; color: #146c3c; } .x-h.warn { background: #fdf3e2; color: #8a5410; } .x-h.bad { background: #fdecec; color: #a72828; }
+  .x-key { display: flex; gap: 14px; justify-content: center; margin-top: 12px; font-size: 10.5px; font-weight: 700; color: #647082; }
+  .x-key i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  /* Pipeline B: flow table */
+  .x-flow { margin-top: 6px; }
+  .x-flow .r { display: grid; grid-template-columns: 58px 1fr 18px 1fr 18px 1fr 54px; align-items: center; gap: 4px; padding: 6px 0; border-top: 1px solid #eef1f4; font-size: 12px; font-weight: 700; color: #3c4654; }
+  .x-flow .r.h { border-top: 0; font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; padding-top: 0; }
+  .x-flow .r b { font-size: 14px; font-weight: 900; color: #1a1c1e; }
+  .x-flow .a { color: #b4bcc6; text-align: center; }
+  .x-flow .c { font-size: 10.5px; font-weight: 900; border-radius: 99px; padding: 2px 0; text-align: center; }
+  .x-flow .s { display: flex; align-items: center; gap: 6px; font-weight: 800; color: #1a1c1e; }
+</style>
+</head>
+<body class="is-authenticated">
+<main class="main-content" id="pv"></main>
+<script>
+const C = { OVL: '#7c6fd6', LEE: '#4e90cf', WSP: '#2ea36a', MPL: '#d99f43', BAL: '#d9776a' };
+const dot = s => '<i class="qp-dot" style="background:' + C[s] + '"></i>';
+const IC = {
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  cart: '<path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/>',
+  trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0V4zM6 5H3v2a3 3 0 0 0 3 3M18 5h3v2a3 3 0 0 1-3 3M9 20h6M12 13v7"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/>',
+};
+const card = (icon, tone, eyebrow, title, top, body) => '<div class="qp-cell"><section class="speeks-action-menu qp-part qp-widget"><div class="sam-board"><div class="sam-card"><div class="qp-ai">'
+  + '<div class="qp-ai-head"><span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true"><svg viewBox="0 0 24 24">' + IC[icon] + '</svg></span><div><div class="ew-eyebrow">' + eyebrow + '</div><div class="qp-ai-title">' + title + '</div></div></div>'
+  + '<div class="qp-ai-body">' + top + body + '</div></div></div></div></section></div>';
+const opt = (a, b, la, lb) => '<div class="pv-row"><div style="flex:0 0 calc(50% - 10px)"><div class="pv-opt">' + la + '</div>' + a + '</div><div style="flex:0 0 calc(50% - 10px)"><div class="pv-opt">' + lb + '</div>' + b + '</div></div>';
+const tone = p => p >= 90 ? ['good', '#1f9d57'] : p >= 80 ? ['warn', '#f0a92b'] : ['bad', '#e05252'];
+
+// GOAL PACE
+const PACE = [['BAL', 91, 2915], ['OVL', 89, 3838], ['WSP', 87, 3650], ['MPL', 84, 5027], ['LEE', 79, 4083]];
+const paceTop = '<div class="qp-ai-top"><div class="qp-hl-big">$191,463<small>of $250.0k goal · net profit so far</small></div><span class="qp-trend down">Tracking to 86%</span></div>';
+const ring = (s, p, need) => { const r = 30, c = 2 * Math.PI * r, t = tone(p);
+  return '<div class="x-ring"><svg viewBox="0 0 74 74"><circle cx="37" cy="37" r="' + r + '" fill="none" stroke="#eef1f4" stroke-width="8"/>'
+    + '<circle cx="37" cy="37" r="' + r + '" fill="none" stroke="' + t[1] + '" stroke-width="8" stroke-linecap="round" stroke-dasharray="' + (c * Math.min(p, 100) / 100).toFixed(1) + ' ' + c.toFixed(1) + '" transform="rotate(-90 37 37)"/>'
+    + '<text x="37" y="42" text-anchor="middle" font-size="15" font-weight="900" fill="#1a1c1e" font-family="inherit">' + p + '%</text></svg>'
+    + '<div class="s">' + dot(s) + s + '</div><div class="n"><b>$' + (need / 1000).toFixed(1) + 'k</b> a day</div></div>'; };
+const paceA = card('flag', 'g', 'District · This Month', 'Goal Pace by Store', paceTop, '<div class="qp-hl-cap">Tracking to Goal · Needed a Day</div><div class="x-rings">' + PACE.map(x => ring(x[0], x[1], x[2])).join('') + '</div>');
+const lo = 70, hi = 105, pos = p => ((p - lo) / (hi - lo) * 100).toFixed(1);
+const paceB = card('flag', 'g', 'District · This Month', 'Goal Pace by Store', paceTop,
+  '<div class="x-track"><div class="line"></div><div class="goal" style="left:' + pos(100) + '%"><span>GOAL</span></div>'
+  + PACE.map((x, i) => '<div class="m' + (i % 2 ? ' up' : '') + '" style="left:' + pos(x[1]) + '%"><i style="background:' + C[x[0]] + '"></i><span>' + x[0] + '</span></div>').join('') + '</div>'
+  + '<div class="x-scale">' + [70, 80, 90, 100].map(v => '<span style="left:' + pos(v) + '%">' + v + '%</span>').join('') + '</div>'
+  + '<div class="qp-hl-cap">Needed a Day to Hit Goal</div><div class="x-need">' + PACE.map(x => '<div><span>' + dot(x[0]) + x[0] + '</span><b>$' + (x[2] / 1000).toFixed(1) + 'k</b></div>').join('') + '</div>');
+
+// BUYING
+const BUY = [['OVL', 9151, 46], ['MPL', 6916, 41], ['BAL', 4738, 46], ['WSP', 3645, 36], ['LEE', 3343, 37]];
+const buyTop = '<div class="qp-ai-top"><div class="qp-hl-big">$27,793<small>bought · $16,084 paid</small></div><span class="qp-trend up">42.1% Margin</span></div>';
+const mt = m => m >= 40 ? 'good-t' : m >= 35 ? 'warn-t' : 'bad-t';
+const mxB = Math.max(...BUY.map(x => x[1]));
+const buyA = card('cart', 'b', 'District · Latest Report', 'Buying by Store', buyTop,
+  '<div class="x-cols">' + BUY.map(x => '<div class="x-col"><span class="tag ' + mt(x[2]) + '">' + x[2] + '%</span><span class="v">$' + (x[1] / 1000).toFixed(1) + 'k</span><i style="height:' + Math.round(x[1] / mxB * 110) + 'px;background:' + C[x[0]] + '"></i></div>').join('') + '</div>'
+  + '<div class="x-colx">' + BUY.map(x => '<span>' + x[0] + '</span>').join('') + '</div>');
+const tot = BUY.reduce((a, x) => a + x[1], 0);
+const buyB = card('cart', 'b', 'District · Latest Report', 'Buying by Store', buyTop,
+  '<div class="qp-hl-cap">Share of the District\'s Buying</div><div class="x-strip">' + BUY.map(x => '<i style="flex:' + x[1] + ';background:' + C[x[0]] + '"></i>').join('') + '</div>'
+  + '<div class="x-tiles5">' + BUY.map(x => '<div class="x-t" style="border-left:4px solid ' + C[x[0]] + '"><div class="s">' + x[0] + ' · ' + Math.round(x[1] / tot * 100) + '%</div><div class="v">$' + (x[1] / 1000).toFixed(1) + 'k</div><span class="tag ' + mt(x[2]) + '">' + x[2] + '% margin</span></div>').join('') + '</div>');
+
+// TEAM
+const TEAM = [['MPL', 'Priya Nair', 53, 14], ['BAL', 'Hannah Lutz', 35, 13], ['OVL', 'Maya Ortiz', 33, 11], ['WSP', 'Marco Diaz', 30, 9], ['LEE', 'Riley Shaw', 27, 10]];
+const teamTop = '<div class="qp-ai-top"><div class="qp-hl-big">178<small>devices processed · $18.0k value</small></div></div>';
+const ini = n => n.split(' ').map(w => w[0]).join('');
+const teamA = card('trophy', 'a', 'District · Latest Report', 'Team Production by Store', teamTop,
+  '<div class="qp-hl-cap">Top Producer at Each Store</div><div class="x-lb">' + TEAM.slice().sort((a, b) => b[3] - a[3]).map((x, i) => '<div class="r"><span class="k">' + (i + 1) + '</span>'
+    + '<span class="av" style="background:' + C[x[0]] + '">' + ini(x[1]) + '</span><div class="nm"><b>' + x[1] + '</b><span>' + x[0] + ' · store processed ' + x[2] + '</span></div>'
+    + '<div class="dv"><b>' + x[3] + '</b><span>DEVICES</span></div></div>').join('') + '</div>');
+const teamB = card('trophy', 'a', 'District · Latest Report', 'Team Production by Store', teamTop,
+  '<div class="qp-hl-cap">Processed by Each Store · Its Top Producer</div><div class="x-tiles5">' + TEAM.map(x => '<div class="x-t" style="border-left:4px solid ' + C[x[0]] + '"><div class="s">' + x[0] + '</div>'
+    + '<div class="v" style="font-size:22px">' + x[2] + '</div><div class="sub">devices</div><div class="sub" style="color:#1a1c1e;margin-top:8px">★ ' + x[1].split(' ')[0] + ' ' + x[1].split(' ')[1][0] + '.</div><div class="sub">' + x[3] + ' devices</div></div>').join('') + '</div>');
+
+// PIPELINE
+const PIPE = [['OVL', 170, 208, 6], ['BAL', 142, 196, 5], ['LEE', 48, 165, 2], ['WSP', 47, 214, 2], ['MPL', 40, 260, 2]];
+const pipeTop = '<div class="qp-ai-top"><div class="qp-hl-big">447<small>waiting to process · 1,043 available</small></div></div>';
+const dt = d => d <= 3 ? 'good' : d <= 7 ? 'warn' : 'bad';
+const pipeA = card('layers', 't', 'District · Latest Report', 'Inventory Pipeline by Store', pipeTop,
+  '<div class="qp-hl-cap">In Queue · Days to Clear at the Store\'s Pace</div><div class="x-heat">' + PIPE.map(x => '<div class="x-h ' + dt(x[3]) + '"><div class="s">' + x[0] + '</div><div class="q">' + x[1] + '</div><div class="ql">in queue</div><div class="d">' + x[3] + ' day' + (x[3] === 1 ? '' : 's') + '</div></div>').join('') + '</div>'
+  + '<div class="x-key"><span><i style="background:#bfe8cf"></i>3 days or less</span><span><i style="background:#f6dcae"></i>4–7 days</span><span><i style="background:#f6c4c4"></i>Over a week</span></div>');
+const ct = d => d <= 3 ? 'good-t' : d <= 7 ? 'warn-t' : 'bad-t';
+const pipeB = card('layers', 't', 'District · Latest Report', 'Inventory Pipeline by Store', pipeTop,
+  '<div class="x-flow"><div class="r h"><span>Store</span><span>In Queue</span><span></span><span>Available</span><span></span><span>Processed / Day</span><span>To Clear</span></div>'
+  + PIPE.map(x => '<div class="r"><span class="s">' + dot(x[0]) + x[0] + '</span><b>' + x[1] + '</b><span class="a">→</span><b>' + x[2] + '</b><span class="a">·</span><span>' + Math.round(x[1] / x[3]) + ' a day</span><span class="c ' + ct(x[3]) + '">' + x[3] + 'd</span></div>').join('') + '</div>');
+
+document.getElementById('pv').innerHTML =
+  '<div class="pv-lab">Goal Pace by Store<small>today: a bar a store, like the other three</small></div>' + opt(paceA, paceB, 'A · Rings', 'B · Race to Goal')
+  + '<div class="pv-lab">Buying by Store</div>' + opt(buyA, buyB, 'A · Columns', 'B · Share Strip + Tiles')
+  + '<div class="pv-lab">Team Production by Store</div>' + opt(teamA, teamB, 'A · Top Producer Leaderboard', 'B · Store Tiles')
+  + '<div class="pv-lab">Inventory Pipeline by Store</div>' + opt(pipeA, pipeB, 'A · Heat Tiles', 'B · Flow Table');
+</script>
+</body>
+</html>

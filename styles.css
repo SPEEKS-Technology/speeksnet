@@ -2850,6 +2850,14 @@ select.bs-hidden-select:focus {
 #manageUsersList .mu-group.collapsed .mu-group-chev { transform: rotate(-90deg); }
 #manageUsersList .mu-group-body { padding-top: 8px; }
 #manageUsersList .mu-group.collapsed .mu-group-body { display: none; }
+/* Test Accounts (_muRenderTestAccounts): read-only, PIN first — the PIN is what
+   the list is for. Not .user-manage-row, so the save never reads them. */
+#manageUsersList .mu-test-note { font-size: 12px; color: #647082; margin: 0 2px 8px; }
+#manageUsersList .mu-test-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 1fr) 60px; gap: 10px; align-items: center;
+    background: #fff; padding: 10px 12px; border-radius: 8px; border: 1px dashed var(--gen-border); margin-bottom: 8px; font-size: 14px; }
+#manageUsersList .mu-test-pin { font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .08em; color: #146c3c; background: #e8f7ee; border-radius: 6px; padding: 3px 8px; justify-self: start; }
+#manageUsersList .mu-test-name { font-weight: 700; color: var(--slate-charcoal); }
+#manageUsersList .mu-test-role, #manageUsersList .mu-test-store { color: #5b6b64; }
 
 .idea-menu { width: 550px; max-width: 90vw; }
 .idea-label { display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: var(--slate-charcoal); }
@@ -5663,10 +5671,15 @@ button.dc-audit:hover { background: #fff; }
     transition: opacity 0.3s ease, color 0.3s ease;
 }
 
-.version-tag:hover {
+/* Clickable: opens this version's patch notes (openVersionPatchNotes). */
+.version-tag { cursor: pointer; border-radius: 4px; }
+
+.version-tag:hover,
+.version-tag:focus-visible {
     opacity: 1;
     color: var(--sage-professional);
 }
+.version-tag:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: 2px; }
 
 .top-nav .version-tag { color: rgba(255,255,255,0.45); }
 .top-nav .version-tag:hover { color: var(--sage-professional); opacity: 1; }
@@ -6939,6 +6952,26 @@ input.vr-up-input[type="file"] {
   color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0;
   border-radius: 20px; padding: 1px 8px; margin-right: 4px; white-space: nowrap;
   vertical-align: 1px;
+}
+
+/* "Recycled in POS" tick under the manager's Approved chip (0159). Sits on its
+   own line below the chip; the who/when stamp under it is what tells the
+   manager and ASM which of them already did it. Grey until ticked, green after. */
+.recycle-pos-box {
+  display: flex; align-items: center; gap: 5px; margin-top: 6px;
+  font-size: 10.5px; font-weight: 800; color: #64748b; cursor: pointer;
+}
+.recycle-pos-box input { margin: 0; width: 14px; height: 14px; cursor: pointer; accent-color: #059669; }
+.recycle-pos-box.is-done { color: #166534; }
+/* width:0 + min-width:100% = fill the cell but contribute NOTHING to its width.
+   The cell is nowrap and the column sizes to its widest line, so a stamp longer
+   than "Recycled in POS" ("Jurell Guild · Oct 28") widened the Status column the
+   moment the box was ticked and shoved every column to its right over. Now it
+   wraps inside the width the chip and the box already claim. Indent is padding,
+   not margin, so the min-width:100% box can't overrun the cell by 19px. */
+.recycle-pos-by {
+  font-size: 10px; font-weight: 600; color: #94a3b8; margin-top: 2px; padding-left: 19px;
+  box-sizing: border-box; width: 0; min-width: 100%; white-space: normal; overflow-wrap: anywhere;
 }
 
 .recycle-new-dot {
@@ -10694,7 +10727,6 @@ body.sam-active .hotbar-btn:hover {
 #claimAlertBubble,
 #recycleAlertBubble,
 #varianceAlertBubble,
-#marginAlertBubble,
 #agingAlertBubble,
 #kpiWeeklyAlertBubble,
 #kpiMonthlyAlertBubble,
@@ -11057,11 +11089,18 @@ body.sam-active .hotbar-btn:hover {
 .modal-menu.manage-menu > .modal-header h3 {
     font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: #0f172a;
 }
-.modal-menu.manage-menu .modal-close-btn {
+/* Settings (the cog) uses the same tool header but is not a manage-menu, so it
+   kept the old round grey X (Ethan, 2026-10-25: "the same style as the rest of
+   the site"). */
+.modal-menu.manage-menu .modal-close-btn,
+.modal-menu.settings-menu .modal-close-btn,
+.qp-lib .modal-close-btn {
     width: 32px; height: 32px; border-radius: 9px;
     background: #f1f5f9; color: #647082; font-size: 14px; flex: 0 0 auto;
 }
-.modal-menu.manage-menu .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
+.modal-menu.manage-menu .modal-close-btn:hover,
+.modal-menu.settings-menu .modal-close-btn:hover,
+.qp-lib .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
 
 /* Reusable calm tool header: icon tile + eyebrow + title + subtitle */
 .tool-head .tool-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
@@ -12416,6 +12455,10 @@ body.sam-active .hotbar-btn:hover {
     background: #eef1f5;
     display: flex; flex-direction: column;
     overflow: auto;
+    /* Yesterday and Month are taller than Today, so switching to them brought
+       a scrollbar in and the whole board slid 15px left (Ethan, 2026-10-28:
+       "glitchy" tabs). The track's room is kept whether it is needed or not. */
+    scrollbar-gutter: stable;
 }
 .lv-fs-bar {
     display: flex; align-items: center; justify-content: space-between;
@@ -16401,6 +16444,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 /* One rule separates the controls from the district total; a second one between
    two adjacent buttons just reads as clutter. */
 .si-line + .si-line { border-left: none; padding-left: 0; margin-left: 0; }
+/* Their home since the Store Breakdown tab went (2026-10-29): the full Live
+   view's top bar, between the title and the close button (_dcImportsPaint). */
+.lv-fs-tools { margin-left: auto; margin-right: 12px; display: flex; align-items: center; gap: 8px; }
+.lv-fs-tools:empty { display: none; }
+.lv-fs-tools .si-line:first-child { border-left: none; padding-left: 0; margin-left: 0; }
 .si-dot  { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #cbd5e0; }
 .si-dot.si-good { background: #1f9d57; }
 .si-dot.si-warn { background: #d98324; }
@@ -19435,8 +19483,15 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
    everything under it is the evidence for reading it. */
 .lh-tool-note { font-size: 13px; font-weight: 700; color: #0f172a; line-height: 1.5; }
 .lh-tool-meta {
-    display: flex; gap: 10px; flex-wrap: wrap; margin: 5px 0 7px;
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 5px 0 7px;
     font-size: 11px; color: #64748b;
+}
+/* The Shopify link on a note, the same pill as everywhere else but sized to the
+   11px line it sits on — the full 82px pill was the loudest thing in the row,
+   louder than the note it belongs to. No min-width: there is no eBay pill
+   beside it to match. */
+.lh-tool-meta .ec-pill, .lh-tool-done-row .ec-pill {
+    min-width: 0; padding: 1px 8px; font-size: 10.5px; gap: 4px;
 }
 .lh-tool-ttl {
     display: flex; gap: 8px; align-items: baseline; font-size: 12px;
@@ -19505,6 +19560,25 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     font-family: inherit; cursor: pointer; white-space: nowrap;
 }
 .lh-tool-done-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
+/* Send Back, per note. The same quiet button as Clear: it is one of two ways a
+   note ends, not an alarm. Right-aligned so it never reads as part of the
+   evidence above it. */
+.lh-tool-send { display: flex; justify-content: flex-end; margin-top: 7px; }
+.lh-tool-send-btn {
+    padding: 4px 10px; border-radius: 7px; border: 1px solid #cbd5e1;
+    background: #fff; color: #334155; font-size: 11px; font-weight: 700;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.lh-tool-send-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
+.lh-tool-send-btn:disabled { opacity: 0.5; cursor: default; }
+/* The DM's reason a denied row is back in the queue (0156). Amber, not red: it
+   is an instruction to look again, not a statement that the title is broken. */
+.lt-returned {
+    margin: 0 0 8px; padding: 7px 10px; border-left: 3px solid #d97706;
+    border-radius: 0 6px 6px 0; background: #fffbeb;
+    font-size: 12px; color: #78350f; line-height: 1.45; overflow-wrap: anywhere;
+}
+.lt-returned-h { font-weight: 800; font-size: 11px; color: #92400e; margin-bottom: 2px; }
 .lh-tool-clear, .lh-tool-err {
     display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
     padding: 14px 16px; border-radius: 10px;
@@ -19626,6 +19700,14 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     margin-left: -16px;   /* out of the ul's bullet indent, back to the edge */
 }
 .lt-why li.lt-caution { color: #a3352c; font-weight: 700; }
+/* The photo that settled a name finding, shown rather than quoted. Capped in
+   both directions so a portrait shot cannot push the row's buttons off a phone
+   screen; the link opens it full size. */
+.lt-evidence { list-style: none; margin: 4px 0 2px -16px; }
+.lt-evidence a { display: inline-flex; flex-direction: column; gap: 3px; max-width: 100%;
+    font-size: 12px; font-weight: 600; color: #1d4ed8; text-decoration: none; }
+.lt-evidence img { display: block; max-width: min(260px, 100%); max-height: 200px;
+    object-fit: contain; border: 1px solid #e2e8f0; border-radius: 6px; background: #f8fafc; }
 
 /* The scope line. Quiet by default — it is context, not an alarm — and amber
    when it has to admit half the scope is not being applied. */
@@ -25209,6 +25291,1417 @@ select.dd-native {
 /* Bigger than body copy: this is the sentence being signed. */
 .b2b-cdoc-terms { margin: 14px 0 0; font-size: 14px; line-height: 1.55; color: #1a1c1e; }
 .b2b-sum-link { font-weight: 700; color: var(--sage-professional, #1f9d57); }
+
+/* ============================================================================
+   QUICKPORTAL LAYOUT — rows of 1–3 cards, the Customize bar, the drop targets
+   ============================================================================
+   speeks.js (QUICKPORTAL LAYOUT) moves every data-qp-block into a .qp-cell in a
+   .qp-row. The row is a flex line; each cell's flex-grow is its share of the
+   width (1:1, 2:1, or the page's own 3:2 and 3:1 defaults). Colours are the
+   dashboard's own — this is the existing page with handles on it, not a new
+   look. */
+.qp-row { display: flex; gap: 20px; align-items: stretch; margin-bottom: 22px; }
+.qp-row[hidden], .qp-cell[hidden] { display: none !important; }
+.qp-cell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+/* The row owns the spacing now. Each block's own margin was written for a plain
+   stack (the deck's 22px, Performance's mb-30, Quick Links' -6px tuck under the
+   deck) and would double up or misalign inside a row. */
+.main-content .qp-cell > [data-qp-block] { margin: 0 !important; flex: 1 1 auto; min-width: 0; }
+/* The High Priority section is the deck's old outer shell; with nothing to show
+   it must not keep the deck's bottom margin. */
+.speeks-action-menu.sam-hero-wrap:not(:has(> .sam-hero:not([hidden]))) { margin-bottom: 0; }
+
+/* The feed and the action items were two columns of one grid; each is its own
+   block now, so each board has one column. The feed card used to be pinned at
+   300px so the two columns lined up; now the ROW lines them up, so the card
+   takes 300px as a floor and grows to the row. `contain: size` stops the list
+   inside counting toward that height — without it a busy feed would make the
+   whole row as tall as every announcement it holds. */
+.speeks-action-menu.qp-part .sam-board { grid-template-columns: minmax(0, 1fr); flex: 1 1 auto; }
+.speeks-action-menu.qp-part .sam-board > .sam-card { height: auto; min-height: 300px; }
+.speeks-action-menu.qp-part .sam-feed { contain: size; }
+/* Every card in a row ends at the same line (Ethan, 2026-10-21), the Action
+   Items card included. Outside the layout its rail stretches only with a full
+   set of four, because sharing the slack among fewer rows distends them — so
+   here the CARD stretches and the rows keep their own height; the slack sits
+   below the last row. A full set still shares it through .sam-rail-fill. */
+.speeks-action-menu.qp-part .sam-rail { align-self: stretch; }
+/* A split-out card's shell is built in speeks.js and never passes through
+   applyRoleBasedUI, which is what writes display:flex inline onto the original
+   blocks — so without this the shell was a plain block and the card inside sat
+   at its own height in a taller row. An inline display (the role gate on the
+   originals) still wins over this. */
+.qp-cell > .speeks-action-menu.qp-part { display: flex; flex-direction: column; }
+.speeks-action-menu.qp-part .sam-rail > .sam-card { flex: 1 1 auto; min-height: min-content; }
+
+/* Quick Links is pinned under High Priority (index.html, QUICK LINKS — pinned),
+   not a block in the rows. Its old margin tucked it -6px up under the feed deck
+   it used to follow; under the banner it sits flush, with the rows' own gap below. */
+body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
+
+/* Performance: the chart and the leaderboard are two cards now. */
+.ew-perf.qp-part .ew-perf-body { grid-template-columns: minmax(0, 1fr); }
+/* On its own card the Leaderboard is white like every other card (Ethan,
+   2026-10-23). The pale green .ew-standings fill was there to set it apart
+   from the chart beside it, back when the two shared one card. */
+.ew-perf-lb .ew-standings { border-left: none; background: #fff; }
+
+/* --- Customize bar --- */
+/* First thing in <main> now, above High Priority — no negative top margin to
+   tuck it under the banner any more. */
+/* THE CORNER BUTTON (Ethan, 2026-10-22): round icon buttons pinned to the
+   bottom-right of the window, so Customize is reachable wherever you have
+   scrolled to — and in edit mode Save is too, which matters when you've just
+   dragged a card to the bottom of the page. Out of the page flow, so it takes
+   no row of its own above the cards any more.
+   SMALL, AND IN THE GUTTER (Ethan, 2026-10-22: it sat over a card's corner).
+   .main-content has 50px of right padding, so a 30px button 10px from the
+   window's edge lives in that empty strip and never covers a card. Reset
+   stacks ABOVE Save rather than beside it, which would need twice the width.
+   z-index 100: over the cards, UNDER the side panels (101) that slide in
+   from the same edge, so an open Checklist isn't wearing a button. */
+.qp-bar { position: fixed; right: 10px; bottom: 18px; z-index: 100; display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 0; }
+/* Just the two buttons in edit mode — no sentence of instructions (Ethan,
+   2026-10-21): the handles and drop bars say what to do. */
+.qp-btn {
+    width: 30px; height: 30px; padding: 0; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+    border: 1px solid #d5dce4; background: #fff; color: #1a1c1e; box-shadow: 0 3px 10px rgba(16,24,40,.14);
+}
+.qp-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-btn:hover { background: #f1f4f7; }
+.qp-btn[hidden] { display: none; }
+.qp-btn-main .qp-ico-save, .qp-bar.is-editing .qp-btn-main .qp-ico-edit { display: none; }
+.qp-bar.is-editing .qp-btn-main .qp-ico-save { display: block; }
+.qp-bar.is-editing .qp-btn-main { background: #1f9d57; border-color: #1f9d57; color: #fff; }
+.qp-bar.is-editing .qp-btn-main:hover { background: #178048; }
+
+/* --- edit mode: THE WHOLE CARD IS THE HANDLE (Ethan, 2026-10-21) ---
+   History, so nobody brings the bars back by accident: edit mode first put a
+   "Drag to Move" bar above every card, and dragging added a + strip between
+   every row and took the card-width strips away — the page slid under the
+   mouse as a drag began and the drop landed a row lower than aimed. A
+   hover-only bar laid over the card fixed the slide but covered the card's
+   first row. Now there is no bar: every card shows a dashed outline the whole
+   time, you grab the card anywhere, and nothing inside it can be used until
+   you press Save (pointer off here; clicks also stopped in speeks.js,
+   _qpBlockClicks). Nothing is added to or taken from the flow while dragging. */
+.main-content.qp-editing .qp-cell > [data-qp-block] { outline: 2px dashed #b8c2ce; outline-offset: 4px; border-radius: 14px; cursor: grab; user-select: none; }
+.main-content.qp-editing .qp-cell > [data-qp-block]:hover { outline-color: #8a94a3; }
+.main-content.qp-editing .qp-cell > [data-qp-block]:active { cursor: grabbing; }
+.main-content.qp-editing .qp-cell > [data-qp-block] * { pointer-events: none; }
+/* A Command Center tab or an Action Items row can still be dragged out on its
+   own, so it keeps the pointer (to start that drag — never to click). */
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-piece-drag { pointer-events: auto; }
+/* Solid green only for combine — an edge drop draws its own line instead. */
+.main-content.qp-editing .qp-cell:has(> .qp-ov-combine) > [data-qp-block].qp-drop { outline: 2px solid #1f9d57; }
+/* The card being carried fades where it stands. */
+.main-content.qp-editing .qp-cell > [data-qp-block].qp-dragging { opacity: .4; }
+
+/* Card widths, above a two-card row. Each choice is a picture of the row (the
+   wider box filled) over the name of the card it widens — no fractions. */
+.qp-rowbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -8px 0 10px; }
+.qp-rowbar-lab { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; margin-right: 4px; }
+.qp-size {
+    font: inherit; font-size: 12.5px; font-weight: 600; min-height: 36px; padding: 4px 12px 4px 8px; border-radius: 9px; cursor: pointer;
+    border: 1px solid #d5dce4; background: #fff; color: #3c4654; display: inline-flex; align-items: center; gap: 8px;
+}
+.qp-size:hover { background: #f1f4f7; }
+.qp-size svg { width: 30px; height: 16px; flex: none; }
+.qp-size svg rect { fill: #e3e8ee; stroke: #9aa6b5; stroke-width: 1; }
+.qp-size svg rect.on { fill: #9aa6b5; }
+.qp-size.on { border-color: #1f9d57; background: #e8f7ee; color: #14532d; box-shadow: inset 0 0 0 1px #1f9d57; }
+.qp-size.on svg rect { stroke: #178048; }
+.qp-size.on svg rect.on { fill: #1f9d57; }
+/* While dragging the width strips fade out but KEEP their space — taking them
+   out of the flow (display:none, as before) moved every row below them. */
+.main-content.qp-dragging-any .qp-rowbar { visibility: hidden; }
+
+/* --- drop targets, only while dragging --- */
+/* The gap between rows: a card dropped there gets a row of its own. The slot
+   lies IN the 22px gap a row already leaves below itself (height 22, margin-top
+   -22), so adding the slots moves nothing. Invisible until the pointer is in
+   it; then a green line across the page marks the spot. The + it carries from
+   the first design stays in the markup, hidden. */
+.qp-slot-row { position: relative; height: 22px; margin: -22px 0 0; }
+.qp-slot-row::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: transparent; }
+.qp-slot-row.qp-drop::before { background: #1f9d57; }
+.qp-plus { display: none; }
+
+/* The hint over the card under the pointer. Laid over the card itself (the
+   cell is the positioning box; top/height are set to the card's, below its
+   handle) and never in the way of the drop: pointer-events off. */
+.qp-cell { position: relative; }
+.qp-ov { position: absolute; left: 0; right: 0; z-index: 6; pointer-events: none; border-radius: 14px; }
+.qp-ov-combine { background: rgba(232,247,238,.94); border: 2px solid #1f9d57; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 20px; box-sizing: border-box; }
+.qp-ov-ico { width: 44px; height: 44px; border-radius: 12px; background: #1f9d57; color: #fff; display: grid; place-items: center; }
+.qp-ov-ico svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.qp-ov-big { font-size: 17px; font-weight: 800; color: #14532d; }
+.qp-ov-small { font-size: 12.5px; font-weight: 600; color: #178048; max-width: 340px; }
+/* "Place beside": a green line in the gap on that side of the card (option B),
+   with its words in a small tag at the top — not a tinted band over the card. */
+.qp-ov-edge { width: 4px; border-radius: 2px; background: #1f9d57; }
+.qp-ov-edge.l { left: -12px; right: auto; }
+.qp-ov-edge.r { right: -12px; left: auto; }
+.qp-ov-edge span { position: absolute; top: 10px; font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #14532d; background: #fff; border: 1px solid #bfe5cf; border-radius: 6px; padding: 4px 7px; white-space: nowrap; box-shadow: 0 2px 6px rgba(16,24,40,.10); }
+.qp-ov-edge.l span { left: 10px; }
+.qp-ov-edge.r span { right: 10px; }
+.qp-ov-edge.full { background: #9aa6b5; }
+.qp-ov-edge.full span { color: #647082; border-color: #d5dce4; }
+
+/* The × on a card taken apart (qpPutBack) — on the card's corner, over the
+   dashed outline, in the cell rather than the card so a click on it is not
+   swallowed with the card's own clicks. Edit mode only (made and removed by
+   _qpRenderControls / _qpSetEditing). */
+.qp-x {
+    position: absolute; top: -9px; right: -9px; z-index: 8; width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center; border-radius: 99px; cursor: pointer;
+    background: #fff; border: 1px solid #c9d3dd; color: #647082; box-shadow: 0 1px 3px rgba(16,24,40,.12);
+}
+.qp-x svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+/* Not red: putting a piece back loses nothing, so it shouldn't look like delete. */
+.qp-x:hover { background: #eef1f4; border-color: #9aa6b5; color: #1a1c1e; }
+.main-content.qp-dragging-any .qp-x { visibility: hidden; }
+
+/* CARD PIECES — the grab cursor on a tab or action row that can be dragged out. */
+.main-content.qp-editing .qp-piece-drag { cursor: grab; }
+.main-content.qp-editing .qp-piece-drag:active { cursor: grabbing; }
+.qp-piece-drag.qp-dragging { opacity: .45; }
+/* A Command Center card split out of the original fills its cell like the
+   original does inside .ew-dash — whose rule beats .employee-widget-card's
+   max-width: calc(33.33% - 20px) with !important, so this has to as well, or a
+   split card sat at a third of its own cell. */
+.qp-cell > .cc-widget.qp-shell { flex: 1 1 auto; min-width: 0; max-width: none !important; }
+/* The Command Center's title is store + "Command Center" + " · Live Dashboard"
+   (.qp-cc-piece) + the week, and .ew-title is a wrapping flex row — so in a
+   narrow card each of those became its own column and wrapped on its own
+   ("OVL / Command Center / · Live Dashboard / Week of…"). As plain text it
+   wraps like a sentence; the week keeps itself together. */
+#ccWidget .ew-title { display: block; }
+#ccWidget .ew-title .ew-date { margin-left: 7px; white-space: nowrap; }
+/* ...and on a one-tab card the week goes: its headline is about today, and in a
+   third-width card the week wrapped to a line of its own and took the card past
+   350px (ONE CARD HEIGHT). */
+[data-qp-single] #ccWidget .ew-title .ew-date { display: none; }
+/* ...and "Updated as of", which is the Scorecard data's date — beside a Live
+   headline it said nothing, and it pushed the title onto two lines. */
+[data-qp-single] #ccWidget .cc-updated { display: none; }
+
+/* ONE-TAB CARDS (data-qp-single, set in _qpDistribute) — no tab button (Ethan,
+   2026-10-21): "Scorecard" under the title "Scorecard & Audit" said nothing the
+   title didn't. The card has no tab bar and shows its headline view, which opens
+   nothing. A card with two or more tabs is never shut — it opens on its first
+   tab and has no summary row (_tabSwitch, _qpRenderHeadlines).
+   Desktop only — a phone keeps the tab button and opens the tab, as before. */
+/* The attribute sits on the block: a shell IS its .cc-widget, but the original
+   card's block is the .ew-dash wrapped round #ccWidget — hence the :is(). */
+@media (min-width: 901px) and (not (pointer: coarse)), (min-width: 1367px) {
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget) .cc-seg { display: none; }
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget):not(.cc-expanded) .cc-tabbar { display: none; }
+    /* The headline replaces the summary row on a one-tab card (_qpRenderHeadlines). */
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget):not(.cc-expanded) .cc-summary { display: none; }
+    :is(.cc-widget[data-qp-single], [data-qp-single] .cc-widget):not(.cc-expanded) > .qp-hl { display: flex; }
+    /* A COMBINED card (data-qp-hl, _qpRenderHeadlines) keeps its tab bar and shows
+       the open tab's headline in place of the summary, the strips and the panel,
+       so it is the same 350px as everything beside it rather than the 530px an
+       open tab used to hold it at. The Scorecard tab's breakdown button moves into
+       its headline, so the tab bar's copy goes. */
+    .cc-widget[data-qp-hl] :is(.cc-summary, .cc-strips, .cc-body) { display: none !important; }
+    .cc-widget[data-qp-hl] > .qp-hl { display: flex; }
+    .cc-widget[data-qp-hl].cc-expanded { min-height: 0; }
+    /* Less padding round the tab bar — the buttons keep their size (Ethan). */
+    .cc-widget[data-qp-hl] > .cc-tabbar { padding-top: 5px; padding-bottom: 5px; flex-wrap: nowrap; }
+    /* ...but in a narrow card three 140px buttons do not fit (440px in a 428px
+       card cut "Scorecard" off and wrapped the bar), so they share the width —
+       still all one size as each other. */
+    .cc-widget[data-qp-hl] .cc-seg { flex: 1 1 auto; min-width: 0; max-width: 440px; }
+    /* !important to match the base .cc-seg .toggle-btn (padding) and the flex
+       display set on it elsewhere: "…" only works on a block. */
+    .cc-widget[data-qp-hl] .cc-seg .toggle-btn { flex: 1 1 0; min-width: 0; width: auto; display: block !important; text-align: center; padding: 7px 8px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* The Scorecard data's "Updated as of" goes, as on a one-tab card: each
+       headline carries its own dates, and it wrapped the title in a narrow card. */
+    .cc-widget[data-qp-hl] .cc-updated { display: none; }
+    /* ...and the week beside the title, for the same reason (the Scorecard
+       headline shows its own week): at 1280px it wrapped the title to a second
+       line and took the card past 350. */
+    .cc-widget[data-qp-hl] .ew-title .ew-date { display: none; }
+    .cc-widget[data-qp-hl] :is(#sh-tab-action, #cc-collapse, #dc-collapse) { display: none !important; }
+    /* THE DISTRICT CARD (part A, 2026-10-29) is a .cc-widget too, so every rule
+       above already covers it. Its scope line goes on a one-tab card, as the
+       store card's week does. */
+    .cc-widget[data-qp-single] #dc-scope { display: none; }
+}
+/* A split-out district card shows one panel at a time, as #dcWidget does
+   (its panels differ in height by hundreds of pixels). */
+.cc-widget.qp-shell[data-qp-family="district"] .cc-panel:not(.cc-active) { display: none; }
+
+/* #dcWidget itself is a block (applyRoleBasedUI writes display:block !important
+   on it inline), so its headline's 12px bottom padding cannot give way the way a
+   split-out card's does in its flex column: the same content made it 359px
+   beside three 350s. 3px is the room a split card ends up leaving. */
+.qp-cell > #dcWidget > .qp-hl { padding-bottom: 3px; }
+
+/* DISTRICT HEADLINES (_QP_DHL_BUILD). Live's five store boxes, one column each. */
+.qp-hl-boxes.qp-hl-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.qp-hl-boxes.qp-hl-5 .qp-hl-box { padding: 4px 8px; }
+.qp-hl-boxes.qp-hl-5 .qp-hl-k .qp-dot { margin-right: 4px; }
+/* Matrix's Watch state is blue, never a paler amber (see _DCW_SEV). */
+.qp-hl-seg > i.info { background: #2563b8; }
+/* NEW WIDGETS AND MINI SHELVES (2026-10-29, speeks.js NEW WIDGETS block). */
+/* A shelf: a ⅓ block of three one-row slots; a double mini spans two. */
+.qp-shelfblk { display: flex; flex-direction: column; background: none; border: 0; box-shadow: none; }
+.qp-mshelf { flex: 1 1 auto; display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 10px; min-height: 350px; }
+.qp-mn { position: relative; background: #fff; border: 1px solid #e6ebf1; border-radius: 16px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+         padding: 12px 16px; display: flex; align-items: center; gap: 12px; min-height: 0; min-width: 0; box-sizing: border-box; overflow: hidden; }
+.qp-mn.x2 { grid-row: span 2; flex-direction: column; align-items: stretch; gap: 8px; justify-content: flex-start; }
+.qp-mn[data-go] { cursor: pointer; }
+.qp-mn[data-go]:hover { border-color: #cfd8e3; }
+.qp-mn .qp-cw-ico { width: 30px; height: 30px; border-radius: 9px; }
+.qp-mn .qp-cw-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-mn-b { flex: 1 1 auto; min-width: 0; }
+.qp-mn-k { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-mn-v { font-size: 22px; font-weight: 900; color: #1a1c1e; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-mn-v small { font-size: 12px; font-weight: 700; color: #8a94a3; margin-left: 5px; }
+.qp-mn-v .good { color: #1f9d57; } .qp-mn-v .warn { color: #b7791f; } .qp-mn-v .bad { color: var(--red-alert); }
+.qp-mn-s { font-size: 11.5px; font-weight: 600; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-mn-r { flex: none; }
+.qp-mn-head { display: flex; align-items: center; gap: 10px; }
+.qp-mn-ev { display: flex; gap: 10px; font-size: 12.5px; font-weight: 600; color: #3c4654; padding: 5px 0; border-top: 1px solid #eef1f4; min-width: 0; }
+.qp-mn-ev b { flex: none; min-width: 52px; font-weight: 800; color: #1a1c1e; }
+.qp-mn-ev span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Customize only: a mini's × and an empty slot's Add. Out of Customize an
+   empty slot is plain space, so the shelf keeps its three rows. */
+.qp-mn-x { display: none; position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 7px; border: 1px solid #e3e8ee; background: #fff; color: #647082; padding: 0; cursor: pointer; }
+.qp-mn-x svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+/* A shelf's empty rows: blank space, in Customize too (no "+ Add a Mini Widget"). */
+.qp-mn-empty { visibility: hidden; }
+.main-content.qp-editing .qp-mn-x { display: grid; place-items: center; }
+/* A mini is carried by the whole mini in Customize (Ethan, 2026-10-29: "grab
+   each row in the shelf"); a shelf's free rows still carry the whole shelf.
+   Its insides stay pointer-less (the rule above), so the press lands on it. */
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mshelf > .qp-mn { pointer-events: auto; cursor: grab; transition: border-color .12s, box-shadow .12s; }
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mshelf > .qp-mn:hover { border-color: #9fd8b6; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-mshelf > .qp-mn:active { cursor: grabbing; }
+.qp-mn.qp-dragging { opacity: .45; }
+/* The 1 Row / 2 Rows switch, beside the × in Customize (qpMiniRows). */
+.qp-mn-sz { display: none; position: absolute; top: 6px; right: 32px; height: 22px; border: 1px solid #e3e8ee; border-radius: 7px; background: #fff; overflow: hidden; z-index: 1; }
+.qp-mn-sz button { font: inherit; font-size: 10.5px; font-weight: 800; width: 22px; height: 100%; border: 0; background: none; color: #8a94a3; cursor: pointer; padding: 0; }
+.qp-mn-sz button.on { background: #e8f7ee; color: #146c3c; }
+.qp-mn-sz button:disabled { color: #d0d6de; cursor: not-allowed; }
+.main-content.qp-editing .qp-mn-sz { display: flex; }
+/* TWO-ROW MINIS (_qpX2, Ethan 2026-10-29, from prototypes/mini-two-row.html). */
+.qp-mn.x2 .qp-days { height: 44px; margin: 2px 0; }
+.qp-x2-bar { height: 8px; border-radius: 99px; background: #eef1f4; position: relative; overflow: hidden; margin: 2px 0; flex: none; }
+.qp-x2-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: #1f9d57; }
+.qp-x2-bar i.warn { background: #f0a92b; } .qp-x2-bar i.bad { background: #e05252; } .qp-x2-bar i.blue { background: #2563b8; }
+.qp-x2-bar b { position: absolute; top: 0; bottom: 0; width: 2px; background: #1a1c1e; opacity: .55; }
+.qp-x2-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 700; color: #3c4654; min-width: 0; }
+.qp-x2-row .k { flex: none; width: 34px; font-weight: 800; color: #1a1c1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-row.wide .k { width: 64px; }
+.qp-x2-row .qp-x2-bar { flex: 1 1 auto; margin: 0; height: 6px; }
+.qp-x2-row .v { flex: none; min-width: 44px; text-align: right; font-weight: 800; color: #1a1c1e; }
+.qp-x2-split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.qp-x2-split div { background: #f6f8fa; border-radius: 9px; padding: 6px 8px; min-width: 0; }
+.qp-x2-split b { display: block; font-size: 15px; font-weight: 900; color: #1a1c1e; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-split span { display: block; font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-line { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #3c4654; padding: 4px 0; border-top: 1px solid #eef1f4; min-width: 0; }
+.qp-x2-line span:not(.qp-cw-due) { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-x2-line em { flex: none; font-style: normal; font-weight: 800; color: #1a1c1e; }
+.qp-x2-wide { display: block; width: 100%; height: 34px; flex: none; }
+.main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] { pointer-events: auto; }
+.main-content.qp-editing .qp-cell > [data-qp-block] [data-qp-edit-ok] * { pointer-events: none; }
+/* A shelf is its minis' backdrop, not a card: no outline of its own in
+   Customize beyond the dashed one every block gets. */
+.qp-cell > .qp-shelfblk { margin: 0 !important; }
+.qp-spark { display: block; }
+.qp-mix { display: flex; height: 10px; border-radius: 99px; overflow: hidden; gap: 2px; margin: 2px 0 4px; }
+.qp-mix i { display: block; }
+.qp-mix-l { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; font-size: 11.5px; font-weight: 700; color: #3c4654; }
+.qp-mix-l span { display: flex; align-items: center; gap: 6px; }
+.qp-mix-l b { margin-left: auto; font-weight: 800; }
+.qp-sw { width: 8px; height: 8px; border-radius: 3px; display: inline-block; }
+/* Full-size cards' own pieces. */
+.qp-days { display: flex; align-items: flex-end; gap: 4px; height: 54px; margin: 6px 0 4px; }
+.qp-days i { flex: 1; background: #1f9d57; border-radius: 4px 4px 2px 2px; }
+.qp-days i.zero { background: #eef1f4; }
+.qp-pipe { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: center; gap: 6px; margin: 4px 0 8px; }
+.qp-pipe-s { background: #f6f8fa; border-radius: 12px; padding: 8px 6px; text-align: center; min-width: 0; }
+.qp-pipe-s b { display: block; font-size: 18px; font-weight: 900; color: #1a1c1e; }
+.qp-pipe-s span { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+.qp-pipe-a { color: #b4bcc8; font-weight: 900; }
+.qp-tm-n { min-width: 92px; }
+.qp-tm-v { flex: none; min-width: 56px; text-align: right; font-weight: 700; color: #647082; }
+/* A hotkey can be a whole sequence ("VOL UP -> VOL DOWN -> Hold POWER"): it
+   gets at most half the line, the rest on hover (title). */
+.qp-hk-k { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f1f4f7; border-radius: 6px; padding: 1px 7px; color: #1a1c1e !important;
+           max-width: 46%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-lib-note { font-size: 12px; font-weight: 600; color: #647082; margin: -2px 0 8px; }
+.qp-lib-size { font-size: 10px; font-weight: 800; color: #2563b8; background: #e8f0fb; border-radius: 6px; padding: 1px 6px; margin-left: 6px; }
+
+/* Scorecard: each store's scorecard beside its audit bar. */
+.qp-dhl-tag { flex: none; min-width: 26px; text-align: right; font-weight: 800; }
+/* "Open Full …" (openDistrictFull): the real panel, in Live's full-window view. */
+.dc-fs-card > .cc-panel { display: block !important; opacity: 1; pointer-events: auto; }
+
+/* ONE CARD HEIGHT (Ethan, 2026-10-21: "every widget the same height"). Every
+   card in a QuickPortal row is 350px, so every row is too — 350 being the
+   tallest standalone card's own height (Scorecard, with its chips and note).
+   A floor rather than a fixed height, so content that ever needs more still
+   gets it. Quick Links is a strip, not a card, and keeps its own height. The
+   Performance chart and the Leaderboard used to fix the bottom row at 530:
+   both are pinned at 380px with !important by the old dashboard rules
+   (#lb-wrapper, .chart-container), so inside a row they FILL their card
+   instead (below). An open Command Center tab is exempt — its panel needs the
+   room. Desktop only: phones stack every card at its own height. */
+@media (min-width: 901px) and (not (pointer: coarse)), (min-width: 1367px) {
+    .main-content .qp-cell > [data-qp-block]:not(.hotbars-stack) { min-height: 350px; }
+    .main-content .qp-cell > .ew-perf { display: flex; flex-direction: column; }
+    .main-content .qp-cell > .ew-perf > .ew-perf-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .main-content .qp-cell > .ew-perf :is(.ew-perf-chart, .ew-standings) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .main-content .qp-cell > .ew-perf .chart-container,
+    .main-content .qp-cell > .ew-perf #lb-wrapper { flex: 1 1 0; height: auto !important; min-height: 160px !important; }
+    .main-content .qp-cell > .ew-perf .chart-container { padding: 6px 14px 4px !important; }
+    .main-content .qp-cell > .ew-perf #lb-wrapper { overflow-y: auto; }
+}
+
+/* --- HEADLINE VIEW (one-tab Command Center card, "style 1") ---
+   One big figure, a bar, the lines under it. Hidden everywhere the media query
+   above does not switch it on — so a phone, a combined card or an open tab
+   never shows it. The card grows to its row (QUICKPORTAL LAYOUT, equal
+   heights); the headline takes the room and the foot sits at the bottom. */
+.qp-hl { display: none; flex-direction: column; flex: 1 1 auto; padding: 12px 20px 12px; border-top: 1px solid #eef1f4; }
+.qp-hl-lines .qp-hl-chips { margin: 0 0 8px; }
+/* Small figure boxes (Scorecard's second audit + scorecard; Live's month-end
+   projections), a caption over a group, the latest orders, and the one link a
+   card may carry. Tighter than the rest so the whole card fits 350px. */
+.qp-hl-boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.qp-hl-box { border: 1px solid #e3e8ee; border-radius: 10px; padding: 4px 10px; min-width: 0; }
+.qp-hl-box .qp-hl-k { font-size: 10px; }
+.qp-hl-bv { font-size: 15px; font-weight: 800; color: #1a1c1e; white-space: nowrap; }
+.qp-hl-bv .good, .qp-hl-bv .bad { font-size: 12px; }
+.qp-hl-bs { font-size: 11.5px; font-weight: 600; color: #8a94a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hl-track { margin-top: 4px; }
+.qp-hl-cap { margin-top: 8px; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+.qp-hl-asof { font-weight: 700; color: #8a94a3; text-transform: none; letter-spacing: 0; }
+.qp-hl-ord { display: flex; justify-content: flex-start; gap: 5px; padding: 3px 0; border-top: 1px solid #eef1f4; font-size: 12.5px; font-weight: 600; color: #1a1c1e; }
+.qp-hl-cap + .qp-hl-ord { border-top: none; }
+.qp-hl-ot { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hl-ot small { color: #8a94a3; font-weight: 600; }
+.qp-hl-oa { flex: none; }
+/* Live's one Recent Activity order: the label on the same line, ahead of it. */
+/* 5, not 8 (2026-10-28): the one-tab Live card's Yesterday / Month views were
+   351 at half a row. */
+.qp-hl-ord1 { margin-top: 5px; border-top: none; align-items: baseline; }
+.qp-hl-ord1 .qp-hl-capin { margin: 0 4px 0 0; flex: none; }
+/* Recent Activity's item name stops at ~30 characters, wide card or not (Ethan, 2026-10-26). */
+.qp-hl-ord1 .qp-hl-ot { max-width: 30ch; }
+.qp-hl-ord1 .qp-hl-om { flex: none; color: #8a94a3; font-weight: 600; font-size: inherit; }
+.qp-hl-ord .lv-ago { flex: none; color: #8a94a3; }
+.qp-hl-link { margin-top: auto; align-self: flex-start; padding: 4px 0 0; border: none; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #1f9d57; cursor: pointer; }
+.qp-hl-link:hover { text-decoration: underline; }
+/* Live: "Open Full Dashboard" on the left, the board's own Daily Breakdown and
+   full-screen buttons on the right (.bd-open / .lv-full keep their own look). */
+/* padding-top 8, not 10 (2026-10-22): a one-tab Live card on Yesterday or
+   Month came to 352px with 10 — the card's content is the same height at any
+   width, so the 2px had to come from somewhere fixed, and this gap is only a
+   floor (margin-top: auto pushes the row down whenever there is room). */
+.qp-hl-footrow { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; }
+.qp-hl-footrow .qp-hl-link { margin-top: 0; padding: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hl-footrow .qp-hl-tools { flex: none; }
+.qp-hl-tools { display: inline-flex; align-items: center; gap: 6px; }
+/* The Live card's Today / Yesterday / Month switch, on its label line, at the
+   size of the site's other switches (.ew-seg .toggle-btn — Performance's 4-Week /
+   Monthly; Ethan, 2026-10-22), in the site's green for the open one. */
+.qp-hl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* In a narrow card the label trims rather than wrapping to a second line beside
+   the switch (that line cost ~10px of the 350 at 1280px wide). */
+.qp-hl-top > .qp-hl-k { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hl-switch { display: inline-flex; flex: none; border: 1px solid #d5dce4; border-radius: 8px; overflow: hidden; background: #fff; }
+.qp-hl-switch button { font: inherit; font-size: 11.5px; font-weight: 750; line-height: 16px; padding: 4px 11px; border: none; background: none; color: #647082; cursor: pointer; }
+.qp-hl-switch button + button { border-left: 1px solid #e3e8ee; }
+.qp-hl-switch button:hover { background: #f1f4f7; }
+.qp-hl-switch button.on { background: #e8f7ee; color: #14532d; }
+/* --- ACTION ITEMS CARDS (_qpRenderActions) ---
+   The card's own view (.qp-ai) inside the deck's white frame. The rows stay in
+   the frame, laid out but out of sight — the layout reads each row's display to
+   know which pieces a card holds. They stay hidden in Customize mode too (Ethan,
+   2026-10-22: it should not go back to a list); a combined card's TABS are what
+   you drag a piece out by there. pointer-events !important: Customize turns the
+   pointer back on for drag handles, and the hidden rows are handles too.
+   Tabs reuse the Command Center's .ew-seg .toggle-btn, so they are the same size. */
+.sam-card.qp-ai-on { position: relative; }
+.sam-card.qp-ai-on > .sam-mini { position: absolute !important; left: 0; top: 0; visibility: hidden; pointer-events: none !important; }
+.qp-ai { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: 14px 18px 14px; }
+.qp-ai-head { display: flex; align-items: center; gap: 10px; }
+.qp-ai-head .sam-mico { flex: none; }
+.qp-ai-title { font-size: 15.5px; font-weight: 800; letter-spacing: -.01em; line-height: 1.15; color: var(--slate-charcoal); }
+.qp-ai-tabs { align-self: flex-start; margin-top: 10px; max-width: 100%; flex-wrap: wrap; }
+.qp-ai-cnt { font-weight: 650; color: #8a94a3; margin-left: 2px; }
+.qp-ai-tabs .toggle-btn.active .qp-ai-cnt { color: #647082; }
+.qp-ai-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; margin-top: 10px; }
+.qp-ai-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.qp-ai .qp-hl-big { margin-top: 0; }
+.qp-ai-li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border-top: 1px solid #eef1f4; font-size: 12.5px; font-weight: 600; color: #1a1c1e; }
+.qp-hl-cap + .qp-ai-li { border-top: none; }
+.qp-ai-li > span:last-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-ai-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #c9d3dd; }
+.qp-ai-pp { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12.5px; font-weight: 600; color: #1a1c1e; }
+.qp-ai-pn { flex: none; width: 78px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-ai-pp .qp-hl-bar { flex: 1 1 auto; margin: 0; }
+.qp-ai-pp b { flex: none; min-width: 46px; text-align: right; font-weight: 800; }
+/* District Team Goals: a Set / Not Set pill a store, all five (Ethan, 2026-10-26). */
+/* 1px, not 3px: five rows under the tab bar of a combined card had to fit 350. */
+.qp-ai-pillrow { justify-content: space-between; padding: 1px 0; }
+.qp-ai-pill { flex: none; min-width: 64px; box-sizing: border-box; text-align: center; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.qp-ai-pill.good { background: #e7f6ee; color: #1a7f4b; }
+.qp-ai-pill.bad { background: #fdecec; color: #b42318; }
+.qp-ai-capnote { text-transform: none; letter-spacing: 0; font-weight: 700; }
+.qp-ai .qp-hl-link { margin-top: auto; padding-top: 8px; }
+.qp-ai .good { color: #1f9d57; }
+.qp-ai .warn { color: #b7791f; }
+.qp-ai .bad { color: var(--red-alert); }
+.qp-hl .status-message { padding: 8px 0; }
+.qp-hl-k { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; }
+.qp-hl-big { font-size: 28px; font-weight: 800; line-height: 1.1; color: #1a1c1e; margin-top: 2px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.qp-hl-big small { font-size: 14px; font-weight: 600; color: #8a94a3; }
+.qp-hl-sub { font-size: 12.5px; font-weight: 600; color: #647082; }
+.qp-hl-bar { position: relative; height: 8px; border-radius: 99px; background: #eef1f4; margin: 7px 0 4px; }
+.qp-hl-bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: #1f9d57; }
+.qp-hl-bar.warn > i { background: var(--idea-gold); }
+.qp-hl-bar.bad > i { background: var(--red-alert); }
+.qp-hl-bar > b { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: #647082; }
+.qp-hl-seg { display: flex; gap: 3px; height: 8px; border-radius: 99px; overflow: hidden; margin: 7px 0 4px; }
+.qp-hl-seg > i { display: block; }
+.qp-hl-seg > i.good { background: #1f9d57; }
+.qp-hl-seg > i.warn { background: var(--idea-gold); }
+.qp-hl-seg > i.bad { background: var(--red-alert); }
+/* 5, not 8 (2026-10-28): Live's Yesterday / Month views were 351 at half a row. */
+.qp-hl-lines { margin-top: 5px; }
+.qp-hl-ln { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid #eef1f4; font-size: 13px; font-weight: 600; color: #1a1c1e; }
+.qp-hl-ln > span:first-child { color: #647082; font-weight: 600; }
+.qp-hl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.qp-hl-note { margin-top: 6px; font-size: 12.5px; color: #3c4654; font-style: italic; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.qp-hl-foot { margin-top: auto; padding-top: 10px; font-size: 11.5px; font-weight: 600; color: #8a94a3; }
+.qp-hl .good { color: #1f9d57; }
+.qp-hl .warn { color: #b7791f; }
+.qp-hl .bad { color: var(--red-alert); }
+
+/* Phones and touch tablets stack every row, as the deck and the dashboard rows
+   already did at this breakpoint. !important because each cell's share is an
+   inline flex-grow, and a stacked cell must not grow in the column direction. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .qp-row { flex-direction: column; }
+    .qp-cell { flex: none !important; }
+}
+
+/* FEED TABS (Ethan, 2026-10-22) — All · Due · To Do · News on the QuickPortal
+   feed card (_samRenderFeedTabs). A grid, not the segment's inline-flex, so the
+   four buttons are always the SAME WIDTH whatever their label and count say.
+   [hidden] needs saying: .ew-seg's display would otherwise win over it. */
+.speeks-action-menu .sam-ftabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 9px 12px 2px; flex: none; }
+.speeks-action-menu .sam-ftabs[hidden] { display: none; }
+.speeks-action-menu .sam-ftabs .toggle-btn { white-space: nowrap; text-align: center; padding: 6px 4px; overflow: hidden; text-overflow: ellipsis; }
+.sam-ftabs .toggle-btn.active .qp-ai-cnt { color: #647082; }
+/* A group label on the All tab — the same caption as "Next Up" on the Action Items cards. */
+.speeks-action-menu .sam-fsec { padding: 8px 12px 2px; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+.speeks-action-menu .sam-fsec:first-child { padding-top: 4px; }
+/* DUE DATES: the Due list is grouped by date (_samDueInfo); Overdue's label is red. */
+.speeks-action-menu .sam-fsec.sam-fsec-over { color: var(--red-alert); }
+/* FEED PIECES: the Due / To Do / News markers the layout moves between feed
+   cards. Present and "shown" (the layout tests display), but take no room. */
+.speeks-action-menu .sam-fpiece { display: block; width: 0; height: 0; overflow: hidden; flex: none; pointer-events: none !important; }
+
+/* RESET TO DEFAULT asks first (qpReset) — an HTML dialog, never confirm(). */
+.qp-ask { position: fixed; inset: 0; z-index: 10000; background: rgba(15, 23, 42, .45); display: grid; place-items: center; padding: 16px; }
+.qp-ask-card { width: min(380px, 100%); background: #fff; border-radius: 16px; padding: 22px 22px 18px; box-shadow: 0 18px 50px rgba(16,24,40,.25); text-align: center; }
+.qp-ask-ico { width: 42px; height: 42px; margin: 0 auto 12px; border-radius: 50%; background: #fdecec; color: var(--red-alert); display: grid; place-items: center; }
+.qp-ask-ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-ask-t { font-size: 16px; font-weight: 800; color: var(--slate-charcoal); }
+.qp-ask-d { margin-top: 6px; font-size: 13px; line-height: 1.5; color: #647082; }
+.qp-ask-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+.qp-ask-btns button { font: inherit; font-size: 13px; font-weight: 700; min-height: 38px; border-radius: 10px; cursor: pointer; }
+.qp-ask-no { border: 1px solid #d5dce4; background: #fff; color: #1a1c1e; }
+.qp-ask-no:hover { background: #f1f4f7; }
+.qp-ask-yes { border: 1px solid var(--red-alert); background: var(--red-alert); color: #fff; }
+.qp-ask-yes:hover { filter: brightness(.93); }
+
+/* ONE TAB LOOK (Ethan, 2026-10-22: "switch the tabs to all be designed like
+   the command center tabs"). Every tab bar and switch on the QuickPortal takes
+   .cc-seg's design (line ~11557): a light green track, each option its own
+   white bordered button, the chosen one pale green with an emerald edge. Two
+   sizes, because they are two jobs:
+     tab bars  — Your Feed, Action Items: what the card shows. The Command
+                 Center's size, sharing the card's width like a combined
+                 Command Center card (max 440px, every button the same width).
+     switches  — Daily/Weekly, Today/Yesterday/Month, 4-Week/Monthly,
+                 Averages/My Team, Revenue/Net Profit: a filter on what is
+                 shown. Same look, smaller, so a 350px card stays 350px:
+                 26px tall, what the old switch was (the Live card has no
+                 room to spare — 30px made the Command Center 353).
+   !important where .cc-seg needs it: the global .toggle-btn rules mark
+   padding/font/radius and the active background/colour !important. */
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs).ew-seg { background: #f3f7f4; border: 1px solid #e4ece7; border-radius: 12px; padding: 4px; gap: 5px; max-width: 440px; }
+[data-qp-block] .qp-ai-tabs.ew-seg { display: flex; flex-wrap: nowrap; align-self: stretch; }
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn {
+    flex: 1 1 0; min-width: 0; display: block; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    padding: 7px 8px !important; font-size: 11.5px !important; font-weight: 750 !important; border-radius: 8px !important;
+    background: #fff; border: 1px solid #dde6e0; color: #5b6b64; box-shadow: none;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn:hover:not(.active) { border-color: #c3d6cb; color: var(--slate-charcoal); box-shadow: 0 1px 2px rgba(16, 24, 40, .06); }
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn.active {
+    background: #e8f7ee !important; color: #146c3c !important; font-weight: 800 !important;
+    border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10);
+}
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn.active .qp-ai-cnt { color: #1f9d57; }
+
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs),
+[data-qp-block] .qp-hl-switch { display: inline-flex; background: #f3f7f4; border: 1px solid #e4ece7; border-radius: 9px; padding: 1px; gap: 3px; overflow: visible; }
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs) .toggle-btn,
+[data-qp-block] .qp-hl-switch button {
+    padding: 2px 10px !important; font-size: 11px !important; font-weight: 750 !important; line-height: 16px; border-radius: 7px !important;
+    background: #fff; border: 1px solid #dde6e0; color: #5b6b64; box-shadow: none;
+}
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs) .toggle-btn:hover:not(.active),
+[data-qp-block] .qp-hl-switch button:hover:not(.on) { background: #fff; border-color: #c3d6cb; color: var(--slate-charcoal); }
+[data-qp-block] .ew-seg:not(.cc-seg):not(.qp-ai-tabs):not(.sam-ftabs) .toggle-btn.active,
+[data-qp-block] .qp-hl-switch button.on {
+    background: #e8f7ee !important; color: #146c3c !important; font-weight: 800 !important;
+    border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35);
+}
+
+/* ADD A WIDGET — the Side Drawer (qpLibraryOpen; Ethan picked Option A,
+   2026-10-22). Slides in from the right over a light dim so the page stays in
+   view; above the side panels and the corner buttons. */
+.qp-lib { position: fixed; inset: 0; z-index: 9000; background: rgba(15, 23, 42, .28); display: flex; justify-content: flex-end; }
+.qp-lib-panel { width: min(340px, 100%); height: 100%; background: #fff; box-shadow: -12px 0 40px rgba(16,24,40,.18); padding: 18px 18px 14px; display: flex; flex-direction: column; animation: qpLibIn .18s ease-out; }
+@keyframes qpLibIn { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.qp-lib-head { display: flex; align-items: center; justify-content: space-between; }
+.qp-lib-t { font-size: 16px; font-weight: 800; color: var(--slate-charcoal); }
+.qp-lib-search { margin: 14px 0 6px; font: inherit; font-size: 13px; padding: 9px 12px; border: 1px solid #d5dce4; border-radius: 10px; outline: none; }
+.qp-lib-search:focus { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
+.qp-lib-list { flex: 1 1 auto; overflow-y: auto; }
+.qp-lib-row { display: flex; align-items: center; gap: 11px; padding: 12px 2px; border-bottom: 1px solid #eef1f4; }
+.qp-lib-ico, .qp-cw-ico { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; }
+.qp-lib-ico svg, .qp-cw-ico svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-lib-ico.r, .qp-cw-ico { background: #fdecec; color: #c53030; }
+.qp-lib-body { flex: 1; min-width: 0; }
+.qp-lib-name { font-size: 13px; font-weight: 750; color: #1a1c1e; }
+.qp-lib-sub { font-size: 11.5px; color: #647082; margin-top: 1px; }
+/* EVERY ROW THE SAME HEIGHT (Ethan, 2026-10-26): the description always takes
+   two lines' room, and never more — a one-line description no longer makes a
+   shorter row, and a long one ends in "…" instead of a taller one. */
+.qp-lib-sub { line-height: 1.45; min-height: 2.9em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.qp-lib-add { font: inherit; font-size: 12px; font-weight: 750; padding: 6px 14px; border-radius: 8px; border: 1px solid #1f9d57; background: #1f9d57; color: #fff; cursor: pointer; }
+.qp-lib-add:hover { background: #178048; }
+.qp-lib-none { padding: 24px 4px; text-align: center; font-size: 12.5px; color: #8a94a3; }
+
+/* The Claims & Disputes widget: the Action Items card's frame (.qp-ai), its
+   "Due Next" lines with an Overdue / Today / date chip. */
+/* Four tabs in a third of a 1280 window: 10.5px, or the bold active
+   "Mismatches 0" is cut off at ~82px. */
+.qp-widget .qp-ai-tabs .toggle-btn { padding-left: 3px !important; padding-right: 3px !important; font-size: 10.5px !important; }
+.qp-cw-ln { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid #eef1f4; font-size: 12.5px; font-weight: 600; color: #1a1c1e; min-width: 0; }
+.qp-hl-cap + .qp-cw-ln { border-top: none; }
+/* Five lines under a tab bar (the district widgets, a line a store): 2px, not
+   4px, so the card stays 350. */
+.qp-ai-dense .qp-cw-ln { padding-top: 2px; padding-bottom: 2px; }
+/* ...on one grid: pill · text · figure columns shared by every line (subgrid),
+   so the pills are one width and the names line up. */
+.qp-cw-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; column-gap: 8px; }
+.qp-cw-grid > .qp-cw-ln { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.qp-cw-grid .qp-cw-due { justify-self: stretch; text-align: center; }
+/* The store code's own slot (_qpWLineS): one width, so the words after it line up. */
+.qp-cw-st { display: inline-block; min-width: 3.3em; font-weight: 800; color: #1a1c1e; }
+.qp-cw-lt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-cw-ln b { flex: none; font-weight: 750; color: #3c4654; }
+.qp-cw-due { flex: none; font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 6px; }
+.qp-cw-due.bad { background: #fdecec; color: #c53030; }
+.qp-cw-due.warn { background: #fdf3e2; color: #a46412; }
+.qp-widget .qp-hl-sub .good { color: #1f9d57; }
+.qp-widget .qp-hl-sub .bad { color: var(--red-alert); }
+/* Dragging a widget out of the drawer: the row says it can be carried, and
+   while it is (.qp-lib-carrying, set the frame after dragstart) the drawer
+   slides away and lets every pointer event through to the page's drop targets. */
+.qp-lib-hint { font-size: 11.5px; color: #8a94a3; margin: 2px 0 4px; }
+.qp-lib-row.qp-lib-drag { cursor: grab; border-radius: 10px; }
+/* Room inside the hover background (Ethan, 2026-10-26: the Add / Remove button
+   hugged its right edge). Every row, hovered or not, so nothing shifts. */
+.qp-lib-row { padding-left: 10px; padding-right: 10px; }
+.qp-lib-row.qp-lib-drag:hover { background: #f6f9f7; }
+.qp-lib-row.qp-lib-drag:active { cursor: grabbing; }
+.qp-lib.qp-lib-carrying { background: transparent; pointer-events: none; }
+.qp-lib.qp-lib-carrying .qp-lib-panel { transform: translateX(105%); transition: transform .18s ease-in; }
+
+/* ONE TAB LOOK, SITE-WIDE (Ethan, 2026-10-22: "everywhere on the site that has
+   the old tab look, change them to the command center style tabs"). The site's
+   tab bars are .notif-tabs holding .tab-btn — the Claims & Disputes tabs, the
+   Checklist / Cleaning panels, Feature Access, Quick Messages, the manage
+   modals and the rest, on all five pages — and the Listing Goals Today /
+   Yesterday switch (.timeframe-toggle). They take .cc-seg's design: a light
+   green track, each tab its own white bordered button, the chosen one pale
+   green with an emerald edge.
+   ONLY THE LOOK. Sizes, padding, gaps and the phone heights stay with each
+   bar's own rules (several are tuned: equal columns in .fa-tabs/.claims-tabs,
+   30px strips on a phone), so nothing here moves a layout.
+   The doubled classes and !important are deliberate: the Checklist panel marks
+   its tab colours !important at (0,3,0), and #quickMsgDropdown / the manage menu
+   set theirs at id or (0,3,0) — this has to outrank all of them. */
+.notif-tabs { gap: 5px; }
+.notif-tabs.notif-tabs { background: #f3f7f4 !important; border: 1px solid #e4ece7 !important; border-radius: 12px !important; }
+.notif-tabs.notif-tabs > .tab-btn.tab-btn {
+    background: #fff !important; border: 1px solid #dde6e0 !important; color: #5b6b64 !important;
+    border-radius: 8px !important; box-shadow: none !important; font-weight: 750 !important;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+.notif-tabs.notif-tabs > .tab-btn.tab-btn:hover:not(.active) { border-color: #c3d6cb !important; color: var(--slate-charcoal) !important; box-shadow: 0 1px 2px rgba(16, 24, 40, .06) !important; }
+.notif-tabs.notif-tabs > .tab-btn.tab-btn.active {
+    background: #e8f7ee !important; color: #146c3c !important; font-weight: 800 !important;
+    border-color: #1f9d57 !important; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10) !important;
+}
+.notif-tabs.notif-tabs > .tab-btn.tab-btn:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+/* The Live dashboard's Today / Yesterday / Month switch, in the full view and
+   anywhere else it is drawn outside a QuickPortal card (Ethan, 2026-10-28: "in
+   the full look at the live dashboard, make the tabs look like the new tab
+   design"). The small-switch version, look only: its size stays its own. */
+.lv-modes.lv-modes { background: #f3f7f4; border: 1px solid #e4ece7; border-radius: 9px; padding: 2px; gap: 3px; }
+.lv-modes.lv-modes .lv-mode {
+    background: #fff; border: 1px solid #dde6e0; color: #5b6b64; border-radius: 7px; box-shadow: none;
+    padding-top: 3px; padding-bottom: 3px;   /* the new 1px border, so the switch is no taller */
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+.lv-modes.lv-modes .lv-mode:hover:not(.on) { border-color: #c3d6cb; color: var(--slate-charcoal); }
+.lv-modes.lv-modes .lv-mode.on {
+    background: #e8f7ee; color: #146c3c; border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35);
+}
+/* The Listing Goals Today / Yesterday switch — the small-switch version. */
+.timeframe-toggle.timeframe-toggle { background: #f3f7f4 !important; border: 1px solid #e4ece7; gap: 3px; }
+.timeframe-toggle.timeframe-toggle .toggle-btn {
+    background: #fff !important; border: 1px solid #dde6e0; color: #5b6b64 !important; border-radius: 7px !important; box-shadow: none;
+}
+.timeframe-toggle.timeframe-toggle .toggle-btn.active {
+    background: #e8f7ee !important; color: #146c3c !important; border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35);
+}
+/* The Operations widgets' icon tones (QP_WIDGETS[...].tone), in the drawer
+   and on the card, and the two quieter chips their lines use. */
+.qp-cw-ico.r { background: #fdecec; color: #c53030; }
+.qp-lib-ico.a, .qp-cw-ico.a { background: #fdf3e2; color: #a46412; }
+.qp-lib-ico.t, .qp-cw-ico.t { background: #e6f6f4; color: #0f766e; }
+.qp-lib-ico.g, .qp-cw-ico.g { background: #e8f7ee; color: #178048; }
+.qp-cw-due.good { background: #e8f7ee; color: #146c3c; }
+.qp-cw-due.grey { background: #f1f4f7; color: #5b6b64; }
+/* A widget's half-row cap (_qpMaxW, an inline max-width on its cell) is for
+   rows of cards side by side. Stacked on a phone or touch tablet every card is
+   the full width, widgets included. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .qp-cell { max-width: none !important; }
+}
+/* NO DEAD SPACE (_qpPairWidgets). While a ⅓/½ widget is carried, a new-row
+   slot it may not take goes red and says why (it is a 22px line in the row
+   gap, so the words sit on it, inside the same space — nothing moves). */
+.qp-slot-row.qp-slot-no::before { background: var(--red-alert); }
+.qp-slot-row.qp-slot-no::after {
+    content: "Needs a Card Beside It"; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    padding: 1px 10px; border-radius: 999px; background: #fdecec; color: #c53030; font-size: 10.5px; font-weight: 800; white-space: nowrap;
+}
+/* ...unless a card can join it there (_qpBumpPlan): then the slot says which,
+   and the size, in green. */
+.qp-slot-row.qp-drop[data-qp-say]:not(.qp-slot-no)::after {
+    content: attr(data-qp-say); position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    padding: 1px 10px; border-radius: 999px; background: #e8f7ee; color: #146c3c; font-size: 10.5px; font-weight: 800; white-space: nowrap;
+}
+/* A ⅓/½ widget alone because no row had room: the space it is waiting to
+   share, in Customize only (it is removed with the rest of edit mode). */
+.qp-row > .qp-lone {
+    flex: 1 1 0; min-width: 0; align-self: stretch; display: grid; place-items: center; border: 2px dashed #c9d3dd; border-radius: 14px;
+    color: #8a94a3; font-size: 12.5px; font-weight: 750; min-height: 120px;
+}
+/* THE DRAWER SLIDES LIKE THE CHECKLIST PANEL (Ethan, 2026-10-22): the same
+   place (under the nav, --panel-top), size, shadow and 0.3s slide from the
+   right, in on .open and out again on close (qpLibraryClose waits for it).
+   No dim: the page stays as it is, as with the Checklist. The full-window
+   layer is still there, clear, so a click off the drawer closes it. */
+.qp-lib, .qp-lib.qp-lib-carrying { background: transparent; }
+.qp-lib .qp-lib-panel {
+    position: absolute; top: var(--panel-top, 64px); right: 0; width: min(420px, 100%); height: calc(100vh - var(--panel-top, 64px));
+    border-radius: 0 0 0 14px; box-shadow: -8px 0 32px rgba(0, 0, 0, .12); border: 1px solid #e2e8f0; border-top: none; border-right: none;
+    animation: none; transform: translateX(105%); opacity: 0;
+    transition: transform .3s cubic-bezier(.25, .46, .45, .94), opacity .3s ease;
+}
+.qp-lib.open .qp-lib-panel { transform: none; opacity: 1; }
+.qp-lib.open.qp-lib-carrying .qp-lib-panel { transform: translateX(105%); }
+/* On the page: Remove in Add's place, the same size, outlined red. */
+.qp-lib-rm { font: inherit; font-size: 12px; font-weight: 750; padding: 6px 14px; border-radius: 8px; border: 1px solid #f3c4c4; background: #fff; color: #c53030; cursor: pointer; flex: none; }
+.qp-lib-rm:hover { background: #fdecec; border-color: #ef4444; }
+/* Drawer sections (_QP_LIB_SECTIONS): a quiet heading per page the tools live
+   on, with how many widgets it offers. */
+.qp-lib-sec + .qp-lib-sec { margin-top: 10px; }
+.qp-lib-sec-h { display: flex; align-items: center; gap: 8px; padding: 10px 2px 6px; border-bottom: 1px solid #eef1f4;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+.qp-lib-sec-h span { margin-left: auto; letter-spacing: 0; font-weight: 700; color: #b4bcc6; }
+.qp-lib-sec .qp-lib-row:last-child { border-bottom: none; }
+.qp-lib-ico.b, .qp-cw-ico.b { background: #e8f0fb; color: #2563b8; }
+/* PROCESSES & POLICIES widget: the drawer's search box, a card's width, then
+   the pinned (or matching) documents as the widgets' own lines, each a link. */
+.qp-doc-q { width: 100%; box-sizing: border-box; margin: 0 0 4px; font: inherit; font-size: 13px; padding: 8px 12px; border: 1px solid #d5dce4; border-radius: 10px; outline: none; }
+.qp-doc-q:focus { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
+.qp-doc-list { flex: 1 1 auto; min-height: 0; }
+a.qp-doc { text-decoration: none; color: #1a1c1e; }
+a.qp-doc:hover .qp-cw-lt { color: #146c3c; text-decoration: underline; }
+.qp-doc-ico { flex: none; width: 22px; height: 22px; border-radius: 6px; background: #e8f0fb; color: #2563b8; display: grid; place-items: center; }
+.qp-doc-ico svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-doc-more { padding: 4px 0 0; font-size: 11.5px; font-weight: 700; color: #8a94a3; }
+.qp-cw-due.info { background: #e8f0fb; color: #2563b8; }
+/* Monthly Breakdown's key rows: name, value, change from last month, place. */
+.qp-mb-ln .qp-mb-d { flex: none; min-width: 56px; text-align: right; font-size: 11px; font-weight: 700; }
+.qp-mb-ln .qp-mb-d .good { color: #1f9d57; } .qp-mb-ln .qp-mb-d .bad { color: var(--red-alert); }
+.qp-widget .qp-hl-sub .warn { color: #b7791f; }
+/* Monthly Breakdown's rows as four fixed columns (Ethan, 2026-10-23: "better
+   align these 3 columns"): name | value | change | place — figures and arrows
+   right-aligned, the place chip one width and centred, so every row lines up
+   down the card whatever its numbers. */
+.qp-cw-ln.qp-mb-ln { display: grid; grid-template-columns: minmax(0, 1fr) 70px 72px 38px; column-gap: 10px; align-items: center; }
+.qp-mb-ln > b { text-align: right; font-variant-numeric: tabular-nums; }
+.qp-mb-ln .qp-mb-d { min-width: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qp-mb-ln > .qp-cw-due { justify-self: stretch; text-align: center; padding-left: 0; padding-right: 0; }
+/* DROP TO SWAP (_qpSwapRows): the combine overlay's look, with a swap arrow;
+   red, and the reason, when the swap would break a size rule. */
+.qp-ov-swap .qp-ov-ico svg { stroke-linejoin: round; }
+.qp-ov-combine.qp-ov-no { background: rgba(253,236,236,.95); border-color: var(--red-alert); }
+.qp-ov-no .qp-ov-ico { background: var(--red-alert); }
+.qp-ov-no .qp-ov-big { color: #9b2c2c; }
+.qp-ov-no .qp-ov-small { color: #c53030; }
+.main-content.qp-editing .qp-cell:has(> .qp-ov-no) > [data-qp-block].qp-drop { outline-color: var(--red-alert); }
+/* (The split-middle overlay — two halves, Combine over Swap — was retired
+   2026-10-25: one action per card middle, see _qpTargetAt.) */
+/* Value and change columns centred in their tracks (Ethan, 2026-10-23). */
+.qp-cw-ln.qp-mb-ln > b, .qp-cw-ln.qp-mb-ln .qp-mb-d { text-align: center; }
+/* REPLACE (10-23): red even when allowed; refused is dashed and says why. */
+.qp-ov-replace.qp-ov-refused { border-style: dashed; }
+.qp-ov-replace.qp-ov-refused .qp-ov-ico { background: #b4b2a9; }
+/* LIVE PREVIEW (_qpPreview, Ethan 2026-10-25): the page as it would be after
+   letting go, docked left of the corner buttons while something is carried —
+   Customize only (it is removed with the drag). The card being moved green,
+   any card that moves with it amber. */
+.qp-pv { position: fixed; right: 60px; bottom: 18px; z-index: 101; width: 300px; box-sizing: border-box; padding: 10px 12px 9px; background: #fff; border: 1px solid #dfe5ea; border-radius: 14px; box-shadow: 0 8px 24px rgba(15,23,42,.14); pointer-events: none; }
+.qp-pv-t { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; margin-bottom: 6px; }
+.qp-pv-r { display: flex; gap: 4px; margin-top: 4px; }
+/* A long name ("Command Center", "To Do + News") wraps onto a second line
+   rather than being cut off; every box in a row grows to match. */
+.qp-pv-c { flex: 1 1 0; min-width: 0; min-height: 28px; display: flex; align-items: center; justify-content: center; padding: 3px 5px; box-sizing: border-box; border-radius: 6px; background: #f1f4f7; color: #5b6b64; font-size: 10px; font-weight: 700; line-height: 1.2; text-align: center; overflow-wrap: break-word; hyphens: none; }
+.qp-pv-c.on { background: #e8f7ee; color: #146c3c; box-shadow: inset 0 0 0 1.5px #1f9d57; }
+.qp-pv-c.moved { background: #fdf3e2; color: #a46412; box-shadow: inset 0 0 0 1.5px #e0a23a; }
+.qp-pv-no { font-size: 12px; font-weight: 700; color: #5b6b64; padding: 6px 0 2px; }
+.qp-pv-k { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+.qp-pv-k i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.qp-pv-k i.on { background: #1f9d57; }
+.qp-pv-k i.moved { background: #e0a23a; margin-left: 8px; }
+/* "New" on a widget added in the last 30 days that this person has not yet
+   seen in the drawer (_qpIsNew, Ethan 2026-10-25). */
+.qp-lib-new { display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 999px; background: #e8f7ee; color: #146c3c; font-size: 10px; font-weight: 800; letter-spacing: .02em; vertical-align: 1px; }
+/* THE DRAWER AS TILES (Ethan, 2026-10-29, option C of
+   prototypes/widget-drawer.html). 460px wide; widgets two across, minis three
+   across like the shelf they go on. The tile is the Add (click or drag); New,
+   or Remove for one already on the page, sits in its top-right corner. */
+.qp-lib .qp-lib-panel { width: min(460px, 100%); }
+.qp-lib-sec + .qp-lib-sec { margin-top: 4px; }
+.qp-lib-sec .qp-lib-sec-h { border-bottom: 0; padding: 14px 2px 8px; }
+.qp-lib-sec .qp-lib-note { margin: -4px 2px 8px; font-size: 11.5px; }
+.qp-lib-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.qp-lib-tiles.qp-lib-tiles-m { grid-template-columns: 1fr 1fr 1fr; }
+.qp-lib-tile { position: relative; display: flex; flex-direction: column; gap: 7px; min-width: 0; min-height: 104px; box-sizing: border-box;
+    padding: 11px 11px 10px; border: 1px solid #e6ebf1; border-radius: 12px; background: #fff; outline: none;
+    transition: border-color .12s, box-shadow .12s; }
+.qp-lib-tile.qp-lib-drag { cursor: grab; }
+.qp-lib-tile.qp-lib-drag:hover, .qp-lib-tile.qp-lib-drag:focus-visible { border-color: #9fd8b6; box-shadow: 0 2px 8px rgba(31,157,87,.12); }
+.qp-lib-tile.qp-lib-drag:active { cursor: grabbing; }
+.qp-lib-tile.qp-lib-on { background: #f8fafb; }
+.qp-lib-tile.qp-lib-mini { min-height: 78px; padding: 9px; gap: 5px; }
+.qp-lib-tile .qp-lib-ico { width: 28px; height: 28px; border-radius: 8px; }
+.qp-lib-tile .qp-lib-ico svg { width: 15px; height: 15px; }
+.qp-lib-tile .qp-lib-name { font-size: 12.5px; font-weight: 800; line-height: 1.25; }
+.qp-lib-tile.qp-lib-mini .qp-lib-name { font-size: 11.5px; }
+.qp-lib-tile .qp-lib-sub { font-size: 11px; font-weight: 600; line-height: 1.4; min-height: 0; margin: 0; }
+.qp-lib-tile .qp-lib-new { position: absolute; top: 9px; right: 9px; margin: 0; font-size: 9.5px; padding: 1px 6px; }
+.qp-lib-tile .qp-lib-size { align-self: flex-start; margin: 0; font-size: 9.5px; }
+.qp-lib-tile .qp-lib-rm { position: absolute; top: 7px; right: 7px; font-size: 10.5px; padding: 2px 8px; border-radius: 999px; }
+.qp-lib-tile.qp-lib-mini .qp-lib-rm { top: 6px; right: 6px; font-size: 10px; padding: 1px 6px; }
+/* Reset reads as the drastic one (Ethan, 2026-10-25: Undo and Reset looked
+   alike): red, a layout-grid-with-an-X icon, and furthest from Save. */
+.qp-btn.qp-btn-reset { color: #c53030; }
+.qp-btn.qp-btn-reset:hover { background: #fdecec; border-color: #f2c4c4; }
+/* Weekly KPIs headline: a miss's goal and the store's figure, quiet beside the
+   red value (_QP_HL_BUILD.kpis). */
+.qp-hl-ln .qp-hl-goal { margin-left: 6px; font-size: 11px; font-weight: 600; color: #8a94a3; }
+/* FOUR TABS IN A THIRD OF A ROW (an assistant manager's Command Center: Live,
+   eBay, Scorecard, Weekly KPIs — 2026-10-25): the long labels were cut off, so
+   a card with four tabs showing uses the short ones. _qpRenderHeadlinesNow sets
+   .qp-many-tabs; the full name stays in the tooltip. */
+.cc-tabbar .toggle-btn .cc-ts { display: none; }
+.cc-widget.qp-many-tabs .cc-tabbar .toggle-btn .cc-tl { display: none; }
+.cc-widget.qp-many-tabs .cc-tabbar .toggle-btn .cc-ts { display: inline; }
+/* SCROLL BARS INSIDE THE CARD (Ethan, 2026-10-26: Your Feed's bottom arrow was
+   cut off). A card clips to its 18px rounded corners, and the feed list ran to
+   1px from the bottom edge, so its scroll bar's lower end went into the curve.
+   The list stops a corner's height short; the card's own background shows below. */
+/* The feed and every feed tab split out into a card of its own (.sam-feed). */
+.qp-cell .sam-card > #samFeed, .qp-cell .sam-card > .sam-feed { margin-bottom: 14px; }
+/* Weekly KPIs miss line (Ethan, 2026-10-26: "the goal and store number seems
+   pretty cramped"): the red figure, then the goal and the store each as a tag
+   of its own — the goal tinted, the store outlined — instead of one grey run. */
+.qp-kpi-v { display: inline-flex; align-items: center; gap: 6px; }
+.qp-kpi-v > b { font-weight: 800; margin-right: 2px; }
+.qp-kpi-tag { display: inline-flex; align-items: baseline; gap: 3px; padding: 2px 8px; border-radius: 999px; background: #f1f4f7; color: #647082; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.qp-kpi-tag b { color: #1a1c1e; font-weight: 800; }
+.qp-kpi-tag.st { background: #fff; box-shadow: inset 0 0 0 1px #dfe5ea; }
+/* An assistant manager's / employee's role today, on My Listing Goals. */
+.qp-ai-role { display: inline-block; padding: 2px 9px; border-radius: 999px; background: #e8f7ee; color: #146c3c; font-size: 11.5px; font-weight: 800; }
+/* Tab counts in same-width digits. Labels + counts are centred (Ethan,
+   2026-10-26); a checklist tab, whose count changes length with the period,
+   reserves its longest count's room inline (_qpAiCntRoom) so it stays still. */
+[data-qp-block] :is(.qp-ai-tabs, .sam-ftabs) .toggle-btn .qp-ai-cnt {
+    display: inline-block; text-align: left; font-variant-numeric: tabular-nums;
+}
+/* Even tags (Ethan, 2026-10-26: "align the pills so they are even sized"): the
+   red figure, the Goal tag and the Store tag each take a set width, so every
+   miss line's three line up under the one above. Same-width digits. */
+.qp-kpi-v { font-variant-numeric: tabular-nums; }
+.qp-kpi-v > b { display: inline-block; min-width: 6ch; text-align: right; }
+.qp-kpi-tag { min-width: 66px; justify-content: center; box-sizing: border-box; }
+.qp-kpi-tag.st { min-width: 92px; }
+/* THE LIVE CARD'S BOTTOM ROW STAYS PUT (Ethan, 2026-10-26: Open Full Dashboard,
+   Daily Breakdown and the sound button moved between Today, Yesterday and
+   Month). The headline was only as tall as what each view had in it, and the
+   row rode up under it. The card cannot be made a flex column — applyRoleBasedUI
+   writes display: block !important onto #ccWidget inline — so the row is pinned
+   to the card's bottom edge instead, with its height kept free above it. */
+[data-qp-block] .cc-widget:has(> .qp-hl) { position: relative; }
+/* 52, not 55 (2026-10-28): the one-tab Live card at half a row was 353. The
+   foot row is 31 tall at 12 from the bottom, so 52 still leaves it 9 clear. */
+[data-qp-block] .cc-widget:has(> .qp-hl) > .qp-hl:has(.qp-hl-footrow) { padding-bottom: 52px; }
+[data-qp-block] .cc-widget:has(> .qp-hl) > .qp-hl .qp-hl-footrow { position: absolute; left: 20px; right: 20px; bottom: 12px; margin: 0; }
+/* My Listing Goals week strip (_qpAiMyListing, Ethan 2026-10-26): seven
+   columns, each filled to that day's share of its goal — green hit, amber
+   short — the count under it, today outlined. */
+.qp-ai-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.qp-ai-day { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.qp-ai-col { width: 100%; height: 54px; border-radius: 6px; background: #f1f4f7; display: flex; align-items: flex-end; overflow: hidden; }
+.qp-ai-col > i { display: block; width: 100%; background: #1f9d57; border-radius: 6px 6px 0 0; }
+.qp-ai-col.warn > i { background: #e0a23a; }
+.qp-ai-day.today .qp-ai-col { box-shadow: inset 0 0 0 1.5px #1f9d57; }
+.qp-ai-day > b { font-size: 12px; font-weight: 800; color: #1a1c1e; font-variant-numeric: tabular-nums; }
+.qp-ai-day > span { font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+.qp-ai-day.today > span { color: #146c3c; }
+
+/* STATS & AWARDS ON THEIR OWN (Ethan, 2026-10-26: "make them more full and
+   cooler" — the design he picked). A card holding only Champions or only Awards
+   (_QP_WSPEC.stats.solo). Gold for the winners; a store's own tile or month in
+   green. A container query, because a card can be ⅓ or ½ of a row. */
+.qp-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; flex: none; }
+.qp-solo { container-type: inline-size; }
+.qp-pods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 2px; }
+.qp-pod { border: 1px solid #f1d9a6; background: #fffaf0; border-radius: 14px; padding: 11px 12px 9px; min-width: 0; }
+.qp-pod.mine { border-color: #9fd8b6; background: #f3fbf6; }
+.qp-pod-k { display: flex; align-items: center; justify-content: space-between; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #7a8794; }
+.qp-medal { width: 20px; height: 20px; border-radius: 50%; background: #f4c64e; color: #7a4b00; display: grid; place-items: center; font-size: 10.5px; font-weight: 900; letter-spacing: 0; }
+.qp-pod-n { font-size: 15px; font-weight: 800; color: #1a1c1e; margin-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-pod-s { font-size: 12px; font-weight: 650; color: #647082; margin-top: 1px; }
+.qp-pod-v { font-size: 23px; font-weight: 900; color: #146c3c; margin-top: 5px; line-height: 1; }
+.qp-pod-v small { font-size: 11px; font-weight: 700; color: #8a94a3; margin-left: 4px; }
+.qp-pod-none { font-size: 12px; color: #8a94a3; margin-top: 10px; }
+/* Runners-up on a grid: name · store · figure, so a long name never pushes the
+   store into the number ("MPL133"). */
+.qp-pod-ru { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 6px; row-gap: 3px; align-items: center;
+    margin-top: 8px; border-top: 1px dashed #e8dcc0; padding-top: 7px; font-size: 11px; font-weight: 650; color: #5b6b64; }
+.qp-pod-rn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-pod-rs { white-space: nowrap; }
+.qp-pod-ru b { color: #3c4654; text-align: right; min-width: 22px; }
+.qp-hero { display: flex; gap: 14px; align-items: center; border: 1px solid #f1d9a6; background: #fffaf0; border-radius: 16px; padding: 13px 16px; margin-top: 2px; }
+.qp-trophy { width: 52px; height: 52px; border-radius: 14px; background: #f4c64e; color: #7a4b00; display: grid; place-items: center; flex: none; }
+.qp-trophy svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.qp-hero-t { min-width: 0; flex: 1; }
+.qp-hero-m { font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #a46412; }
+.qp-hero-n { font-size: 14px; font-weight: 800; color: #1a1c1e; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hero-w { font-size: 26px; font-weight: 900; color: #1a1c1e; line-height: 1.1; margin-top: 1px; }
+.qp-hero-w .qp-dot { width: 11px; height: 11px; vertical-align: 3px; }
+.qp-hero-also { font-size: 11px; font-weight: 650; color: #647082; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-hero-sep { display: inline-block; width: 10px; }
+.qp-hero-vid { flex: none; font-size: 11.5px; font-weight: 750; color: #146c3c; background: #e8f7ee; border: 1px solid #bfe6cf; border-radius: 999px; padding: 5px 11px; text-decoration: none; white-space: nowrap; }
+.qp-hero-vid:hover { background: #d9f1e3; }
+.qp-hero-vid.off { color: #8a94a3; background: #f1f4f7; border-color: #e3e8ee; }
+.qp-pasts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.qp-past { border: 1px solid #e6ece8; border-radius: 11px; padding: 7px 10px; min-width: 0; }
+.qp-past.mine { border-color: #9fd8b6; background: #f3fbf6; }
+.qp-past-m { font-size: 10.5px; font-weight: 700; color: #8a94a3; white-space: nowrap; }
+.qp-past-w { font-size: 13.5px; font-weight: 850; color: #1a1c1e; margin-top: 1px; }
+.qp-tally { margin-top: 8px; font-size: 11.5px; font-weight: 650; color: #5b6b64; }
+.qp-tally b { color: #1a1c1e; }
+/* A third of a row: smaller type; the video button drops under the winner. */
+@container (max-width: 470px) {
+    .qp-pods { gap: 7px; }
+    .qp-pod { padding: 9px 9px 8px; }
+    .qp-pod-n { font-size: 13.5px; }
+    .qp-pod-v { font-size: 20px; }
+    .qp-pod-v small { display: block; margin: 2px 0 0; }
+    .qp-pod-ru { grid-template-columns: minmax(0, 1fr) auto; font-size: 10.5px; }
+    .qp-pod-rs { display: none; }
+    .qp-hero { flex-wrap: wrap; padding: 11px 13px; gap: 10px 12px; }
+    .qp-trophy { width: 44px; height: 44px; }
+    .qp-hero-w { font-size: 22px; }
+    .qp-hero-vid { order: 3; }
+    .qp-pasts { gap: 6px; }
+    .qp-past { padding: 6px 7px; }
+}
+
+/* WIDGET ENHANCEMENTS (Ethan, 2026-10-26: ideas 1, 2, 3, 4 and 6 of the six he
+   was shown; 5, clickable lines, was left out). Every card stays 350. */
+/* 1 · store dots: the store slot makes room for the dot. */
+.qp-cw-st { min-width: 4.4em; white-space: nowrap; }
+.qp-ai-pn .qp-dot { margin-right: 4px; }
+/* 6 · "Updated 2m ago" — the card's top corner; a click reads it again. */
+.qp-ai-head { position: relative; }
+.qp-upd { margin-left: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: none; cursor: pointer;
+    font: inherit; font-size: 10.5px; font-weight: 700; color: #8a94a3; background: #f6f8fa; border-radius: 999px; padding: 3px 8px; white-space: nowrap; }
+.qp-upd:hover { background: #e8f7ee; color: #146c3c; }
+.qp-upd svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+/* 2 · all clear: a check in a soft ring, centred, in place of a bare 0. */
+.qp-ai-body.qp-clear { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.qp-clear-ck { width: 54px; height: 54px; border-radius: 50%; background: #e8f7ee; box-shadow: 0 0 0 7px #f3fbf6; display: grid; place-items: center; color: #1f9d57; margin-top: 16px; flex: none; }
+.qp-clear-ck svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.qp-clear-t { font-size: 16px; font-weight: 850; color: #1a1c1e; margin-top: 13px; }
+.qp-clear-s { font-size: 12px; font-weight: 600; color: #647082; margin-top: 2px; max-width: 92%; }
+.qp-clear-l { font-size: 10.5px; font-weight: 650; color: #8a94a3; margin-top: 9px; background: #f6f8fa; border-radius: 999px; padding: 3px 10px; }
+.qp-ai-body.qp-clear .qp-hl-link { align-self: flex-start; }
+/* 3 · trend vs last week. */
+.qp-trend { flex: none; font-size: 10.5px; font-weight: 800; border-radius: 999px; padding: 2px 8px; white-space: nowrap; letter-spacing: 0; text-transform: none; }
+.qp-trend.up { background: #e8f7ee; color: #146c3c; }
+.qp-trend.down { background: #fdecec; color: #c53030; }
+.qp-trend.flat { background: #f1f4f7; color: #5b6b64; }
+.qp-hl-cap.qp-cap-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.qp-hl-cap.qp-cap-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qp-mini { flex: none; width: 12px; text-align: center; font-size: 9.5px; font-weight: 900; }
+.qp-mini.up { color: #1f9d57; } .qp-mini.down { color: #c53030; } .qp-mini.flat { color: #8a94a3; }
+.qp-cw-ln b.qp-mini { font-size: 10px; }
+/* 4 · progress ring on the checklists. */
+.qp-ringrow { display: flex; gap: 14px; align-items: center; margin-top: 2px; }
+.qp-ring { --p: 0; width: 78px; height: 78px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    background: conic-gradient(#1f9d57 calc(var(--p) * 1%), #e8eef0 0); }
+.qp-ring.done { background: #1f9d57; }
+.qp-ring-in { width: 62px; height: 62px; border-radius: 50%; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; }
+.qp-ring-in b { font-size: 22px; font-weight: 900; color: #1a1c1e; }
+.qp-ring-in span { font-size: 10px; font-weight: 700; color: #8a94a3; margin-top: 2px; }
+.qp-ring-side { min-width: 0; flex: 1; }
+.qp-ring-t { font-size: 14.5px; font-weight: 850; color: #1a1c1e; }
+.qp-ring-s { font-size: 11.5px; font-weight: 600; color: #647082; margin: 1px 0 7px; }
+.qp-ring-side .qp-hl-switch { flex-wrap: wrap; max-width: 100%; }
+/* ...and under the Stats & Awards tab bar (qp-solo-tabbed): the same views a
+   little tighter, so the card stays 350 with the tabs above them. */
+.qp-solo-tabbed > .qp-hl-cap:first-child { margin-top: 0 !important; }
+.qp-solo-tabbed .qp-pod { padding: 8px 10px 7px; }
+.qp-solo-tabbed .qp-pod-n { margin-top: 4px; font-size: 14px; }
+.qp-solo-tabbed .qp-pod-v { font-size: 20px; margin-top: 3px; }
+.qp-solo-tabbed .qp-pod-ru { margin-top: 6px; padding-top: 5px; row-gap: 2px; }
+.qp-solo-tabbed .qp-hero { padding: 9px 13px; }
+.qp-solo-tabbed .qp-trophy { width: 44px; height: 44px; border-radius: 12px; }
+.qp-solo-tabbed .qp-trophy svg { width: 23px; height: 23px; }
+.qp-solo-tabbed .qp-hero-w { font-size: 22px; }
+.qp-solo-tabbed .qp-past { padding: 5px 8px; }
+.qp-solo-tabbed .qp-tally { margin-top: 6px; }
+
+/* THE REDESIGNED WIDGET BODIES (Ethan, 2026-10-28). Tiles in a grid three
+   across are ONE FIXED SIZE: the name has a two-line slot whether it needs one
+   or not ("Monthly Customer Conversion" vs "Daily Buy"), so no tile and no row
+   is taller than another. Every card stays 350. */
+/* Store KPIs — six tiles. */
+.qp-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-top: 5px; }
+/* 52px: under a tab bar in a third of a 1280 window the card has 52 a tile to spare. */
+.qp-tile { position: relative; height: 52px; box-sizing: border-box; border-radius: 10px; padding: 6px 8px; background: #f6f8fa; min-width: 0; }
+.qp-tile b { display: block; font-size: 14px; line-height: 1.2; font-weight: 900; color: #1a1c1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 12px; }
+.qp-tile span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 9.5px; font-weight: 700; color: #647082; line-height: 1.2; margin-top: 1px; }
+.qp-tile-dot { position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; }
+.qp-tile.g { background: #f3fbf6; } .qp-tile.g .qp-tile-dot { background: #1f9d57; }
+.qp-tile.r { background: #fdf2f2; } .qp-tile.r .qp-tile-dot { background: #e05252; }
+.qp-tile.w { background: #fdf8ee; } .qp-tile.w .qp-tile-dot { background: #f0a92b; }
+/* Records — a trophy shelf. */
+.qp-shelf { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.qp-rec { position: relative; height: 70px; box-sizing: border-box; border: 1px solid #e6ece8; border-radius: 11px; padding: 7px 9px; min-width: 0; }
+.qp-rec.g1 { border-color: #f1d9a6; background: #fffaf0; }
+.qp-rec.g2 { border-color: #dfe5ea; background: #f7f9fb; }
+.qp-rec.g3 { border-color: #ecd9c6; background: #fbf6f1; }
+/* The badge floats at the top right of the NAME, so only the name's first
+   line gives up room — the second has the tile's whole width. */
+.qp-rec-med, .qp-rec-who { float: right; margin: -1px -3px 2px 4px; font-size: 9.5px; font-weight: 900; border-radius: 999px; padding: 1px 6px; background: #eef1f4; color: #5b6b64; line-height: 1.35; }
+.g1 .qp-rec-med { background: #f4c64e; color: #7a4b00; }
+.g2 .qp-rec-med { background: #d5dce4; color: #3c4654; }
+.g3 .qp-rec-med { background: #e6c39f; color: #6b3f12; }
+.qp-rec-who { background: #fff; box-shadow: inset 0 0 0 1px #f1d9a6; color: #1a1c1e; }
+.qp-rec-who .qp-dot { width: 6px; height: 6px; margin-right: 3px; vertical-align: 1px; }
+.qp-rec-l { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; height: 2.5em; font-size: 10px; font-weight: 700; color: #7a8794; line-height: 1.25; }
+.qp-rec-v { font-size: 15px; font-weight: 900; color: #1a1c1e; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Processes & Policies — pinned as tiles. */
+.qp-doc-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+/* Icon to the LEFT of the name (2026-10-28: stacked, a two-line name ran into
+   the tile's bottom edge). Centred in a fixed 52px, two lines always fit. */
+a.qp-doc.qp-doc-tile { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; height: 52px; box-sizing: border-box;
+    border: 1px solid #e6ece8; border-radius: 11px; padding: 6px 9px; text-decoration: none; min-width: 0; }
+a.qp-doc.qp-doc-tile:hover { border-color: #9fd8b6; background: #f3fbf6; }
+.qp-doc-tile .qp-doc-ico { flex: none; margin: 0; }
+.qp-doc-tile .qp-cw-lt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; font-size: 10.5px; font-weight: 750; color: #1a1c1e; line-height: 1.3; }
+/* B2B Unlisted — one bar split by deal. */
+.qp-split { display: flex; height: 11px; border-radius: 7px; overflow: hidden; gap: 2px; margin: 6px 0 0; }
+.qp-split i { display: block; height: 100%; }
+.qp-sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+/* Call Backs In Stock — what, who, where. */
+.qp-cb { border-top: 1px solid #eef1f4; padding: 4px 0; min-width: 0; }
+.qp-hl-cap + .qp-cb { border-top: none; }
+.qp-cb-i { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 750; color: #1a1c1e; }
+.qp-cb-i span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-cb-i b { flex: none; color: #3c4654; }
+.qp-cb-m { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; color: #647082; margin-top: 1px; }
+.qp-cb-m span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-cb-at { flex: none; color: #146c3c; font-weight: 750; }
+/* Monthly Breakdown — the stores on the row the switch picks. */
+.qp-mb-top { margin-top: 6px; }
+/* Five equal columns across the card: five buttons evened to the widest do not
+   fit a third of a row, so the even-tabs helper backed off and the buttons
+   shifted as the bold one moved (2026-10-28). A grid holds them still.
+   ALL FIVE THE SAME (Ethan, 2026-10-28): Net Profit's wider 1.25fr column is
+   gone. At 10px (below) "Net Profit" fits a fifth of a ⅓ card at 1280 even
+   bold — measured, 64px a button, nothing cut. */
+.qp-mb-sw { display: grid !important; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
+.qp-mb-sw button { min-width: 0 !important; padding-left: 1px !important; padding-right: 1px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-mbars { display: grid; gap: 5px; margin-top: 8px; }
+.qp-mbar { display: grid; grid-template-columns: 50px minmax(0, 1fr) 58px; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 700; color: #5b6b64; }
+.qp-mbar.me { color: #1a1c1e; }
+.qp-mbar b { text-align: right; color: #3c4654; font-weight: 800; }
+.qp-mbar.me b { color: #146c3c; }
+.qp-mbar-t { height: 9px; border-radius: 6px; background: #eef2f4; overflow: hidden; }
+.qp-mbar-t i { display: block; height: 100%; border-radius: 6px; background: #c9d3dd; }
+/* Pinned tiles in a third of a row: with the icon beside it a name had ~60px and
+   ran past two lines, so there the icon goes and the name takes the tile. */
+.qp-doc-tiles { container-type: inline-size; }
+@container (max-width: 380px) {
+    a.qp-doc.qp-doc-tile { grid-template-columns: minmax(0, 1fr); padding: 6px 8px; }
+    .qp-doc-tile .qp-doc-ico { display: none; }
+}
+
+/* CLAIMS & DISPUTES — the timeline strip (2026-10-28): what needs attention by
+   when it is due, red to grey; a zero is faded, not hidden, so the four always
+   line up. */
+.qp-tls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin-top: 2px; }
+.qp-tl { border-radius: 9px; padding: 4px 6px; text-align: center; min-width: 0; }
+.qp-tl b { display: block; font-size: 15px; font-weight: 900; line-height: 1.15; }
+.qp-tl span { display: block; font-size: 9.5px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-tl.r { background: #fdecec; color: #b42318; }
+.qp-tl.a { background: #fdf3e1; color: #8a5a0b; }
+.qp-tl.y { background: #f1f5f2; color: #3c4654; }
+.qp-tl.n { background: #f6f8fa; color: #8a94a3; }
+.qp-tl.zero { opacity: .45; }
+/* LEADERBOARD — a podium for the top three (2026-10-28). The steps are set by
+   place, not scaled to the money. */
+.lbp { display: flex; align-items: flex-end; justify-content: center; gap: 10px; margin: 4px 0 8px; }
+.lbp-pod { flex: 0 1 108px; min-width: 0; text-align: center; }
+.lbp-v { font-size: 13.5px; font-weight: 900; color: #1a1c1e; white-space: nowrap; }
+.lbp-s { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 11.5px; font-weight: 750; color: #647082; margin: 1px 0 5px; }
+.lbp-s .lbs-dot { flex: none; }
+.lbp-step { border-radius: 10px 10px 4px 4px; display: flex; justify-content: center; padding-top: 6px; box-sizing: border-box; }
+.lbp-step b { font-size: 15px; font-weight: 900; }
+.lbp-pod.p1 .lbp-step { height: 64px; background: #f4c64e; color: #7a4b00; }
+.lbp-pod.p2 .lbp-step { height: 46px; background: #d5dce4; color: #3c4654; }
+.lbp-pod.p3 .lbp-step { height: 32px; background: #e6c39f; color: #6b3f12; }
+.lbp-pod.me .lbp-s { color: #146c3c; }
+.lbp-pod.me .lbp-step { box-shadow: inset 0 0 0 2px rgba(31, 157, 87, .55); }
+/* On a card with a line a store (district Claims, room 5) the strip is one line
+   — "3 Overdue" — so five stores still fit 350 at a third of a row. */
+.qp-ai-dense .qp-tls { margin-top: 0; }
+.qp-ai-dense .qp-tl { display: flex; align-items: baseline; justify-content: center; gap: 4px; padding: 1px 4px; line-height: 1.2; }
+.qp-ai-dense .qp-tl b { display: inline; font-size: 12.5px; line-height: 1.2; }
+.qp-ai-dense .qp-tl span { display: inline; line-height: 1.2; }
+
+/* ROUND 2 OF THE WIDGET REDESIGNS (Ethan, 2026-10-28). */
+.qp-pill { flex: none; font-size: 10px; font-weight: 800; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.qp-pill.g { background: #e8f7ee; color: #146c3c; }
+.qp-pill.r { background: #fdecec; color: #b42318; }
+.qp-pill.n { background: #f1f4f7; color: #5b6b64; }
+/* Goals & Initiatives — goal tiles one size, the label pinned to the bottom. */
+.qp-goals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.qp-goal { height: 58px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid #f1d9a6; background: #fffaf0; border-radius: 10px; padding: 6px 8px; min-width: 0; }
+.qp-goal b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 11.5px; font-weight: 850; color: #1a1c1e; line-height: 1.25; }
+.qp-goal span { font-size: 9.5px; font-weight: 750; color: #a46412; }
+.qp-ini { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid #eef1f4; padding: 4px 0; font-size: 12px; font-weight: 650; color: #1a1c1e; min-width: 0; }
+.qp-hl-cap + .qp-ini { border-top: none; }
+.qp-ini > span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Variance — a severity bar a line; DM Notes — the note quoted. */
+.qp-sev, .qp-dmn, .qp-age { border-top: 1px solid #eef1f4; padding: 4px 0; min-width: 0; }
+.qp-hl-cap + .qp-sev, .qp-hl-cap + .qp-dmn, .qp-hl-cap + .qp-age { border-top: none; }
+.qp-sev-t, .qp-dmn-t, .qp-age-t { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: #1a1c1e; }
+.qp-sev-t span, .qp-dmn-t span:first-child, .qp-age-t span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-sev-t b { flex: none; color: #c53030; font-weight: 850; }
+.qp-sev-bar, .qp-age-bar { height: 6px; border-radius: 4px; background: #f6e3e3; margin-top: 3px; overflow: hidden; }
+.qp-sev-bar i, .qp-age-bar i { display: block; height: 100%; border-radius: 4px; background: #e05252; }
+.qp-sev-w, .qp-age-d { font-size: 10.5px; font-weight: 600; color: #8a94a3; margin-top: 2px; }
+.qp-dmn-q { font-size: 11px; font-weight: 600; color: #5b6b64; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-style: italic; }
+/* B2B — an age bar on the tool's own 4 / 7 day rule. */
+.qp-age-bar { background: #eef2f4; }
+.qp-age-bar.g i { background: #1f9d57; }
+.qp-age-bar.w i { background: #f0a92b; }
+.qp-age-bar.r i { background: #e05252; }
+/* SPEEKS Connect — tiles you can click; two or three across. */
+a.qp-tile.qp-tile-link { display: block; text-decoration: none; cursor: pointer; height: 62px; }
+a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
+.qp-tiles.qp-tiles-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Call Backs — when they asked, or when they were called. */
+.qp-cb-when { flex: none; color: #a46412; font-weight: 750; }
+.qp-sev-t em { font-style: normal; font-weight: 600; color: #8a94a3; }
+.qp-age-row { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.qp-age-row .qp-age-bar { flex: 1 1 auto; margin-top: 0; }
+.qp-age-row .qp-age-d { flex: none; margin-top: 0; font-weight: 750; color: #5b6b64; }
+/* Narrow-card fixes from the role gallery (2026-10-28), a third of a row:
+   Monthly Breakdown's switch read "Net P…"; "Top Reviews" wrapped and broke the
+   Champions row; the video pill cut "Beyond The Benchmark". */
+[data-qp-block] .qp-hl-switch.qp-mb-sw button { font-size: 10px !important; letter-spacing: -.01em; padding-left: 3px !important; padding-right: 3px !important; }
+@container (max-width: 470px) {
+    .qp-pod-k { letter-spacing: .03em; font-size: 9.5px; white-space: nowrap; }
+    .qp-medal { width: 17px; height: 17px; font-size: 9.5px; }
+    .qp-hero-t { flex: 1 1 calc(100% - 60px); }
+    .qp-hero-vid { margin-left: 56px; }
+}
+
+/* PHONES AND TABLETS (Ethan, 2026-10-29: "on mobile and tablet, customize is
+   disabled and the new widgets aren't active"). The compact tier — the same
+   query as _compactMediaQuery(), so a desktop window under 900px counts. No
+   corner buttons (no Customize; _qpHeadlinesOn reads this, so the cards go back
+   to their full panels too), and no added widget or shelf, whatever the saved
+   layout holds. The layout itself is kept for the desktop. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    /* The bar itself gets an inline display:flex !important from applyRoleBasedUI
+       (dynamic-module-flex), which no stylesheet beats — so its buttons go. */
+    .qp-bar > * { display: none !important; }
+    .main-content .qp-cell:has(> [data-qp-widget]), .main-content .qp-cell:has(> [data-qp-shelf]) { display: none !important; }
+}
+/* The Quick Messages widget (qmsgs): the window's Copy button, small enough
+   that six lines keep the card at 350, and a gap after the tab name
+   ("Common", "No Deals") — it is wider than a store code. */
+.qp-hk-list .qp-qm-copy { flex: none; padding: 2px 9px; font-size: 9.5px; line-height: 1.5; }
+.qp-hk-list .qp-cw-st { margin-right: 8px; }
+/* POLISH (Ethan, 2026-10-29, items 2-4). The drop preview for a shelf: a mini
+   a line, two-row ones twice as tall (_qpShelfAfter). */
+.qp-pv-shelf { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.qp-pv-shelf .qp-pv-c { flex: none; min-height: 24px; }
+.qp-pv-shelf .qp-pv-c.x2 { min-height: 52px; }
+/* Empty shelf rows show in Customize as a faint outline, so it is clear where
+   a mini can still go — no words, no button (that was "+ Add a Mini Widget"). */
+.main-content.qp-editing .qp-mn-empty { visibility: visible; border: 2px dashed #dfe5ec; border-radius: 16px; }
+.main-content.qp-dragging-any .qp-mn-empty { border-color: #b9e3c9; }
+/* The whole-shelf grip: a pill on the shelf's top edge, Customize only. The
+   minis are their own handles now, so a full shelf had nothing left to grab. */
+.qp-shelfblk { position: relative; }
+.qp-shelf-grip { display: none; position: absolute; top: -11px; left: 50%; transform: translateX(-50%); z-index: 3; align-items: center; gap: 5px;
+    padding: 2px 10px 2px 8px; border-radius: 999px; background: #fff; border: 1px solid #d5dce4; box-shadow: 0 1px 3px rgba(16,24,40,.08);
+    font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #647082; white-space: nowrap; cursor: grab; }
+.qp-shelf-grip svg { width: 12px; height: 12px; fill: currentColor; }
+.main-content.qp-editing .qp-cell > [data-qp-block] .qp-shelf-grip { display: flex; pointer-events: auto; }
+.main-content.qp-editing .qp-shelf-grip:hover { border-color: #1f9d57; color: #146c3c; }
+.main-content.qp-editing .qp-shelf-grip:active { cursor: grabbing; }
+/* THE DISTRICT FOUR, each its own picture (Ethan, 2026-10-29; picked from
+   prototypes/district-variety.html). Sized for ½ a row; container queries
+   tighten them at ⅓ (428px), where five across has about 75px a store. */
+.qp-widget { container-type: inline-size; }
+.qp-drings { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.qp-dring { text-align: center; min-width: 0; }
+.qp-dring svg { display: block; width: 100%; max-width: 74px; height: auto; margin: 0 auto; }
+.qp-dring-s { font-size: 12px; font-weight: 800; color: #1a1c1e; margin-top: 4px; display: flex; align-items: center; justify-content: center; gap: 5px; }
+.qp-dring-n { font-size: 11px; font-weight: 700; color: #647082; margin-top: 2px; white-space: nowrap; }
+.qp-dring-n b { color: #1a1c1e; } .qp-dring-n b.good { color: #1f9d57; }
+.qp-strip { display: flex; height: 14px; border-radius: 99px; overflow: hidden; gap: 2px; margin: 4px 0 12px; }
+.qp-strip i { display: block; min-width: 2px; }
+.qp-stiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.qp-stile { border: 1px solid #e6ebf1; border-left: 4px solid #8a94a3; border-radius: 12px; padding: 9px 9px 8px; min-width: 0; }
+.qp-stile-s { font-size: 11px; font-weight: 800; color: #647082; white-space: nowrap; }
+.qp-stile-v { font-size: 16px; font-weight: 900; color: #1a1c1e; margin: 2px 0 4px; white-space: nowrap; }
+.qp-stile-tag { font-size: 10px; font-weight: 800; border-radius: 6px; padding: 1px 6px; display: inline-block; background: #eef1f4; color: #4b5563; white-space: nowrap; }
+.qp-stile-tag.good { background: #e8f7ee; color: #146c3c; } .qp-stile-tag.warn { background: #fdf3e2; color: #a46412; } .qp-stile-tag.bad { background: #fdecec; color: #c53030; }
+.qp-lb { margin-top: 2px; }
+.qp-lb-r { display: flex; align-items: center; gap: 10px; padding: 4px 2px; border-top: 1px solid #eef1f4; min-width: 0; }
+.qp-lb-r:first-child { border-top: 0; }
+.qp-lb-k { flex: none; width: 18px; font-size: 13px; font-weight: 900; color: #9aa4b1; text-align: center; }
+.qp-lb-r:nth-child(1) .qp-lb-k { color: #c9971c; } .qp-lb-r:nth-child(2) .qp-lb-k { color: #8f9aa7; } .qp-lb-r:nth-child(3) .qp-lb-k { color: #b0703a; }
+.qp-lb-av { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 10.5px; font-weight: 900; }
+.qp-lb-nm { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-lb-nm b { font-size: 12.5px; font-weight: 800; color: #1a1c1e; margin-right: 6px; }
+.qp-lb-nm span { font-size: 11px; font-weight: 700; color: #8a94a3; }
+.qp-lb-dv { flex: none; text-align: right; white-space: nowrap; }
+.qp-lb-dv b { font-size: 15px; font-weight: 900; color: #1a1c1e; margin-right: 4px; }
+.qp-lb-dv span { font-size: 10px; font-weight: 800; color: #8a94a3; letter-spacing: .04em; text-transform: uppercase; }
+.qp-heat { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+.qp-heat-t { border-radius: 14px; padding: 12px 6px; text-align: center; min-width: 0; background: #f1f4f7; color: #3c4654; }
+.qp-heat-t.good { background: #e8f7ee; color: #146c3c; } .qp-heat-t.warn { background: #fdf3e2; color: #8a5410; } .qp-heat-t.bad { background: #fdecec; color: #a72828; }
+.qp-heat-s { font-size: 11px; font-weight: 900; letter-spacing: .04em; }
+.qp-heat-q { font-size: 24px; font-weight: 900; margin-top: 4px; line-height: 1.1; }
+.qp-heat-l { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .75; }
+.qp-heat-d { margin-top: 8px; font-size: 12px; font-weight: 900; border-radius: 99px; background: rgba(255,255,255,.7); padding: 2px 0; white-space: nowrap; }
+.qp-heat-key { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 12px; font-size: 10.5px; font-weight: 700; color: #647082; }
+.qp-heat-key i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.qp-heat-key i.good { background: #bfe8cf; } .qp-heat-key i.warn { background: #f6dcae; } .qp-heat-key i.bad { background: #f6c4c4; }
+@container (max-width: 500px) {
+    .qp-drings, .qp-stiles, .qp-heat { gap: 5px; }
+    .qp-dring-n { font-size: 10px; }
+    .qp-stile { padding: 7px 6px 6px; border-left-width: 3px; }
+    .qp-stile-v { font-size: 13.5px; }
+    .qp-wide-only { display: none; }
+    .qp-heat-t { padding: 10px 4px; }
+    .qp-heat-q { font-size: 19px; }
+    .qp-heat-d { font-size: 10.5px; }
+    .qp-heat-key { gap: 8px; font-size: 9.5px; }
+    .qp-lb-nm span { display: none; }
+}
+/* The card body is a flex column; these keep their height instead of being
+   squeezed (the rings drew over the caption and their own store names). */
+.qp-drings, .qp-strip, .qp-stiles, .qp-lb, .qp-heat, .qp-heat-key { flex: none; }
+/* SPRUCE-UPS (Ethan, 2026-10-29: "All eight", prototypes/widget-spruce.html). */
+/* Google Reviews by Store: a card a store, the leader gold. */
+.qp-rvc { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 4px; flex: none; }
+.qp-rvc > div { border: 1px solid #e6ebf1; border-radius: 12px; padding: 10px 6px 8px; text-align: center; min-width: 0; }
+.qp-rvc > div.lead { border-color: #f3d68a; background: #fffaf0; }
+.qp-rvc-s { font-size: 11px; font-weight: 800; color: #647082; display: flex; align-items: center; justify-content: center; gap: 5px; }
+.qp-rvc-v { font-size: 24px; font-weight: 900; color: #1a1c1e; margin-top: 2px; }
+.qp-rvc-st { font-size: 11px; font-weight: 800; color: #b7791f; }
+.qp-rvc-sp { display: block; width: 100%; height: 28px; margin-top: 6px; }
+/* Lost Deals by Store: donut + legend. */
+.qp-dn { display: flex; align-items: center; gap: 22px; margin-top: 8px; flex: none; }
+.qp-dn-svg { width: 150px; height: 150px; flex: none; }
+.qp-dn-lg { flex: 1; min-width: 0; }
+.qp-dn-lg > div { display: grid; grid-template-columns: 12px 40px 1fr auto; align-items: center; gap: 6px; padding: 5px 0; border-top: 1px solid #eef1f4; font-size: 12px; font-weight: 700; color: #3c4654; white-space: nowrap; }
+.qp-dn-lg > div:first-child { border-top: 0; padding-top: 0; }
+.qp-dn-lg > .qp-dn-h { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+.qp-dn-lg i { width: 10px; height: 10px; border-radius: 3px; }
+.qp-dn-lg b { font-weight: 900; color: #1a1c1e; }
+/* Store Lost Deals: three stat boxes. */
+.qp-box3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 6px 0 10px; flex: none; }
+.qp-box3 div { background: #f6f8fa; border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.qp-box3 b { display: block; font-size: 20px; font-weight: 900; color: #1a1c1e; }
+.qp-box3 > div > span { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+/* A column a day (store Buying blue, store Lost Deals red); the latest full colour. */
+.qp-dcols { display: flex; align-items: flex-end; gap: 8px; margin: 6px 2px 0; flex: none; }
+.qp-dcols > div { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+.qp-dcols i { display: block; width: 100%; max-width: 46px; border-radius: 6px 6px 2px 2px; }
+.qp-dcols.blue i { background: #c9d9f2; } .qp-dcols.blue .on i { background: #2563b8; }
+.qp-dcols.red i { background: #f3b7b7; } .qp-dcols.red .on i { background: #e05252; }
+.qp-dcols-m { font-size: 10px; font-weight: 800; color: #647082; margin-bottom: 3px; }
+.qp-dcols.blue .on .qp-dcols-m { color: #2563b8; }
+.qp-dcols-x { font-size: 10px; font-weight: 800; color: #8a94a3; margin-top: 4px; text-align: center; line-height: 1.3; white-space: nowrap; }
+.qp-dcols .on .qp-dcols-x { color: #1a1c1e; }
+/* The district two-row minis. */
+.qp-x2-chips { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; flex: none; }
+.qp-x2-chips div { border-radius: 10px; background: #fdf6e8; text-align: center; padding: 6px 2px; min-width: 0; }
+.qp-x2-chips b { display: block; font-size: 16px; font-weight: 900; color: #1a1c1e; }
+.qp-x2-chips span { font-size: 10px; font-weight: 800; color: #a46412; white-space: nowrap; }
+.qp-x2-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; flex: none; }
+.qp-x2-tiles div { border-radius: 10px; border: 1px solid #e6ebf1; padding: 6px 2px; text-align: center; min-width: 0; }
+.qp-x2-tiles div.low { border-color: #f3c4c4; background: #fdf3f3; }
+.qp-x2-tiles b { display: block; font-size: 13.5px; font-weight: 900; color: #1a1c1e; white-space: nowrap; }
+.qp-x2-tiles span { font-size: 10px; font-weight: 800; color: #647082; display: flex; align-items: center; justify-content: center; gap: 4px; }
+.qp-x2-cols { display: flex; align-items: flex-end; gap: 8px; height: 82px; flex: none; }
+.qp-x2-cols div { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.qp-x2-cols b { font-size: 10.5px; font-weight: 900; color: #1a1c1e; margin-bottom: 2px; }
+.qp-x2-cols i { display: block; width: 100%; border-radius: 5px 5px 1px 1px; }
+.qp-x2-cols span { font-size: 10px; font-weight: 800; color: #8a94a3; margin-top: 2px; }
+.qp-x2-strip { height: 12px; margin: 4px 0 8px; }
+@container (max-width: 500px) {
+    .qp-rvc { gap: 5px; }
+    .qp-rvc-v { font-size: 19px; }
+    .qp-dn { gap: 12px; }
+    .qp-dn-svg { width: 112px; height: 112px; }
+    .qp-dn-lg > div { grid-template-columns: 10px 32px 1fr auto; gap: 4px; font-size: 11px; }
+    .qp-box3 b { font-size: 17px; }
+    .qp-box3 div { padding: 7px 8px; }
+    .qp-dcols { gap: 5px; }
+    .qp-dcols-x { font-size: 9px; }
+}
+/* Goal Pace rings' "Needs $2.9k/Day": one line at ½, two at ⅓ rather than
+   running into the next store's. */
+.qp-dring-n { white-space: normal; line-height: 1.3; }
+/* Always two lines, every store alike (Ethan, 2026-10-29: one store fit on a
+   line and the rest wrapped — "the formatting of the text all needs to be the
+   same"): the word on top, the figure under it. */
+.qp-dring-n { white-space: nowrap; }
+.qp-dring-w { display: block; }
+/* QUICK LINKS, REDRAWN (_qlBuild; Ethan, 2026-10-29: B, the app tiles, "lose
+   the backdrop and just have the quick links almost looking like mini
+   widgets"). No bar behind them: each link is a card like a mini widget's
+   (.qp-mn — border, 16px radius, the soft shadow, a 30px icon), spaced like
+   the card rows under them. The old strip stays in the page as the source. */
+.hotbars-stack.ql-src { display: none !important; }
+.ql { margin: -6px 0 22px; }
+.ql[hidden] { display: none; }
+.ql-tiles { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 20px; }
+.ql-l { display: flex; align-items: center; gap: 12px; padding: 12px 16px; min-width: 0; text-decoration: none; color: #1a1c1e;
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 16px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+    transition: border-color .12s, box-shadow .12s, transform .12s; }
+.ql-l:hover { border-color: #9fd8b6; box-shadow: 0 4px 12px rgba(16,24,40,.08); transform: translateY(-1px); }
+.ql-ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; }
+.ql-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ql-sheet { background: #e8f7ee; color: #178048; } .ql-drive { background: #e8f0fb; color: #2563b8; } .ql-key { background: #fdf3e2; color: #a46412; }
+.ql-cart { background: #f3effc; color: #6b4fc9; } .ql-bag { background: #fdecef; color: #c2416b; } .ql-pc { background: #e6f6f4; color: #0f766e; }
+.ql-folder { background: #fff4e0; color: #b7791f; } .ql-link { background: #eef1f4; color: #4b5563; }
+.ql-nm { flex: 1; min-width: 0; }
+.ql-nm b { display: block; font-size: 13.5px; font-weight: 800; color: #1a1c1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ql-nm span { display: block; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; margin-top: 1px; }
+.ql-ext { width: 12px; height: 12px; fill: none; stroke: #9aa4b1; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+/* Expense Report widget: two stat boxes (Mileage, Expenses). */
+.qp-box3.qp-box2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* The ↗ sits after the kind ("Drive Folder ↗"), not in a column of its own, so
+   the longest name ("SPEEKSNET Google Drive" five across) fits on its line —
+   wrapping only some names made the tiles disagree. */
+.ql-nm span { display: flex; align-items: center; gap: 5px; }
+.ql-nm .ql-ext { width: 10px; height: 10px; }
+/* THE WAY HOME (_qpBackBar, _qpNavFit; Ethan, 2026-10-30, option C). Desktop
+   only — the complement of _compactMediaQuery(): phones and tablets keep the
+   QuickPortal tab and get no back bar. */
+.qp-back { display: none; }
+@media (min-width: 1367px), (min-width: 901px) and (pointer: fine) {
+    .top-nav .nav-bar .nav-link[href="index.html"] { display: none !important; }
+    /* Spaced evenly, each tab its own width (not equal boxes: the gaps showed). */
+    .top-nav .nav-bar { display: flex !important; justify-content: space-between; gap: 8px; flex: 1 1 auto; max-width: 820px; margin: 0 20px; min-width: 0; }
+    .top-nav .nav-bar a.nav-link { justify-content: center; width: auto !important; flex: none !important; box-sizing: border-box; margin: 0 !important; padding: 0 12px !important; white-space: nowrap; }
+    /* Names stay: the shortening (_qpNavFit) replaces the icons-only fallback. */
+    .top-nav.nav-compact .nav-bar a.nav-link span { display: inline !important; }
+    .top-nav.nav-compact .nav-bar a.nav-link { font-size: 13px !important; gap: 7px !important; }
+    .top-nav.nav-compact .nav-bar a.nav-link i { width: auto !important; font-size: inherit !important; }
+    .top-nav.nav-compact .nav-bar a.nav-link[data-m]::after { content: none !important; }
+    .top-nav .brand-area.qp-home { cursor: pointer; border-radius: 12px; transition: background .12s; }
+    .top-nav .brand-area.qp-home:hover { background: rgba(255,255,255,.08); }
+    .qp-back { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
+    .qp-back a { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; color: #146c3c; background: #e8f7ee; border: 1px solid #b9e3c9; border-radius: 999px; padding: 6px 14px 6px 10px; text-decoration: none; transition: background .12s, border-color .12s; }
+    .qp-back a:hover { background: #d9f2e3; border-color: #8fd3ab; }
+    .qp-back a svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    .qp-back span { font-size: 13px; font-weight: 700; color: #8a94a3; }
+    .qp-back b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
+    /* B2B runs edge to edge (.main-content:has(> .b2b-wrap) has no side padding):
+       the bar takes the page's own 24px gutter and a white strip, and the panel
+       under it is sized by _wsFitPanels from wherever it then sits. */
+    .main-content:has(> .b2b-wrap) > .qp-back { margin: 0; padding: 10px 24px; background: #fff; border-bottom: 1px solid #e3e8ee; }
+}
+/* THE HIGH PRIORITY BANNER, SLIM (Ethan, 2026-10-30: "for high priority I like
+   slim" — option A of prototypes/nav-and-banner.html). One line on a white card
+   like the widgets: a red High Priority tag, the title, as much of the message
+   as fits, then Read now (or Mark read). About half the height it was. The whole
+   bar still opens the announcement. */
+.speeks-action-menu .sam-hero { padding: 8px 10px 8px 12px; gap: 12px; background: #fff; border-color: #f3c4c4; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+.speeks-action-menu .sam-hero::before, .speeks-action-menu .sam-hero-ico { display: none; }
+.speeks-action-menu .sam-hero-body { display: flex; align-items: center; gap: 12px; }
+.speeks-action-menu .sam-hero-lab { flex: none; color: #fff; background: #e05252; border-radius: 7px; padding: 4px 8px; font-size: 10px; font-weight: 900; }
+.speeks-action-menu .sam-hero-t { flex: none; max-width: 40%; font-size: 14px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.speeks-action-menu .sam-hero-s { flex: 1; min-width: 0; font-size: 13px; }
+.speeks-action-menu .sam-hero-cta { border: 0; background: #fdecec; color: #c53030; }
+/* Phones: the tag, the title and Read — the snippet has no room on one line. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .speeks-action-menu .sam-hero { padding: 8px 10px; gap: 10px; }
+    .speeks-action-menu .sam-hero-s { display: none; }
+    .speeks-action-menu .sam-hero-t { flex: 1; max-width: none; min-width: 0; }
+    /* ...and no tag, which took most of a phone line: a red edge says it. */
+    .speeks-action-menu .sam-hero-lab { display: none; }
+    .speeks-action-menu .sam-hero { border-left: 4px solid #e05252; }
+}
 
 /* =========================================================================
    B2B DEAL WORKSPACE (2026-10 consistency overhaul)

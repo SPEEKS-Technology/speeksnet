@@ -76,7 +76,7 @@ t('meta line says how long ago, from a timestamp it carries', function () {
     var ago = frag(_lvChipHtml(e)).querySelector('.lv-ameta .lv-ago');
     if (!ago) return 'no .lv-ago';
     if (ago.getAttribute('data-at') !== e.at) return 'data-at: ' + ago.getAttribute('data-at');
-    return ago.textContent === '4m ago' || 'ago: ' + ago.textContent;
+    return ago.textContent === '4m Ago' || 'ago: ' + ago.textContent;
 });
 
 t('_lvAgo: just now, minutes, hours and minutes, then whole hours', function () {
@@ -84,7 +84,7 @@ t('_lvAgo: just now, minutes, hours and minutes, then whole hours', function () 
     var at = function (min) { return new Date(now - min * 60000).toISOString(); };
     var got = [_lvAgo(at(0.5), now), _lvAgo(at(-2), now), _lvAgo(at(4), now), _lvAgo(at(59), now),
                _lvAgo(at(72), now), _lvAgo(at(9 * 60 + 59), now), _lvAgo(at(11 * 60 + 5), now), _lvAgo('nope', now)];
-    var want = ['just now', 'just now', '4m ago', '59m ago', '1h 12m ago', '9h 59m ago', '11h ago', ''];
+    var want = ['Just Now', 'Just Now', '4m Ago', '59m Ago', '1h 12m Ago', '9h 59m Ago', '11h Ago', ''];
     return JSON.stringify(got) === JSON.stringify(want) || JSON.stringify(got);
 });
 
@@ -95,7 +95,7 @@ t('_lvRefreshAgo rewrites an aged card in place', function () {
     try {
         _lvRefreshAgo();
         var txt = host.querySelector('.lv-ago').textContent;
-        return txt === '2h 5m ago' || 'after refresh: ' + txt;
+        return txt === '2h 5m Ago' || 'after refresh: ' + txt;
     } finally { host.remove(); }
 });
 

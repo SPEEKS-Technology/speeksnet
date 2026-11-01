@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261027a">
+  <link rel="stylesheet" href="styles.css?v=20261031a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261027a" defer></script>
+  <script src="speeks.js?v=20261031a" defer></script>
 </head>
 <body class="preload">
 
@@ -615,7 +615,7 @@
                            deliberately. -->
                       <button id="cbViewMatchesBtn" class="mb-view-btn active" onclick="cbSetView('matches')"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Matches</button>
                       <!-- Corp roles (DM/CEO/MOCD) get no My Store view — hidden pre-paint by applyRoleBasedUI so it never flashes -->
-                      <button id="cbViewMineBtn" class="mb-view-btn dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-employee role-training" onclick="cbSetView('mine')"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>My Store</button>
+                      <button id="cbViewMineBtn" class="mb-view-btn dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-employee" onclick="cbSetView('mine')"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>My Store</button>
                       <button id="cbViewAllBtn" class="mb-view-btn" onclick="cbSetView('all')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>All Stores</button>
                       <!-- Completed and Archived are two SECTIONS of this one tab, not
                            two tabs. They were the two nobody opened, and they are the
@@ -708,7 +708,7 @@
   </div>
 
 
-<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
+<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee">
     <div class="gi-panel-header">
         <div class="gi-panel-header-row">
             <div style="display: flex; align-items: center; gap: 10px;">

@@ -25,17 +25,22 @@ const DUP_PAGE = Number(src.match(/const DUP_PAGE\s*=\s*(\d+)/)[1]);
 const DUP_MAX_PAGES = Number(src.match(/const DUP_MAX_PAGES\s*=\s*(\d+)/)[1]);
 const DUP_ORDERS_QUERY = src.match(/const DUP_ORDERS_QUERY = `([\s\S]*?)`;/)[1];
 const SHOPIFY_API_VERSION = '2026-07';
+// The real pause, checked below; the harness itself retries without waiting.
+const REAL_RETRY_MS = Number(src.match(/const SHOPIFY_RETRY_MS\s*=\s*(\d+)/)[1]);
+const SHOPIFY_RETRY_MS = 0;
 
 // Strip the TypeScript that plain node cannot parse.
 const strip = s => s
   .replace(/:\s*Array<\{[^}]*\}>\s*=/g, ' =')
   .replace(/:\s*string \| null\s*=/g, ' =')
   .replace(/\(shop: string, token: string, sinceDay: string\)/, '(shop, token, sinceDay)')
+  .replace(/\(shop: string, token: string, payload: unknown\)/, '(shop, token, payload)')
   .replace(/\(n: any\)/, '(n)')
   .replace(/ as any\[\]/g, '')
   .replace(/\((t|a|e|sum)(: any)?(, t: any)?\)\s*=>/g, (m) => m.replace(/: any/g, ''))
   .replace(/\(sum: number, t: any\)/g, '(sum, t)');
 
+eval(strip(lift('shopifyPost', 'async function')));
 eval(strip(lift('shopifyEbayOrders', 'async function')));
 eval(strip(lift('mapDupOrder', 'function')));
 
@@ -140,6 +145,30 @@ const check = (ok, msg) => { console.log((ok ? '  ok   ' : '  FAIL ') + msg); if
   threw = false;
   try { await shopifyEbayOrders('s', 't', '2026-08-23'); } catch (e) { threw = /bad field/.test(e.message); }
   check(threw, 'a 200-with-errors throws too — the silent false negative');
+
+  console.log('\n=== one Shopify blip is retried once, not mailed (BAL 409, 2026-10-21) ===');
+  check(REAL_RETRY_MS > 0 && REAL_RETRY_MS <= 10000, `a real pause between tries (${REAL_RETRY_MS}ms)`);
+  const okPage = { ok: true, json: async () => ({ data: { orders: { edges: [], pageInfo: { hasNextPage: false } } } }) };
+  let n = 0;
+  global.fetch = async () => (++n === 1 ? { ok: false, status: 409, json: async () => ({}) } : okPage);
+  r = await shopifyEbayOrders('s', 't', '2026-08-23');
+  check(n === 2 && r.orders.length === 0, `a single 409 then a 200 succeeds (${n} requests)`);
+
+  n = 0;
+  global.fetch = async () => { if (++n === 1) throw new Error('connection reset'); return okPage; };
+  r = await shopifyEbayOrders('s', 't', '2026-08-23');
+  check(n === 2, 'a dropped connection gets the same second try');
+
+  n = 0;
+  global.fetch = async () => { n++; return { ok: false, status: 409, json: async () => ({}) }; };
+  threw = false;
+  try { await shopifyEbayOrders('s', 't', '2026-08-23'); } catch (e) { threw = /409/.test(e.message); }
+  check(threw && n === 2, `two failures in a row still throw, after exactly two tries (${n})`);
+
+  n = 0;
+  global.fetch = async () => { n++; return { ok: true, json: async () => ({ errors: [{ message: 'bad field' }] }) }; };
+  try { await shopifyEbayOrders('s', 't', '2026-08-23'); } catch (_) {}
+  check(n === 1, 'a 200-with-errors is NOT retried — it would fail the same way twice');
 
   console.log('\n=== the query itself ===');
   check(/\$after: String/.test(DUP_ORDERS_QUERY) && /after: \$after/.test(DUP_ORDERS_QUERY), 'cursor is a GraphQL variable');

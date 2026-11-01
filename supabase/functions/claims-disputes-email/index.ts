@@ -554,28 +554,42 @@ function managerNudge(store: string, rows: Row[], today: string) {
 // 3. The DM digest
 // ---------------------------------------------------------------------------
 function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], contested: Row[], today: string) {
-  const col = (n: number, color?: string) =>
-    `<td style="text-align:center;padding:0 3px;font-size:15px;font-weight:700;color:${n ? (color || C.ink) : "#c9d5cd"};">${n || "—"}</td>`;
+  // ROW RULES ACROSS THE WHOLE ROW (desktop, 2026-10-24). The line used to sit
+  // on the store cell only, so on a wide screen each store got a short stub
+  // under its name and the numbers floated free of it. Every cell carries the
+  // rule now, and the last row drops it so it doesn't double the footer's line.
+  // Zeros are regular weight, not just a pale colour: dark-mode clients repaint
+  // the pale grey nearly as bright as the real numbers, so colour alone lost them.
+  const rule = (lastRow: boolean) => lastRow ? "" : `border-bottom:1px solid ${C.line};`;
+  const col = (n: number, lastRow: boolean, color?: string, w = "11.5%") =>
+    `<td width="${w}" style="text-align:center;padding:11px 3px;${rule(lastRow)}font-size:15px;font-weight:${n ? 700 : 400};color:${n ? (color || C.ink) : "#c9d5cd"};">${n || "—"}</td>`;
 
   // SHORT HEADERS (Ethan's phone, 2026-10-02). Eight full-word headers with no
   // gap between cells ran together into "STOREDISPUTESINRSCASES…" at phone
   // width. Short single words with padding fit at 360px; the footer spells them out.
+  // Fixed widths so the columns are even instead of each sizing to its own
+  // header word: store 17%, Claims 14% (the longest word, which touched DUE at
+  // 360px at an even 12%), the other six 11.5%.
+  const widths = ["17%", "11.5%", "11.5%", "11.5%", "11.5%", "11.5%", "14%", "11.5%"];
   const head = ["Store", "Disp", "INR", "Case", "Mism", "Pay", "Claims", "Due"];
   const last = head.length - 1;
-  let table = `<tr><td style="padding:14px 12px;border-top:1px solid ${C.line};">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      <tr>${head.map((h, i) => `<th style="text-align:${i ? "center" : "left"};padding:0 3px 7px;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.03em;color:${i === last ? C.bad : C.faint};text-transform:uppercase;border-bottom:1.5px solid ${C.ink};">${esc(h)}</th>`).join("")}</tr>`;
+  let table = `<tr><td style="padding:14px 12px 6px;border-top:1px solid ${C.line};">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">
+      <tr>${head.map((h, i) => `<th width="${widths[i]}" style="text-align:${i ? "center" : "left"};padding:0 3px 7px;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.03em;color:${i === last ? C.bad : C.faint};text-transform:uppercase;border-bottom:1.5px solid ${C.ink};">${esc(h)}</th>`).join("")}</tr>`;
 
-  let any = false;
-  for (const s of STORES) {
+  const shown = STORES.filter((s) => {
     const c = counts[s];
-    if (!c || !(c.disputes || c.inrs || c.cases || c.mismatch || c.payments || c.claims || c.dueToday)) continue;
-    any = true;
+    return c && (c.disputes || c.inrs || c.cases || c.mismatch || c.payments || c.claims || c.dueToday);
+  });
+  const any = shown.length > 0;
+  shown.forEach((s, i) => {
+    const c = counts[s];
+    const lastRow = i === shown.length - 1;
     table += `<tr>
-      <td style="padding:11px 0;border-bottom:1px solid ${C.line};font-size:13px;font-weight:700;color:${C.ink};">${esc(s)}</td>
-      ${col(c.disputes)}${col(c.inrs)}${col(c.cases)}${col(c.mismatch)}${col(c.payments)}${col(c.claims, C.warn)}${col(c.dueToday, C.bad)}
+      <td width="${widths[0]}" style="padding:11px 3px;${rule(lastRow)}font-size:13px;font-weight:700;color:${C.ink};">${esc(s)}</td>
+      ${col(c.disputes, lastRow)}${col(c.inrs, lastRow)}${col(c.cases, lastRow)}${col(c.mismatch, lastRow)}${col(c.payments, lastRow)}${col(c.claims, lastRow, C.warn, widths[6])}${col(c.dueToday, lastRow, C.bad)}
     </tr>`;
-  }
+  });
   table += `</table></td></tr>`;
   if (!any) table = `<tr><td style="padding:16px 14px;border-top:1px solid ${C.line};font-size:13px;color:${C.ink};">Nothing is outstanding at any store this morning.</td></tr>`;
 

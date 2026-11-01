@@ -1865,8 +1865,13 @@ async function drainHeldForDigest(
 // ============================================================================
 // SETTINGS (the cog popout)
 // ============================================================================
-async function whoAmI(sb: any, pin: string) {
-  const { data } = await sb.from("users").select("name, role, store").eq("pin", pin).single();
+// TEST ACCOUNTS (migration 0160, test_users): a test PIN may READ, with the
+// test account's role and store, so the tool draws for design testing. Only on
+// a GET — a write with a test PIN finds nobody and is refused as before (the
+// browser refuses it first anyway).
+async function whoAmI(sb: any, pin: string, reading = false) {
+  let { data } = await sb.from("users").select("name, role, store").eq("pin", pin).single();
+  if (!data && reading) ({ data } = await sb.from("test_users").select("name, role, store").eq("pin", pin).maybeSingle());
   if (!data) return null;
   const raw = String(data.role || "").toLowerCase().trim();
   if (raw === "store") return null;             // TV board: no settings, no mail
@@ -1955,7 +1960,7 @@ Deno.serve(async (req: Request) => {
   // only real proof an address works.
   if (mode === "roster") {
     if (!pin) return json({ error: "Missing x-user-pin header" }, 401);
-    const me = await whoAmI(sb, pin);
+    const me = await whoAmI(sb, pin, req.method === "GET");
     if (!me) return json({ error: "Invalid PIN" }, 401);
     if (!["district manager", "ceo"].includes(me.role)) return json({ error: "Insufficient role" }, 403);
     const prefs = await loadPrefs(sb);
@@ -1977,7 +1982,7 @@ Deno.serve(async (req: Request) => {
 
   if (req.method === "GET") {
     if (!pin) return json({ error: "Missing x-user-pin header" }, 401);
-    const me = await whoAmI(sb, pin);
+    const me = await whoAmI(sb, pin, true);
     if (!me) return json({ error: "Invalid PIN" }, 401);
     const { data } = await sb.from("user_notify_prefs").select("*").eq("user_name", me.key).maybeSingle();
     // B2B is a limited rollout: Feature Access takes the tab away per role and

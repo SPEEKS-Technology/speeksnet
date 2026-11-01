@@ -40,19 +40,25 @@ function onEditInstallable(e) {
   pushToSupabase();
 }
 
+// 2026-10-26: sends the Summary tab ONLY. The Summary is still the sole source
+// of each store's unlisted inventory LINE ITEMS (store_weekly_sales ->
+// unlisted-backlog and the Unlisted Inventory Trend dashboard; see 0137), so
+// this trigger has to stay. The Buy / goals / Sales tabs are no longer sent:
+// - Sales tabs were retired with the GP -> NP switch (daily_np replaced them).
+// - Buy tabs: two rows landed on the same store+month+day, so every upsert
+//   since Sep 14 failed with "ON CONFLICT DO UPDATE command cannot affect row a
+//   second time" — one 500 per sheet edit on the Supabase dashboard. Buying
+//   now comes from daily_buysell. Goals sat behind that failure (none saved
+//   since Sep 1). Nothing current reads any of the three, and dropping them
+//   only stops writes that were already being rejected.
+// The parse functions below are kept for reference; nothing calls them.
 function pushToSupabase() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var weekly       = parseWeeklySummary(ss);
-  var dailyBuying  = parseDailyBuying(ss);
-  var monthlyGoals = parseSalesGoals(ss);
-  var dailySales   = parseDailySales(ss);
+  var weekly = parseWeeklySummary(ss);
 
   var payload = JSON.stringify({
-    secret:        SYNC_SECRET,
-    weekly:        weekly,
-    daily_buying:  dailyBuying,
-    monthly_goals: monthlyGoals,
-    daily_sales:   dailySales
+    secret: SYNC_SECRET,
+    weekly: weekly
   });
 
   var response = UrlFetchApp.fetch(SUPABASE_SYNC_URL, {

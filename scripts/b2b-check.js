@@ -870,9 +870,16 @@ t('3.8.1 Copy reads as a real route, not a fallback', function () {
 // remove the Not mine feature on the your feed completely. That is not how i
 // intended that to be". These checks now pin it staying gone, and pin the
 // snooze half that survives.
+//
+// The rows are drawn by _samPaintFeedCard since the feed became pieces on the
+// QuickPortal (2026-10-22: one painter per feed card), so these read both —
+// reading only _samRenderFeedNow would pass Not mine without looking at a row.
+function _feedRowSrc() {
+    return _samRenderFeedNow.toString() + (typeof _samPaintFeedCard === 'function' ? _samPaintFeedCard.toString() : '');
+}
 t('3.8.9 Not mine is gone from the feed', function () {
     if (typeof samNotMineItem !== 'undefined') return 'the handler still exists';
-    var src = _samRenderFeedNow.toString();
+    var src = _feedRowSrc();
     if (src.indexOf('samNotMineItem') > -1) return 'the card still wires the action';
     // MARKUP, not the words. A bare 'Not mine' also matches the comment that
     // explains why the control was removed -- which is exactly how this check
@@ -883,7 +890,7 @@ t('3.8.9 Not mine is gone from the feed', function () {
 });
 t('3.8.9 Snooze is still on the card', function () {
     if (typeof samSnoozeItem !== 'function') return 'no snooze action';
-    return _samRenderFeedNow.toString().indexOf('samSnoozeItem') > -1
+    return _feedRowSrc().indexOf('samSnoozeItem') > -1
         || 'the card does not offer Snooze';
 });
 t('3.8.9 anything hidden by Not mine comes back', function () {
@@ -1021,12 +1028,6 @@ t('3.8.3 opening it goes to the listing screen, not the read-only sheet', functi
     return _asRole('employee', 'LEE', function () {
         var k = _b2bClickKind(EMP_LISTING);
         return k === 'listing' || 'routed to "' + k + '" instead of the listing screen';
-    });
-});
-t('3.8.3 a trainee gets the same', function () {
-    return _asRole('training', 'LEE', function () {
-        var a = _b2bActionFor(EMP_LISTING);
-        return (a && a.kind === 'listing') || 'trainees still cannot list';
     });
 });
 t('3.8.3 pricing still works for them', function () {

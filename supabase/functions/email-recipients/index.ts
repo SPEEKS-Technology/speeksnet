@@ -72,6 +72,10 @@ const LIST_KEYS = new Set([
   // every store's mail.
   "record_watch_leadership",
   ...STORES.map((s) => `record_watch_${s}`),
+  // unrestocked_returns: the 7:35am Returned But Not Back In Stock mail
+  // (unrestocked-returns, 0153) — the DM. Empty, it falls back to
+  // claims_disputes_dm.
+  "unrestocked_returns",
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

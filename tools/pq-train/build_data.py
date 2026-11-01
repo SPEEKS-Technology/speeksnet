@@ -33,6 +33,7 @@ so re-running never moves a test listing into training.
 """
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -43,9 +44,17 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 GOLD = os.path.join(REPO, "scripts", "pq-gold", "gold.json")
 OUT = os.environ.get("PQ_DATA", r"C:\Users\User\pq-train\data")
 PHOTOS = os.path.join(OUT, "photos")
+CONTACTS = os.path.join(OUT, "contact")   # round 4: one listing grid per example
+CONTACT_PX = 448
 WIDTH = 640
 TEST_SHARE = 0.25
 REVIEWED_MAX = 600   # enough to measure on; each costs inference time
+# Labels KNOWN to be wrong that can't be fixed in Confirm Shots (2026-10-22):
+# broken by the pre-10-14 reorder bug (see REDO in picture-quality index.ts)
+# and sold before Ethan could re-check them, so the queue can't show them.
+KNOWN_BAD = {
+    "15228962308198",   # OVL Dell WD19S Docking Station (labels shifted; sold)
+}
 
 
 def side(product_id: str) -> str:
@@ -101,12 +110,48 @@ def example(listing, photo, path, tier):
     }
 
 
+def photo_path(url: str) -> str:
+    return os.path.join(PHOTOS, hashlib.sha1(url.split("?")[0].encode()).hexdigest()[:20] + ".jpg")
+
+
+def contact_sheet(listing, n, out):
+    """Round 4 (2026-10-21): the whole listing as ONE small numbered grid, this
+    photo outlined in yellow. Position alone (round 3) didn't move Windows laptops
+    (26%): the model still can't see which corner it's on without the others. A
+    grid is one fixed-size image (CONTACT_PX square, ~256 image tokens) however many
+    photos the listing has (up to 38), so a 30-photo item lot costs no more memory
+    than a 2-photo game. Built from TODAY's photos, all of them, labelled or not."""
+    from PIL import Image, ImageDraw, ImageFont
+    urls = [p["url"] for p in listing["photos"] if p.get("url")]
+    cols = math.ceil(math.sqrt(len(urls)))
+    nrows = math.ceil(len(urls) / cols)
+    tile = CONTACT_PX // max(cols, nrows)
+    sheet = Image.new("RGB", (CONTACT_PX, CONTACT_PX), "white")
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default(size=max(10, tile // 5))
+    for i, url in enumerate(urls):
+        x, y = (i % cols) * tile, (i // cols) * tile
+        try:
+            im = Image.open(photo_path(url)).convert("RGB")
+            im.thumbnail((tile - 6, tile - 6))
+            sheet.paste(im, (x + (tile - im.width) // 2, y + (tile - im.height) // 2))
+        except Exception:
+            pass
+        if i + 1 == n:
+            draw.rectangle([x + 1, y + 1, x + tile - 2, y + tile - 2], outline=(255, 200, 0), width=max(3, tile // 18))
+        draw.rectangle([x + 2, y + 2, x + 2 + tile // 4, y + 2 + tile // 5], fill="black")
+        draw.text((x + 4, y + 2), str(i + 1), fill="white", font=font)
+    sheet.save(out, quality=88)
+
+
 def main():
     gold = json.load(open(GOLD, encoding="utf-8"))
     os.makedirs(PHOTOS, exist_ok=True)
-    jobs, rows = [], {"train": [], "test": [], "reviewed": []}
+    jobs, rows, listings = [], {"train": [], "test": [], "reviewed": []}, {}
     for l in gold["listings"]:
         if not l.get("sheet") or not l.get("guide"):
+            continue
+        if l["product_id"].split("/")[-1] in KNOWN_BAD:
             continue
         for p in l["photos"]:
             tier = p.get("shots_tier")
@@ -116,19 +161,29 @@ def main():
                 continue
             if tier not in ("explicit", "reviewed"):
                 continue
-            path = os.path.join(PHOTOS, hashlib.sha1(p["url"].split("?")[0].encode()).hexdigest()[:20] + ".jpg")
+            path = photo_path(p["url"])
             bucket = side(l["product_id"]) if tier == "explicit" else "reviewed"
             rows[bucket].append(example(l, p, path, tier))
             jobs.append((p["url"], path))
+            # Every photo of the listing, for its contact sheet.
+            jobs += [(q["url"], photo_path(q["url"])) for q in l["photos"] if q.get("url")]
+            listings[l["product_id"]] = l
     # The reviewed yardstick is capped, spread across sheets in a stable order.
     rows["reviewed"].sort(key=lambda r: hashlib.sha1(r["id"].encode()).hexdigest())
     rows["reviewed"] = rows["reviewed"][:REVIEWED_MAX]
     keep = {r["image"] for b in rows.values() for r in b}
+    keep |= {photo_path(q["url"]) for r in (r for b in rows.values() for r in b)
+             for q in listings[r["product_id"]]["photos"] if q.get("url")}
     jobs = [j for j in dict(jobs).items() if j[1] in keep]
     print(f"downloading {len(jobs)} photos at {WIDTH}px …", flush=True)
     with ThreadPoolExecutor(6) as pool:
         ok = list(pool.map(lambda j: fetch(*j), jobs))
     bad = {path for (url, path), good in zip(jobs, ok) if not good}
+    os.makedirs(CONTACTS, exist_ok=True)
+    for b in rows.values():
+        for r in b:
+            r["contact"] = os.path.join(CONTACTS, f"{r['id'].replace('#', '_')}.jpg")
+            contact_sheet(listings[r["product_id"]], r["n"], r["contact"])
     for name, b in rows.items():
         b = [r for r in b if r["image"] not in bad]
         with open(os.path.join(OUT, f"{name}.jsonl"), "w", encoding="utf-8") as f:

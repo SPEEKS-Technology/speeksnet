@@ -26,6 +26,13 @@
 --                                blank flag means NO. ⚠️ This query
 --                                reads the table, so it fails until migration
 --                                0148 is applied.
+--                                A row of its own since 2026-10-23: the local
+--                                prefill (0157) brings listings Opus never
+--                                graded, and they were dropped silently while
+--                                this table was only left-joined to grades —
+--                                104 labelled listings missing from round 5's
+--                                first build. Their title comes from
+--                                pq_local_prefill.
 --   pq_photo_labels (0141)       EXPLICIT, per photo, FRAMING only — fine /
 --                                problem (off_center, crooked, too_small,
 --                                blurry, cut_off, dirty_backdrop, clutter,
@@ -121,13 +128,13 @@ guide as (
   group by c.slug
 )
 select jsonb_build_object(
-  'store',       coalesce(r.store_code, l.store_code),
-  'product_id',  coalesce(r.product_id, l.product_id),
+  'store',       coalesce(r.store_code, l.store_code, k.store_code),
+  'product_id',  coalesce(r.product_id, l.product_id, k.product_id),
   'sku',         r.sku,
-  'title',       r.title,
+  'title',       coalesce(r.title, pf.title),
   'handle',      c.product_handle,
   'price',       c.price,
-  'sheet',       r.sheet_slug,
+  'sheet',       coalesce(r.sheet_slug, k.shots->0->>'sheet'),
   'sheet_name',  r.sheet_name,
   'guide',       g.shots,
   -- The saved grade, in the review shape the scorer reads. This is MODEL output
@@ -155,8 +162,9 @@ select jsonb_build_object(
 ) as g
 from reviews r
 full join labels l on l.product_id = r.product_id and l.store_code = r.store_code
-left join confirmed k on k.product_id = coalesce(r.product_id, l.product_id)
-left join catalog c on c.product_id = coalesce(r.product_id, l.product_id)
-left join guide g on g.slug = r.sheet_slug
+full join confirmed k on k.product_id = coalesce(r.product_id, l.product_id)
+left join pq_local_prefill pf on pf.product_id = coalesce(r.product_id, l.product_id, k.product_id)
+left join catalog c on c.product_id = coalesce(r.product_id, l.product_id, k.product_id)
+left join guide g on g.slug = coalesce(r.sheet_slug, k.shots->0->>'sheet')
 left join guide cg on cg.slug = k.shots->0->>'sheet'
 order by 1;

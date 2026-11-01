@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261027a">
+  <link rel="stylesheet" href="styles.css?v=20261031a">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261027a" defer></script>
+  <script src="speeks.js?v=20261031a" defer></script>
 </head>
 
 <body class="preload">
@@ -686,11 +686,45 @@
 
 <main class="main-content">
 
+  <!-- ===== CUSTOMIZE BAR — arrange the QuickPortal (QUICKPORTAL LAYOUT in speeks.js) =====
+       Every element with data-qp-block is a block that can be moved; data-qp-label
+       is the name its handle shows. This bar and the High Priority bar below are
+       deliberately NOT blocks, so they stay on top whatever the layout. It sits
+       ABOVE High Priority (Ethan, 2026-10-21: under the banner it looked odd), so
+       the page opens with the controls and the banner leads into the cards.
+       Who gets it: see the note on #qpBar below (by role, not Feature Access). -->
+  <!-- Since 2026-10-22 the bar is a pair of round icon buttons pinned to the
+       bottom-right corner of the window (Ethan: "move the customize button to
+       this bottom right corner ... change it to an icon ... follow as the user
+       scrolls"). Still the first thing in <main>; position: fixed in the CSS. -->
+  <!-- Customize is for every role from manager down, with no Feature Access
+       switch (Ethan, 2026-10-25: "for everyone going forward"). The store
+       board never gets it (a board is opt-in). DM, CEO and MOCD since 2026-10-26
+       (Ethan: MOCD had the manager cards but no way to arrange them; the DM's
+       Action Items became cards). -->
+  <div class="qp-bar dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-employee role-district-manager role-ceo role-mocd" id="qpBar" data-mobile="hide" data-tablet="show">
+    <!-- Reset (red, the layout grid) sits furthest from Save; Undo (the curved
+         arrow) right above it — Ethan 2026-10-25: the two round-arrow icons
+         were too alike. -->
+    <button type="button" class="qp-btn qp-btn-reset" id="qpResetBtn" hidden onclick="qpReset()" title="Reset Layout to Default" aria-label="Reset Layout to Default"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14.5 14.5l6 6M20.5 14.5l-6 6"/></svg></button>
+    <button type="button" class="qp-btn" id="qpAddBtn" hidden onclick="qpLibraryOpen()" title="Add Widget" aria-label="Add Widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button type="button" class="qp-btn" id="qpUndoBtn" hidden onclick="qpUndo()" title="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button type="button" class="qp-btn qp-btn-main" id="qpEditBtn" aria-pressed="false" onclick="qpToggleEdit()" title="Customize" aria-label="Customize"><svg class="qp-ico-edit" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><svg class="qp-ico-save" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button>
+  </div>
+
   <!-- ===== SPEEKS ACTION MENU (Priority-Hero briefing deck) ===== -->
   <!-- Managers + ASMs. Replaces the info-ticker + nav bell. Cards trigger the
        existing modals/panels; the unified feed (announcements + store notes +
-       reminders) is built by renderActionFeed() in the SPEEKS ACTION MENU block. -->
-  <section class="speeks-action-menu dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" id="speeksActionMenu">
+       reminders) is built by renderActionFeed() in the SPEEKS ACTION MENU block.
+
+       Since the QuickPortal layout (2026-10-21) this one deck is THREE elements:
+       this section holds only the High Priority bar, and the feed and the action
+       items are their own sections below, each a block that can be moved. The
+       High Priority bar is deliberately not a block (Ethan: it has to stay at the
+       top because of what it is). All three carry .speeks-action-menu, because
+       every deck rule in styles.css is scoped under it; samInit still reads this
+       section's visibility to decide whether the deck is on at all. -->
+  <section class="speeks-action-menu sam-hero-wrap dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee" id="speeksActionMenu">
 
     <div class="sam-hero" id="samHero" hidden onclick="toggleNotifs()">
       <div class="sam-hero-ico">
@@ -707,19 +741,148 @@
       <div class="sam-hero-cta" id="samHeroCta">Read now <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
       <button type="button" class="sam-hero-read" id="samHeroRead" hidden><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>
     </div>
+  </section>
 
+  <!-- ===== QUICK LINKS — pinned under High Priority (Ethan, 2026-10-22) =====
+       Was a QuickPortal block that could be moved like any card (data-qp-block
+       "links"); now it is not a block at all, so the layout never moves it and it
+       always sits here, under any open High Priority banner and above the rows.
+       A saved layout that still names "links" just drops the key (_qpResolve). -->
+  <div class="hotbars-stack qp-pinned">
+
+    <div class="dynamic-module-flex role-ceo hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">CEO</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-tom-folder">📁 MOCD Folder</a>
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
+        </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex role-district-manager hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">DM</span>
+          <div class="hotbar-links">
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
+          </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex role-mocd hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">MOCD</span>
+          <div class="hotbar-links">
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-tom-folder">📁 MOCD Folder</a>
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
+        </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex role-manager role-owner-manager hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">MGR</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex role-assistant-manager hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">ASM</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-asm-sales-summary">📊 Sales Summary</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex store-lee hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">LEE</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-pc-inventory">💻 PC Inventory</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex store-ovl hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">OVL</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-pc-inventory">💻 PC Inventory</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex store-wsp hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">WSP</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-employee-purchases">🛍️ Employee Purchases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex store-mpl hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">MPL</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-employee-purchases">🛍️ Employee Purchases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="dynamic-module-flex store-bal hotbar-wrapper">
+        <div class="hotbar-container">
+          <span class="hotbar-label">BAL</span>
+          <div class="hotbar-links">
+            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-employee-purchases">🛍️ Employee Purchases</a>
+          </div>
+        </div>
+      </div>
+  </div>
+
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee" data-qp-block="feed" data-qp-label="Your Feed">
     <div class="sam-board">
       <!-- LEFT: the feed — announcements + store notes + reminders/due dates -->
       <div class="sam-card">
         <div class="sam-card-h">
-          <span class="sam-ttl"><span class="sam-hico"><svg viewBox="0 0 24 24"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></svg></span>Your Feed <span class="sam-pip" id="samAnnPip" style="display:none">0</span></span>
+          <span class="sam-ttl"><span class="sam-hico"><svg viewBox="0 0 24 24"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></svg></span><span class="sam-fttl">Your Feed</span> <span class="sam-pip" id="samAnnPip" style="display:none">0</span></span>
           <div class="sam-h-actions">
             <button class="sam-viewall" onclick="toggleNotifs()">All announcements <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
           </div>
         </div>
+        <!-- Feed tabs: QuickPortal card view only, filled by _samRenderFeedTabs -->
+        <div class="sam-ftabs ew-seg" id="samFeedTabs" role="group" aria-label="Feed filter" hidden></div>
         <div class="sam-feed" id="samFeed"><div class="sam-empty">Syncing your feed...</div></div>
+        <!-- The feed's three pieces for the QuickPortal layout (QP_FAMILIES.feed):
+             empty markers it moves into whichever card holds each kind. -->
+        <i class="sam-fpiece" data-qp-piece="feed/due"></i><i class="sam-fpiece" data-qp-piece="feed/todo"></i><i class="sam-fpiece" data-qp-piece="feed/news"></i>
       </div>
+    </div>
+  </section>
 
+  <section class="speeks-action-menu qp-part dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee" data-qp-block="actions" data-qp-label="Action Items">
+    <div class="sam-board">
       <!-- RIGHT: action items -->
       <div class="sam-rail">
         <div class="sam-card">
@@ -736,12 +899,12 @@
           <!-- Order matters: the three side panels (Checklist, Cleaning, Goals &
                Initiatives) sit together as 1-2-3, then Listing Goals — which opens
                a modal, not a panel — comes last. -->
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
             <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Goals &amp; Initiatives</span><span class="sam-m-s">Team goals &amp; initiatives</span></span>
             <span class="sam-m-chev"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></span>
           </button>
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-assistant-manager role-training" data-feature="widget-listing-goals" onclick="openListingGoals()">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-assistant-manager" data-feature="widget-listing-goals" onclick="openListingGoals()">
             <span class="sam-mico sage"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Listing Goals</span><span class="sam-m-s" id="samListSub">This week's listing target</span><span class="sam-m-bar"><i id="samListFill" style="width:0%"></i></span></span>
             <span class="sam-m-val" id="samListVal"></span>
@@ -776,140 +939,6 @@
     </div>
   </section>
 
-  <div class="hotbars-stack">
-      
-    <div class="dynamic-module-flex role-ceo hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">CEO</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
-            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-tom-folder">📁 MOCD Folder</a>
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
-        </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex role-district-manager hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">DM</span>
-          <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex role-mocd hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">MOCD</span>
-          <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-tom-folder">📁 MOCD Folder</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-b2b-records">🏢 B2B Records</a>   
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
-        </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex role-district-manager hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">Resources</span>
-          <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-res-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-res-training">🎓 Training</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex role-manager role-owner-manager hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">MGR</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex role-assistant-manager hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">ASM</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-asm-sales-summary">📊 Sales Summary</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex store-lee hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">LEE</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-pc-inventory">💻 PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-training">🎓 Training</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex store-ovl hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">OVL</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-pc-inventory">💻 PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-training">🎓 Training</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex store-wsp hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">WSP</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-training">🎓 Training</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex store-mpl hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">MPL</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-training">🎓 Training</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="dynamic-module-flex store-bal hotbar-wrapper">
-        <div class="hotbar-container">
-          <span class="hotbar-label">BAL</span>
-          <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-training">🎓 Training</a>
-          </div>
-        </div>
-      </div>
-  </div>
 
 
   <!-- The row the Command Center and Buying & Sales live in. It carries a feature
@@ -918,7 +947,7 @@
        inside a row that was still display:none, so the grant silently did
        nothing. A container whose children are grantable must be grantable too.
        Default matches the role classes it used to be gated by. -->
-  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row" data-feature="widget-command-center">
+  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row" data-feature="widget-command-center" data-qp-block="command" data-qp-label="Command Center">
     <!-- ===== COMMAND CENTER — ONE widget for every role =====
          Managers, ASMs and employees all get this same card; which TABS they see is
          the only difference, and that is entirely Feature Access (cc-live, cc-ebay,
@@ -935,7 +964,9 @@
         <div class="ew-head">
             <div class="ew-titles">
                 <span class="ew-eyebrow"><span id="cc-store-eyebrow">—</span> · This Month</span>
-                <span class="ew-title"><span id="cc-store-name">Store</span> Command Center <span id="cc-week" class="ew-date"></span></span>
+                <!-- .qp-cc-piece: " · Live Dashboard" when QuickPortal has left this
+                     card holding one tab (QUICKPORTAL LAYOUT, _qpDistribute). -->
+                <span class="ew-title"><span id="cc-store-name">Store</span> Command Center<span class="qp-cc-piece"></span> <span id="cc-week" class="ew-date"></span></span>
             </div>
             <span class="cc-head-r">
                 <!-- Tab-specific header bits, shown by switchCommandTab. The goal chip
@@ -979,10 +1010,10 @@
                      duplicated there, and the four month-end projections that were not
                      became its "Tracking to month-end" strip. One fewer tab, one fewer
                      Feature Access switch, and no figure lost. -->
-                <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
+                <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live"><span class="cc-tl">Live Dashboard</span><span class="cc-ts">Live</span></button>
                 <button id="cc-tab-ebay" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('ebay')" data-mobile="hide" data-tablet="show" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
-                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
-                <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-mobile="hide" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
+                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard"><span class="cc-tl">Scorecard</span><span class="cc-ts">Score</span><span class="cc-updot" id="cc-updot-scorecard"></span></button>
+                <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-mobile="hide" data-feature="cc-kpis"><span class="cc-tl">Weekly KPIs</span><span class="cc-ts">KPIs</span><span class="cc-updot" id="cc-updot-kpis"></span></button>
             </div>
             <div class="cc-tabbar-right">
                 <!-- Starts HIDDEN, like its sibling below. This holds the audit
@@ -1097,19 +1128,19 @@
        Feature Access is unchanged: widget-district-command gates the card and
        widget-district-live gates the Live tab. No new keys. -->
   <div class="card ew-airy cc-widget dynamic-module-block role-district-manager role-ceo mb-30"
-       id="dcWidget" data-feature="widget-district-command">
+       id="dcWidget" data-feature="widget-district-command" data-qp-block="district" data-qp-label="District Command Center">
       <div class="ew-head">
           <div class="ew-titles">
               <span class="ew-eyebrow">District</span>
               <!-- Same scope line the login screen prints on its rail (Stores 5 /
                    Markets KC · STL), said as one phrase. -->
-              <span class="ew-title">Command Center <span class="ew-date" id="dc-scope">5 Stores &middot; 2 Markets &middot; KC &amp; STL</span></span>
+              <span class="ew-title">Command Center<span class="qp-cc-piece"></span> <span class="ew-date" id="dc-scope">5 Stores &middot; 2 Markets &middot; KC &amp; STL</span></span>
           </div>
       </div>
 
       <div class="cc-tabbar">
           <div class="ew-seg cc-seg">
-              <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
+              <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live" title="Live Dashboard"><span class="cc-tl">Live Dashboard</span><span class="cc-ts">Live</span></button>
               <!-- Matrix sits right after Live because it answers the question the
                    card gets opened with: who needs me today. Hidden on a phone like
                    the other three data tabs — the row carries three metrics, two
@@ -1124,9 +1155,8 @@
                    was left deliberately: every id, key and function stays `watch`,
                    every label a person sees says Matrix. -->
               <button id="dc-tab-watch" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('watch')" data-feature="widget-district-watch">Matrix</button>
-              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
               <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
-              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
+              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('scorecard')" title="Scorecard"><span class="cc-tl">Scorecard</span><span class="cc-ts">Score</span></button>
           </div>
           <div class="cc-tabbar-right">
               <button id="dc-collapse" class="cc-collapse" type="button" onclick="collapseDistrict()" style="display:none;">&#9650; Summary</button>
@@ -1189,28 +1219,30 @@
               <div id="dc-score-body"><div class="status-message">Syncing the district&hellip;</div></div>
           </div>
 
-          <!-- The store-major board, unchanged. Monthly Team Goals, Listing Goals and
-               the Cleaning Checklist used to sit beside it; they are action-menu items
-               now (#dmGoalsModal, #dmListingModal, #dmCleaningModal).
-               Sits second, right after Live: it is the tab a DM opens most, and the
-               one the eBay and Scorecard rows drill into. -->
-          <div class="cc-panel" id="dc-panel-stores" data-mobile="hide" data-tablet="show">
-              <div id="district-master-body">
-                  <div class="dcc-empty">Syncing the district&hellip;</div>
-              </div>
-          </div>
+          <!-- NO STORE BREAKDOWN TAB (Ethan, 2026-10-29: "we can actually get rid of
+               the store breakdown widget entirely as the live dashboard, ebay
+               widget, and matrix kind of handling that"). The store-major board
+               went with it. Its rows (_dccRows) still load — eBay, Scorecard and the
+               summary read them — through fetchMasterDistrictDashboard, which no
+               longer needs #district-master-body. Its two buttons, Run daily import
+               and Run weekly summary, moved to the full Live view's top bar
+               (_dcImportsPaint). -->
 
           <!-- No KPIs tab. It held the month-by-month monthly-KPI grid
                (fetchDistrictMonthlyKPIs / renderDistrictKPIs, which read
                #district-kpi-body); with the container gone those return at their
                first line again and make no network calls. The Store Breakdown tab
-               carries each store's weekly metrics, which is what a DM reads day to
-               day. Restoring the tab means putting the two elements back — see the
-               Scorecard panel above for the shape. -->
+               carried each store's weekly metrics. Restoring the tab means putting the two elements back — see the
+               Scorecard panel above for the shape. (The Store Breakdown tab that
+               carried them is gone too, 2026-10-29 — see above.) -->
       </div>
   </div>
 
-  <div class="ew-airy ew-perf mb-30">
+  <!-- Performance is two blocks since the QuickPortal layout: the chart, and the
+       leaderboard that used to sit in its right-hand column. Both keep .ew-perf so
+       every rule for the card (and the store board's hide) still reaches them;
+       .qp-part collapses .ew-perf-body to the one column each now has. -->
+  <div class="ew-airy ew-perf qp-part mb-30" data-qp-block="chart" data-qp-label="Performance Chart">
       <div class="ew-head">
           <div class="ew-titles">
               <span class="ew-eyebrow">The Company</span>
@@ -1251,6 +1283,11 @@
                   <canvas id="mainKpiChart"></canvas>
               </div>
           </div>
+      </div>
+  </div>
+
+  <div class="ew-airy ew-perf ew-perf-lb qp-part mb-30" data-qp-block="leaderboard" data-qp-label="Leaderboard">
+      <div class="ew-perf-body">
           <div class="ew-standings">
               <div class="ew-standings-head">
                   <span class="ew-standings-title">Leaderboard</span>
@@ -1372,7 +1409,7 @@
     <div class="manage-content" id="audit-breakdown-body"></div>
 </div>
 
-<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
+<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee">
     <div class="gi-panel-header">
         <div class="gi-panel-header-row">
             <div style="display: flex; align-items: center; gap: 10px;">

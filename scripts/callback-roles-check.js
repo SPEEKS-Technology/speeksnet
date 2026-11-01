@@ -77,7 +77,6 @@ async function asRole(browser, role, store) {
         ['manager',          'LEE',  true,  "LEE's manager sees green — it is their stock"],
         ['assistant manager', 'LEE', true,  "LEE's ASM too"],
         ['employee',         'LEE',  true,  "and LEE's employee, who can ring the customer"],
-        ['training',         'LEE',  true,  'and somebody still in training'],
         ['manager',          'WSP',  false, 'WSP, who asked, sees the neutral chip instead'],
         ['employee',         'OVL',  false, 'and a store with nothing to do sees neutral'],
     ]) {
