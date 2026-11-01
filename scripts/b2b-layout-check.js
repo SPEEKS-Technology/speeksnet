@@ -238,7 +238,7 @@ t('layout: the notes panel stacks rather than squeezing on a phone', function ()
     // b2b-grid2 side by side is right on a desktop and wrong at 390px, where two
     // columns would leave each textarea about 20 characters wide.
     var host = stage(390, _b2bNotesPanel(FIX_DEAL));
-    var boxes = host.querySelectorAll('.b2b-notespanel textarea');
+    var boxes = host.querySelectorAll('.b2b-ws-notes textarea');
     if (boxes.length !== 2) return 'expected two note fields, got ' + boxes.length;
     var a = boxes[0].getBoundingClientRect(), b = boxes[1].getBoundingClientRect();
     // Stacked means the second starts below the first, not beside it.
@@ -248,7 +248,7 @@ t('layout: the notes panel stacks rather than squeezing on a phone', function ()
 
 t('layout: both note fields are the same width on a desktop', function () {
     var host = stage(1200, _b2bNotesPanel(FIX_DEAL));
-    var boxes = host.querySelectorAll('.b2b-notespanel textarea');
+    var boxes = host.querySelectorAll('.b2b-ws-notes textarea');
     var a = boxes[0].getBoundingClientRect().width;
     var b = boxes[1].getBoundingClientRect().width;
     return Math.abs(a - b) <= 2 || 'lopsided: ' + Math.round(a) + ' vs ' + Math.round(b);
@@ -365,30 +365,141 @@ document.getElementById('layout-host') && document.getElementById('layout-host')
 // Nick: the Out For Quote screen crushed its lines into half the width. They
 // now span the screen; on a phone they must scroll inside their own box, never
 // widen the page.
+// Since the 2026-10 workspace port: the status facts are the side panel's line
+// and the lines are the shared table's offer mode.
 function _sentQuoteHtml() {
     var d = Object.assign({}, FIX_DEAL, { stage: 'quote', quote_sent_at: '2026-10-10T15:00:00Z', quote_send_count: 1 });
-    return _b2bQuoteStatus(d)
-        + '<div id="b2bReviewLines" class="b2b-rvw-full">' + _b2bReviewLines(true) + '</div>';
+    return _b2bQuoteFactsHtml(d)
+        + '<div id="b2bReviewLines">' + _b2bReviewLines() + '</div>';
 }
 t('layout: sent-quote lines get the width on a desktop', function () {
-    var host = stage(1300, _sentQuoteHtml());
-    var name = host.querySelector('.b2b-rvw-full .b2b-rvw-name');
+    var host = stage(1300 - 320, _sentQuoteHtml());
+    var name = host.querySelector('.b2b-lt-item b');
     if (!name) return 'no line rendered';
     // One line of text, not three: the old split wrapped names to ~3 lines.
     var h = name.getBoundingClientRect().height;
     return h < 34 || 'item name is ' + Math.round(h) + 'px tall — still wrapping';
 });
-t('layout: sent-quote lines scroll inside their box on a phone', function () {
+t('layout: sent-quote lines never widen the page on a phone, and the offer stays usable', function () {
     var host = stage(390, _sentQuoteHtml());
     var bad = overflowing(host);
     if (bad.length) return 'page widened by: ' + bad.join(', ');
-    var box = host.querySelector('.b2b-rvw-full .b2b-rvw');
-    return (box.scrollWidth > box.clientWidth) || 'the table was crushed instead of scrolling';
+    var input = host.querySelector('.b2b-lt-in');
+    if (!input) return 'no offer field';
+    return input.getBoundingClientRect().width >= 60 || 'the offer field is ' + Math.round(input.getBoundingClientRect().width) + 'px';
 });
 t('layout: the quote status line wraps rather than spilling on a phone', function () {
     var host = stage(390, _sentQuoteHtml());
-    var st = host.querySelector('.b2b-qstatus');
+    var st = host.querySelector('.b2b-ws-qfacts');
     return st.getBoundingClientRect().width <= 391 || 'status line is ' + Math.round(st.getBoundingClientRect().width) + 'px';
+});
+
+document.getElementById('layout-host') && document.getElementById('layout-host').remove();
+
+// ---------------------------------------------------------------------------
+// THE DEAL WORKSPACE (2026-10 consistency overhaul)
+// ---------------------------------------------------------------------------
+// The side panel is a fixed 320px column, and everything in it -- facts with a
+// long email or custody line, the numbers block, a folded section -- has to
+// fit it without widening it. The line table may be wider than its column, but
+// only inside its own scroller.
+t('ws the side panel fits its 320px column', function () {
+    var html = '<div class="b2b-ws-side" style="width:320px">'
+        + _b2bNextHtml(FIX_DEAL, { line: 'Accepted Oct 16', primary: { label: 'Complete Deal', onclick: '' },
+                                   secondary: [{ label: 'Send Back', onclick: '' }, { label: 'Copy Quote', onclick: '' }] })
+        + _b2bFactsHtml(Object.assign({}, FIX_DEAL, { delivered_by: 'Marcus Whitaker-Johnson', received_by: 'Ethan Kushnir' }))
+        + _b2bNumsHtml()
+        + _b2bSection('Move history', '<div class="b2b-hint">Nothing moved.</div>', { open: true, n: 0 })
+        + '</div>';
+    var bad = overflowing(stage(320, html));
+    return !bad.length || 'overflows: ' + bad.slice(0, 4).join(', ');
+});
+[1200, 820].forEach(function (w) {
+    t('ws the read table never widens the page at ' + w + 'px', function () {
+        var bad = overflowing(stage(w - 320, _b2bLineTable(FIX_ITEMS, 'read')));
+        return !bad.length || 'overflows: ' + bad.slice(0, 4).join(', ');
+    });
+});
+t('ws every read-table row lines up with the header', function () {
+    var two = FIX_ITEMS.concat([Object.assign({}, FIX_ITEMS[0], { id: 'i2', line_no: 2, sku: 'B2B-0001-02', staff_notes: '' })]);
+    var host = stage(900, _b2bLineTable(two, 'read'));
+    // Visible rows only: the runner's default window is ~758px, under the
+    // workspace's 760px phone breakpoint, where the header row is hidden and
+    // reports "none" for its columns.
+    var rows = Array.prototype.filter.call(host.querySelectorAll('.b2b-lt-r'), function (r) { return r.offsetParent; });
+    if (rows.length < 2) return 'nothing to compare';
+    var cols = rows.map(function (r) { return getComputedStyle(r).gridTemplateColumns; });
+    return cols.every(function (c) { return c === cols[0]; }) || 'rows use different columns: ' + cols.join(' | ');
+});
+
+// ---------------------------------------------------------------------------
+// THE PIPELINE BOARD FITS (2026-10) -- Nick: no horizontal scroll, and it has
+// to look right with every stage busy too.
+// ---------------------------------------------------------------------------
+function _boardDeals(stages) {
+    var out = [];
+    stages.forEach(function (s, i) {
+        for (var k = 0; k < 2; k++) out.push({ id: 'bd' + i + k, ref: 'BD-' + i + k, stage: s, pricing_store: 'OVL',
+            listing_store: s === 'listing' ? 'OVL' : null, listing_stores: s === 'listing' ? ['OVL'] : [],
+            client: { company: 'Northgate Family Practice ' + i }, total_offer: 1200, stage_changed_at: '2026-10-10T15:00:00Z',
+            pricing_started_at: '2026-10-01' });
+    });
+    return out;
+}
+function _boardAt(width, deals) {
+    var keepR = sessionStorage.getItem('speeksUserRole');
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try { return stage(width, _b2bRenderPipeline(deals)); }
+    finally { sessionStorage.setItem('speeksUserRole', keepR); }
+}
+[1300, 1000, 700].forEach(function (w) {
+    t('board: every stage busy, no sideways scroll at ' + w + 'px', function () {
+        var host = _boardAt(w, _boardDeals(B2B_BOARD));
+        var wrap = host.querySelector('.b2b-boardwrap');
+        if (!wrap) return 'no board';
+        if (wrap.scrollWidth > wrap.clientWidth + 1) return 'board scrolls: ' + wrap.scrollWidth + ' > ' + wrap.clientWidth;
+        var bad = overflowing(host);
+        return !bad.length || 'overflows: ' + bad.slice(0, 3).join(', ');
+    });
+});
+// Nick, after the folded strips: "I really dont like the vertical bars when
+// there arent any deals in that stage". Idle stages live in the stage row only.
+t('board: an idle stage is not a column, only a grey tile in the stage row', function () {
+    var host = _boardAt(1300, _boardDeals(['pricing', 'listing']));
+    var cols = host.querySelectorAll('.b2b-col');
+    if (cols.length !== 2) return 'expected 2 columns, got ' + cols.length;
+    var tiles = host.querySelectorAll('.b2b-flow-s');
+    if (tiles.length !== B2B_BOARD.length) return 'the stage row shows ' + tiles.length + ' of ' + B2B_BOARD.length + ' stages';
+    var idle = host.querySelectorAll('.b2b-flow-s.idle[disabled]').length;
+    if (idle !== B2B_BOARD.length - 2) return idle + ' idle tiles, expected ' + (B2B_BOARD.length - 2);
+    var w = cols[0].getBoundingClientRect().width;
+    return w > 400 || 'two busy stages only got ' + Math.round(w) + 'px each';
+});
+t('board: with nothing in flight it says so, and the stage row still shows the flow', function () {
+    var host = _boardAt(1300, []);
+    if (host.querySelectorAll('.b2b-col').length) return 'empty columns drawn';
+    if (!host.querySelector('.b2b-empty')) return 'no empty-state message';
+    return host.querySelectorAll('.b2b-flow-s').length === B2B_BOARD.length || 'the stage row went with the deals';
+});
+t('board: every stage busy fits one row at 1300px', function () {
+    var host = _boardAt(1300, _boardDeals(B2B_BOARD));
+    var tops = Array.prototype.map.call(host.querySelectorAll('.b2b-col'), function (c) { return Math.round(c.getBoundingClientRect().top); });
+    return tops.every(function (t) { return t === tops[0]; }) || 'columns wrapped at 1300px: ' + tops.join(',');
+});
+t('board: a narrow board wraps its columns rather than squeezing them under 170px', function () {
+    var host = _boardAt(700, _boardDeals(B2B_BOARD));
+    var thin = Array.prototype.filter.call(host.querySelectorAll('.b2b-col'), function (c) { return c.getBoundingClientRect().width < 169; });
+    return !thin.length || thin.length + ' column(s) under 170px at 700px';
+});
+t('board: picking a stage in the row narrows the board to it', function () {
+    var keep = _b2bStageFocus;
+    try {
+        _b2bStageFocus = 'listing';
+        var host = _boardAt(1300, _boardDeals(['pricing', 'listing']));
+        var cols = host.querySelectorAll('.b2b-col');
+        if (cols.length !== 1) return 'expected 1 column, got ' + cols.length;
+        return !!host.querySelector('.b2b-flow-s.on') || 'the picked tile is not marked';
+    } finally { _b2bStageFocus = keep; }
 });
 
 document.getElementById('layout-host') && document.getElementById('layout-host').remove();

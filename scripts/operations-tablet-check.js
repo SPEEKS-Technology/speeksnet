@@ -202,12 +202,11 @@ t('the third writer honours the opt-in', function () {
     });
 });
 
-t('the Picture Guide and B2B are the only Operations tabs on a tablet', function () {
+t('the Picture Guide is the only Operations tab on a tablet', function () {
     // The request was one tab. SPEEKS Connect is a four-view upload console,
     // Margin Guide is a lookup nobody asked to move, and Customer Call Backs came
-    // and went the same day. B2B joined on 2026-10-16 (Nick: "have on mobile the
-    // b2b module enabled now") -- the pickup and its custody form happen at the
-    // client's door. It carries no data-mobile cut at all, so it is on phones too.
+    // and went the same day. B2B joined on 2026-10-16 and left Operations for its
+    // own page (b2b.html) in 2026-10, so it is no longer a tab here at all.
     var g = _otNeedsTabletBox(); if (g) return g;
     var st = _otReplayTablet();
     try {
@@ -216,9 +215,9 @@ t('the Picture Guide and B2B are the only Operations tabs on a tablet', function
             function (el) {
                 if (getComputedStyle(el).display !== 'none') shown.push(el.id);
             });
-        return (shown.sort().join() === 'ops-tab-b2b,ops-tab-pictureguide') ||
+        return (shown.sort().join() === 'ops-tab-pictureguide') ||
             'visible on a tablet: ' + (shown.join(', ') || '(none)') +
-            ' — expected ops-tab-pictureguide and ops-tab-b2b';
+            ' — expected only ops-tab-pictureguide';
     } finally { _otEndReplay(st); }
 });
 
@@ -253,26 +252,28 @@ t('Customer Call Backs stays off, and takes its scroll host with it', function (
     return !bad.length || bad.join('; ');
 });
 
-t('a phone gets Operations only for B2B', function () {
+t('a phone gets no Operations, and the B2B tab only for people with B2B', function () {
     // The band with no exceptions on top — a phone, replayed rather than stood
     // on, so this holds at a landscape window too.
     //
-    // Until 2026-10-16 a phone got no Operations at all. B2B is now the one
-    // exception (data-phone="show" on the link, _PHONE_SECTION_TABS): the link
-    // shows for someone who can see B2B, and stays cut for someone who cannot --
-    // otherwise it would open onto a page with every tab cut.
+    // From 2026-10-16 B2B was a phone's one way into Operations. Since B2B
+    // became its own page (2026-10) a phone gets no Operations at all again, and
+    // reaches B2B through its own nav tab -- which must show for someone who can
+    // see B2B and stay cut for someone who cannot.
     var g = _otNeedsTabletBox(); if (g) return g;
     var st = _otReplayPhone();
     try {
         var bad = ['ops-tab-pictureguide', 'ops-tab-callbacks'].filter(function (id) {
             return getComputedStyle(document.getElementById(id)).display !== 'none';
         });
-        var link = document.querySelector('.nav-bar a.nav-link[href="operations.html"]');
+        var ops = document.querySelector('.nav-bar a.nav-link[href="operations.html"]');
+        var link = document.querySelector('.nav-bar a.nav-link[href="b2b.html"]');
         // The link is written by _applySectionNavVisibility, not by CSS, so the
         // phone case is asked of the function rather than of the computed style.
         _otAsRole('manager', function () {
             _otAsPhone(function () {
                 _applySectionNavVisibility('role-manager', 'Check Harness');
+                if (ops && ops.style.display !== 'none') bad.push('a phone still gets the Operations link');
                 if (link.style.display !== 'flex') bad.push('no nav link for a manager who has B2B');
                 // Take B2B away by role override: the link must go with it.
                 var keep = _featureOv.role['widget-ops-b2b'];

@@ -1,6 +1,13 @@
 # B2B Deals — module map
 
-Lives in `operations.html` under `#ops-pane-b2b`. Front end: `speeks.js`
+Lives in **`b2b.html`** (its own nav tab and the full screen since 2026-10; it was
+an Operations sub-tab until then). The pane keeps id `#ops-pane-b2b` because the
+realtime refresh and the poll gate on it. `initB2bPage()` boots it from the
+page load, the PIN sign-in and the SPA router. `operations.html#b2b` forwards
+to it, so emails and bookmarks still land. A deal opens as a page inside
+`.b2b-wrap` in place of the hub (still `.modal-menu`, so `closeAllModals()`
+closes it). The Needs You tab is gone: Pipeline is the default, and the board's
+"Needs you only" switch shows the same set. Front end: `speeks.js`
 **15,524 – 23,230**. Backend: `supabase/functions/b2b-deals/index.ts` (one large
 action-dispatch function), plus `b2b-outreach`, `b2b-intake`, `b2b-capture-tool`,
 and 30 `*_b2b_*.sql` migrations.
@@ -176,6 +183,42 @@ a security boundary, it is the client telling the server which rule to apply.
 Field-level scoping of contact details is separate and unchanged
 (`CONTACT_COLS` / `SCOPED_DEAL_COLS`, applied on the board query).
 
+## Deal workspace (2026-10 overhaul, in progress)
+
+Every deal screen is moving onto one layout, chosen by Nick from the mocks in
+`prototypes/b2b-overhaul-options.html`. The layout: header (ref, client, stage
+chip, ⋯ menu, ×), then the stage rail, then the stage's own work on the left and
+the deal on the right (status + the one next step, facts, numbers, folded
+sections). A screen opts in by passing `ws: true` to `_b2bShowDeal`. A screen
+without it renders exactly as before, because the shell restores the old
+header, subtitle, trashcan and footer.
+
+Parts (grep the names, line numbers drift): `B2B_RAIL` / `_b2bRailHtml`,
+`_b2bWaitingOn`, `_b2bNextHtml`, `_b2bFactRows` (the one builder behind both
+`_b2bSummary` and `_b2bFactsHtml`), `_b2bNumsInner` (repainted by
+`_b2bPaintTotals`), `_b2bSection`, `_b2bLineTable(items, mode)`,
+`_b2bWsHeader`, `_b2bWsTools`. CSS: the `B2B DEAL WORKSPACE` banner at the end
+of `styles.css`.
+
+Decided with it: close is the header × or Esc only, with no Close/Cancel among the actions;
+Request Deletion and Decline Deal live in the ⋯ menu; evaluations use the
+workspace with `rail: false`; the Needs You tab goes, and Pipeline becomes the
+default view with a "Needs you only" switch.
+
+Ported: every stage screen and the evaluation (`rail: false`). The sheet
+stages (pricing, listing, the quote's full sheet, the evaluation) pass
+`sheet: true`. Below 1600px their panel folds into a band above the sheet,
+because the sheets need ~1130px (listing) and ~1400px (pricing). See
+`_b2bWsFolded`. Buttons that other code enables keep their ids (`b2bAsGo`,
+`b2bPuGo`, `b2bPrSubmit`, `b2bListDone`). Screens fill `#b2bWsWhy` through
+`_b2bWsWhy()` to say why a button is still disabled.
+
+Still on the old shell, on purpose for now: the sub-dialogs that borrow the deal
+modal (Send Back, Decline, Convert evaluation, Delete Requests). Dead since the
+port and due for removal: `_b2bSummary`, `_b2bWhereLine`, `_b2bTotalsBar`,
+`_b2bDealStatsHtml`, `_b2bItemTableHtml`, `_b2bQuoteClientBlock`,
+`_b2bCustPanel`, and their CSS.
+
 ## Screens
 
 Router `b2bOpenDeal(kind, id)` `speeks.js:19028`.
@@ -311,19 +354,25 @@ sub, so it could not be muted even in principle. Corp-facing kinds carry
 `audienceFeature: "cap-b2b-corp"`, so a manager lent the corp hat is told too.
 `excludeUser` keeps each one out of the inbox of whoever caused it.
 
-`submit_pricing` **also** still emails, via `notifyQuoteReady` → `b2b-outreach`
-`sendQuoteReady`, addressed to the `b2b_quote_ready` recipient list with a
-fallback to the single CRM `notify_email`. Both channels on purpose: the email is
-what Paul originally asked for, and the queue row is the half that survives a
-mail relay failing silently.
+**Since 0151 (2026-10-21) "a quote is ready to send" reaches Paul through his
+own notification settings only:** the `b2b_quote_ready` kind above, under B2B →
+"B2B Deals Waiting On Me". 0151 gave him a `user_notify_prefs` row with email on
+(`paul.kushnir@pikinvestments.com`, instant, every B2B switch on, other
+categories off). `submit_pricing` still calls `notifyQuoteReady` → `b2b-outreach`
+`sendQuoteReady`, but that separate email is switched off
+(`b2b_crm_settings.quote_ready_enabled = false`) so he does not get two. The
+`b2b_quote_ready` list was taken out of the Email Recipients tool for the same
+reason. Removing the call from b2b-deals and the action from b2b-outreach is a
+function deploy, not done yet.
 
-⚠️ **The email path was configured correctly the whole time** Paul was reporting
-it broken — `b2b_crm_settings.notify_email` is his address with both toggles on,
-the shared secret matches, the call is awaited, and both functions were deployed
-with the code. So whatever failed was downstream in the relay (`GMAIL_RELAY_URL`,
-else Resend) and left no trace. There is deliberately no `b2b_quote_ready` row in
-`email_recipients`: an empty list is what makes `quoteReadyTo` fall back to the
-CRM address, and creating the list would remove that safety net.
+**The CEO mini CRM is retired (0151).** Its button, modal and every `crm*`
+function are gone from the site, and both `b2b-outreach-daily-*` cron jobs are
+unscheduled. Nothing was dropped: `b2b_crm_settings` still holds the
+certified-wipe fee b2b-deals prices with (`wipe_fee`, $8.00, now not editable on
+the site), and `b2b_clients.outreach_*` and `b2b_outreach_log` keep their
+history. The CRM actions in `b2b-outreach` (`set_crm_settings`, `set_schedule`,
+`mark_reviewed`, `log_touch`, the sweep) are dead code until a deploy removes
+them. `send_feedback` lives there too and stays.
 
 The generic system: `notify_queue` (`0033_email_notifications.sql:80-121`),
 categories `notify/index.ts:68-71`, prefs/subs `:162-252`, bell UI
@@ -375,6 +424,7 @@ straight from pre-release would switch Aging emails back on until his branch mer
 Why Paul got no "ready for review" mail (2026-09-18): he has no `user_notify_prefs`
 row (email alerts never switched on), and the quote-ready email's fallback address
 is `b2b_crm_settings.notify_email`, a different mailbox from the one he writes from.
+Both fixed by 0151 (see above).
 
 ## Pickup: custody form and itemized pickup (0150)
 
@@ -521,5 +571,3 @@ who edited an item's `value`/`offer`.
 - **SPEEKS Capture tool** distribution + version history `:16225`, edge fn
   `b2b-capture-tool`, `0066_b2b_capture_releases.sql`. Source in
   `tools/b2b-capture/` — its README is the source of truth.
-- **CRM settings** (CEO only) `:17663-17880` — recipient config, load `:17686`,
-  settings HTML `:17836-17845`, save `:17861-17877`; registration `:33686-33688`.
