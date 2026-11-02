@@ -102,19 +102,24 @@ const chicagoDay = (iso: string) => DAY_FMT.format(new Date(iso));
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 // --- WHEN A MONTH CLOSES, and what that does to a shipping charge ----------
-// The rule, from the CFO (2026-08-27):
-//   · the month closes at 7pm Central on the 1st, so the stores have that day
-//     to ship what sold on the last day of the month;
+// The rule, from the CFO (2026-08-27), with the close day moved by Ethan
+// (2026-11-02):
+//   · the month closes at 7pm Central on the 7th. It was the 1st, giving the
+//     stores one day to ship what sold on the last day. Ethan moved it so late
+//     labels and anything else that settles in the first week still count in
+//     the month they belong to — 13% of labels post 2-3 days after the sale
+//     and a tail posts later than that, all of which the 1st pushed into the
+//     NEXT month. He cleared the change against the CFO's rule himself;
 //   · never on a day the stores are shut — they buy ZERO labels on a Sunday
 //     (measured: 0 of 2,403 in July) and they close for Thanksgiving,
 //     Christmas and New Year's Day — so it slips to the first eligible
 //     business day;
 //   · anything applied after that stays in the new month. No back-dating.
 //
-// Of the three holidays only New Year's Day can ever land on a close. The 1st
-// and 2nd of a month are the only candidates and neither Thanksgiving (4th
-// Thursday of November) nor Christmas can fall there, so December always
-// closes on Jan 2 at the earliest and the other two never bite.
+// Since the close moved to the 7th none of the three can land on it (the
+// candidates are the 7th-9th; New Year's is the 1st, Christmas the 25th,
+// Thanksgiving the 22nd-28th). The checks stay so the rule still reads whole
+// if the day moves again.
 function isStoreHoliday(y: number, m0: number, day: number): boolean {
   if (m0 === 0 && day === 1) return true;    // New Year's Day
   if (m0 === 11 && day === 25) return true;  // Christmas
@@ -125,6 +130,13 @@ function isStoreHoliday(y: number, m0: number, day: number): boolean {
   return false;
 }
 
+// The day of the next month the close aims at, before slipping past a Sunday
+// or holiday. Was 1 until 2026-11-02.
+// ⚠️ netprofit-schedule.gs has its own copy (NPS_CLOSE_DAY). The close run asks
+// this function for the date and REFUSES to close if the two disagree, so
+// change both together.
+const CLOSE_DAY = 7;
+
 // The last day whose charges still belong to the month that just ended.
 // ym is the month being closed, e.g. "2026-07". Returns YYYY-MM-DD.
 function monthCloseDay(ym: string): string {
@@ -132,7 +144,7 @@ function monthCloseDay(ym: string): string {
   const m0 = Number(ym.slice(5, 7)) - 1;
   const ny = m0 === 11 ? y + 1 : y;
   const nm0 = (m0 + 1) % 12;
-  for (let day = 1; day < 15; day++) {
+  for (let day = CLOSE_DAY; day < CLOSE_DAY + 14; day++) {
     if (new Date(Date.UTC(ny, nm0, day)).getUTCDay() === 0) continue;
     if (isStoreHoliday(ny, nm0, day)) continue;
     const mm = String(nm0 + 1).padStart(2, "0");
@@ -153,7 +165,8 @@ function monthCloseDay(ym: string): string {
 // when it was charged.
 //
 // The exception is the close. Once a month is shut nothing may re-open it, so
-// a label that turns up afterwards books to the day it was charged.
+// a label that turns up afterwards books to the day it was charged — since
+// 2026-11-02 that means one bought more than a week into the next month.
 // ⚠️ WHICH DAY A REFUND BOOKS TO. Ethan's call, 2026-09-02, and the reasoning
 // matters more than the setting because either answer is defensible.
 //

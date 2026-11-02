@@ -44,8 +44,10 @@
 //
 //   npsMonthClose     7:00pm Central, every day — but it ACTS on one day a
 //                     month and logs "not today" on the rest.
-//                     The month closes at 7pm on the 1st, giving the stores
-//                     that day to ship what sold on the last day of the month.
+//                     The month closes at 7pm on the 7th (NPS_CLOSE_DAY). It
+//                     was the 1st until 2026-11-02; Ethan moved it so labels
+//                     and anything else that settles in the first week still
+//                     count in the month they belong to.
 //                     Never on a day the stores are shut: they buy ZERO labels
 //                     on a Sunday (0 of 2,403 in July) and close for
 //                     Thanksgiving, Christmas and New Year's Day. Otherwise it
@@ -115,6 +117,7 @@ var NPS_TZ = 'America/Chicago';
 var NPS_MORNING_HOUR = 8;  // 8am — everything except shipping. Cron owns the time.
 var NPS_DAILY_HOUR = 14;   // 2pm — and the hour at or after which shipping is written
 var NPS_CLOSE_HOUR = 19;   // 7pm
+var NPS_CLOSE_DAY = 7;     // of the next month, before slipping past a Sunday/holiday (was 1 until 2026-11-02)
 var NPS_LAST_CLOSED_KEY = 'NPS_LAST_CLOSED_MONTH';
 
 // ⚠️ THE WATCHDOG — FOR THE FAILURES THAT CANNOT SEND THEIR OWN EMAIL.
@@ -229,10 +232,9 @@ function _npsTriggerLabel(key, today) {
 // The close calendar. Mirrors monthCloseDay() in netprofit-collect/index.ts.
 // ---------------------------------------------------------------------------
 
-// Of the three closures only New Year's Day can ever land on a close: the 1st
-// and 2nd of a month are the only candidates, and neither Thanksgiving (4th
-// Thursday of November) nor Christmas can fall there. December therefore
-// always closes on Jan 2 at the earliest.
+// Since the close moved to the 7th none of the three can land on it (the
+// candidates are the 7th-9th). The checks stay so the rule reads whole if the
+// day moves again.
 function _npsIsStoreHoliday(y, m0, day) {
   if (m0 === 0 && day === 1) return "New Year's Day";
   if (m0 === 11 && day === 25) return 'Christmas';
@@ -250,7 +252,9 @@ function _npsMonthCloseDay(ym) {
   var ny = m0 === 11 ? y + 1 : y;
   var nm0 = (m0 + 1) % 12;
   var why = [];
-  for (var day = 1; day < 15; day++) {
+  // From NPS_CLOSE_DAY, not the 1st, since 2026-11-02. Must agree with
+  // CLOSE_DAY in netprofit-collect or the close refuses to run.
+  for (var day = NPS_CLOSE_DAY; day < NPS_CLOSE_DAY + 14; day++) {
     var dow = new Date(Date.UTC(ny, nm0, day)).getUTCDay();
     if (dow === 0) { why.push(_npsIso(ny, nm0, day) + ' is a Sunday — no shipping'); continue; }
     var hol = _npsIsStoreHoliday(ny, nm0, day);
@@ -429,7 +433,8 @@ function npsDailyRefresh(e) {
 // morning and afternoon, the one day goals and announcements are made from it
 // (user, 2026-10-01).
 //
-// So from the 1st until the close, each daily pass also writes last month in
+// So from the 1st until the close (the 7th since 2026-11-02 — a week of this,
+// not a day or two, and each pass runs ~50s longer for it), each daily pass also writes last month in
 // full. That is the same write the close does (NP_FROM/NP_TO on last month,
 // the grid, the health email, and the summary strip with NPX_CLOSE_RUN so the
 // Last Month row is left alone), minus the two things that make a close a
