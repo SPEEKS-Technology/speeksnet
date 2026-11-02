@@ -22438,6 +22438,13 @@ function b2bSetView(view) {
     if (changed) {
         const body = document.getElementById('b2bBody');
         if (body) body.scrollTop = 0;
+        // Since 2026-10-31 the hub grows and the PAGE scrolls, so the same
+        // rule applies to the window: scrolled past the tab row, come back up
+        // to it. Left alone when the tabs are already on screen.
+        const tabs = document.querySelector('.b2b-view-tabs');
+        if (tabs && tabs.getBoundingClientRect().top < 64) {
+            window.scrollTo({ top: Math.max(0, tabs.getBoundingClientRect().top + window.scrollY - 80) });
+        }
     }
 }
 

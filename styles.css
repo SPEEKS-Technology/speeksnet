@@ -27124,6 +27124,24 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 /* The numbers block is always in the markup now, hidden until the deal has a
    line; its own display:grid/flex would otherwise beat the hidden attribute. */
 .b2b-ws-nums[hidden] { display: none !important; }
+
+/* THE HUB GROWS WITH ITS CONTENT (2026-10-31, Ethan: make the white box
+   "longer like the workspace and operations tab has so it doesn't seem like a
+   small box with a long scroll"). The Claims & Disputes treatment
+   (.ws-panel-claims): the card is as tall as the board or list in it, at least
+   a screen's worth, and the PAGE scrolls instead of a box inside it. The head
+   with + New Deal pins under the top nav so the actions stay in reach on a
+   long Completed list. After the phone rule above on purpose: both are
+   !important, so the later one wins. The deal page keeps its own fixed
+   height -- its insides are laid out around it. */
+.b2b-wrap > .ws-pane > .b2b-panel.ws-panel { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.b2b-wrap > .ws-pane > .b2b-panel > .cb-scroll { overflow: visible; flex: none; min-height: 0; }
+.b2b-wrap > .ws-pane > .b2b-panel > .cb-head {
+    position: sticky; top: 64px; z-index: 4; border-radius: 18px 18px 0 0;
+}
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .b2b-wrap > .ws-pane > .b2b-panel > .cb-head { top: 68px; }   /* the phone top bar */
+}
 @media (max-width: 760px) {
     /* On a phone the deal panel (and its message line) is at the top of the
        page, so scan feedback ("already on the list", a failed save) appeared
