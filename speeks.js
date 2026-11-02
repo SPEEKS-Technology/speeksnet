@@ -14899,24 +14899,25 @@ function _gpBuyDaysHtml(editable) {
 function _gpAddClosed() {
     const inp = document.getElementById('gpClosedDate');
     const lab = document.getElementById('gpClosedLabel');
-    if (!inp) return;
+    if (!inp) return false;
     // "2026-11-26" is read by its PARTS. new Date('2026-11-26') is parsed as UTC
     // and lands on the 25th here, which would close the wrong day.
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(inp.value || ''));
-    if (!m) { alert('Pick the day the stores are closed.'); return; }
+    if (!m) { alert('Pick the day the stores are closed.'); return false; }
     if (m[1] + '-' + m[2] !== _gpGoals.month) {
         alert('That day is not in ' + _gpMonthName(_gpGoals.month) + '.');
-        return;
+        return false;
     }
     const day = parseInt(m[3], 10);
     if (new Date(+m[1], +m[2] - 1, day).getDay() === 0) {
         alert('Sundays are already excluded — no need to add one.');
-        return;
+        return false;
     }
-    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return; }
+    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return false; }
     _gpClosed.push({ day, label: String((lab && lab.value) || '').trim() });
     _gpHarvestGoals();
     renderGpGoals();
+    return true;
 }
 function _gpRemoveClosed(day) {
     _gpClosed = _gpClosed.filter(c => c.day !== day);
@@ -14980,10 +14981,34 @@ function _gpUpdateTotal() {
     el.textContent = any ? _lvMoney(total, false) : '—';
 }
 
+// What the workbook said about the push, in a sentence — empty when it took.
+// gp-goals has always returned the script's answer as `sheet` and nothing read
+// it, which is how a push that never ran went unnoticed for months. Only the NP
+// goals and the buying days are judged: an NP month also gets a "no Sales tab"
+// back from the retired GP write, and that one is expected.
+function _gpSheetNote(sheet) {
+    const s = String(sheet || '');
+    if (!s) return '';
+    if (!/^ok /.test(s)) return '\n\nThe spreadsheet was NOT updated (' + s.slice(0, 120) + ').';
+    let r = null;
+    try { r = JSON.parse(s.slice(3)); } catch (_) { return ''; }   // answer cut short — it ran
+    const what = { npGoals: 'NP goals', buyDays: 'buying days', closedDays: 'closed-day $0s' };
+    const bad = Object.keys(what)
+        .filter(k => r && r[k] && r[k].ok === false)
+        .map(k => what[k] + ': ' + (r[k].error || (r[k].skipped || []).join('; ')));
+    return bad.length ? '\n\nThe spreadsheet did not take everything — ' + bad.join(' / ') : '';
+}
+
 async function saveGpGoals() {
     if (_gpGoalsBusy || !_gpGoals) return;
     const pin = sessionStorage.getItem('speeksUserPin') || '';
     if (!pin) { alert('Sign in again to save goals.'); return; }
+    // A date picked but never Added is still a closure they meant. On 2026-11-02
+    // Thanksgiving sat in the box, Save Month sent the empty list, and the month
+    // quietly kept 25 buying days. Added here first — before the button is looked
+    // up, because adding re-renders the panel and replaces it.
+    const pending = document.getElementById('gpClosedDate');
+    if (pending && pending.value && !_gpAddClosed()) return;
     const btn = document.getElementById('gpGoalSaveBtn');
     const goals = {};
     let bad = '';
@@ -15011,7 +15036,8 @@ async function saveGpGoals() {
         const j = await res.json().catch(() => ({}));
         if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
         alert((j.complete ? 'Saved. Every store has a goal' : 'Saved')
-            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.'));
+            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.')
+            + _gpSheetNote(j.sheet));
         _gpGoals = await _gpFetch(_gpGoals.month);
         _gpClosed = (_gpGoals.closed || []).map(c => ({ day: Number(c.day), label: String(c.label || '') }));
         renderGpGoals();

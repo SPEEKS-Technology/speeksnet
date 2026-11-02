@@ -176,6 +176,9 @@ function _mrSundays(ym) {
 function _mrCentralMonth() {
   return Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM');
 }
+function _mrCentralToday() {
+  return Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
+}
 function _mrSs() { return SpreadsheetApp.openById(MR_SHEET_ID); }
 
 function _mrIndex(ss) {
@@ -540,16 +543,22 @@ function _mrResetReviews(tab, wantCount, dryRun) {
 
 // The Sunday zeros — see MR_BUY_SUNDAY_ZERO. Fills blanks only.
 function _mrSundayZeros(tab, ym, dryRun) {
+  return _mrDayZeros(tab, ym, _mrSundays(ym), dryRun);
+}
+
+// The same $0, on any list of days. A closed day (Thanksgiving) is a Sunday as
+// far as the Buy tab is concerned: nobody buys, and without the 0 the import
+// emails that five stores sent no Day End Report for it.
+function _mrDayZeros(tab, ym, days, dryRun) {
   var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
   var rng = tab.getRange(1, 1, lastRow, lastCol);
   var values = rng.getValues(), formulas = rng.getFormulas();
   var bases = _mrBases(values, MR_BUY_WIDTH);
-  var sundays = _mrSundays(ym);
   var out = { written: [], kept: 0 };
   Object.keys(bases).forEach(function (code) {
     var base = bases[code];
     var rows = _mrDayRows(values, base, MR_BUY_FIRST_ROW);
-    sundays.forEach(function (d) {
+    days.forEach(function (d) {
       var r = rows[d];
       if (r === undefined) return;
       MR_BUY_SUNDAY_ZERO.forEach(function (off) {
@@ -1242,6 +1251,47 @@ function _mrWriteBuyDays(ss, ym, buyDays) {
     }
   }
   return { ok: false, error: 'no "Buying Days in Month" label on ' + tab.getName() };
+}
+
+// The closed days SPEEKS holds for the month, zeroed on its Buy tab the way the
+// Sundays are (Ethan, 2026-11-02: "zero out the actual columns too like it does
+// for Sunday"). Sent as the FULL list on every save, so a closure taken back off
+// the list is handled here too: its 0 is lifted — but only on a day still to
+// come, where a 0 cannot be a real figure. A past day keeps whatever it holds,
+// because by then the 0 may be what the store actually did.
+function _mrWriteClosedDays(ss, ym, closed) {
+  var entry = _mrIndex(ss)[ym];
+  if (!entry || !entry.buy) return { ok: false, error: 'no Buy tab for ' + ym };
+  var tab = entry.buy;
+  var days = (closed || []).map(Number).filter(function (d) { return d >= 1 && d <= 31; });
+  var out = _mrDayZeros(tab, ym, days, false);
+
+  var sundays = _mrSundays(ym);
+  var today = _mrCentralToday();
+  var lifted = [];
+  if (ym >= today.slice(0, 7)) {
+    var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+    var rng = tab.getRange(1, 1, lastRow, lastCol);
+    var values = rng.getValues(), formulas = rng.getFormulas();
+    var bases = _mrBases(values, MR_BUY_WIDTH);
+    var fromDay = ym === today.slice(0, 7) ? Number(today.slice(8, 10)) + 1 : 1;
+    Object.keys(bases).forEach(function (code) {
+      var base = bases[code];
+      var rows = _mrDayRows(values, base, MR_BUY_FIRST_ROW);
+      Object.keys(rows).forEach(function (k) {
+        var d = Number(k);
+        if (d < fromDay || days.indexOf(d) >= 0 || sundays.indexOf(d) >= 0) return;
+        MR_BUY_SUNDAY_ZERO.forEach(function (off) {
+          var r = rows[d], c = base + off;
+          if ((formulas[r] || [])[c]) return;
+          if ((values[r] || [])[c] !== 0) return;          // only a bare 0, never a figure
+          tab.getRange(r + 1, c + 1).clearContent();
+          lifted.push(code + ' ' + _mrA1(r, c));
+        });
+      });
+    });
+  }
+  return { ok: true, tab: tab.getName(), days: days, zeroed: out.written, kept: out.kept, lifted: lifted };
 }
 
 // Every month's GP goals, read off every Sales tab in the workbook and printed
@@ -2099,6 +2149,10 @@ function doPost(e) {
     // not touch them sends null, and the sheet's count is left alone.
     if (body.buyDays !== null && body.buyDays !== undefined) {
       out.buyDays = _mrWriteBuyDays(ss, ym, body.buyDays);
+    }
+    // Same condition, same reason: an absent list means "not editing closures".
+    if (Array.isArray(body.closedDays)) {
+      out.closedDays = _mrWriteClosedDays(ss, ym, body.closedDays);
     }
     return _mrJson(out);
   }
