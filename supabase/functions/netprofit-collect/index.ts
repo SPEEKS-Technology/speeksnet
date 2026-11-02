@@ -551,7 +551,19 @@ Deno.serve(async (req: Request) => {
   // month of $0.00 — which the sheet would happily write over real figures. A
   // store with genuinely no sales in a range is not a case worth supporting at
   // the cost of that.
-  if (!qlRows.length) {
+  //
+  // One exception, from 2026-11-01: the 6:10am pass on the 1st asks for a
+  // range that is only today, and a store that has not sold online since
+  // midnight genuinely has no rows (BAL, a Sunday, before opening). That is
+  // not a month of zeros — there is nothing earlier to overwrite — and the
+  // refusal mailed a "broken" alert that the 2pm pass then cleared. Accepted
+  // only when the query itself answered (tableData present, no parse errors):
+  // a FAILED query on the 1st is still refused like any other day.
+  const qlAnsweredEmpty = !!ql?.tableData && !ql?.parseErrors?.length;
+  const rangeIsToday = from === to && from === chicagoDay(new Date().toISOString());
+  if (!qlRows.length && qlAnsweredEmpty && rangeIsToday) {
+    warnings.push(`shopifyql: no sales yet today (${from}) — reporting the day as $0`);
+  } else if (!qlRows.length) {
     return json({
       error: "shopifyql returned no sales rows for this range — refusing to "
         + "report a month of zeros. Check the date range and the query.",
