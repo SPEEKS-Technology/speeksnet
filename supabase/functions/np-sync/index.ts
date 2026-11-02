@@ -273,11 +273,42 @@ function diffMonth(ym: string, before: any[], rows: Row[]): Change[] {
   return out;
 }
 
-// The Monthly Breakdown's NP rows follow the tab — only for a store whose month
-// has been started in the Breakdown ("where we have reported that"), so this
-// never creates a half-filled month on its own. A total with an unknown day in
-// it (an =NA() eBay cell, a refused collector) is not written: half a month
-// would read as fact.
+// The Monthly Breakdown rows that are typed off the Net Profit tab follow it —
+// only for a store whose month has been started in the Breakdown ("where we
+// have reported that"), so this never creates a half-filled month on its own.
+//
+// WHICH ROWS (checked 2026-11-02 against October): NET Sales and COGS match the
+// tab's Sales and Cost to the cent for every store, so they are typed from it,
+// and Net Profit / eBay Fees are its own columns. The first version followed
+// only the last two, and OVL's Sales sat at $201,650 after the 2pm pass had
+// corrected the tab to $181,423 (the ShopifyQL paging fix). Shipping Label Cost
+// does NOT match the tab for any store — it comes from somewhere else — so it is
+// left alone, though its % of Sales follows a Sales change.
+//
+// A total with an unknown day in it (an =NA() eBay cell, a refused collector)
+// is not written: half a month would read as fact.
+const FOLLOW: [string, keyof Row][] = [
+  ["net_sales", "sales"], ["cogs", "cost"], ["net_profit", "np"], ["ebay_fees", "ebay_fee"],
+];
+// _MB_DERIVED in speeks.js, every row with a followed figure among its inputs,
+// in the same order (pct_non_ebay_sales reads the three rows before it) and
+// the same rounding, so a follow and a save in the editor agree to the cent.
+const pctOf = (n: number | null | undefined, d: number | null | undefined) =>
+  n !== null && n !== undefined && d !== null && d !== undefined && d > 0 ? r2(n / d * 100) : null;
+const DERIVED: [string, (v: Record<string, number | null>) => number | null][] = [
+  ["gross_profit", (v) => v.net_sales != null && v.cogs != null ? r2(v.net_sales - v.cogs) : null],
+  ["gross_profit_pct", (v) => v.net_sales != null && v.net_sales > 0 && v.cogs != null ? r2((1 - v.cogs / v.net_sales) * 100) : null],
+  ["cogs_sold_vs_listed", (v) => pctOf(v.cogs, v.inventory_cost)],
+  ["pct_sales_at_pos", (v) => pctOf(v.sales_at_pos, v.net_sales)],
+  ["pct_sales_online", (v) => pctOf(v.sales_online, v.net_sales)],
+  ["pct_sales_draft_order", (v) => pctOf(v.sale_draft_order, v.net_sales)],
+  ["pct_non_ebay_sales", (v) => v.pct_sales_at_pos != null && v.pct_sales_online != null && v.pct_sales_draft_order != null
+    ? r2(v.pct_sales_at_pos + v.pct_sales_online + v.pct_sales_draft_order) : null],
+  ["shipping_cost_pct_sales", (v) => pctOf(v.shipping_label_cost, v.net_sales)],
+  ["net_profit_pct", (v) => pctOf(v.net_profit, v.net_sales)],
+  ["ebay_fee_pct_sales", (v) => pctOf(v.ebay_fees, v.net_sales)],
+];
+
 // deno-lint-ignore no-explicit-any
 async function followBrief(sb: any, ym: string, rows: Row[]): Promise<Change[]> {
   const pe = lastDayOf(ym);
@@ -291,20 +322,24 @@ async function followBrief(sb: any, ym: string, rows: Row[]): Promise<Change[]> 
   for (const s of STORES) {
     const mine = rows.filter((r) => r.store === s);
     if (!have[s] || !mine.length) continue;
-    const ns = have[s].net_sales;
     const want: Record<string, number> = {};
-    if (mine.every((r) => r.np !== null)) want.net_profit = r2(mine.reduce((a, r) => a + (r.np || 0), 0));
-    if (mine.every((r) => r.ebay_fee !== null)) want.ebay_fees = r2(mine.reduce((a, r) => a + (r.ebay_fee || 0), 0));
-    // The same formulas as _MB_DERIVED in speeks.js, so a follow and a save in
-    // the editor agree to the cent.
-    if (want.net_profit !== undefined && ns && ns > 0) want.net_profit_pct = r2(want.net_profit / ns * 100);
-    if (want.ebay_fees !== undefined && ns && ns > 0) want.ebay_fee_pct_sales = r2(want.ebay_fees / ns * 100);
-    for (const [k, v] of Object.entries(want)) {
+    for (const [k, col] of FOLLOW) {
+      if (mine.every((r) => r[col] !== null)) want[k] = r2(mine.reduce((a, r) => a + (Number(r[col]) || 0), 0));
+    }
+    // The derived rows read the month as it will stand after this write.
+    const v: Record<string, number | null> = { ...have[s], ...want };
+    for (const [k, f] of DERIVED) {
+      const x = f(v);
+      if (x === null) continue;
+      v[k] = x;
+      want[k] = x;
+    }
+    for (const [k, val] of Object.entries(want)) {
       const cur = have[s][k];
-      if (cur !== undefined && !differs(cur, v)) continue;
+      if (cur !== undefined && !differs(cur, val)) continue;
       write.push({ store: s, period_end_date: pe, month: Number(ym.slice(5, 7)), year: Number(ym.slice(0, 4)),
-        metric_key: k, value: v, updated_by: "Net Profit tab", updated_at: at });
-      out.push({ ym, store: s, kind: "brief", what: k, was: cur ?? null, now: v });
+        metric_key: k, value: val, updated_by: "Net Profit tab", updated_at: at });
+      out.push({ ym, store: s, kind: "brief", what: k, was: cur ?? null, now: val });
     }
   }
   if (write.length) {
@@ -314,50 +349,94 @@ async function followBrief(sb: any, ym: string, rows: Row[]): Promise<Change[]> 
   return out;
 }
 
-// A Net Profit record THIS month holds is re-derived from the Breakdown, the
-// same way records-watch picks one (largest positive; a tie goes to the earlier
-// month; 2026 onward; the company only for months all five stores have).
-// Down as well as up: a record set on a figure that fell is corrected, and if
-// the month no longer beats the old one, the old one comes back.
+// The monthly records the followed rows feed, picked the way records-watch
+// picks them: largest positive figure, a tie to the earlier month, the company
+// from 2026 only. Revenue and GP for the company are the stores summed; Net
+// Profit only for a month all five have; margin is summed GP over summed sales.
+// Conversion is not here — nothing on the tab feeds it.
+const MARGIN_SKIP: Record<string, string> = {   // = records-watch's MARGIN_SKIP
+  OVL: "2024-09-01", WSP: "2025-06-01", BAL: "2026-04-01",
+};
+const pct2 = (x: number) => x.toFixed(2) + "%";
+type MRow = Record<string, number>;
+const RECORDS: { label: string; key: string; fmt: (x: number) => string; margin?: boolean;
+  company: (rs: [string, MRow][]) => number | null }[] = [
+  { label: "Monthly Revenue Record", key: "net_sales", fmt: usd0,
+    company: (rs) => rs.length ? r2(rs.reduce((a, [, m]) => a + (m.net_sales ?? 0), 0)) : null },
+  { label: "Monthly Gross Profit Record", key: "gross_profit", fmt: usd0,
+    company: (rs) => rs.length ? r2(rs.reduce((a, [, m]) => a + (m.gross_profit ?? 0), 0)) : null },
+  { label: "Monthly Sell Margin Record", key: "gross_profit_pct", fmt: pct2, margin: true,
+    company: (rs) => {
+      const sales = rs.reduce((a, [, m]) => a + (m.net_sales ?? 0), 0);
+      return sales ? rs.reduce((a, [, m]) => a + (m.gross_profit ?? 0), 0) / sales * 100 : null;
+    } },
+  { label: NP_RECORD, key: "net_profit", fmt: usd0,
+    company: (rs) => rs.length === STORES.length && rs.every(([, m]) => m.net_profit !== undefined)
+      ? r2(rs.reduce((a, [, m]) => a + m.net_profit, 0)) : null },
+];
+
+// A record THIS month holds is re-derived from the Breakdown. Down as well as
+// up: a record set on a figure that fell is corrected, and if the month no
+// longer beats the old one, the best other month in the Breakdown comes back
+// (it holds every month back to each store's opening, so a 2025 record can).
 // deno-lint-ignore no-explicit-any
 async function fixRecords(sb: any, ym: string): Promise<Change[]> {
   const mo = `${ym}-01`, when = monthText(ym);
-  const [recRes, npRes] = await Promise.all([
-    sb.from("records").select("id, store, value, period, value_num, record_on").eq("label", NP_RECORD).is("person", null),
-    sb.from("monthly_brief").select("store, year, month, value").eq("metric_key", "net_profit").gte("year", 2026),
-  ]);
-  if (recRes.error) throw new Error("records read: " + recRes.error.message);
-  if (npRes.error) throw new Error("net_profit read: " + npRes.error.message);
-  const byMo: Record<string, Record<string, number>> = {};
-  for (const r of npRes.data || []) {
-    if (r.value === null || !STORES.includes(r.store)) continue;
-    (byMo[`${r.year}-${String(r.month).padStart(2, "0")}-01`] ||= {})[r.store] = Number(r.value);
+  const { data: recs, error: re } = await sb.from("records").select("id, store, label, value, period, value_num, record_on")
+    .in("label", RECORDS.map((r) => r.label)).is("person", null);
+  if (re) throw new Error("records read: " + re.message);
+  const mine = (recs || []).filter((r: { record_on: string | null; period: string | null }) =>
+    String(r.record_on || "") === mo || String(r.period || "").trim().toLowerCase() === when.toLowerCase());
+  if (!mine.length) return [];
+
+  // Paged: PostgREST stops at 1,000 rows whatever the query asks for.
+  // deno-lint-ignore no-explicit-any
+  const all: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from("monthly_brief").select("store, year, month, metric_key, value")
+      .in("metric_key", ["net_sales", "gross_profit", "gross_profit_pct", "net_profit"]).range(from, from + 999);
+    if (error) throw new Error("monthly_brief read: " + error.message);
+    all.push(...(data || []));
+    if (!data || data.length < 1000) break;
   }
-  const bestOf = (val: (m: Record<string, number>) => number | null) => {
+  const byMo: Record<string, Record<string, MRow>> = {};
+  for (const r of all) {
+    if (r.value === null || !STORES.includes(r.store)) continue;
+    const m = `${r.year}-${String(r.month).padStart(2, "0")}-01`;
+    ((byMo[m] ||= {})[r.store] ||= {})[r.metric_key] = Number(r.value);
+  }
+  const bestOf = (val: (m: string) => number | null) => {
     let top: { mo: string; v: number } | null = null;
     for (const m of Object.keys(byMo).sort()) {
-      const v = val(byMo[m]);
-      if (v === null || !(v > 0)) continue;
+      const v = val(m);
+      if (v === null || !Number.isFinite(v) || !(v > 0)) continue;
       if (!top || v > top.v) top = { mo: m, v };
     }
     return top;
   };
+
   const out: Change[] = [];
-  for (const rec of recRes.data || []) {
-    const held = String(rec.record_on || "") === mo || String(rec.period || "").trim().toLowerCase() === when.toLowerCase();
-    if (!held) continue;
+  for (const rec of mine) {
+    const def = RECORDS.find((d) => d.label === rec.label)!;
     const top = rec.store === "Company"
-      ? bestOf((m) => STORES.every((s) => s in m) ? r2(STORES.reduce((a, s) => a + m[s], 0)) : null)
-      : STORES.includes(rec.store) ? bestOf((m) => rec.store in m ? m[rec.store] : null) : null;
+      ? bestOf((m) => {
+        if (m < "2026-01-01") return null;
+        const rs = Object.entries(byMo[m])
+          .filter(([s, x]) => def.margin ? MARGIN_SKIP[s] !== m && x.net_sales !== undefined : x[def.key] !== undefined);
+        return def.company(rs);
+      })
+      : STORES.includes(rec.store)
+      ? bestOf((m) => (def.margin && MARGIN_SKIP[rec.store] === m) ? null : byMo[m][rec.store]?.[def.key] ?? null)
+      : null;
     if (!top) continue;
-    const text = usd0(top.v), period = monthText(top.mo.slice(0, 7));
+    const text = def.fmt(top.v), period = monthText(top.mo.slice(0, 7));
     if (!differs(rec.value_num, top.v) && String(rec.record_on || "") === top.mo) continue;
     const was = rec.value_num === null ? null : Number(rec.value_num), wasText = `${rec.value} (${rec.period})`;
     const { error } = await sb.from("records").update({
       value: text, period, value_num: top.v, record_on: top.mo, updated_at: new Date().toISOString(),
     }).eq("id", rec.id);
-    if (error) throw new Error(`records ${rec.store}: ${error.message}`);
-    out.push({ ym, store: rec.store, kind: "record", what: NP_RECORD, was, now: top.v,
+    if (error) throw new Error(`records ${rec.store} ${rec.label}: ${error.message}`);
+    out.push({ ym, store: rec.store, kind: "record", what: rec.label, was, now: top.v,
       was_text: wasText, now_text: `${text} (${period})` });
   }
   return out;
@@ -379,8 +458,15 @@ async function relay(to: string[], subject: string, html: string): Promise<strin
 }
 
 const BRIEF_LABEL: Record<string, string> = {
+  net_sales: "NET Sales", cogs: "COGS", gross_profit: "Gross Profit", gross_profit_pct: "Gross Profit %",
+  cogs_sold_vs_listed: "COGS Sold vs. COGS Listed", pct_sales_at_pos: "% of Sales at POS", pct_sales_online: "% of Sales Online",
+  pct_sales_draft_order: "% of Sales Draft Order", pct_non_ebay_sales: "% of Non eBay Sales",
+  shipping_cost_pct_sales: "Shipping Cost % of Sales",
   net_profit: "Net Profit", ebay_fees: "eBay Fees", net_profit_pct: "Net Profit %", ebay_fee_pct_sales: "eBay Fees % of Sales",
 };
+// Which Breakdown rows are percentages, for the email's formatting.
+const BRIEF_PCT = new Set(["gross_profit_pct", "cogs_sold_vs_listed", "pct_sales_at_pos", "pct_sales_online",
+  "pct_sales_draft_order", "pct_non_ebay_sales", "shipping_cost_pct_sales", "net_profit_pct", "ebay_fee_pct_sales"]);
 
 // deno-lint-ignore no-explicit-any
 function buildChangesEmail(rows: any[]): { subject: string; html: string } {
@@ -393,7 +479,7 @@ function buildChangesEmail(rows: any[]): { subject: string; html: string } {
     const d = r2(now - was);
     return `<span style="color:${d < 0 ? "#b91c1c" : "#047857"};font-weight:600;">${d < 0 ? "−" : "+"}${usd(Math.abs(d))}</span>`;
   };
-  const fmtBrief = (k: string, v: number | null) => v === null ? "blank" : (k.endsWith("_pct") || k.endsWith("_sales") ? v.toFixed(2) + "%" : usd(v));
+  const fmtBrief = (k: string, v: number | null) => v === null ? "blank" : (BRIEF_PCT.has(k) ? v.toFixed(2) + "%" : usd(v));
   let html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#111827;max-width:720px;">`;
   const subj: string[] = [];
   for (const ym of months) {
@@ -427,25 +513,22 @@ function buildChangesEmail(rows: any[]): { subject: string; html: string } {
       html += `<h3 style="font-size:14px;margin:14px 0 4px;">Corrected On The Site</h3><table style="border-collapse:collapse;width:100%;margin-bottom:12px;">`
         + `<tr><th style="${th}">Store</th><th style="${th}">Where</th><th style="${th}">Was</th><th style="${th}">Now</th></tr>`;
       for (const r of site) {
-        const where = r.kind === "brief" ? `Monthly Breakdown · ${BRIEF_LABEL[r.what] || r.what}` : "Records · Monthly Net Profit Record";
+        const where = r.kind === "brief" ? `Monthly Breakdown · ${BRIEF_LABEL[r.what] || r.what}` : `Records · ${esc(String(r.what))}`;
         const was = r.kind === "brief" ? fmtBrief(r.what, num(r.was)) : esc(String(r.was_text || "—"));
         const now = r.kind === "brief" ? fmtBrief(r.what, num(r.now)) : esc(String(r.now_text || "—"));
         html += `<tr><td style="${td}font-weight:600;">${esc(r.store)}</td><td style="${td}">${where}</td><td style="${td}">${was}</td><td style="${td}">${now}</td></tr>`;
       }
       html += `</table>`;
     }
-    const days = mine.filter((r) => r.kind === "day")
-      .sort((a, b) => STORES.indexOf(a.store) - STORES.indexOf(b.store) || String(a.day).localeCompare(String(b.day)) || a.id - b.id);
-    if (days.length) {
-      html += `<h3 style="font-size:14px;margin:14px 0 4px;">What Moved On The Net Profit Tab</h3><table style="border-collapse:collapse;width:100%;">`
-        + `<tr><th style="${th}">Store</th><th style="${th}">Day</th><th style="${th}">Column</th><th style="${th}">Was</th><th style="${th}">Now</th><th style="${th}text-align:right;">Change</th></tr>`;
-      for (const r of days) {
-        const what = r.what === "added" ? "Day Added (Net Profit)" : r.what === "removed" ? "Day Cleared (Net Profit)" : r.what;
-        const was = num(r.was), now = num(r.now);
-        html += `<tr><td style="${td}">${esc(r.store)}</td><td style="${td}">${String(r.day).slice(5)}</td><td style="${td}">${esc(what)}</td>`
-          + `<td style="${td}">${usd(was)}</td><td style="${td}">${usd(now)}</td><td style="${td}text-align:right;">${delta(was, now)}</td></tr>`;
-      }
-      html += `</table>`;
+    // The day-by-day lines stay in np_month_changes but out of the email (Ethan,
+    // 2026-11-02: "I don't need the entire breakdown like this" — the store
+    // totals and what changed on the site are the two sections he reads). A
+    // batch that only moved figures between days, with no total or site
+    // change, still says so in one line rather than arriving empty.
+    const days = mine.filter((r) => r.kind === "day");
+    if (days.length && !tStores.length && !site.length) {
+      const n = new Set(days.map((r) => `${r.store} ${r.day}`)).size;
+      html += `<p style="font-size:13px;margin:0 0 10px;">${n} store-day${n === 1 ? "" : "s"} moved on the tab, but no store's month total or anything on the site changed.</p>`;
     }
   }
   html += `<p style="font-size:12px;color:#6b7280;margin-top:16px;">Anything already sent out with the old figure (an announcement, an email, a message) still says it. Those are the only places this cannot correct.</p></div>`;
@@ -600,7 +683,7 @@ Deno.serve(async (req: Request) => {
         try {
           const brief = await followBrief(supabase, ym, got.rows);
           changes.push(...brief);
-          if (brief.some((c) => c.what === "net_profit")) changes.push(...await fixRecords(supabase, ym));
+          if (brief.length) changes.push(...await fixRecords(supabase, ym));
         } catch (e) {
           report.followError = String((e as Error)?.message || e);
         }
