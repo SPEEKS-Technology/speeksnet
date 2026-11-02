@@ -1126,7 +1126,10 @@ function _npFixTracking(preview) {
       var ttlCur = String(formulas[ttl][col] || '').trim();
       if (ttlCur === ttlWant) { same++; }
       else {
-        if (!preview) sh.getRange(tn, col + 1).setFormula(ttlWant);
+        // The format goes with the formula — see npFixTtlFormats for what a
+        // bare setFormula into a percent-formatted cell looks like.
+        if (!preview) sh.getRange(tn, col + 1).setFormula(ttlWant)
+                        .setNumberFormat(sh.getRange(ttl, col + 1).getNumberFormat());
         added = true; ttlAdded++; wrote++;
       }
 
@@ -1142,6 +1145,72 @@ function _npFixTracking(preview) {
   Logger.log('\n%s %s cell(s) (%s of them the TTL row), %s already correct.',
     preview ? 'WOULD WRITE' : 'WROTE', wrote, ttlAdded, same);
   if (preview) Logger.log('Nothing was written. Run npFixTrackingApply() to write it.');
+}
+
+// ============================================================================
+// npFixTtlFormats — the TTL row's tracking cells printed as a PERCENT.
+//
+// Ethan, 2026-11-02: GP Tracking on the TTL row read 5928666.00%. The formula
+// was right — 59,286.66, the same projection as the last day row — but the
+// cell carried a percent format, so Sheets showed it x100 with a % sign.
+// npFixTracking wrote those cells with setFormula alone, which keeps whatever
+// format the cell already had, and on the TTL row that was the margin-style %
+// the old (empty) cell was left with. Rollover copies the tab, so every month
+// since has inherited it.
+//
+// The fix copies the number format of the LAST DAY ROW's cell in the same
+// column onto the TTL row — the format the column demonstrably uses, not a
+// typed "$#,##0.00" that would drift from the sheet's own. Rev, GP and NP
+// Tracking, all six blocks, on every "Net Profit" month tab (closed months
+// included — a locked month is still read). Formats only; no value changes.
+// ============================================================================
+function npFixTtlFormatsPreview() { _npFixTtlFormats(true); }
+function npFixTtlFormatsApply()   { _npFixTtlFormats(false); }
+
+function _npFixTtlFormats(preview) {
+  var ss = SpreadsheetApp.openById(NP_SHEET_ID);
+  var tabs = ss.getSheets().filter(function (s) {
+    return s.getName().indexOf(NP_TAB_PREFIX + ' ') === 0;
+  });
+  if (!tabs.length) { Logger.log('!! no "%s ..." tabs found — nothing done.', NP_TAB_PREFIX); return; }
+  Logger.log(preview ? '=== PREVIEW — nothing will be written ===' : '=== APPLYING ===');
+
+  var blocks = NP_ORDER.map(function (c) { return [c, NP_BASES[c]]; });
+  blocks.push(['TTL block', NP_TTL_BASE]);
+  var total = 0;
+
+  tabs.forEach(function (sh) {
+    var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+    var values = sh.getRange(1, 1, lastRow, lastCol).getValues();
+    var ttl = -1;
+    for (var r = NP_HEADER_ROWS; r < lastRow; r++) {
+      if (String(values[r][NP_BASES.OVL]).trim().toUpperCase() === 'TTL') { ttl = r; break; }
+    }
+    // The last day row is the one directly above TTL; refuse if it is not a day.
+    if (ttl < 1 || !(parseInt(values[ttl - 1][NP_BASES.OVL], 10) >= 28)) {
+      Logger.log('  %s: no TTL row under a day-28+ row — skipped', sh.getName());
+      return;
+    }
+    var fmts = sh.getRange(ttl, 1, 2, lastCol).getNumberFormats();   // [last day, TTL]
+    var changed = [];
+    blocks.forEach(function (b) {
+      NP_TRACKING.forEach(function (spec) {
+        var c = b[1] + spec.off;
+        if (c >= lastCol) return;
+        var want = fmts[0][c], cur = fmts[1][c];
+        if (cur === want) return;
+        changed.push(b[0] + ' ' + spec.name + ' ' + _npColLetter(c) + (ttl + 1)
+          + '  "' + cur + '" -> "' + want + '"');
+        if (!preview) sh.getRange(ttl + 1, c + 1).setNumberFormat(want);
+      });
+    });
+    total += changed.length;
+    Logger.log('  %s (TTL row %s): %s', sh.getName(), ttl + 1,
+      changed.length ? changed.length + ' cell(s)' : 'all tracking formats already match');
+    changed.forEach(function (l) { Logger.log('      ' + l); });
+  });
+  Logger.log('%s %s cell(s).', preview ? 'WOULD FIX' : 'FIXED', total);
+  if (preview && total) Logger.log('Run npFixTtlFormatsApply() to write.');
 }
 
 // ============================================================================
