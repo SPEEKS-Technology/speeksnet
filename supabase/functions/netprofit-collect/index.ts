@@ -489,17 +489,55 @@ Deno.serve(async (req: Request) => {
   //   * a row's SALE half never travels, only its RETURN half. An exchange
   //     books the returned item and its replacement under one order name, and
   //     dragging the replacement back would invent revenue on the wrong day.
+  //
+  // ⚠️ PAGED, BECAUSE SHOPIFYQL STOPS AT 1,000 ROWS WITHOUT SAYING SO. A query
+  // with no LIMIT gets an implicit LIMIT 1000 and no error, and the rows come
+  // back largest-first — so what falls off the end is the REFUNDS. OVL October
+  // 2026 was the first month over (1,065 day×order rows): 65 rows and $22,280
+  // of returns vanished, and the tab carried $201,650 of sales against
+  // Shopify's $180,030. Every day without a return still tied to the cent,
+  // which is why nothing looked wrong. September peaked at 858 rows, so this
+  // had never bitten before; holiday volume puts every store at risk.
+  // ORDER BY day, order_name keeps the pages from overlapping (checked:
+  // 1,000 + 65 rows, no repeats, totals exact against the ungrouped query).
+  const QL_PAGE = 1000;
+  const QL_PAGE_CAP = 20;
   const tQl0 = Date.now();
-  const qlBody = await gql(
-    `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day, order_name SINCE ${from} UNTIL ${to}") {
-         parseErrors tableData { rows } } }`);
+  const qlRaw: any[] = [];
+  let ql: any = null;
+  let qlPages = 0;
+  for (; qlPages < QL_PAGE_CAP; qlPages++) {
+    const qlBody = await gql(
+      `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day, order_name SINCE ${from} UNTIL ${to} ORDER BY day, order_name LIMIT ${QL_PAGE} OFFSET ${qlPages * QL_PAGE}") {
+           parseErrors tableData { rows } } }`);
+    ql = qlBody?.data?.shopifyqlQuery;
+    if (ql?.parseErrors?.length) break;
+    const page = ql?.tableData?.rows || [];
+    qlRaw.push(...page);
+    if (page.length < QL_PAGE) { qlPages++; break; }
+  }
   timing.shopifyql = Date.now() - tQl0;
-  const ql = qlBody?.data?.shopifyqlQuery;
+  health.shopifyql_pages = qlPages;
+  health.shopifyql_rows = qlRaw.length;
   if (ql?.parseErrors?.length) {
     warnings.push(`shopifyql: ${ql.parseErrors.join("; ")}`);
     health.shopifyql_errors = ql.parseErrors.map(String);
   }
-  const qlRows = (ql?.tableData?.rows || []).map((row: any) => ({
+  // A short month is worse than no month — see the empty-answer guard below.
+  // A failed LATER page is the same hazard as the cap: page one alone is a
+  // complete-looking month with its refunds cut off.
+  const qlLaterPageFailed = qlRaw.length > 0 && (!ql?.tableData || !!ql?.parseErrors?.length);
+  if (qlPages >= QL_PAGE_CAP || qlLaterPageFailed) {
+    return json({
+      error: qlLaterPageFailed
+        ? `shopifyql page ${qlPages + 1} failed after ${qlRaw.length} rows — refusing to `
+          + "report a month that may be missing its refunds."
+        : `shopifyql still returning full pages after ${QL_PAGE_CAP} — refusing to `
+          + "report a month that may be missing its refunds. Split the range.",
+      store, from, to, rows: qlRaw.length, parseErrors: ql?.parseErrors ?? null,
+    }, 502);
+  }
+  const qlRows = qlRaw.map((row: any) => ({
     day: String(row.day).slice(0, 10),
     order: String(row.order_name || ""),
     net: round2(Number(row.net_sales) || 0),
