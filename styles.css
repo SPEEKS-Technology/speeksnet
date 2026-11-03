@@ -17620,6 +17620,13 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    select beside it. Needs the #id to outrank .modal-menu.manage-menu .btn-primary. */
 .exp-btn-mail { flex: 0 0 auto; }
 #expensesModal .exp-btn-mail { font-size: 12px; padding: 7px 16px; line-height: 18px; }
+/* Export Excel + Email Report travel as one unit (2026-11-02). Loose in the row,
+   a tablet-width modal wrapped Email Report alone onto a second line at the LEFT
+   edge, away from the button it sits beside. margin-left:auto keeps the pair
+   right-aligned on whichever line it lands. */
+.exp-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }
+#expensesModal .exp-btn-xls { background: #eef1f5; color: #334155; }
+#expensesModal .exp-btn-xls:hover { background: #e2e8f0; }
 
 /* The footer arrows are inline SVGs with only a viewBox, so without an explicit
    size they fall back to 300x150 and blow the button apart — same rule Box Order
@@ -17769,6 +17776,8 @@ input[type="date"].exp-input { height: 36px; padding-top: 0; padding-bottom: 0; 
     .exp-add-grid label { flex: 1 1 100%; }
     .exp-controls { gap: 10px; }
     .exp-btn-mail { width: 100%; justify-content: center; }
+    /* Full-width buttons need a full-width group to be full width of. */
+    .exp-actions { flex: 1 1 100%; flex-direction: column; margin-left: 0; }
 }
 
 /* =========================================================

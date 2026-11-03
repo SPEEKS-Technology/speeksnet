@@ -62441,12 +62441,20 @@ function _expControlsHtml() {
         + '<label class="exp-ctl"><span>Month</span><select class="kpi-select" onchange="expSetMonth(this.value)">' + monthOpts + '</select></label>'
         + personSel + rateCtl
         + '<span class="exp-controls-sp"></span>' + cats
+        // Export and Email are one group so a narrow row wraps them together and
+        // they stay on the right, rather than Email Report dropping alone to the
+        // left edge of a second line.
+        + '<span class="exp-actions">'
+        // Export works from "All" too — one workbook of everyone's lines for the
+        // month, which is what a reviewer files when the whole month is approved.
+        + '<button type="button" class="btn-secondary exp-btn-mail exp-btn-xls" onclick="expExportExcel(this)">'
+            + 'Export Excel<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><polyline points="7 10 12 15 17 10"/><line x1="5" y1="20" x2="19" y2="20"/></svg></button>'
         // A report is filed by one person for one month, so there is nothing to
         // email from the "All" overview.
         + (_expIsAll() ? ''
             : '<button type="button" class="btn-primary exp-btn-mail" onclick="expShowPreview()">'
               + 'Email Report<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>')
-        + '</div>';
+        + '</span></div>';
 }
 
 // A DM/MSM may only edit their own report; the CEO may edit anyone's.
@@ -62870,6 +62878,132 @@ function expCopyReport(button) {
     }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
 }
 window.expCopyReport = expCopyReport;
+
+// ---- Excel export -------------------------------------------------------------
+// The email is still how a report is filed. This is for AFTER Paul approves it:
+// he wants the approved months kept as files in a Drive folder (Ethan,
+// 2026-11-02), so the same lines the email carries come out as a workbook the
+// person drops in there. It reads _expRows like the email does, so the file can
+// never disagree with what was sent.
+//
+// One sheet laid out like the email — Mileage, then Expenses, then Total Due —
+// rather than a sheet per kind, because the file stands in for the email in the
+// folder and should read the same way. Dates are real dates and money is real
+// numbers (with SUM formulas on the totals), so the file can be added up in a
+// spreadsheet instead of retyped. In "All" every line gets a Person column and
+// the file is named for the month alone.
+//
+// SheetJS is only on the Workspace page, so this borrows the Variance tool's
+// on-demand loader rather than adding a 900 KB script to every page.
+const _expXlsDate = s => {
+    const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000;
+};
+
+function _expWorkbook() {
+    const all = _expIsAll();
+    const who = all ? 'Everyone' : _expPerson;
+    const monthLabel = _expMonthLabel(_expMonth);
+    const mileageRows = _expRows('mileage');
+    const expenseRows = _expRows('expense');
+    const enc = (r, c) => XLSX.utils.encode_cell({ r, c });
+
+    const aoa = [];
+    const money = [], dates = [], sums = [];   // [row, col] cells to format after the sheet exists
+    const push = row => { aoa.push(row); return aoa.length - 1; };
+    const p = all ? 1 : 0;                     // the Person column shifts everything right by one
+
+    push(['Expense Report — ' + who + ' — ' + monthLabel]);
+    push([]);
+
+    let mileageTotalRow = null, expenseTotalRow = null;
+    if (mileageRows.length) {
+        push(['MILEAGE']);
+        push(['Date'].concat(all ? ['Person'] : [], ['From', 'To', 'Purpose', 'Miles', 'Rate', 'Amount']));
+        const first = aoa.length;
+        mileageRows.forEach(e => {
+            const r = push([_expXlsDate(e.entry_date)].concat(all ? [e.person || ''] : [],
+                [e.from_loc || '', e.to_loc || '', e.description || '',
+                 Number(e.miles) || 0, Number(e.rate) || 0, Number(e.amount) || 0]));
+            dates.push([r, 0]); money.push([r, 5 + p], [r, 6 + p]);
+        });
+        const last = aoa.length - 1;
+        const miles = mileageRows.reduce((a, e) => a + (Number(e.miles) || 0), 0);
+        mileageTotalRow = push(['Total'].concat(all ? [''] : [], ['', '', '', Math.round(miles * 10) / 10, '', _expTotal('mileage')]));
+        sums.push([mileageTotalRow, 4 + p, first, last], [mileageTotalRow, 6 + p, first, last]);
+        money.push([mileageTotalRow, 6 + p]);
+        push([]);
+    }
+
+    if (expenseRows.length) {
+        push(['EXPENSES']);
+        push(['Date'].concat(all ? ['Person'] : [], ['Category', 'Description', 'Amount']));
+        const first = aoa.length;
+        expenseRows.forEach(e => {
+            const r = push([_expXlsDate(e.entry_date)].concat(all ? [e.person || ''] : [],
+                [e.category || '', e.description || '', Number(e.amount) || 0]));
+            dates.push([r, 0]); money.push([r, 3 + p]);
+        });
+        const last = aoa.length - 1;
+        expenseTotalRow = push(['Total'].concat(all ? [''] : [], ['', '', _expTotal('expense')]));
+        sums.push([expenseTotalRow, 3 + p, first, last]);
+        money.push([expenseTotalRow, 3 + p]);
+        push([]);
+    }
+
+    if (!mileageRows.length && !expenseRows.length) {
+        push(['No expenses or mileage were logged for this month.']);
+        push([]);
+    }
+
+    const dueRow = push(['TOTAL DUE', _expTotal('mileage') + _expTotal('expense')]);
+    money.push([dueRow, 1]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    dates.forEach(([r, c]) => { const cell = ws[enc(r, c)]; if (cell && cell.t === 'n') cell.z = 'mm/dd/yyyy'; });
+    money.forEach(([r, c]) => { const cell = ws[enc(r, c)]; if (cell) cell.z = '$#,##0.00'; });
+    // The cached value stays in each cell, so a viewer that ignores formulas
+    // (Drive's preview) still shows the right total.
+    sums.forEach(([r, c, a, b]) => {
+        const cell = ws[enc(r, c)];
+        if (cell) cell.f = 'SUM(' + enc(a, c) + ':' + enc(b, c) + ')';
+    });
+    const due = [mileageTotalRow != null ? enc(mileageTotalRow, 6 + p) : null,
+                 expenseTotalRow != null ? enc(expenseTotalRow, 3 + p) : null].filter(Boolean);
+    if (due.length) ws[enc(dueRow, 1)].f = due.join('+');
+
+    // Widths from the content, because Mileage and Expenses share columns with
+    // different things in them. Row 0 (the title) is skipped — it is meant to
+    // run across the top, not to widen the Date column.
+    const widths = [];
+    aoa.slice(1).forEach(row => row.forEach((v, c) => {
+        const len = typeof v === 'number' ? 12 : String(v == null ? '' : v).length + 2;
+        widths[c] = Math.min(Math.max(widths[c] || 10, len), 50);
+    }));
+    ws['!cols'] = widths.map(w => ({ wch: w }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Expense Report');
+    // Plain hyphens: an em dash in a filename survives Windows but not every
+    // Drive sync client.
+    const name = 'Expense Report - ' + (all ? '' : who.replace(/[\\/:*?"<>|]/g, '') + ' - ') + monthLabel + '.xlsx';
+    return { wb, name };
+}
+
+async function expExportExcel(btn) {
+    if (btn) btn.disabled = true;
+    try {
+        await _vrEnsureXlsx();
+        const { wb, name } = _expWorkbook();
+        XLSX.writeFile(wb, name);
+    } catch (e) {
+        alert('Could not build the Excel file — check your connection and try again.');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+window.expExportExcel = expExportExcel;
 
 // ---- monthly "file your expense report" reminder ------------------------------
 // DM and MSM only (the CEO receives the reports, they don't file one). Unlike the
