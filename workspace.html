@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261103a">
+  <link rel="stylesheet" href="styles.css?v=20261103b">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20261103a" defer></script>
+  <script src="speeks.js?v=20261103b" defer></script>
 </head>
 <body class="preload">
 
@@ -752,6 +752,7 @@
               <div style="padding: 12px 18px 12px;">
                   <div class="notif-tabs claims-tabs">
                       <button id="ov-tab-claims" class="tab-btn active" onclick="switchOversightTab('claims')">Claims</button>
+                      <button id="ov-tab-confirm" class="tab-btn" onclick="switchOversightTab('confirm')">To Confirm<span id="hold-ov-badge-confirm" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
                       <button id="ov-tab-mismatch" class="tab-btn" onclick="switchOversightTab('mismatch')">Mismatches<span id="hold-ov-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
                       <button id="ov-tab-returns" class="tab-btn" onclick="switchOversightTab('returns')">Returns<span id="hold-ov-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
                       <button id="ov-tab-cases" class="tab-btn" onclick="switchOversightTab('cases')">Cases &amp; Disputes<span id="hold-ov-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
@@ -760,6 +761,7 @@
               </div>
               <div class="manage-content">
                   <div id="ov-panel-claims"><div id="claims-oversight-body"><div class="status-message">Loading…</div></div></div>
+                  <div id="ov-panel-confirm" style="display:none;"><div id="hold-ov-confirm"></div></div>
                   <div id="ov-panel-mismatch" style="display:none;"><div id="hold-ov-mismatch"></div></div>
                   <div id="ov-panel-returns" style="display:none;"><div id="hold-ov-returns"></div></div>
                   <div id="ov-panel-cases" style="display:none;"><div id="hold-ov-cases"></div></div>

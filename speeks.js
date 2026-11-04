@@ -33782,7 +33782,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkClaimsConfirmAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -38203,13 +38203,20 @@ const _HOLD_STATE = {
     // _holdStateLabel always overrides this one (it has to name the right site),
     // so this string is a fallback only — kept accurate so it cannot mislead.
     needs_reply: { label: 'Needs a reply from us',    bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
-    needs_claim: { label: 'Refunded — needs a claim', bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    // Since 2026-11-03 only a parcel LOST IN TRANSIT is a claim — a refunded INR
+    // the carrier delivered, returned, or never scanned arrives as 'due' with a
+    // note saying which (see _holdStateLabel), because a claim is the wrong move.
+    needs_claim: { label: 'Lost in transit — needs a claim', bg: _HOLD_C.red.bg, fg: _HOLD_C.red.fg, rank: 0 },
     due:         { label: 'Check-in due',             bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 1 },
     checked:     { label: 'Checked in',               bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
     // 0112: we answered a dispute and the card network decides now. Nothing is
     // due from us, so it sits with the other "moving, not waiting on you" states.
     answered:    { label: 'Answered — with them',     bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
     covered:     { label: 'Claim open',               bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
+    // 0164: a manager marked it resolved, eBay/Shopify don't back that up, and
+    // it is the DM's call now. Off the manager's Needs Attention, on the DM's
+    // To Confirm tab.
+    dm_review:   { label: 'Waiting on DM',            bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
     resolved:    { label: 'Resolved',                 bg: _HOLD_C.green.bg, fg: _HOLD_C.green.fg, rank: 4 },
     settled:     { label: 'Settled',                  bg: _HOLD_C.grey.bg,  fg: _HOLD_C.grey.fg,  rank: 5 },
 };
@@ -38232,6 +38239,10 @@ function _holdStateLabel(type, it, s) {
         if (it.state === 'due') return 'Card expired — not collected';
         return s.label;
     }
+    // 0164: the DM sent a resolution back. Said on the chip, because the card
+    // looks exactly like any other due item otherwise.
+    if (it.dm && it.dm.status === 'denied' && it.state !== 'needs_reply'
+        && _HOLD_VIEWS.due.states.includes(it.state)) return 'Sent back by DM';
     if (it.state === 'needs_reply') {
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
@@ -38245,6 +38256,8 @@ function _holdStateLabel(type, it, s) {
     // The claim is open, so "Check-in due" would point at the wrong person: the
     // carrier does not owe this one, eBay does.
     if (it.state_note === 'delivered_after_refund') return 'Delivered — call eBay';
+    if (it.state_note === 'returned_to_us') return 'Returned to us — restock it';
+    if (it.state_note === 'never_scanned') return 'Never scanned — find it';
     return s.label;
 }
 
@@ -38280,7 +38293,7 @@ const _HOLD_VIEWS = {
     // settled in neither view the card simply vanished, with nothing to show
     // the link had worked. Settled and resolved are both FINISHED, so they sit
     // in the collapsed group at the bottom of this view rather than in the list.
-    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'resolved', 'settled'] },
+    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'dm_review', 'resolved', 'settled'] },
 };
 // Which of that view's states are done with, and fold away.
 const _HOLD_DONE = ['resolved', 'settled'];
@@ -38299,6 +38312,8 @@ const _HOLD_KINDS = [
 ];
 
 const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
+// A refunded INR that is NOT a carrier claim, by what the carrier says (2026-11-03).
+const _HOLD_REFUND_NOTES = ['delivered_after_refund', 'returned_to_us', 'never_scanned'];
 // A plain return only. An escalated one arrives folded into the case eBay opened
 // (0104), which is no longer a routine return, so it belongs with the cases.
 const _holdIsReturn = it => it.kind === 'return';
@@ -38416,7 +38431,9 @@ function _holdDueCounts(ctx) {
 }
 function _holdPaintBadges(ctx) {
     const n = _holdDueCounts(ctx);
-    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments]].forEach(([t, v]) => {
+    // 0164: the DM's To Confirm count — only the oversight view has that tab.
+    const conf = ctx === 'ov' ? (((_holdData[ctx] || {}).dmQueue) || []).length : 0;
+    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments], ['confirm', conf]].forEach(([t, v]) => {
         const b = document.getElementById(`hold-${ctx}-badge-${t}`);
         if (!b) return;
         b.textContent = v ? String(v) : '';
@@ -38458,6 +38475,92 @@ function renderHoldItems(ctx) {
     // because nothing here involves eBay and the fix is always on Shopify.
     const pw = _holdWrap(ctx, 'payments');
     if (pw) pw.innerHTML = _holdToolbar(ctx, 'payment') + _holdPaymentSyncLine(d) + _holdList(ctx, 'payment', d.payments || [], null);
+    // 0164: the DM's queue of resolutions the sites don't back up.
+    const fw = _holdWrap(ctx, 'confirm');
+    if (fw) fw.innerHTML = _holdConfirmList(ctx, d);
+}
+
+// =========================================================
+//  TO CONFIRM — the DM's half of the fact check (0164)
+// =========================================================
+// Ethan, 2026-11-03: "make sure anytime a manager resolves something, it gets
+// fact checked and if the system disagrees, then DM gets notified to confirm and
+// take a deeper look and confirming then gets rid of it from the sheet and
+// denying needs a reason and goes back to manager with the reason".
+//
+// The server decides what is on this list (claims-disputes dmQueue: every
+// resolution factCheck disagrees with that the DM has not answered). Each card
+// puts the manager's account beside the system's, with the item's own facts.
+// Confirm: it stands, gone for good. Send back: needs a reason, and the item is
+// due for that store again at once — on their list, their 4pm mail and their
+// feed card — with the reason on it. Items the sites catch up on (eBay posts
+// the payback, the device gets restocked) leave this list by themselves.
+let _holdDmIndex = [];
+function _holdConfirmList(ctx, d) {
+    const q = d.dmQueue || [];
+    _holdDmIndex = q.slice();
+    if (!q.length) return `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.7;">Nothing to confirm.<div style="margin-top:4px; font-weight:600; color:#cbd5e1;">When a manager marks something resolved and eBay or Shopify don't back it up, it lands here.</div></div>`;
+    // The full item, from the lists already loaded, for the facts line.
+    const find = x => {
+        const list = x.type === 'mismatch' ? d.mismatches : x.type === 'dispute' ? d.disputes : x.type === 'payment' ? d.payments : d.cases;
+        return (list || []).find(it => _holdKeyFor(x.type, it) === x.key) || {};
+    };
+    const tabOf = x => x.type === 'mismatch' ? 'mismatch' : x.type === 'payment' ? 'payments' : 'cases';
+    const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
+    return `<div style="font-size:12px; color:#64748b; margin:2px 0 12px; line-height:1.6;"><b style="color:var(--slate-charcoal);">${q.length} resolution${q.length === 1 ? '' : 's'} · ${_holdMoney(total)}</b> — marked resolved by a manager, not backed up by eBay or Shopify. Oldest first.</div>
+    <div style="display:flex; flex-direction:column; gap:10px;">${q.map((x, i) => {
+        const it = find(x);
+        const kind = _holdKindChip(x.type, it.type ? it : x) || (x.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
+        const title = x.type === 'mismatch'
+            ? (it.direction === 'ebay_only' ? 'Refunded on eBay — still a sale in Shopify' : 'Refunded in Shopify — still a sale on eBay')
+            : (x.title || it.item_title || kind);
+        const order = x.order || it.ebay_order_id || '';
+        return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; box-shadow:inset 3px 0 0 ${_HOLD_C.amber.fg};">
+            <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
+                <div style="min-width:0; flex:1 1 240px;">
+                    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
+                        <span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#f1f5f9; color:#475569;">${escapeHtml(x.store_code || '')}</span>
+                        <span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#e2e8f0; color:#334155;">${escapeHtml(kind)}</span>
+                        ${x.state === 'needs_reply' ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${_HOLD_C.red.bg}; color:${_HOLD_C.red.fg};">Deadline still open</span>` : ''}
+                    </div>
+                    <div style="font-weight:800; font-size:13.5px; color:var(--slate-charcoal);">${escapeHtml(title)}</div>
+                    ${order ? `<div style="font-size:12px; color:#334155; margin-top:3px;"><span style="color:#94a3b8;">Order</span> ${escapeHtml(order)}${siteCopyBtn(order, 'order number')}</div>` : ''}
+                </div>
+                <span style="font-weight:900; font-size:15px; color:var(--slate-charcoal);">${x.amount != null ? _holdMoney(x.amount) : ''}</span>
+            </div>
+            <div style="font-size:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; margin-top:8px; color:#334155;">
+                <b>${escapeHtml(x.resolved_by || 'The manager')} said</b>${x.resolved_at ? ' · ' + _holdDate(x.resolved_at) : ''}<div style="margin-top:2px;">“${escapeHtml(x.resolved_note || '')}”</div></div>
+            <div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:6px; color:${_HOLD_C.red.fg};"><b>The system says:</b> ${escapeHtml(x.why || '')}.</div>
+            <div style="margin-top:10px;">
+                <label class="form-label-caps" for="hold-dm-note-${i}">Note — optional to confirm, required to send back</label>
+                <textarea id="hold-dm-note-${i}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;" placeholder="e.g. Checked Seller Hub — eBay credited it Oct 30 / Not good enough: call eBay and get the case number"></textarea>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                    <button onclick="_holdDmAnswer(${i}, 'dm_confirm')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Confirm resolved</button>
+                    <button onclick="_holdDmAnswer(${i}, 'dm_send_back')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Send back to manager</button>
+                    <button onclick="switchOversightTab('${tabOf(x)}')" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">See it in ${tabOf(x) === 'mismatch' ? 'Mismatches' : tabOf(x) === 'payments' ? 'Payments' : 'Cases'}</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('')}</div>`;
+}
+async function _holdDmAnswer(i, action) {
+    const x = _holdDmIndex[i];
+    if (!x) return;
+    const ta = document.getElementById(`hold-dm-note-${i}`);
+    const note = ta ? ta.value.trim() : '';
+    if (action === 'dm_send_back' && note.length < HOLD_MIN_REASON) {
+        alert('Say why it is going back — the manager sees this.');
+        if (ta) ta.focus();
+        return;
+    }
+    try {
+        // review_key: the row the resolution actually lives on — an escalated
+        // INR's note can sit on the inquiry it came from.
+        await _holdPost({ action, item_type: x.type, item_key: x.review_key || x.key, note: note || null });
+        await _holdAfterWrite('ov');
+        if (typeof checkClaimsConfirmAlerts === 'function') checkClaimsConfirmAlerts();
+    } catch (e) { alert('Could not save: ' + e.message); }
 }
 
 // Payments are read from Shopify only, so a failure says Shopify — the eBay
@@ -38945,12 +39048,23 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             const tn = it.tracking_number ? `${escapeHtml(it.tracking_carrier || '')} ${escapeHtml(it.tracking_number)}${siteCopyBtn(it.tracking_number, 'tracking number')}` : '';
             facts.push(`<span style="white-space:nowrap; ${del ? `color:${_HOLD_C.green.fg}; font-weight:800;` : 'color:#475569;'}">${del ? 'Delivered' : escapeHtml(_holdPretty(it.tracking_status))}${tn ? ' · ' + tn : ''}</span>`);
         }
+        // A REFUNDED INR SAYS WHAT TO DO BY WHAT THE CARRIER SAYS (2026-11-03).
+        // Only a parcel lost in transit is a carrier claim; the other three are
+        // a phone call to eBay or a device on our own shelf. Each ends the same
+        // way — mark it resolved — and that resolution is CHECKED: eBay's payouts
+        // for the money coming back, Shopify for the device back in stock. If
+        // neither backs it up it goes to the DM, never straight off the list.
+        const box = (c, html) => `<div style="font-size:12px; background:${c.bg}; border:1px solid ${c.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${c.fg};">${html}</div>`;
         if (it.state_note === 'delivered_after_refund') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.</div>`;
-        } else if (st === 'needs_claim' && _holdDelivered(it)) {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>The carrier says this was delivered</b> — Even though the buyer was refunded. eBay covers a delivered item-not-received, so ask eBay for it rather than filing a claim, then mark this resolved and say what eBay did.</div>`;
+            extra = box(_HOLD_C.green, it.claim
+                ? `<b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.`
+                : `<b>The carrier says this was delivered</b> — even though the buyer was refunded. eBay covers a delivered item-not-received, so call eBay for it rather than filing a claim, then mark this resolved and say what eBay did. The system checks eBay's payouts for the money coming back.`);
+        } else if (it.state_note === 'returned_to_us') {
+            extra = box(_HOLD_C.amber, `<b>The carrier sent this back to us</b> — after the buyer was refunded, so nobody owes us for it and no claim is needed. Put the device back in stock in Shopify, then mark this resolved. The system checks Shopify for it.`);
+        } else if (it.state_note === 'never_scanned') {
+            extra = box(_HOLD_C.red, `<b>${it.tracking_status ? 'The carrier never scanned this parcel' : 'There is no tracking on this one'}</b> — and the buyer was refunded. It may never have left the store, and a carrier won't pay a claim on a parcel it never had. Find the device and put it back in stock in Shopify, then mark this resolved. If it can't be found, say so — that goes to the DM.`);
         } else if (st === 'needs_claim') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''}. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.</div>`;
+            extra = box(_HOLD_C.red, `<b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''} and the carrier still shows the parcel in transit. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.`);
         }
         if (it.state_note === 'outcome unread') {
             extra += `<div style="font-size:11.5px; color:#b45309; margin-top:6px;">Closed on eBay, but we couldn't read whether the buyer was refunded yet. It clears itself on the next read, or check it on eBay.</div>`;
@@ -38967,10 +39081,26 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     // A contested resolution gets the red block below INSTEAD of the green
     // "Resolved by…" one — showing both would have the same card saying it is
     // settled and not settled at once.
-    if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
+    // 0164. Every resolution is fact-checked. One the sites don't back up waits
+    // on the DM (amber); one the DM sent back is due again with the DM's reason
+    // (red). A live-deadline item keeps its red "site disagrees" block below
+    // instead, so it is not said twice.
+    const dmx = it.dm || null;
+    const dmPending = !!(dmx && dmx.pending && it.state_note !== 'resolution_disputed');
+    const dmBack = !!(dmx && dmx.status === 'denied' && _HOLD_VIEWS.due.states.includes(st));
+    if (dmPending) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>${escapeHtml(dmx.resolved_by || 'Someone')} marked this resolved${dmx.resolved_at ? ' ' + _holdDate(dmx.resolved_at) : ''} — waiting on the DM to confirm</b>
+            ${dmx.resolved_note ? `<div style="margin-top:2px;">“${escapeHtml(dmx.resolved_note)}”</div>` : ''}
+            <div style="margin-top:4px;">The system doesn't back it up yet: ${escapeHtml(dmx.why || '')}. If eBay or Shopify catch up, this clears by itself.</div></div>`;
+    } else if (dmBack) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The DM sent this back${dmx.by ? ' — ' + escapeHtml(dmx.by) : ''}${dmx.at ? ', ' + _holdDate(dmx.at) : ''}</b>
+            <div style="margin-top:2px; font-weight:700;">“${escapeHtml(dmx.note || '')}”</div>
+            ${dmx.resolved_note ? `<div style="margin-top:4px;">It had been marked resolved${dmx.resolved_by ? ' by ' + escapeHtml(dmx.resolved_by) : ''}: “${escapeHtml(dmx.resolved_note)}”</div>` : ''}</div>`;
+    } else if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
         const who = escapeHtml(rv.by_name || 'Someone');
         if (rv.status === 'resolved') {
-            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
+            const ok = dmx && dmx.status === 'confirmed' ? ` · confirmed by ${escapeHtml(dmx.by || 'the DM')}` : '';
+            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}${ok}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
         } else {
             said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>Still open</b> — ${who}, ${_holdDate(rv.updated_at)}${st === 'checked' && it.due_on ? ` · back on the list ${_holdDay(it.due_on)}` : ''}${rv.note ? `<div style="margin-top:2px;">${escapeHtml(rv.note)}</div>` : ''}</div>`;
         }
@@ -38995,7 +39125,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(still)}</b>
             ${rv && rv.note ? `<div style="margin-top:2px; font-weight:600;">“${escapeHtml(rv.note)}”</div>` : ''}
-            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now${age >= days ? ' — this has already gone to the DM.' : ` — after ${days} day${days === 1 ? '' : 's'} it goes to the DM.`}</div>
+            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now — it has gone to the DM to confirm${age >= days ? '' : ''}.</div>
         </div>`;
     }
     // Cases only: a dispute says its own version of this above, naming the right
@@ -39030,18 +39160,20 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     if (readOnly) { /* nothing to press: the daily read moves a return along */ }
     else if (st === 'resolved') {
         acts.push(`<button onclick="_holdReopen('${ctx}', ${idx})" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Reopen</button>`);
-    } else if (st === 'needs_claim' || it.state_note === 'delivered_after_refund') {
-        // Delivered after all: eBay pays that one back, so the first move is a
-        // note saying what eBay did, not a carrier claim (0106). Once a claim
-        // has already been opened the card arrives here as 'due' instead — same
-        // parcel, same move, so it gets the same button rather than a generic
-        // "Update status" that says nothing about who to ring.
-        if (_holdDelivered(it)) {
-            acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${form === 'status' ? 'Close' : 'Delivered — Resolve it'}</button>`);
-        }
+    } else if (st === 'needs_claim' || _HOLD_REFUND_NOTES.includes(it.state_note)) {
+        // A REFUNDED INR (2026-11-03): the button names the move the carrier's
+        // word calls for. Lost in transit leads with the claim; the other three
+        // with a resolution — which is fact-checked, and goes to the DM if eBay
+        // and Shopify don't back it up. Lost in transit can be resolved too (it
+        // turned up in the store after all), checked the same way.
         if (st === 'needs_claim') {
             acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">${form === 'claim' ? 'Close' : 'Open or link a claim'}</button>`);
         }
+        const lbl = it.state_note === 'delivered_after_refund' ? 'Delivered — Resolve it'
+            : it.state_note === 'returned_to_us' ? 'Restocked — Resolve it'
+            : it.state_note === 'never_scanned' ? 'Found it — Resolve it' : 'Resolve another way';
+        const c = st === 'needs_claim' ? _HOLD_C.grey : _HOLD_C.green;
+        acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${c.bg}; border:1.5px solid ${c.line}; color:${c.fg};">${form === 'status' ? 'Close' : lbl}</button>`);
     } else if (st === 'needs_reply' || st === 'due' || st === 'checked') {
         acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">${form === 'status' ? 'Close' : 'Update status'}</button>`);
     }
@@ -39049,6 +39181,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     let formHtml = '';
     if (form === 'status' && (st === 'due' || st === 'checked' || st === 'needs_claim' || st === 'needs_reply')) {
         const days = ((_holdData[ctx] || {}).timers || {})[type] || 0;
+        // A refunded INR is due every day until it is dealt with (2026-11-03) —
+        // the money has already gone out — so it has no "Still open" to hide it.
+        const refInr = inr && it.outcome === 'refunded';
         formHtml = `
         <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
             <label class="form-label-caps" for="hold-note-${ctx}-${idx}">Note</label>
@@ -39057,7 +39192,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
                     : type === 'dispute' ? 'e.g. Refunded the buyer and accepted it — cheaper than losing the chargeback fee too'
                     : type === 'payment' ? 'e.g. Customer paid the $28.20 in store 9/29, receipt #…'
                     : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
-            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply' && type === 'payment'
+            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${refInr
+                ? `The buyer has already been refunded, so this can't be checked in — it stays on the list every day until it's dealt with. Say what happened: what eBay did, or that the device is back in stock.`
+                : st === 'needs_reply' && type === 'payment'
                 ? `<b>Still open</b> is off the table while Shopify can still charge the card — fulfilling or cancelling the order is the fix, and the next read sees it. <b>Resolved</b> is recorded, but it stays on the list until Shopify agrees.`
                 : st === 'needs_reply'
                 ? (type === 'dispute'
@@ -39067,14 +39204,15 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
                     : `<b>Still open</b> is off the table until eBay shows our reply — that is the point of this one. <b>Resolved</b> is still here for a case that ended some other way, and needs a reason.`)
                 : type === 'mismatch'
                 ? `<b>Insurance Claim</b> opens the claim form and takes this off the list for ${days} day${days === 1 ? '' : 's'}. <b>Resolved</b> needs a reason — why it is fine that the two sites don’t match, or what you fixed.`
-                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}</div>
+                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}
+                <div style="margin-top:4px;"><b>Resolved is checked</b> against eBay and Shopify. If they don't back it up, it goes to the DM to confirm — and the DM can send it back to you with a reason.</div></div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                ${st === 'needs_reply' ? ''
+                ${st === 'needs_reply' || refInr ? ''
                     : type === 'mismatch'
                     ? `<button onclick="_holdInsuranceClaim('${ctx}', ${idx})" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Insurance Claim</button>`
                     : `<button onclick="_holdSave('${ctx}', ${idx}, 'still_open')" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Still open</button>`}
                 <button onclick="_holdSave('${ctx}', ${idx}, 'resolved')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Mark resolved</button>
-                ${inr && st !== 'needs_claim' ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
+                ${inr && !refInr ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
             </div>
         </div>`;
     } else if (form === 'claim' && (inr || type === 'mismatch')) {
@@ -39248,13 +39386,13 @@ async function _holdOpenClaim(ctx, idx) {
 // DM/CEO oversight view: the claims summary plus the same two tabs across
 // every rolled-out store.
 function switchOversightTab(tab) {
-    ['claims', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
+    ['claims', 'confirm', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const b = document.getElementById(`ov-tab-${t}`);
         const p = document.getElementById(`ov-panel-${t}`);
         if (b) b.classList.toggle('active', t === tab);
         if (p) p.style.display = t === tab ? 'block' : 'none';
     });
-    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
+    if (tab === 'confirm' || tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
         if (_holdLoading.ov) renderHoldItems('ov');
         else loadHoldItems('ov', { sync: !_holdData.ov });
     }
@@ -40040,6 +40178,48 @@ async function checkAgingClaimsDM() {
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
+}
+
+// --- RESOLUTIONS TO CONFIRM, AS THE DM'S FEED CARD (0164) ---------------------
+// Ethan, 2026-11-03: "if the system disagrees, then DM gets notified to confirm".
+// The DM's notice is this card plus the 8:20 digest. State-based like the
+// delete-request card: it stays while anything waits on the DM and leaves when
+// the queue is empty, so no snooze — a glance must not silence it. District
+// manager only, the role that answers them.
+let _claimsConfirmPollStarted = false;
+function _claimsConfirmBubbleEl() {
+    let b = document.getElementById('claimsConfirmAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'claimsConfirmAlertBubble';
+    // FEED ONLY — invisible state-carrier (see _claimsDueBubbleEl, and the
+    // retired-bubble rule in styles.css that this id is listed in).
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="claimsConfirmAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+async function checkClaimsConfirmAlerts() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const hide = () => { const b = document.getElementById('claimsConfirmAlertBubble'); if (b) b.style.display = 'none'; };
+    if (role !== 'district manager') { hide(); return; }
+    if (!_claimsConfirmPollStarted) { _claimsConfirmPollStarted = true; setInterval(checkClaimsConfirmAlerts, 30 * 60 * 1000); }
+    try {
+        const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(_CLAIMS_OVERSIGHT_STORES.join(','))}&v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success) return;
+        const q = j.dmQueue || [];
+        if (!q.length) { hide(); return; }
+        const b = _claimsConfirmBubbleEl();
+        const t = document.getElementById('claimsConfirmAlertBubbleText');
+        if (!b || !t) return;
+        const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
+        const stores = [...new Set(q.map(x => x.store_code))];
+        t.textContent = `${q.length} resolution${q.length === 1 ? '' : 's'} (${_holdMoney(total)}) the system doesn't back up — ${stores.join(', ')}. Confirm or send back.`;
+        b.style.display = 'flex';
+    } catch (_) { /* next poll or ping retries */ }
 }
 
 // --- THE 4PM "DUE TODAY" ALERT, AS A FEED CARD -------------------------------
@@ -57566,6 +57746,12 @@ function _samReminderCfg() {
         // resolved in the tool, and only then. Overdue once a deadline on it
         // has passed — it stays after that too, until somebody records what
         // happened.
+        // 0164: resolutions the sites don't back up, waiting on the DM
+        // (checkClaimsConfirmAlerts). State-based: no snooze, gone when the
+        // queue is.
+        { key: 'claimsConfirm', id: 'claimsConfirmAlertBubble', text: 'claimsConfirmAlertBubbleText',
+          title: 'Resolutions to Confirm', urgency: 2, due: 'Confirm', cls: 'sam-due-amber', noSnooze: true,
+          action: "openClaimsTool('confirm')" },
         { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
           title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
           urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true, kind: 'due',
@@ -58052,7 +58238,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', '_qpClaimsReload'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', 'checkClaimsConfirmAlerts', '_qpClaimsReload'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders', '_qpWReloadVariance'],
     comments:      ['fetchAndDisplayStoreComment'],

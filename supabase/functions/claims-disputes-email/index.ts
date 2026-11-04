@@ -128,6 +128,8 @@ type Row = {
   // A payment's deadline is a card running out, not a reply (0119), so it
   // carries its own words for "answer by" and "reply window shut".
   dueVerb?: string; missedText?: string;
+  // 0164: the DM looked at a resolution of this and sent it back, with why.
+  sentBack?: { by: string | null; note: string | null } | null;
 };
 
 // The states that mean a person still has to do something. Identical to the
@@ -156,13 +158,18 @@ function disputeRow(d: any): Row {
   };
 }
 
+const REFUNDED_INR_NOTES = ["delivered_after_refund", "returned_to_us", "never_scanned"];
+const refundedInr = (c: any) => c.state === "needs_claim" || REFUNDED_INR_NOTES.includes(c.state_note);
+
 function caseRow(c: any): Row {
   const inr = c.kind === "inquiry" || (c.kind === "case" && c.case_type === "ITEM_NOT_RECEIVED");
   const escalated = c.kind === "case";
   return {
     type: "ebay_case", key: c.case_key, store: c.store_code, state: c.state, note: c.state_note || null,
-    kindLabel: c.state === "needs_claim" ? "Refunded item not received"
+    kindLabel: c.state === "needs_claim" ? "Refunded — lost in transit"
       : c.state_note === "delivered_after_refund" ? "Delivered after we refunded"
+      : c.state_note === "returned_to_us" ? "Returned to us after we refunded"
+      : c.state_note === "never_scanned" ? "Refunded — carrier never scanned it"
       : inr ? (escalated ? "Item not received — escalated" : "Item not received")
       : "eBay case",
     title: c.item_title || (inr ? "Item not received" : "eBay case"),
@@ -172,11 +179,15 @@ function caseRow(c: any): Row {
       c.reason ? pretty(c.reason) : "",
     ].filter(Boolean),
     amount: c.amount == null ? null : Number(c.amount),
-    // A refunded INR has met its eBay deadline — that is WHY it was refunded.
-    // Carrying the date forward would mark it late for something already done,
-    // and would let it count towards "closes today". What is outstanding is the
-    // claim, and a claim has no deadline of its own.
-    due: c.state === "needs_claim" || c.state_note === "delivered_after_refund" ? "" : chicagoDay(c.respond_by),
+    // A REFUNDED INR IS DUE EVERY DAY (Ethan, 2026-11-03: "we should be bugging
+    // managers daily in the due now that they need claims for them"). Its eBay
+    // deadline is long past — that is why it was refunded — so the date that
+    // counts is the one claims-disputes gives it: today, every day, until it
+    // is claimed, resolved, or the DM signs it off. That puts it in both 4pm
+    // mails and on the manager's feed card, not just the morning list. (It
+    // used to carry no date at all, which kept it out of every 4pm send: 23 of
+    // them, ~$8.5k, sat from Aug 4 to Nov 3.)
+    due: refundedInr(c) ? (c.due_on || "") : chicagoDay(c.respond_by),
     link: "", linkLabel: "",
     quiet: c.quiet_until || null, missed: !!c.missed_window,
     contestedSince: c.resolution_disputed_since || null, openedAt: c.opened_at || "",
@@ -364,12 +375,24 @@ function withBackupWarning(html: string, lines: string[]): string {
   return i < 0 ? html : html.slice(0, i + 10) + row + html.slice(i + 10);
 }
 
+// SENT BACK BY THE DM (0164) is due today whatever its own date says: the DM
+// has just said it is not done, so it belongs in today's 4pm mails and on the
+// manager's feed, with the DM's reason under it.
 function allRows(d: any): Row[] {
+  const today = d.today || chicagoDay(new Date());
+  const tag = (fn: (x: any) => Row) => (x: any): Row => {
+    const r = fn(x);
+    if (x.dm?.status === "denied" && NEED.includes(r.state)) {
+      r.sentBack = { by: x.dm.by || null, note: x.dm.note || null };
+      if (!r.due || r.due > addDaysIso(today, 1)) r.due = today;
+    }
+    return r;
+  };
   return [
-    ...(d.disputes || []).map(disputeRow),
-    ...(d.cases || []).filter((c: any) => !isPlainReturn(c)).map(caseRow),
-    ...(d.mismatches || []).map(mismatchRow),
-    ...(d.payments || []).map(paymentRow),
+    ...(d.disputes || []).map(tag(disputeRow)),
+    ...(d.cases || []).filter((c: any) => !isPlainReturn(c)).map(tag(caseRow)),
+    ...(d.mismatches || []).map(tag(mismatchRow)),
+    ...(d.payments || []).map(tag(paymentRow)),
   ];
 }
 
@@ -448,8 +471,13 @@ function itemRow(r: Row, today: string) {
   const todayDue = r.due && r.due === today;
   // Due a day early (dueSoon), but the real deadline is still what is printed.
   const tomorrowDue = r.due && r.due === addDaysIso(today, 1);
-  const dueTxt = r.missed
-    ? (r.missedText === "" ? "" : `<span style="color:${C.bad};font-weight:700;"> · ${esc(r.missedText || "reply window shut")}</span>`)
+  // A refunded INR, or anything the DM sent back, is due EVERY day until it is
+  // dealt with — there is no deadline closing, so "closes today" would lie.
+  const everyDay = r.state === "needs_claim" || REFUNDED_INR_NOTES.includes(r.note || "") || !!r.sentBack;
+  const dueTxt = everyDay && !r.missed
+    ? `<span style="color:${C.bad};font-weight:700;"> · due today${r.sentBack ? " — sent back by the DM" : ""}</span>`
+    : r.missed
+    ?(r.missedText === "" ? "" : `<span style="color:${C.bad};font-weight:700;"> · ${esc(r.missedText || "reply window shut")}</span>`)
     : todayDue ? `<span style="color:${C.bad};font-weight:700;"> · closes today</span>`
     : tomorrowDue ? `<span style="color:${C.bad};font-weight:700;"> · due today — closes tomorrow</span>`
     : late ? `<span style="color:${C.bad};font-weight:700;"> · was due ${esc(prettyDay(r.due))}</span>`
@@ -469,6 +497,12 @@ function itemRow(r: Row, today: string) {
 
 // The one-line "so what" under an item, in the same words the card uses.
 function noteLine(r: Row): string {
+  const base = noteBase(r);
+  if (!r.sentBack) return base;
+  const back = `The DM sent this back${r.sentBack.by ? ` (${r.sentBack.by})` : ""}: "${r.sentBack.note || ""}"`;
+  return base ? `${back} — ${base}` : back;
+}
+function noteBase(r: Row): string {
   // A payment has no "response" — what matters is whether Shopify can still
   // charge the card, so it gets its own three lines, in the card's words.
   if (r.type === "payment") {
@@ -478,12 +512,16 @@ function noteLine(r: Row): string {
   }
   if (r.note === "delivered_after_refund")
     return "It turned up after we refunded the buyer. The carrier does not owe this one — call eBay, then record what they did.";
+  if (r.note === "returned_to_us")
+    return "The carrier sent it back to us. Put it back in stock in Shopify, then mark it resolved — the system checks Shopify.";
+  if (r.note === "never_scanned")
+    return "The carrier never scanned it, so a claim won't work. Find the device — it may never have left the store — and restock it.";
   if (r.note === "resolution_disputed")
     return "Someone marked this resolved and the site still shows no response.";
   if (r.note === "missed_window")
     return "No response was recorded before the deadline, and no late one is accepted.";
   if (r.state === "needs_claim")
-    return "The buyer was refunded — open or link a claim. A note cannot close this one.";
+    return "The buyer was refunded and the parcel is lost in transit — open or link a carrier claim.";
   return "";
 }
 
@@ -529,7 +567,7 @@ function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { r
     `${STORE_NAME[store] || store} — money we're still holding`,
     `Everything eBay or Shopify is still waiting on us for, soonest deadline first. Each one stays on this email every morning until the site itself shows it is dealt with.`,
     body,
-    `Open the Claims &amp; Disputes tool at <a href="${TOOL_URL}" style="color:#1c6b47;">speeksnet.com</a>.<br>Marking something resolved does not remove it while eBay or Shopify still show it unanswered.`,
+    `Open the Claims &amp; Disputes tool at <a href="${TOOL_URL}" style="color:#1c6b47;">speeksnet.com</a>.<br>Marking something resolved is checked against eBay and Shopify — if they don't back it up, it goes to the DM to confirm.`,
   );
 }
 
@@ -553,7 +591,7 @@ function managerNudge(store: string, rows: Row[], today: string) {
 // ---------------------------------------------------------------------------
 // 3. The DM digest
 // ---------------------------------------------------------------------------
-function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], contested: Row[], today: string) {
+function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], toConfirm: any[], today: string) {
   // ROW RULES ACROSS THE WHOLE ROW (desktop, 2026-10-24). The line used to sit
   // on the store cell only, so on a wide screen each store got a short stub
   // under its name and the numbers floated free of it. Every cell carries the
@@ -605,17 +643,25 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
           : "The deadline passed with no response recorded from the store."}</span></div>
     </td></tr>`).join("");
   }
-  if (contested.length) {
-    body += sectionRow("Needs manual review from you", C.warn);
-    body += contested.map((r) => {
-      const days = Math.max(0, Math.round((Date.parse(today) - Date.parse(chicagoDay(r.contestedSince))) / 86400000));
+  // RESOLUTIONS TO CONFIRM (0164). Every "resolved" a manager saved that eBay
+  // or Shopify doesn't back up, from the moment it is saved — not after a grace
+  // period, as the old "site disagrees" list was. Repeats every morning until
+  // the DM confirms it or sends it back in the tool, or the sites catch up.
+  if (toConfirm.length) {
+    body += sectionRow(`Resolutions to confirm — ${toConfirm.length}`, C.warn);
+    body += toConfirm.map((q) => {
+      const days = q.resolved_at ? Math.max(0, Math.round((Date.parse(today) - Date.parse(chicagoDay(q.resolved_at))) / 86400000)) : 0;
+      const what = q.type === "mismatch" ? "Refund mismatch" : q.type === "payment" ? "Unpaid order"
+        : q.type === "dispute" ? (q.source === "ebay" ? "eBay payment dispute" : "Shopify chargeback")
+        : (q.kind === "inquiry" || q.case_type === "ITEM_NOT_RECEIVED") ? "Item not received" : "eBay case";
       return `<tr><td style="padding:14px;border-top:1px solid ${C.line};">
-        <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">Marked resolved, site disagrees · day ${days}</div>
-        <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(r.store)} — ${money(r.amount)} ${esc(r.kindLabel)}</div>
-        <div style="font-size:13px;color:${C.ink};line-height:1.6;">${esc(r.facts.join(" · "))}<br>
-          <span style="color:${C.faint};">${r.type === "payment" ? "Shopify can still charge the card — it was not charged or cancelled." : "The site still shows no response."} Past the 2-day grace, so it came to you.</span></div>
+        <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">${esc(what)} · marked resolved ${days ? `${days} day${days === 1 ? "" : "s"} ago` : "today"}</div>
+        <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(q.store_code)} — ${money(q.amount)}${q.order ? ` · ${esc(q.order)}` : ""}</div>
+        <div style="font-size:13px;color:${C.ink};line-height:1.6;"><b>${esc(q.resolved_by || "The manager")} said:</b> “${esc(q.resolved_note || "")}”<br>
+          <span style="color:${C.bad};"><b>The system says:</b> ${esc(q.why || "")}.</span></div>
       </td></tr>`;
     }).join("");
+    body += `<tr><td style="padding:12px 14px;border-top:1px solid ${C.line};font-size:12.5px;color:${C.faint};line-height:1.6;">Confirm or send each one back in Claims &amp; Disputes → To Confirm at <a href="${TOOL_URL}/workspace.html#claims" style="color:#1c6b47;">speeksnet.com</a>. Sending one back needs a reason; the manager sees it.</td></tr>`;
   }
 
   return shell(
@@ -780,10 +826,14 @@ Deno.serve(async (req: Request) => {
       mk({ key: "x2", store: "BAL", type: "ebay_case", kindLabel: "eBay case", missed: true, amount: 799.99,
            title: "Asus ROG Strix Gaming PC", facts: ["Case 5384957079", "Due Sep 14"] }),
     ];
-    const contested = [
-      mk({ key: "y1", store: "MPL", kindLabel: "Shopify chargeback", amount: 57.00,
-           title: "Product unacceptable", facts: ["Order #MO03-2699", "Joseph marked it resolved on Sep 20"],
-           contestedSince: "2026-09-20T15:00:00Z" }),
+    // Real ones from 2026-11-03's first fact-check pass.
+    const toConfirm = [
+      { type: "ebay_case", kind: "inquiry", store_code: "LEE", amount: 209.99, order: "26-15129-13550",
+        resolved_by: "LEE manager", resolved_note: "We got refunded. all is good.", resolved_at: "2026-10-09T15:00:00Z",
+        why: "The buyer was refunded: eBay's payouts show $179.85 refunded from us and not credited back, and Shopify doesn't show the device back in stock (#MO01-9616)" },
+      { type: "mismatch", store_code: "MPL", amount: 449.99, order: null,
+        resolved_by: "MPL manager", resolved_note: "refunded on shopify", resolved_at: "2026-11-02T15:00:00Z",
+        why: "eBay and Shopify still don't match on this order" },
     ];
     const byStore: Record<string, Row[]> = { OVL: [], LEE: [], WSP: wsp, MPL: [], BAL: [] };
     const counts: Record<string, any> = {
@@ -796,7 +846,7 @@ Deno.serve(async (req: Request) => {
     const html =
       kind === "manager_nudge" ? managerNudge("WSP", dueToday, day)
       : kind === "dm_due_today" ? dmDueToday({ WSP: dueToday }, day)
-      : kind === "dm_digest" ? dmDigest(byStore, counts, missed, contested, day)
+      : kind === "dm_digest" ? dmDigest(byStore, counts, missed, toConfirm, day)
       : managerDaily("WSP", wsp, new Set(["dispute|d3", "ebay_case|c2", "mismatch|m1"]),
                      { returns: 6, claims: 0, quiet: 2 }, day);
     return new Response(html, { headers: { ...cors, "Content-Type": "text/html; charset=utf-8" } });
@@ -943,7 +993,7 @@ Deno.serve(async (req: Request) => {
         const list = byStore[s];
         counts[s] = {
           disputes: list.filter((r) => r.type === "dispute").length,
-          inrs: list.filter((r) => r.type === "ebay_case" && /item not received|refunded item|delivered after/i.test(r.kindLabel)).length,
+          inrs: list.filter((r) => r.type === "ebay_case" && /item not received|refunded|delivered after|returned to us/i.test(r.kindLabel)).length,
           cases: list.filter((r) => r.type === "ebay_case" && r.kindLabel === "eBay case").length,
           mismatch: list.filter((r) => r.type === "mismatch").length,
           payments: list.filter((r) => r.type === "payment").length,
@@ -959,27 +1009,27 @@ Deno.serve(async (req: Request) => {
         { headers: { Prefer: "return=representation" } }) || [];
       const told = new Set(toldRows.map((r: any) => `${r.item_type}|${r.item_key}`));
       const newMissed = rows.filter((r) => r.missed && !told.has(`${r.type}|${r.key}`));
-      // The contested ones DO repeat, because that one can still be put right.
-      const contested = rows.filter((r) =>
-        r.contestedSince && Date.now() - Date.parse(r.contestedSince) > 2 * 86400000);
+      // Resolutions the sites don't back up, waiting on the DM (0164). They
+      // repeat every morning, because each one is still the DM's to answer.
+      const toConfirm = (data.dmQueue || []) as any[];
 
       const backupWarn = await backupWarning();
-      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || contested.length || dmWarn.length || backupWarn.length;
+      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || toConfirm.length || dmWarn.length || backupWarn.length;
       if (!anything) sent.push({ skipped: "nothing outstanding anywhere" });
       else {
-        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, contested, today), dmWarn), backupWarn);
+        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, toConfirm, today), dmWarn), backupWarn);
         previews.push(html);
         const subject = `Claims & Disputes — what is still with the managers`;
         const to = await listFor("claims_disputes_dm");
         if (!to.length) sent.push({ skipped: "no recipients" });
-        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, backupWarn });
+        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, toConfirm: toConfirm.length, backupWarn });
         else {
           const r = await relay(to.join(","), subject, html);
           // Only the missed windows are logged for this mail: they are the ones
           // whose whole behaviour depends on having been said once. Logging the
           // table's contents would make every count "already seen" tomorrow.
           if (r.ok) for (const m of newMissed) await logIt("dm_digest", m.store, [m], today);
-          sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, backupWarn, ...r });
+          sent.push({ to, subject, newMissed: newMissed.length, toConfirm: toConfirm.length, backupWarn, ...r });
         }
       }
     }

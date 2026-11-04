@@ -6,6 +6,10 @@
 //   POST {action:'review', item_type, item_key, status, note, by_name}
 //          status 'still_open'  check-in; hides it for its timeframe. Note optional.
 //          status 'resolved'    settled, and WHY. Note required (>= 10 chars).
+//          Every 'resolved' is FACT-CHECKED (0164) — see factCheck / stateOf.
+//   POST {action:'dm_confirm' | 'dm_send_back', item_type, item_key, note, by_name}
+//          the DM's answer to a resolution the system disagreed with (0164).
+//          Send back needs a reason (>= 10 chars); the manager sees it.
 //   POST {action:'reopen', item_type, item_key, by_name}
 //          drops the review, so the item is due again at once
 //   POST {action:'open_claim', item_type, item_key, reason_type, case_number, ...}
@@ -17,6 +21,8 @@
 //   ops (secret) — for the store-by-store data checks, any store:
 //   GET  ?action=sync&stores=OVL&secret=<ops>[&force=1]
 //   GET  ?action=detail&store=OVL&kind=inquiry|case|return&id=<n>&secret=<ops>
+//   GET  ?action=factcheck&key=<case_key>&secret=<ops>   the refunded-INR fact
+//                                             check's two reads, nothing saved
 //   GET  ?stores=LEE&preview=1&secret=<ops>   list a store not yet rolled out,
 //                                             including the not-yet-due items
 //
@@ -258,7 +264,11 @@ const RESOLUTION_GRACE_DAYS = 2;
 //     already answered it, lets go.
 // A "Still open" check-in does NOT clear it: that is the tool's snooze, and
 // this card has none.
-const DUE_ALERT_DONE = ["resolved", "settled", "answered", "covered"];
+// 0164: `dm_review` too — the manager has answered it and it is the DM's move.
+const DUE_ALERT_DONE = ["resolved", "settled", "answered", "covered", "dm_review"];
+// The states that need a person, the same three the tab's Needs Attention view
+// and the emails' NEED list use.
+const NEED_STATES = ["needs_reply", "needs_claim", "due"];
 
 // CLAIMS KEEP THE RULE THEY ALREADY HAVE (Ethan, 2026-09-23: "I believe we have
 // timing set already for open claims, reminders, etc. I think we keep those?").
@@ -377,9 +387,17 @@ const EBAY_ORDER_RE =
 const EBAY_DISPUTE_RE =
   /^https:\/\/apiz(?:\.sandbox)?\.ebay\.com\/sell\/fulfillment\/v1\/payment_dispute(?:_summary\?[^#/]*|\/\d+)$/;
 
+// eBay's payout ledger, one order's transactions (0164 fact check). A search
+// with a query string and nothing else: the Finances API has no writes on this
+// path, but the anchor is kept as tight as the others anyway. Note this token
+// also carries sell.finances, which gates issue_refund on the Fulfillment API —
+// that path fails EBAY_ORDER_RE's anchor, and GET is hard-coded below.
+const EBAY_FIN_RE =
+  /^https:\/\/apiz(?:\.sandbox)?\.ebay\.com\/sell\/finances\/v1\/transaction\?[^#/]*$/;
+
 async function ebayGet(url: string, token: string): Promise<any> {
   if (!EBAY_SEARCH_RE.test(url) && !EBAY_DETAIL_RE.test(url)
-      && !EBAY_ORDER_RE.test(url) && !EBAY_DISPUTE_RE.test(url)) {
+      && !EBAY_ORDER_RE.test(url) && !EBAY_DISPUTE_RE.test(url) && !EBAY_FIN_RE.test(url)) {
     throw new Error(`refused: not a read-only eBay URL -> ${url.slice(0, 120)}`);
   }
   // Post-Order documents the OAuth user token under the "IAF" scheme. It is
@@ -548,6 +566,31 @@ function readTracking(kind: string, d: any) {
 }
 const isDelivered = (it: any) => /DELIVERED/i.test(String(it.tracking_status || ""));
 
+// WHAT A REFUNDED INR ASKS FOR DEPENDS ON WHAT THE CARRIER SAYS (Ethan,
+// 2026-11-03). Until this every refunded INR said "open a claim", and on Nov 3
+// 23 of them sat unworked for up to three months — partly because for most of
+// them a claim was the wrong move:
+//   delivered      eBay owes it back, not the carrier — call eBay       (7)
+//   returned       it came back to us — put it back in stock            (2)
+//   never_scanned  label made, the carrier never had it (MANIFEST), or
+//                  no tracking at all — find the device; it may never
+//                  have left the store                                  (8, incl. MPL $879.99)
+//   lost           in transit / carrier error — the one a claim is for  (6)
+// "returned" covers RETURNED, RETURN_TO_SENDER and the like. It is tested
+// BEFORE delivered so a "returned — delivered to sender" style status reads as
+// back with us, not as delivered to the buyer.
+type InrRoute = "delivered" | "returned" | "never_scanned" | "lost";
+function inrRoute(it: any): InrRoute {
+  const t = String(it.tracking_status || "").toUpperCase();
+  if (/RETURN/.test(t)) return "returned";
+  if (/DELIVERED/.test(t)) return "delivered";
+  if (!t || /MANIFEST|LABEL|PRE_?TRANSIT|INFO_?RECEIVED|CREATED|UNKNOWN/.test(t)) return "never_scanned";
+  return "lost";
+}
+const INR_ROUTE_NOTE: Record<InrRoute, string> = {
+  delivered: "delivered_after_refund", returned: "returned_to_us", never_scanned: "never_scanned", lost: "",
+};
+
 // WHOSE MOVE IS IT (0107). Every entry in a case or inquiry history is stamped
 // BUYER, SELLER or SYSTEM, so the last word tells us whether eBay is waiting on
 // us. SYSTEM entries ("Auto Dispose Approve the case") are eBay talking to
@@ -654,6 +697,201 @@ async function shopifyRead(shop: string, token: string, query: string, variables
   if (!res.ok) throw new Error(`Shopify ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
   if (body?.errors?.length) throw new Error(`Shopify: ${JSON.stringify(body.errors).slice(0, 200)}`);
   return body?.data;
+}
+
+// ===========================================================================
+// THE FACT CHECK'S TWO OUTSIDE READS (0164). A manager calling a refunded INR
+// resolved is a claim that the money is not lost after all. Two things can
+// make that true, and both can be looked up rather than taken on trust:
+//   1. eBay put the money back — its payout ledger for the order shows the
+//      refund credited back (a CREDIT, or a refund/dispute booked as CREDIT),
+//      or never charged us a refund at all (eBay covered the buyer itself).
+//   2. We have the device back — Shopify shows the order's refund restocked,
+//      or the order's own variant is in stock again.
+// Either one and the system agrees; neither and it goes to the DM. Both are
+// read-only, and a read that FAILS is never read as agreement — it says so in
+// `why`, and the DM decides.
+// ===========================================================================
+const EBAY_ORDER_NO = /^\d{2}-\d{5}-\d{5}$/;
+const SHOPIFY_ORDER_FOR_EBAY_QL = `query ($q: String!) {
+  orders(first: 5, query: $q) {
+    edges { node {
+      name sourceIdentifier tags
+      customAttributes { key value }
+      lineItems(first: 10) { edges { node { sku title variant { id inventoryQuantity } } } }
+      refunds { refundLineItems(first: 10) { edges { node { restocked restockType lineItem { sku } } } } }
+    } }
+  }
+}`;
+const usd = (n: number) => `$${n.toFixed(2)}`;
+
+async function checkEbayPayback(it: any, ebayRow: any): Promise<{ ok: boolean | null; why: string; evidence: any }> {
+  const order = String(it.order_no || "");
+  if (!EBAY_ORDER_NO.test(order)) return { ok: null, why: "no eBay order number to look up in eBay's payouts", evidence: null };
+  if (!ebayRow?.refresh_token) return { ok: null, why: "no eBay login for this store", evidence: null };
+  const host = EBAY_HOSTS[ebayRow.environment as string] || EBAY_HOSTS.production;
+  // The ledger only answers inside a date range; from well before the order to
+  // now is enough to catch the sale, the refund, and anything after.
+  const from = new Date(Date.parse(it.opened_at || it.first_seen || new Date().toISOString()) - 60 * 86_400_000).toISOString();
+  const to = new Date().toISOString();
+  const filter = `orderId:{${order}},transactionDate:[${from}..${to}]`;
+  try {
+    const token = await mintToken(ebayRow);
+    const d = await ebayGet(`${ebayZ(host)}/sell/finances/v1/transaction?limit=200&filter=${encodeURIComponent(filter)}`, token);
+    const txs = ((d?.transactions || []) as any[]).filter((t) =>
+      String(t.orderId || "") === order
+      || (t.references || []).some((r: any) => String(r.referenceId) === order));
+    let sale = 0, out = 0, back = 0;
+    for (const t of txs) {
+      const amt = Number(t.amount?.value) || 0;
+      const type = String(t.transactionType || "");
+      const credit = String(t.bookingEntry || "") === "CREDIT";
+      if (type === "SALE") sale += credit ? amt : -amt;
+      else if (type === "REFUND" || type === "DISPUTE") { if (credit) back += amt; else out += amt; }
+      else if (type === "CREDIT" && credit) back += amt;
+    }
+    const evidence = { sale, refunded_out: out, credited_back: back, transactions: txs.length };
+    if (!txs.length) return { ok: null, why: "this order isn't in eBay's payout records", evidence };
+    const held = out - back;
+    if (held <= 0.01) {
+      return { ok: true, why: out > 0
+        ? `eBay's payouts show the ${usd(out)} refund credited back to us`
+        : "eBay's payouts show no refund charged to us for this order", evidence };
+    }
+    return { ok: false, why: `eBay's payouts show ${usd(held)} refunded from us and not credited back`, evidence };
+  } catch (e) {
+    return { ok: null, why: `couldn't read eBay's payouts (${String((e as any)?.message ?? e).slice(0, 80)})`, evidence: null };
+  }
+}
+
+// THE FALLBACK FOR AN ORDER SHOPIFY WON'T SHOW. Our Shopify tokens don't carry
+// read_all_orders, so an order over ~60 days old simply isn't found (see
+// shopify-60-day-order-window) — and most of the refunded INRs worth checking
+// are that old. eBay's own order still names the SKU we listed it under, and
+// Shopify will always show a variant's stock. So: eBay order → SKU → is that
+// variant in stock? One honest limit: BAL reuses SKUs across products, so a SKU
+// that matches more than one variant proves nothing and is reported as such.
+const SHOPIFY_VARIANT_BY_SKU_QL = `query ($q: String!) {
+  productVariants(first: 5, query: $q) { edges { node { sku inventoryQuantity product { title } } } }
+}`;
+async function restockBySku(it: any, ebayRow: any, shopRow: any): Promise<{ ok: boolean | null; why: string; evidence: any }> {
+  const order = String(it.order_no || "");
+  if (!ebayRow?.refresh_token) return { ok: null, why: "couldn't find the Shopify order for it", evidence: null };
+  try {
+    const host = EBAY_HOSTS[ebayRow.environment as string] || EBAY_HOSTS.production;
+    const o = await ebayGet(`${host}/sell/fulfillment/v1/order/${order}`, await mintToken(ebayRow));
+    const skus = [...new Set(((o?.lineItems || []) as any[]).map((l) => String(l.sku || "").trim()).filter(Boolean))];
+    if (!skus.length) return { ok: null, why: "the Shopify order is too old to read and eBay's order has no SKU", evidence: null };
+    const found: any[] = [];
+    for (const sku of skus) {
+      const d = await shopifyRead(shopRow.shop, shopRow.access_token, SHOPIFY_VARIANT_BY_SKU_QL, { q: `sku:${JSON.stringify(sku)}` });
+      const vs = ((d?.productVariants?.edges || []) as any[]).map((e) => e.node).filter((v: any) => String(v.sku || "") === sku);
+      found.push({ sku, variants: vs.map((v: any) => ({ qty: v.inventoryQuantity, title: v.product?.title })) });
+      if (vs.length === 1 && Number(vs[0].inventoryQuantity) > 0) {
+        return { ok: true, why: `Shopify shows it back in stock (SKU ${sku}, ${vs[0].inventoryQuantity} on hand)`, evidence: { by: "sku", found } };
+      }
+    }
+    const shared = found.find((f) => f.variants.length > 1);
+    if (shared) return { ok: null, why: `SKU ${shared.sku} is on ${shared.variants.length} Shopify products, so stock can't prove which one came back`, evidence: { by: "sku", found } };
+    if (found.every((f) => !f.variants.length)) return { ok: null, why: `SKU ${skus[0]} isn't in Shopify any more`, evidence: { by: "sku", found } };
+    return { ok: false, why: `Shopify doesn't show SKU ${skus[0]} back in stock`, evidence: { by: "sku", found } };
+  } catch (e) {
+    return { ok: null, why: `couldn't look up the SKU (${String((e as any)?.message ?? e).slice(0, 80)})`, evidence: null };
+  }
+}
+
+async function checkShopifyRestock(it: any, shopRow: any, ebayRow?: any): Promise<{ ok: boolean | null; why: string; evidence: any }> {
+  const order = String(it.order_no || "");
+  if (!EBAY_ORDER_NO.test(order)) return { ok: null, why: "no eBay order number to find the Shopify order", evidence: null };
+  if (!shopRow?.access_token) return { ok: null, why: "no Shopify login for this store", evidence: null };
+  try {
+    const d = await shopifyRead(shopRow.shop, shopRow.access_token, SHOPIFY_ORDER_FOR_EBAY_QL, { q: order });
+    // Shopify's search is fuzzy (see ebay-shopify-order-join): only an order that
+    // really carries this eBay number counts.
+    const nodes = ((d?.orders?.edges || []) as any[]).map((e) => e.node).filter((n: any) =>
+      String(n.sourceIdentifier || "") === order
+      || (n.tags || []).some((t: string) => String(t).includes(order))
+      || (n.customAttributes || []).some((a: any) => String(a.value || "").includes(order)));
+    if (!nodes.length) return await restockBySku(it, ebayRow, shopRow);
+    const restocked: string[] = [];
+    const inStock: { sku: string; qty: number }[] = [];
+    for (const n of nodes) {
+      for (const r of n.refunds || []) for (const e of r.refundLineItems?.edges || []) {
+        if (e.node?.restocked) restocked.push(String(e.node.lineItem?.sku || "?"));
+      }
+      for (const e of n.lineItems?.edges || []) {
+        const q = Number(e.node?.variant?.inventoryQuantity);
+        if (Number.isFinite(q) && q > 0) inStock.push({ sku: String(e.node.sku || "?"), qty: q });
+      }
+    }
+    const evidence = { orders: nodes.map((n: any) => n.name), restocked, in_stock: inStock };
+    if (restocked.length) return { ok: true, why: `Shopify shows it restocked on ${nodes[0].name} (SKU ${restocked[0]})`, evidence };
+    if (inStock.length) return { ok: true, why: `Shopify shows it back in stock (SKU ${inStock[0].sku}, ${inStock[0].qty} on hand)`, evidence };
+    return { ok: false, why: `Shopify doesn't show the device back in stock (${nodes[0].name})`, evidence };
+  } catch (e) {
+    return { ok: null, why: `couldn't read Shopify (${String((e as any)?.message ?? e).slice(0, 80)})`, evidence: null };
+  }
+}
+
+// Both reads, one verdict. Agreement needs a positive answer from at least one;
+// "couldn't read" is never agreement.
+async function verifyRefundedInr(it: any, ebayRow: any, shopRow: any) {
+  const [pay, stock] = await Promise.all([checkEbayPayback(it, ebayRow), checkShopifyRestock(it, shopRow, ebayRow)]);
+  const hit = pay.ok ? pay : stock.ok ? stock : null;
+  return {
+    fact_verdict: hit ? "agrees" : "disagrees",
+    fact_why: hit ? hit.why : `The buyer was refunded: ${pay.why}, and ${stock.why}`,
+    fact_evidence: { ebay: pay, shopify: stock },
+    fact_checked_at: new Date().toISOString(),
+  };
+}
+
+async function credsFor(sb: any, store: string) {
+  const [{ data: e }, { data: shops }] = await Promise.all([
+    sb.from("ebay_stores").select("store_code,refresh_token,scopes,environment").eq("store_code", store).maybeSingle(),
+    sb.from("shopify_stores").select("shop,store_code,access_token"),
+  ]);
+  const shop = (shops || []).find((r: any) => r.store_code === store || r.shop === SHOP_BY_STORE[store]) || null;
+  return { ebayRow: e, shopRow: shop };
+}
+async function verifyFor(sb: any, c: any) {
+  const { ebayRow, shopRow } = await credsFor(sb, c.store_code);
+  return verifyRefundedInr(c, ebayRow, shopRow);
+}
+
+// RE-ASKED WHILE THE DM HAS NOT ANSWERED. A payback eBay posts days after the
+// manager's note, or a device restocked after it, should take the item off the
+// DM's list by itself — so every sweep re-reads the refunded-INR resolutions
+// still waiting on the DM (and ones saved before 0164, which were never
+// checked). At most RECHECK_PER_SWEEP per store, and each no oftener than
+// RECHECK_HOURS, so a backlog can't turn every page open into a burst of reads.
+const RECHECK_PER_SWEEP = 10;
+const RECHECK_HOURS = 6;
+async function recheckResolutions(sb: any, store: string) {
+  const stale = new Date(Date.now() - RECHECK_HOURS * 3_600_000).toISOString();
+  const { data: rvs } = await sb.from("hold_reviews").select("item_key,fact_verdict,fact_checked_at")
+    .eq("store_code", store).eq("item_type", "ebay_case").eq("status", "resolved").is("dm_status", null)
+    .or(`fact_verdict.is.null,and(fact_verdict.eq.disagrees,fact_checked_at.lt.${stale})`)
+    .order("fact_checked_at", { ascending: true, nullsFirst: true }).limit(RECHECK_PER_SWEEP);
+  if (!rvs?.length) return 0;
+  const { data: rows } = await sb.from("ebay_cases")
+    .select("case_key,store_code,kind,case_type,ebay_id,outcome,order_no,opened_at,first_seen")
+    .in("case_key", rvs.map((r: any) => r.item_key));
+  // The refund can sit on the escalated case's row, not the inquiry's.
+  const ids = (rows || []).map((r: any) => r.ebay_id);
+  const { data: refunded } = ids.length
+    ? await sb.from("ebay_cases").select("ebay_id").eq("store_code", store).in("ebay_id", ids).eq("outcome", "refunded")
+    : { data: [] };
+  const refundedIds = new Set((refunded || []).map((r: any) => r.ebay_id));
+  const { ebayRow, shopRow } = await credsFor(sb, store);
+  let n = 0;
+  for (const c of rows || []) {
+    if (!isInr(c) || !refundedIds.has(c.ebay_id)) continue;
+    const fact = await verifyRefundedInr(c, ebayRow, shopRow);
+    await sb.from("hold_reviews").update(fact).eq("item_type", "ebay_case").eq("item_key", c.case_key);
+    n++;
+  }
+  return n;
 }
 
 // Shopify's DisputeStatus is the whole state machine, checked against all 29
@@ -1135,6 +1373,8 @@ async function sync(sb: any, stores: string[], force: boolean) {
       try {
         if (!row?.refresh_token) throw new Error("no eBay credentials");
         out[s] = await sweepStore(sb, row);
+        // 0164 — never fails the sweep; a failed read just stays "disagrees".
+        try { out[s] = { ...out[s], rechecked: await recheckResolutions(sb, s) }; } catch (_) { /* next sweep */ }
       } catch (e) {
         const detail = String((e as any)?.message ?? e).slice(0, 200);
         await sb.from("ebay_case_sync").upsert(
@@ -1183,7 +1423,95 @@ async function sync(sb: any, stores: string[], force: boolean) {
 // ===========================================================================
 const isInr = (it: any) => it.kind === "inquiry" || (it.kind === "case" && it.case_type === "ITEM_NOT_RECEIVED");
 
-function stateOf(type: string, it: any, review: any, ctx: any): { state: string; due_on: string | null; note?: string; quiet_until?: string } {
+// ===========================================================================
+// EVERY "RESOLVED" IS FACT-CHECKED (0164 — Ethan, 2026-11-03: "make sure
+// anytime a manager resolves something, it gets fact checked and if the system
+// disagrees, then DM gets notified to confirm and take a deeper look and
+// confirming then gets rid of it from the sheet and denying needs a reason and
+// goes back to manager with the reason").
+//
+// factCheck answers one question: do the sites back the manager up TODAY?
+// Everything it reads is re-read every sweep, so the answer moves with them —
+// a dispute answered tomorrow, a payback eBay posts next week, both turn a
+// "disagrees" into "agrees" with nobody pressing anything.
+//
+//   dispute    the site no longer wants a response from us
+//   payment    nothing left unpaid on the order
+//   mismatch   eBay and Shopify agree now
+//   ebay_case  eBay has no reply outstanding and has closed it; and a REFUNDED
+//              INR also needs one of the two outside reads (verifyRefundedInr):
+//              eBay credited the money back, or Shopify has the device back
+//
+// When it disagrees the resolution is not thrown away — it is the manager's
+// account, and the DM reads it beside the system's. Until the DM answers:
+//   * if the site still has a live deadline (state needs_reply), the manager is
+//     STILL chased — a resolution can't make a deadline go away (0113's rule);
+//   * otherwise it is `dm_review`: off the manager's list, on the DM's.
+// DM confirms → resolved for good. DM sends back → the review stops counting,
+// the item is due again at once, and the DM's reason rides on the card.
+// ===========================================================================
+function factCheck(type: string, it: any, review: any): { ok: boolean; why: string } {
+  const ok = { ok: true, why: "" };
+  if (type === "dispute") {
+    if (!it.is_open || !it.needs_response) return ok;
+    const site = it.source === "ebay" ? "eBay" : "Shopify";
+    return { ok: false, why: missedWindow(type, it)
+      ? `${site} still shows no response from us, and the window to send one has closed`
+      : `${site} still shows no response from us` };
+  }
+  if (type === "payment") {
+    if (!it.is_open || !(Number(it.amount) > 0)) return ok;
+    return { ok: false, why: it.capturable
+      ? "Shopify can still charge this card — the order was not charged or cancelled"
+      : `Shopify still shows ${usd(Number(it.amount))} unpaid on this order` };
+  }
+  if (type === "mismatch") return it.resolved_at ? ok : { ok: false, why: "eBay and Shopify still don't match on this order" };
+  if (type === "ebay_case") {
+    if (it.is_open && awaitingReply(it)) return { ok: false, why: "eBay still shows no reply from us" };
+    if (it.is_open) return { ok: false, why: "eBay still has this open" };
+    if (isInr(it) && it.outcome === "refunded") {
+      if (review?.fact_verdict === "agrees") return ok;
+      return { ok: false, why: review?.fact_why || "The buyer was refunded, and nothing yet shows the money or the device came back" };
+    }
+    if (it.outcome == null && (isInr(it) || (it.kind === "case" && it.case_type == null))) {
+      return { ok: false, why: "eBay's outcome hasn't been read yet" };
+    }
+  }
+  return ok;
+}
+
+type StateOut = { state: string; due_on: string | null; note?: string; quiet_until?: string; dm?: any };
+function stateOf(type: string, it: any, review: any, ctx: any): StateOut {
+  if (review?.status !== "resolved") return baseState(type, it, review, ctx);
+  const fc = factCheck(type, it, review);
+  if (fc.ok) return { ...baseState(type, it, review, ctx), dm: review.dm_status ? dmOf(review, false, "") : undefined };
+  if (review.dm_status === "confirmed") {
+    return { state: "resolved", due_on: null, note: "dm_confirmed", dm: dmOf(review, false, fc.why) };
+  }
+  if (review.dm_status === "denied") {
+    // Sent back: as though nobody had resolved it, except it is due TODAY —
+    // the DM has just said it isn't done, so no timeframe or check-in hides it.
+    const s = baseState(type, it, null, ctx);
+    const quiet = ["waiting", "checked", "resolved"].includes(s.state);
+    return { ...(quiet ? { state: "due", due_on: ctx.today } : s), note: s.note, quiet_until: undefined,
+             dm: dmOf(review, false, fc.why) };
+  }
+  const s = baseState(type, it, review, ctx);
+  if (s.state === "needs_reply") return { ...s, dm: dmOf(review, true, fc.why) };
+  return { state: "dm_review", due_on: null, note: s.note, dm: dmOf(review, true, fc.why) };
+}
+// What the card, the DM list and the emails need to know about the DM's part.
+function dmOf(review: any, pending: boolean, why: string) {
+  return {
+    pending, why,
+    status: review.dm_status || null, by: review.dm_by || null,
+    note: review.dm_note || null, at: review.dm_at || null,
+    resolved_by: review.by_name || null, resolved_note: review.note || null, resolved_at: review.updated_at || null,
+    evidence: review.fact_evidence || null,
+  };
+}
+
+function baseState(type: string, it: any, review: any, ctx: any): StateOut {
   const today = ctx.today;
   // A DISPUTE RUNS ON THE SITE'S CLOCK, NOT OURS (0112). It has a real deadline
   // from the moment it exists, so it never waits a timeframe and it never has a
@@ -1255,30 +1583,33 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
     if (it.outcome !== "refunded" && isDelivered(it)) {
       return { state: "settled", due_on: null, note: "delivered before the refund was due" };
     }
-    // THE PARCEL TURNING UP AFTER A REFUND CHANGES WHO OWES US (0106). eBay hands
-    // that money back itself, so there is nothing for a carrier claim to recover
-    // — but somebody still has to ring eBay and ask for it, and that is the one
-    // thing an open claim does not do.
-    const deliveredRefund = it.outcome === "refunded" && isDelivered(it);
-    // So a resolution counts here, and only here, among refunded INRs — the POST
-    // gate refuses exactly the same set, so the card and the refusal cannot say
-    // different things. Without this the gate ACCEPTED a resolution on a
-    // delivered INR, wrote the row, logged the event, and the card never moved.
-    if (deliveredRefund && review?.status === "resolved") return { state: "resolved", due_on: null };
-    if (claim) {
-      // Ethan, 2026-09-23: "the daily email will notify them if the item ever ends
-      // up delivered so they can call ebay about it". A claim normally takes the
-      // chasing over (below) — but a claim still In Progress against a parcel that
-      // arrived is chasing money the carrier does not owe. So it comes back due,
-      // saying which call to make, until someone records what eBay did.
-      if (claim.status === "in_progress") {
-        return deliveredRefund
-          ? { state: "due", due_on: today, note: "delivered_after_refund" }
-          : { state: "covered", due_on: null };
+    if (it.outcome === "refunded") {
+      // A resolution only gets this far once the fact check agreed with it or
+      // the DM confirmed it (stateOf, 0164) — so here it simply stands.
+      if (review?.status === "resolved") return { state: "resolved", due_on: null };
+      // WHAT THE CARRIER SAYS DECIDES THE ASK (inrRoute, 2026-11-03). Only a
+      // parcel lost in transit is a carrier claim. Delivered means ring eBay
+      // (0106: eBay hands that money back itself); returned means it is on our
+      // shelf; never scanned means it may never have left the store.
+      const route = inrRoute(it);
+      if (claim) {
+        // Ethan, 2026-09-23: "the daily email will notify them if the item ever
+        // ends up delivered so they can call ebay about it". A claim normally
+        // takes the chasing over — but a claim still In Progress against a
+        // parcel that arrived is chasing money the carrier does not owe. So it
+        // comes back due, saying which call to make.
+        if (claim.status === "in_progress") {
+          return route === "delivered"
+            ? { state: "due", due_on: today, note: "delivered_after_refund" }
+            : { state: "covered", due_on: null };
+        }
+        return { state: "settled", due_on: null, note: `claim ${claim.status}` };
       }
-      return { state: "settled", due_on: null, note: `claim ${claim.status}` };
+      // Due every day from the refund on, with no timeframe: the money has
+      // already gone out, so there is nothing to wait for.
+      if (route === "lost") return { state: "needs_claim", due_on: today };
+      return { state: "due", due_on: today, note: INR_ROUTE_NOTE[route] };
     }
-    if (it.outcome === "refunded") return { state: "needs_claim", due_on: today };
     // TOLD ONCE, THEN QUIET UNTIL IT MATTERS (Ethan, 2026-09-23: "once they are
     // notified about it via email, they don't need to see it again until the day
     // of needing to refund"). An open INR is a date to keep, not a thing to do
@@ -1472,16 +1803,54 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     // $159.99 and $139.99. The case's own figure wins when it has one.
     if (!(Number(c.amount) > 0) && Number(r.amount) > 0) { c.amount = r.amount; c.currency = c.currency || "USD"; }
   }
+  // ONE CARD PER SALE, INRs TOO (2026-11-03). When eBay escalates an
+  // item-not-received inquiry, the case it opens carries the SAME id, and from
+  // then on eBay stops listing the inquiry in its open search — so our copy
+  // froze at whatever it last read: "open, waiting on us", forever. On Nov 3
+  // four of those (BAL, OVL, WSP) were showing "needs a reply" beside a case
+  // eBay had already closed and refunded, one of them stuck on a manager's
+  // feed card with no way to clear it. The case is the live stage, so it is the
+  // card; the inquiry folds into it, the way a return does, and a note left on
+  // the inquiry carries over (see `build`).
+  const caseByEbayId: Record<string, any> = {};
+  for (const c of cs.data || []) if (c.kind === "case") caseByEbayId[`${c.store_code}|${c.ebay_id}`] = c;
+  const openInq = (cs.data || []).filter((c: any) => c.kind === "inquiry" && !caseByEbayId[`${c.store_code}|${c.ebay_id}`]);
+  if (openInq.length) {
+    // A case outside the read window (closed, not refunded, over RECENT_DAYS)
+    // still has to fold its inquiry away.
+    const { data: more, error } = await sb.from("ebay_cases").select("case_key,store_code,ebay_id")
+      .eq("kind", "case").in("case_key", openInq.map((c: any) => `case:${c.ebay_id}`));
+    if (error) throw new Error(error.message);
+    for (const c of more || []) caseByEbayId[`${c.store_code}|${c.ebay_id}`] ||= c;
+  }
+  const inquiryOf: Record<string, string> = {};
+  for (const c of cs.data || []) {
+    if (c.kind !== "inquiry") continue;
+    const k = caseByEbayId[`${c.store_code}|${c.ebay_id}`];
+    if (!k) continue;
+    folded.add(c.case_key);
+    inquiryOf[k.case_key] = c.case_key;
+  }
   const caseRows = (cs.data || []).filter((c: any) => !folded.has(c.case_key));
 
   const waiting: Record<string, number> = { mismatch: 0, ebay_case: 0, dispute: 0, payment: 0 };
   const build = (type: string, it: any, key: string) => {
     // A check-in made on the return before it escalated carries onto the case
     // until someone acts on the case itself.
-    const review = reviewBy[`${type}|${key}`] || (it.return ? reviewBy[`${type}|${it.return.case_key}`] : null) || null;
+    // So does a note left on the inquiry an INR case escalated from.
+    const inq = type === "ebay_case" ? inquiryOf[key] : null;
+    const review = reviewBy[`${type}|${key}`] || (it.return ? reviewBy[`${type}|${it.return.case_key}`] : null)
+      || (inq ? reviewBy[`${type}|${inq}`] : null) || null;
     const s = stateOf(type, it, review, ctx);
     const claim = ctx.claimFor(type, it);
-    return { ...it, review, history: (eventsBy[`${type}|${key}`] || []).slice(0, 20),
+    const history = [...(eventsBy[`${type}|${key}`] || []), ...(inq ? eventsBy[`${type}|${inq}`] || [] : [])]
+      .sort((a: any, b: any) => String(b.at).localeCompare(String(a.at)));
+    return { ...it, review, history: history.slice(0, 20),
+             // The key the review actually lives under — a DM answer, a reopen
+             // or a new resolution has to land on the same row the card read.
+             review_key: review ? review.item_key : key,
+             // 0164: the DM's part, null when there is none.
+             dm: s.dm || null,
              state: s.state, due_on: s.due_on, state_note: s.note || null, claim,
              // The day this item is allowed to be MAILED about again. Null means
              // "whenever it is due". Only the emails read it — the tool lists
@@ -1561,8 +1930,15 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   const alertFrom = (type: string, rows: any[], keyOf: (x: any) => string) => {
     for (const x of rows) {
       const key = keyOf(x);
-      const on = nudgedOn[`${type}|${key}`];
-      if (!on || DUE_ALERT_DONE.includes(x.state) || x.review?.status === "resolved") continue;
+      // SENT BACK BY THE DM (0164) goes on the card AT ONCE, not at the next
+      // 4pm mail: the DM has just said it isn't done, and the card is how the
+      // manager hears it — with the DM's reason (dm_note).
+      const sentBack = x.dm?.status === "denied" && NEED_STATES.includes(x.state);
+      const on = nudgedOn[`${type}|${key}`] || (sentBack ? String(x.dm.at || "").slice(0, 10) || ctx.today : null);
+      if (!on || DUE_ALERT_DONE.includes(x.state)) continue;
+      // A manager's own resolution clears their card (Ethan, 2026-10-08) —
+      // unless the DM has since sent it back.
+      if (x.review?.status === "resolved" && !sentBack) continue;
       const dueAt = type === "payment" ? (x.capturable ? x.auth_expires_at : null) : x.respond_by;
       const due = dueAt ? chicagoDay(dueAt) : null;
       dueAlerts.push({
@@ -1577,6 +1953,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
         // What the front end's _holdKindChip reads to name the item.
         source: x.source, dispute_type: x.dispute_type, kind: x.kind, case_type: x.case_type,
         financial_status: x.financial_status, capturable: x.capturable,
+        sent_back: sentBack ? { by: x.dm.by, note: x.dm.note } : null,
       });
     }
   };
@@ -1587,8 +1964,31 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   dueAlerts.sort((a, b) => (b.overdue ? 1 : 0) - (a.overdue ? 1 : 0)
     || String(a.due || "9999").localeCompare(String(b.due || "9999")));
 
+  // THE DM'S LIST (0164): every resolution the system disagrees with that the
+  // DM has not answered yet, oldest first — the one that has waited longest is
+  // the one most likely to have a deadline running out under it.
+  const dmQueue: any[] = [];
+  const queueFrom = (type: string, rows: any[], keyOf: (x: any) => string) => {
+    for (const x of rows) {
+      if (!x.dm?.pending) continue;
+      dmQueue.push({
+        type, key: keyOf(x), review_key: x.review_key, store_code: x.store_code, state: x.state,
+        why: x.dm.why, resolved_by: x.dm.resolved_by, resolved_note: x.dm.resolved_note, resolved_at: x.dm.resolved_at,
+        amount: x.amount ?? null, order: x.order_no || x.order_name || x.order_id || x.ebay_order_id || null,
+        title: x.item_title || x.reason || null,
+        source: x.source, dispute_type: x.dispute_type, kind: x.kind, case_type: x.case_type,
+        financial_status: x.financial_status, capturable: x.capturable,
+      });
+    }
+  };
+  queueFrom("dispute", disputes, (x) => x.dispute_key);
+  queueFrom("ebay_case", cases, (x) => x.case_key);
+  queueFrom("payment", payments, (x) => x.order_key);
+  queueFrom("mismatch", mismatches, (x) => x.issue_key);
+  dmQueue.sort((a, b) => String(a.resolved_at || "").localeCompare(String(b.resolved_at || "")));
+
   return {
-    dueAlerts,
+    dueAlerts, dmQueue,
     rollout: ROLLOUT_STORES, stores, today: ctx.today, monthEnd: ctx.monthEnd,
     mismatches, cases, claims, disputes, payments, waiting,
     sync: sy.data || [], disputeSync: ds.data || [], paymentSync: us.data || [],
@@ -1643,6 +2043,16 @@ Deno.serve(async (req) => {
       }
       // One eBay object in full, for the data checks — the summaries omit
       // things (an INR's outcome) that decide whether a list is right.
+      // 0164: what the fact check would say about a refunded INR, without
+      // saving anything — for checking the two outside reads against real items.
+      if (action === "factcheck") {
+        if (!ops) return json({ success: false, error: "unauthorised" }, 401);
+        const { data: c } = await sb.from("ebay_cases")
+          .select("case_key,store_code,kind,case_type,ebay_id,outcome,tracking_status,order_no,opened_at,first_seen")
+          .eq("case_key", String(url.searchParams.get("key") || "")).maybeSingle();
+        if (!c) return json({ success: false, error: "no such case_key" }, 404);
+        return json({ success: true, item: c, route: inrRoute(c), ...(await verifyFor(sb, c)) });
+      }
       if (action === "detail") {
         if (!ops) return json({ success: false, error: "unauthorised" }, 401);
         const store = parseStores(url.searchParams.get("store"))[0];
@@ -1664,7 +2074,7 @@ Deno.serve(async (req) => {
       // The feed card's poll: the same read, without the lists it never draws.
       if (action === "alerts") {
         const l = await list(sb, stores);
-        return json({ success: true, today: l.today, stores: l.stores, dueAlerts: l.dueAlerts });
+        return json({ success: true, today: l.today, stores: l.stores, dueAlerts: l.dueAlerts, dmQueue: l.dmQueue });
       }
       return json({ success: true, preview, ...(await list(sb, stores, { includeWaiting: preview })) });
     }
@@ -1694,9 +2104,20 @@ Deno.serve(async (req) => {
       // being guarded against. Only snoozing is.
       if (action === "review" && type === "ebay_case") {
         const { data: c } = await sb.from("ebay_cases")
-          .select("is_open,kind,seller_replied_at,buyer_acted_at,respond_by").eq("case_key", key).maybeSingle();
+          .select("is_open,kind,case_type,seller_replied_at,buyer_acted_at,respond_by").eq("case_key", key).maybeSingle();
         if (c && awaitingReply(c) && String(body.status || "") === "still_open") {
           return json({ success: false, error: "eBay is still waiting on a reply from us, so this one cannot be checked in. Answer it on eBay — the next read clears it by itself — or mark it resolved and say what happened." }, 400);
+        }
+        // A REFUNDED INR IS DUE EVERY DAY (Ethan, 2026-11-03: "we should be
+        // bugging managers daily ... that they need claims for them"). The money
+        // has already gone out, so there is nothing to wait for and no check-in
+        // to hide behind: a claim, or a resolution (which is fact-checked).
+        if (String(body.status || "") === "still_open" && c && isInr(c)) {
+          const { data: ref } = await sb.from("ebay_cases").select("case_key")
+            .eq("ebay_id", String(key).split(":")[1] || "").eq("outcome", "refunded").limit(1);
+          if ((ref || []).length) {
+            return json({ success: false, error: "The buyer has already been refunded, so this can't be checked in — it stays on the list every day until it's dealt with. Open a claim, or mark it resolved and say what happened (eBay paid it back, or the device is back in stock)." }, 400);
+          }
         }
       }
       // The same gate for disputes (0112). needs_response is the site's own
@@ -1740,13 +2161,22 @@ Deno.serve(async (req) => {
       if (status === "resolved" && (note || "").length < MIN_REASON) {
         return json({ success: false, error: `Say why it's resolved (at least ${MIN_REASON} characters).` }, 400);
       }
-      // A refunded INR is settled by a claim, not by a note (see header).
+      // A REFUNDED INR USED TO BE CLOSABLE ONLY BY A CLAIM. Since 0164 a note
+      // is accepted — the device came back, eBay paid it back, it never left
+      // the store — because every resolution is now fact-checked: eBay's payouts
+      // and Shopify's stock are read right here, and if neither backs the note
+      // up it goes to the DM rather than closing. So the refusal is gone, and
+      // the check is what stops a note making money disappear.
+      let fact: any = { fact_verdict: null, fact_why: null, fact_evidence: null, fact_checked_at: null };
       if (status === "resolved" && type === "ebay_case") {
-        const { data: c } = await sb.from("ebay_cases").select("kind,case_type,outcome,tracking_status").eq("case_key", key).maybeSingle();
-        // ...unless the parcel turned up after all: eBay gives that money back
-        // itself, so there is nothing for a carrier claim to recover (0106).
-        if (c && isInr(c) && c.outcome === "refunded" && !isDelivered(c)) {
-          return json({ success: false, error: "The buyer was refunded — open or link a claim for this one instead." }, 400);
+        const { data: c } = await sb.from("ebay_cases")
+          .select("case_key,store_code,kind,case_type,outcome,tracking_status,order_no,opened_at,first_seen").eq("case_key", key).maybeSingle();
+        if (c && isInr(c)) {
+          // The refund may sit on the escalated case rather than on this
+          // inquiry (one sale, two rows): check whichever says refunded.
+          const { data: sib } = await sb.from("ebay_cases").select("outcome")
+            .eq("store_code", c.store_code).eq("ebay_id", String(key).split(":")[1] || "").eq("outcome", "refunded").limit(1);
+          if (c.outcome === "refunded" || (sib || []).length) fact = await verifyFor(sb, c);
         }
       }
       const nowIso = new Date().toISOString();
@@ -1754,16 +2184,44 @@ Deno.serve(async (req) => {
       // from updated_at, which is what decides when it is due again.
       const next = status === "still_open"
         ? new Date(Date.now() + CHECKIN_DAYS[type] * 86_400_000).toISOString() : null;
+      // Any manager write is a NEW account of the item, so the DM's answer to
+      // the last one, and the last fact check, are cleared with it (0164).
       const { error } = await sb.from("hold_reviews").upsert({
         item_type: type, item_key: key, store_code: store, status, note,
         by_name: by, updated_at: nowIso, next_checkin_at: next,
+        ...fact, dm_status: null, dm_by: null, dm_note: null, dm_at: null,
       }, { onConflict: "item_type,item_key" });
       if (error) return json({ success: false, error: error.message }, 400);
       await logEvent(sb, type, key, store, status, note, by);
       // The 4pm feed card clears on a resolution, on every open page — not only
       // the one that pressed the button (DUE_ALERT_DONE).
       await broadcastClaims(store);
-      return json({ success: true, status });
+      return json({ success: true, status, fact_verdict: fact.fact_verdict, fact_why: fact.fact_why });
+    }
+
+    // THE DM'S ANSWER (0164). Only a resolution can be answered, and only one
+    // the system disagreed with — answering one the sites already back up
+    // would be a click that means nothing. Confirm: it stands, off every list.
+    // Send back: needs a reason, and the item is due for the manager again at
+    // once with that reason on the card and the feed.
+    if (action === "dm_confirm" || action === "dm_send_back") {
+      const type = String(body.item_type || "");
+      const key = String(body.item_key || "");
+      if (!ITEM_TYPES.includes(type) || !key) return json({ success: false, error: "unknown item" }, 400);
+      const { data: rv } = await sb.from("hold_reviews").select("*").eq("item_type", type).eq("item_key", key).maybeSingle();
+      if (!rv || rv.status !== "resolved") return json({ success: false, error: "There's no resolution on this item to answer — it may have been reopened." }, 409);
+      if (rv.dm_status) return json({ success: false, error: `Already ${rv.dm_status === "confirmed" ? "confirmed" : "sent back"} by ${rv.dm_by || "someone"}.` }, 409);
+      const note = String(body.note ?? "").trim() || null;
+      if (action === "dm_send_back" && (note || "").length < MIN_REASON) {
+        return json({ success: false, error: `Say why it's going back (at least ${MIN_REASON} characters) — the manager sees this.` }, 400);
+      }
+      const { error } = await sb.from("hold_reviews").update({
+        dm_status: action === "dm_confirm" ? "confirmed" : "denied", dm_by: by, dm_note: note, dm_at: new Date().toISOString(),
+      }).eq("item_type", type).eq("item_key", key).eq("status", "resolved").is("dm_status", null);
+      if (error) return json({ success: false, error: error.message }, 400);
+      await logEvent(sb, type, key, rv.store_code, action === "dm_confirm" ? "dm_confirmed" : "dm_sent_back", note, by);
+      await broadcastClaims(rv.store_code);
+      return json({ success: true, dm_status: action === "dm_confirm" ? "confirmed" : "denied" });
     }
 
     if (action === "open_claim" || action === "link_claim") {

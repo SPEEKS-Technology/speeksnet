@@ -10771,7 +10771,9 @@ body.sam-active .hotbar-btn:hover {
    without this line and floated a red "Card expired … overdue" toast on every
    store manager's screen. scripts/retired-bubble-check.js now fails any
    *AlertBubble id speeks.js creates that is missing from this list. */
-#claimsDueAlertBubble {
+#claimsDueAlertBubble,
+/* Added 2026-11-03 with the DM's "Resolutions to Confirm" card (0164). */
+#claimsConfirmAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
