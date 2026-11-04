@@ -270,14 +270,35 @@ let EBAY_APPS: Record<string, any> = {};
 const EBAY_FIN_RE =
   /^https:\/\/apiz(?:\.sandbox)?\.ebay\.com\/sell\/finances\/v1\/transaction(?:\?[^#]*)?$/;
 
+// ⚠️ A 5xx IS RETRIED HERE, PER PAGE. 2026-11-04 6:11am: OVL and LEE each got
+// one HTTP 500 errorId 135000 ("problem with an eBay internal system") and the
+// whole store's fee + shipping went #N/A on 3 days, with a "Claude fixes it"
+// email — for a blip every earlier pass had read cleanly. A 5xx or 429 says
+// nothing about our request, so the same GET is asked again after a pause.
+// 4xx (bad token, bad filter) is still returned at once: retrying can't fix it.
+// Budget: worst case adds ~7s per store against the 150s ceiling, and only on
+// a page that is already failing.
+const EBAY_RETRY_PAUSES_MS = [1000, 2500, 4000];
 async function ebayGet(url: string, token: string): Promise<Response> {
   if (!EBAY_FIN_RE.test(url)) {
     throw new Error(`refused: not a read-only eBay finances URL -> ${url}`);
   }
-  return await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-  });
+  for (let i = 0; ; i++) {
+    let res: Response | null = null;
+    try {
+      res = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+    } catch (e) {
+      // A dropped connection is the same kind of transient as a 5xx.
+      if (i >= EBAY_RETRY_PAUSES_MS.length) throw e;
+    }
+    if (res && res.status < 500 && res.status !== 429) return res;
+    if (i >= EBAY_RETRY_PAUSES_MS.length) return res as Response;
+    if (res) await res.body?.cancel();
+    await new Promise((s) => setTimeout(s, EBAY_RETRY_PAUSES_MS[i]));
+  }
 }
 
 // Minted per run and deliberately never persisted.
