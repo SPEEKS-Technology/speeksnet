@@ -31,11 +31,11 @@
 //  3. CONDITION WORDS LEAD TITLES. new / broken / unlocked / factory / t-mobile
 //     are the first token of a huge number of titles, so they are stopwords on
 //     both sides or every row matches "New".
-//  4. A BROKEN UNIT IS STOCK, NOT AN ANSWER. 22 of 40 in-stock iPhones are
-//     titled "Broken". Sending someone to ring a customer about a cracked phone
-//     is worse than staying quiet — UNLESS that is what they asked for, and
-//     people do ask (the recycle buyers). So broken units are excluded by
-//     default and become eligible, ranked FIRST, when the row asks for one.
+//  4. A BROKEN UNIT IS STOCK, NOT AN ANSWER — REVISED 2026-08-24. It used to be
+//     excluded outright. Now the panel shows the graded condition on every line
+//     and "Not This" is back, so the floor can see what a unit is and dismiss it
+//     permanently. Broken is therefore SHOWN, but sorted last within a store so
+//     it never takes a slot from something sound.
 //  5. A TYPE IS EITHER THE ANSWER OR JUST A SHELF, and the first dry run proved
 //     why that has to be modelled. "Sony PlayStation 3" matches every PS3 game
 //     we own, so "ps3 pain" came back with Tiger Woods PGA Tour 13 at 3.5 while
@@ -98,6 +98,28 @@ async function broadcastChange(): Promise<void> {
   } catch (_) { /* the write already succeeded; realtime is best-effort */ }
 }
 
+// Drop a row on the email queue — same contract as the queueNotification in
+// every other source function (see notify, migration 0033): describe who cares,
+// notify resolves people and preferences. Takes the sweep's client rather than
+// building its own. Best-effort: a failed queue must never fail the sweep.
+async function queueNotification(sb: any, n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceFeature?: string | null;
+}): Promise<void> {
+  try {
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      priority: "normal",
+      audience_feature: n.audienceFeature ?? null,
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
@@ -122,8 +144,8 @@ const NOISE = new Set([
 // A 2020 MacBook Air titled "... A2337 Bad LCD" was therefore scored as healthy
 // stock and offered to a customer who asked for a working MacBook Air — the exact
 // thing fact 4 exists to prevent. The part list is spelled out rather than using a
-// bare \bbad\b: this regex REMOVES stock from the results, so a false positive
-// hides a good unit silently, and "Bad Company" is a real game title.
+// bare \bbad\b: a false positive here demotes a good unit, and "Bad Company" is a
+// real game title.
 // Measured when widened: 20 in-stock titles say "bad <part>", 19 of which already
 // matched another word here, so this catches exactly the one that was slipping
 // through and nothing else.
@@ -519,6 +541,7 @@ Deno.serve(async (req: Request) => {
       typeNeedsItemText: ty ? ty.needsItemText : null,
       anyModel: cb.any_model === true,
       wantsBroken,
+      required,
       matches: found.length,
       top: found.sort((a, b) => b.score - a.score).slice(0, 5).map((f) => ({
         store: f.item.store_code, sku: f.item.sku, title: f.item.title,
@@ -633,9 +656,42 @@ Deno.serve(async (req: Request) => {
   }
 
   // A pair we had never seen before is the only thing worth waking a client for.
-  const newMatches = deduped.filter((r) =>
-    !stateByKey.has(`${r.callback_id}|${r.store_code}|${r.sku}`)).length;
+  const fresh = deduped.filter((r) =>
+    !stateByKey.has(`${r.callback_id}|${r.store_code}|${r.sku}`));
+  const newMatches = fresh.length;
   if (newMatches || retired || markedSold) await broadcastChange();
+
+  // ...and the only thing worth an email (Ethan, 2026-11-03). One mail per
+  // HOLDING store per sweep, naming each customer once however many of that
+  // store's units matched them — the store rings a customer, not a SKU. Sent to
+  // the holding store, the same direction as the feed card (see the header).
+  // Never resurrects a dismissed pair: `vetoed` rows never reach `deduped`.
+  const cbById = new Map(cbs.map((c: any) => [c.id, c]));
+  const byHolder = new Map<string, Map<number, any>>();
+  for (const r of fresh) {
+    const m = byHolder.get(r.store_code) ?? new Map<number, any>();
+    if (!m.has(r.callback_id)) m.set(r.callback_id, r);
+    byHolder.set(r.store_code, m);
+  }
+  for (const [store, m] of byHolder) {
+    const lines = [...m.values()].map((r: any) => {
+      const cb: any = cbById.get(r.callback_id) || {};
+      const from = cb.store && String(cb.store).toUpperCase() !== store ? ` (${String(cb.store).toUpperCase()}'s customer)` : "";
+      return `${String(cb.item || r.title).slice(0, 60)}${from}`;
+    });
+    await queueNotification(sb, {
+      category: "callbacks",
+      kind: "callback_match",
+      title: m.size === 1
+        ? `A call back customer wants something ${store} has`
+        : `${m.size} call back customers want something ${store} has`,
+      body: lines.join(" · ").slice(0, 300),
+      link: "operations.html",
+      store,
+      audienceStores: [store],
+      audienceFeature: "widget-ops-callbacks",
+    });
+  }
 
   return json({ ok: true, summary: { ...summary, written, newMatches, retired, markedSold } });
 });

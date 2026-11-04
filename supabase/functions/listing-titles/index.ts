@@ -5342,13 +5342,35 @@ async function handlePost(req: Request, scope: Scope) {
     if (!scope.corp) return json({ error: "forbidden", detail: "Only the DM or CEO can send a row back." }, 403);
     const note = String(body.note || "").trim().slice(0, 500);
     if (!note) return json({ error: "note required", detail: "Say why the suggestion was right — the store reads this on the row." }, 400);
-    await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}&status=eq.denied`, {
-      method: "PATCH", headers: { Prefer: "return=minimal" },
+    const back = await (await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}&status=eq.denied&select=current_title`, {
+      method: "PATCH", headers: { Prefer: "return=representation" },
       body: JSON.stringify({
         status: "open", returned_note: note, returned_by: scope.name,
         returned_at: new Date().toISOString(),
       }),
-    });
+    })).json().catch(() => []);
+    // The row went back into the store's queue silently until 2026-11-03 — no
+    // card, no mail — so a store only found it by opening Listing Health. Mailed
+    // to the store side of ec-view-titles (STORE_ROLES + EXTRA_ROLES above; MSM
+    // is "manager" by then in notify). Best-effort: the send-back already landed.
+    if (Array.isArray(back) && back.length) {
+      try {
+        await sb("notify_queue", {
+          method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            category: "categories", kind: "title_sent_back",
+            title: `A title was sent back to ${store}`,
+            body: `${String(back[0].current_title || "").slice(0, 120)} — ${note}`.slice(0, 300),
+            link: "operations.html", store,
+            audience_stores: [store],
+            audience_roles: ["manager", "owner (manager)", "owner manager", "assistant manager"],
+            audience_feature: TITLES_KEY,
+            exclude_user: String(scope.name || "").trim().toLowerCase() || null,
+            priority: "normal",
+          }),
+        });
+      } catch (_) { /* best-effort */ }
+    }
     return json({ ok: true, sentBack: productId });
   }
 
