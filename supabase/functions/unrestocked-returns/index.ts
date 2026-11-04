@@ -201,6 +201,18 @@ const SEARCH_Q = `query($q: String!, $after: String) {
 
 const ONE_Q = `query($id: ID!) { order(id: $id) { ${ORDER_FIELDS} } }`;
 
+// THE SKU, WHEN THE ORDER CAN'T BE READ (2026-11-03). Our Shopify tokens don't
+// carry read_all_orders, so an order over ~60 days old reads as null. An eBay
+// RETURN of something that sold two months earlier hits that on day one. Until
+// this the re-check skipped such a row — not cleared, not mailed — and WSP
+// #MO02-6752 (a $899.99 ThinkPad, returned Oct 9) silently dropped off the mail
+// after Oct 23 while still open. A variant's stock is always readable, so the
+// SKU stands in for the order.
+const VARIANT_BY_SKU_Q = `query($q: String!) {
+  productVariants(first: 5, query: $q) { nodes { sku
+    inventoryItem { tracked inventoryLevels(first: 5) { nodes { quantities(names: ["on_hand"]) { name quantity } } } } } }
+}`;
+
 const RESOLD_Q = `query($q: String!) {
   orders(first: 15, query: $q) { nodes { id name createdAt cancelledAt displayFinancialStatus lineItems(first: 20) { nodes { sku } } } }
 }`;
@@ -236,6 +248,9 @@ type Candidate = {
   refundAt: string; refundDay: string; refundNote: string;
   sku: string; title: string; amount: number;
   variantId: string | null;
+  // Set only when the morning re-check could not read the order and fell back
+  // to the SKU's own stock — what the mail says about how it was checked.
+  recheck?: string;
 };
 
 type Verdict =
@@ -327,6 +342,43 @@ async function judge(shop: string, token: string, o: any, c: Candidate, lost: Se
     if (again) return { state: "ok", how: `sold again on ${again.name}` };
   }
   return { state: "flag", flag: "not_restocked" };
+}
+
+// An open row whose order Shopify will no longer show, judged by its SKU:
+// on hand -> back; sold again since the refund -> back; otherwise it STAYS on
+// the mail, saying it was checked by SKU, or that it could not be checked at
+// all. Never dropped quietly: that is the whole point of this path.
+// The same multi-unit caveat as the on-hand test above applies, and a SKU on
+// more than one variant (BAL reuses SKUs) proves nothing, so it is said so.
+async function judgeBySku(shop: string, token: string, row: any): Promise<{ ok: true; how: string } | { ok: false; why: string }> {
+  const sku = String(row.sku || "").trim();
+  const old = "Order too old for Shopify to re-read";
+  if (!sku) return { ok: false, why: `${old}, and no SKU on file — check it by hand` };
+  const d: any = await shopifyQuery(shop, token, VARIANT_BY_SKU_Q, { q: `sku:"${sku.replace(/"/g, "")}"` });
+  const vs = (d?.productVariants?.nodes || []).filter((v: any) => String(v?.sku || "").trim() === sku);
+  if (!vs.length) return { ok: false, why: `${old}, and SKU ${sku} is no longer in Shopify` };
+  if (vs.length > 1) return { ok: false, why: `${old}, and SKU ${sku} is on ${vs.length} products — check it by hand` };
+  const inv = vs[0].inventoryItem;
+  if (inv && inv.tracked === false) return { ok: false, why: `${old}, and SKU ${sku} isn't stock-tracked` };
+  const onHand = (inv?.inventoryLevels?.nodes || []).reduce((a: number, lv: any) =>
+    a + num((lv?.quantities || []).find((q: any) => q?.name === "on_hand")?.quantity), 0);
+  if (onHand >= 1) return { ok: true, how: `on hand ${onHand} (checked by SKU — order too old to re-read)` };
+  const r: any = await shopifyQuery(shop, token, RESOLD_Q, { q: `sku:"${sku.replace(/"/g, "")}" AND created_at:>=${chicagoDay(row.refund_at)}` });
+  const again = (r?.orders?.nodes || []).find((x: any) =>
+    String(x.id).split("/").pop() !== String(row.order_id) && !x.cancelledAt &&
+    x.displayFinancialStatus !== "REFUNDED" && x.createdAt > row.refund_at &&
+    (x.lineItems?.nodes || []).some((l: any) => String(l?.sku || "").trim() === sku));
+  if (again) return { ok: true, how: `sold again on ${again.name} (checked by SKU)` };
+  return { ok: false, why: `Checked by SKU (order too old to re-read): 0 on hand` };
+}
+function candidateOfRow(row: any): Candidate {
+  return {
+    key: row.issue_key, store: row.store_code,
+    orderId: String(row.order_id), orderName: row.order_name || "", orderCreatedAt: "", channel: row.channel || "",
+    ebayOrderId: "", kind: row.kind === "cancel" ? "cancel" : "return",
+    refundAt: row.refund_at, refundDay: chicagoDay(row.refund_at), refundNote: row.refund_note || "",
+    sku: row.sku || "", title: row.title || "", amount: num(row.amount), variantId: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +474,14 @@ async function collect(wantStores: string[], days: string[], openRows: any[]) {
           const data: any = await shopifyQuery(shop, token, ONE_Q, { id: `gid://shopify/Order/${row.order_id}` });
           o = data?.order;
         }
-        if (!o) { problems.push(`${store} ${row.order_name}: order not found`); continue; }
+        if (!o) {
+          // See VARIANT_BY_SKU_Q: judge it by its SKU, and keep it on the mail
+          // unless the SKU proves it is back.
+          const v = await judgeBySku(shop, token, row);
+          if (v.ok) cleared.push({ key: row.issue_key, how: v.how });
+          else found.push({ ...candidateOfRow(row), flag: row.flag || "not_restocked", recheck: v.why });
+          continue;
+        }
         const c = candidatesOf(store, o, null).find((x) => x.key === row.issue_key);
         // The line is no longer an unrestocked full return — restocked on a
         // later refund, or the order changed under it.
@@ -472,6 +531,7 @@ function rowHtml(r: Row) {
         ${esc(r.title)}<br>
         <b>${esc(r.orderName)}</b>${r.sku ? ` &nbsp;·&nbsp; SKU <b>${esc(r.sku)}</b>` : ""}
         ${r.refundNote ? `<br><span style="color:${C.faint};">Note: “${esc(r.refundNote)}”</span>` : ""}
+        ${r.recheck ? `<br><span style="color:${C.warn};">${esc(r.recheck)}</span>` : ""}
       </div>
       <div style="margin-top:8px;font-size:12px;">
         <a href="${shopUrl}" style="color:#1c6b47;">Open In Shopify</a>
@@ -623,7 +683,7 @@ Deno.serve(async (req: Request) => {
         wouldClear: cleared, blindStores: [...blind], stats, problems,
         rows: rows.map((r) => ({
           store: r.store, order: r.orderName, channel: r.channel, kind: r.kind, day: r.refundDay,
-          sku: r.sku, title: r.title, amount: r.amount, flag: r.flag, new: fresh.includes(r),
+          sku: r.sku, title: r.title, amount: r.amount, flag: r.flag, new: fresh.includes(r), recheck: r.recheck || null,
         })),
       });
     }
