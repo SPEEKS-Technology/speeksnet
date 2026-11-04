@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261102b">
+  <link rel="stylesheet" href="styles.css?v=20261103a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20261102b" defer></script>
+  <script src="speeks.js?v=20261103a" defer></script>
 </head>
 <body class="preload">
 
@@ -794,8 +794,6 @@
         <div class="box-order-disclaimer">
             If a box or item you need is not on this page, please reach out to your District Manager for approval.
         </div>
-        <!-- Live "receipt" of what's selected — sticky to the bottom of the list -->
-        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
     </div>
 
     <!-- PAGE 2: Email Preview + Notes -->
@@ -874,6 +872,9 @@
 
     <!-- FOOTER PAGE 1 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter1">
+        <!-- Live "receipt" of what's selected — its own row above the buttons, outside the scrolling list
+             so items never slide under it. Shows/hides with this footer (page 1 only). -->
+        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
         <button class="btn-primary" onclick="boxOrderNextPage()">Next<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
