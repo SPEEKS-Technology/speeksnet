@@ -27180,3 +27180,18 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
         box-shadow: 0 8px 24px rgba(15, 23, 42, .18);
     }
 }
+
+/* ===== RESTOCKED UNDER ANOTHER SKU card (2026-11-04) — see the banner in speeks.js.
+   Opened from a phone more than anywhere: 16px input so iOS doesn't zoom, picks
+   and button full width so they're easy to tap. Messages are inline, never toasts. */
+#restockSkuModal .rsk-item { padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 16px; font-size: 14px; line-height: 1.6; }
+#restockSkuModal .rsk-title { font-weight: 700; font-size: 15px; margin: 2px 0; }
+#restockSkuModal .rsk-muted { color: #6d8579; font-size: 12.5px; line-height: 1.5; }
+#restockSkuModal .rsk-bad { color: #b3261e; font-size: 13.5px; font-weight: 600; margin: 8px 0 0; }
+#restockSkuModal .rsk-done { color: #1c6b47; font-size: 14px; font-weight: 600; line-height: 1.6; margin: 4px 0 14px; }
+#restockSkuModal .rsk-sugg { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 16px; }
+#restockSkuModal .rsk-pick { text-align: left; width: 100%; padding: 10px 12px; border: 1.5px solid #cfe0d6; border-radius: 8px; background: #f7faf8; font-size: 13.5px; line-height: 1.45; cursor: pointer; color: inherit; }
+#restockSkuModal .rsk-pick:hover { border-color: var(--sage-professional); }
+#restockSkuModal .rsk-input { font-size: 16px; text-transform: uppercase; }
+#restockSkuModal .rsk-btn { width: 100%; margin-top: 12px; padding: 12px; }
+#restockSkuModal .rsk-tries { margin-top: 16px; padding-top: 10px; border-top: 1px solid #e2e8f0; }

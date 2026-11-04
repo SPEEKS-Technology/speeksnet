@@ -9,6 +9,8 @@
 //     &html=1                         with dryRun, render the mail instead of JSON
 //     &to=addr                        send the mail to one address instead
 //     &sample=1&html=1                render the mail from invented rows
+//   POST {action:'lookup'|'close'}    the app's "Restocked Under Another SKU"
+//                                     card — see RESTOCKED UNDER ANOTHER SKU
 //
 // WHY THIS EXISTS. Ethan, 2026-10-22: a store refunds a whole item — a return
 // at the counter, an eBay or web return, or an order cancelled before it
@@ -382,7 +384,7 @@ function candidateOfRow(row: any): Candidate {
 }
 
 // ---------------------------------------------------------------------------
-async function collect(wantStores: string[], days: string[], openRows: any[]) {
+async function collect(wantStores: string[], days: string[], openRows: any[], resolvedKeys: Set<string>) {
   const problems: string[] = [];
   const blind = new Set<string>();
   const found: Array<Candidate & { flag: string }> = [];
@@ -452,6 +454,12 @@ async function collect(wantStores: string[], days: string[], openRows: any[]) {
     for (const o of orders) {
       if (isPhantom(o)) continue;
       for (const c of candidatesOf(store, o, inDays)) {
+        // Already closed — back on hand, sold, or closed by hand (BAL #MO04-3622,
+        // 2026-11-04: put back under a DIFFERENT listing because the original was
+        // the wrong item, which no SKU test can see). The 3-day lookback re-reads
+        // the same refund twice more, and without this the upsert below would
+        // reopen it.
+        if (resolvedKeys.has(c.key)) { seen.add(c.key); continue; }
         st.unrestocked_lines++;
         seen.add(c.key);
         try {
@@ -503,7 +511,24 @@ const C = {
   bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1",
 };
 
-type Row = Candidate & { flag: string; ageDays: number };
+type Row = Candidate & { flag: string; ageDays: number; attempts?: any[] };
+
+// Where the mail's "Restocked Under Another SKU" link lands: the dashboard,
+// which is also the login page, so the hash survives the PIN screen and the
+// card opens right after it (_restockHandleHash in speeks.js).
+const APP_URL = "https://speeksnet.com/index.html";
+const shortAt = (iso: string) => shortDay(chicagoDay(iso));
+
+// Closed from the app by a manager — on the next mail once, so the DM sees
+// every hand-close and which SKU it was closed against.
+function closedHtml(r: any) {
+  return `
+    <tr><td style="padding:12px 14px;border-top:1px solid ${C.line};font-size:13px;color:${C.ink};line-height:1.6;">
+      <div style="font-size:12px;color:${C.faint};">${esc(STORE_NAME[r.store_code] || r.store_code)} · ${esc(r.channel || "")} · Closed ${esc(shortAt(r.resolved_at))} By ${esc(r.closed_by || "Unknown")}</div>
+      <b>${esc(r.order_name)}</b> · ${esc(r.title || "")} — ${money(num(r.amount))}<br>
+      Back In Stock As <b>${esc(r.moved_to_sku || "")}</b> <span style="color:${C.faint};">(was ${esc(r.sku || "no SKU")})</span>
+    </td></tr>`;
+}
 
 const money = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -513,6 +538,16 @@ const shortDay = (day: string) => { const [, m, d] = day.split("-").map(Number);
 
 // Kept short on purpose (Ethan, 2026-10-22: "a very simple report, no need to
 // over explain"). Labels and headings are Title Case; values stay as written.
+// Someone tried a SKU and it was refused — Ethan, 2026-11-04: the DM has to be
+// able to tell "tried and got it wrong" from "never tried".
+function tried(r: Row) {
+  const a = r.attempts || [];
+  if (!a.length) return "";
+  const last = a[a.length - 1];
+  const more = a.length > 1 ? ` (${a.length} Tries)` : "";
+  return `<br><span style="color:${C.bad};">Tried ${esc(last.sku || "a blank SKU")} — ${esc(last.by || "Unknown")}, ${esc(shortAt(last.at))}${more}: ${esc(last.why || "")}</span>`;
+}
+
 function rowHtml(r: Row) {
   const shopUrl = `https://${SHOP_BY_STORE[r.store]}/admin/orders/${r.orderId}`;
   const what = r.kind === "cancel" ? "Cancelled" : "Returned";
@@ -532,14 +567,17 @@ function rowHtml(r: Row) {
         <b>${esc(r.orderName)}</b>${r.sku ? ` &nbsp;·&nbsp; SKU <b>${esc(r.sku)}</b>` : ""}
         ${r.refundNote ? `<br><span style="color:${C.faint};">Note: “${esc(r.refundNote)}”</span>` : ""}
         ${r.recheck ? `<br><span style="color:${C.warn};">${esc(r.recheck)}</span>` : ""}
+        ${tried(r)}
       </div>
       <div style="margin-top:8px;font-size:12px;">
         <a href="${shopUrl}" style="color:#1c6b47;">Open In Shopify</a>
+        &nbsp;·&nbsp;
+        <a href="${APP_URL}#restock=${encodeURIComponent(r.key)}" style="color:#1c6b47;">Restocked Under Another SKU</a>
       </div>
     </td></tr>`;
 }
 
-function build(fresh: Row[], older: Row[], blind: string[], days: string[]) {
+function build(fresh: Row[], older: Row[], blind: string[], days: string[], closed: any[] = []) {
   const span = !days.length ? "" : days.length === 1 ? shortDay(days[0])
     : `${shortDay(days[0])} – ${shortDay(days[days.length - 1])}`;
   const section = (label: string) => `
@@ -573,6 +611,7 @@ function build(fresh: Row[], older: Row[], blind: string[], days: string[]) {
   </td></tr>
   ${fresh.length ? section("New") + fresh.map(rowHtml).join("") : ""}
   ${older.length ? section("Still Not Back In Stock") + older.map(rowHtml).join("") : ""}
+  ${closed.length ? section("Closed By A Manager") + closed.map(closedHtml).join("") : ""}
   <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:11px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
     Sent every morning while anything is open. Items stay on until they are back in stock or sold.
     Partial refunds are not included.
@@ -613,11 +652,158 @@ async function listFor(sb: any, key: string, fallbackKey: string): Promise<strin
   return [];
 }
 
+// ===========================================================================
+// RESTOCKED UNDER ANOTHER SKU (2026-11-04). The app side of the mail's
+// "Restocked Under Another SKU" link (index.html#restock=<issue_key>).
+//
+// WHY. BAL #MO04-3622 — a JMGO projector listed as the wrong model — came back
+// and was put in stock under the listing that matched what it really was
+// (MO04-2508D-R3R2). The refunded line's own SKU stays at 0 forever, so no test
+// in judge() can ever clear it; only the manager knows where it went.
+//
+// SO THE MANAGER SAYS, AND THE FUNCTION CHECKS. A typed SKU closes the row only
+// if, at that store, it is on exactly one product, stock-tracked, not the
+// refunded line's own SKU, and either on hand now or sold since the refund. A
+// SKU that fails closes NOTHING: it is logged in `attempts` and shown on the
+// next mail, because Ethan needs to see "tried and got it wrong" as well as
+// "never tried". A row closed this way goes on the next mail once, under
+// "Closed By A Manager", so the DM sees every manual close.
+//
+// POST, no ops secret — the page calls it like every other app tool
+// (recycle-requests). Who is asking is the browser-asserted name/role/store,
+// the same as everywhere on this site, so a manager can only close their own
+// store's rows and only the DM tier can close any.
+// ===========================================================================
+const PRODUCTS_LIKE_Q = `query($q: String!) {
+  products(first: 30, query: $q, sortKey: UPDATED_AT, reverse: true) { nodes {
+    title updatedAt createdAt
+    variants(first: 3) { nodes { sku inventoryQuantity } } } }
+}`;
+const MULTI_STORE = ["BAL", "MPL"];
+const DM_TIER = ["ceo", "mocd", "dm"];
+
+function mayClose(row: any, who: any): string | null {
+  const role = String(who?.role || "").toLowerCase();
+  if (DM_TIER.includes(role)) return null;
+  if (role === "manager") {
+    const mine = String(who?.store || "").toUpperCase();
+    if (row.store_code === mine) return null;
+    if (who?.multiStore && MULTI_STORE.includes(row.store_code)) return null;
+    return `Only ${row.store_code}'s manager or the DM can close this one.`;
+  }
+  return "Only a store manager or the DM can close these.";
+}
+
+// The fields the card shows — never the raw row.
+function cardOf(row: any) {
+  return {
+    key: row.issue_key, store: row.store_code, storeName: STORE_NAME[row.store_code] || row.store_code,
+    order: row.order_name, orderUrl: `https://${SHOP_BY_STORE[row.store_code]}/admin/orders/${row.order_id}`,
+    channel: row.channel, kind: row.kind, refundDay: row.refund_at ? chicagoDay(row.refund_at) : null,
+    sku: row.sku, title: row.title, amount: num(row.amount), note: row.refund_note,
+    closed: !!row.resolved_at, closedHow: row.resolved_how, closedBy: row.closed_by, movedTo: row.moved_to_sku,
+    attempts: Array.isArray(row.attempts) ? row.attempts : [],
+  };
+}
+
+// Listings at the store that it could have gone back in under: in stock, not
+// the refunded SKU, touched since the day before the refund, sharing words with
+// the refunded title. Ranked by shared words. A shortcut only — whatever is
+// picked still goes through the same check as a typed SKU.
+async function suggestionsFor(shop: string, token: string, row: any) {
+  const words = String(row.title || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  if (!words.length || !row.refund_at) return [];
+  const brand = words[0].replace(/"/g, "");
+  const since = addDays(chicagoDay(row.refund_at), -1);
+  const d: any = await shopifyQuery(shop, token, PRODUCTS_LIKE_Q, { q: `${brand} updated_at:>=${since}` });
+  const want = new Set(words);
+  const out: any[] = [];
+  for (const p of (d?.products?.nodes || [])) {
+    for (const v of (p?.variants?.nodes || [])) {
+      const sku = String(v?.sku || "").trim();
+      if (!sku || sku === String(row.sku || "").trim() || num(v?.inventoryQuantity) < 1) continue;
+      const tw = String(p.title || "").toLowerCase().split(/[^a-z0-9]+/);
+      const score = tw.filter((w: string) => want.has(w)).length;
+      out.push({ sku, title: p.title, onHand: num(v.inventoryQuantity), score });
+    }
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, 5).map(({ score: _s, ...rest }) => rest);
+}
+
+async function checkMovedSku(shop: string, token: string, row: any, sku: string):
+  Promise<{ ok: true; how: string } | { ok: false; why: string }> {
+  if (!sku) return { ok: false, why: "Type the SKU it went back in under." };
+  if (sku === String(row.sku || "").trim()) {
+    return { ok: false, why: `${sku} is the listing it was refunded from, and that one is still at 0. Type the SKU of the listing you put it back under.` };
+  }
+  const d: any = await shopifyQuery(shop, token, VARIANT_BY_SKU_Q, { q: `sku:"${sku.replace(/"/g, "")}"` });
+  const vs = (d?.productVariants?.nodes || []).filter((v: any) => String(v?.sku || "").trim() === sku);
+  if (!vs.length) return { ok: false, why: `No listing at ${row.store_code} has SKU ${sku}. Check it for typos.` };
+  if (vs.length > 1) return { ok: false, why: `SKU ${sku} is on ${vs.length} listings at ${row.store_code}, so it can't prove anything. Ask the DM to close this one.` };
+  const inv = vs[0].inventoryItem;
+  if (inv && inv.tracked === false) return { ok: false, why: `${sku} isn't stock-tracked in Shopify, so it can't be checked.` };
+  const onHand = (inv?.inventoryLevels?.nodes || []).reduce((a: number, lv: any) =>
+    a + num((lv?.quantities || []).find((q: any) => q?.name === "on_hand")?.quantity), 0);
+  if (onHand >= 1) return { ok: true, how: `on hand ${onHand}` };
+  const r: any = await shopifyQuery(shop, token, RESOLD_Q,
+    { q: `sku:"${sku.replace(/"/g, "")}" AND created_at:>=${chicagoDay(row.refund_at)}` });
+  const again = (r?.orders?.nodes || []).find((x: any) =>
+    !x.cancelledAt && x.displayFinancialStatus !== "REFUNDED" && x.createdAt > row.refund_at &&
+    (x.lineItems?.nodes || []).some((l: any) => String(l?.sku || "").trim() === sku));
+  if (again) return { ok: true, how: `sold on ${again.name}` };
+  return { ok: false, why: `${sku} is at 0 on hand and hasn't sold since the refund. Put the unit in stock under it first, then try again.` };
+}
+
+async function appAction(body: any): Promise<Response> {
+  const sb = createClient(SUPABASE_URL, SERVICE_KEY);
+  const key = String(body?.key || "").trim();
+  if (!key) return json({ ok: false, error: "missing key" }, 400);
+  const { data: row } = await sb.from("unrestocked_returns").select("*").eq("issue_key", key).maybeSingle();
+  if (!row) return json({ ok: false, error: "This item isn't on the report any more." }, 404);
+  const shopRows = await sbGet(`shopify_stores?select=shop,store_code,access_token`);
+  const shopRow = shopRows.find((s: any) => (s.store_code || STORE_BY_SHOP[s.shop]) === row.store_code);
+  const denied = mayClose(row, body?.who);
+
+  if (body.action === "lookup") {
+    let suggestions: any[] = [];
+    if (!row.resolved_at && !denied && shopRow?.access_token) {
+      try { suggestions = await suggestionsFor(shopRow.shop, shopRow.access_token, row); } catch (_) { /* card still works without them */ }
+    }
+    return json({ ok: true, card: cardOf(row), canClose: !denied, denied, suggestions });
+  }
+
+  if (body.action === "close") {
+    if (denied) return json({ ok: false, error: denied }, 403);
+    if (row.resolved_at) return json({ ok: true, already: true, card: cardOf(row) });
+    if (!shopRow?.access_token) return json({ ok: false, error: `No Shopify connection for ${row.store_code}.` }, 500);
+    const sku = String(body?.sku || "").trim().toUpperCase();
+    const by = String(body?.who?.name || "").trim() || "Unknown";
+    const nowIso = new Date().toISOString();
+    const v = await checkMovedSku(shopRow.shop, shopRow.access_token, row, sku);
+    if (!v.ok) {
+      const attempts = [...(Array.isArray(row.attempts) ? row.attempts : []), { at: nowIso, by, sku, why: v.why }].slice(-10);
+      await sb.from("unrestocked_returns").update({ attempts }).eq("issue_key", key);
+      return json({ ok: false, why: v.why, card: cardOf({ ...row, attempts }) });
+    }
+    const how = `restocked under ${sku} (${v.how}) — closed by ${by}`;
+    const { data: done } = await sb.from("unrestocked_returns")
+      .update({ resolved_at: nowIso, resolved_how: how, moved_to_sku: sku, closed_by: by, last_checked: nowIso })
+      .eq("issue_key", key).select("*").maybeSingle();
+    return json({ ok: true, card: cardOf(done || row) });
+  }
+  return json({ ok: false, error: "unknown action" }, 400);
+}
+
 // ---------------------------------------------------------------------------
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const url = new URL(req.url);
   const q = (k: string) => url.searchParams.get(k);
+  // The app's card (RESTOCKED UNDER ANOTHER SKU) — no ops secret, see above.
+  if (req.method === "POST") {
+    try { return await appAction(await req.json().catch(() => ({}))); }
+    catch (err: any) { return json({ ok: false, error: String(err?.message ?? err).slice(0, 200) }, 500); }
+  }
   if (!authed(url)) return json({ error: "unauthorised" }, 401);
 
   // PREVIEW. Silent on a clean morning, so without this a layout change could
@@ -634,8 +820,14 @@ Deno.serve(async (req: Request) => {
     ], [
       { ...base, key: "s3", store: "MPL", orderName: "#MO03-3460", channel: "In store", kind: "return",
         refundDay: "2026-10-15", sku: "MO03-2368D-R7R1", title: "Xbox Wireless Controller", amount: 64.99,
-        refundNote: "right trigger is inconsistent", flag: "not_restocked", ageDays: 7 },
-    ], [], ["2026-10-19", "2026-10-21"]);
+        refundNote: "right trigger is inconsistent", flag: "not_restocked", ageDays: 7,
+        attempts: [{ at: "2026-10-21T15:00:00Z", by: "Sample Manager", sku: "MO03-2368D-R7R2",
+          why: "MO03-2368D-R7R2 is at 0 on hand and hasn't sold since the refund." }] },
+    ], [], ["2026-10-19", "2026-10-21"], [
+      { store_code: "BAL", channel: "eBay", resolved_at: "2026-10-21T16:00:00Z", closed_by: "Sample Manager",
+        order_name: "#MO04-3622", title: "JMGO N1S Pro 4K Projector", amount: 899.99,
+        sku: "MO04-2086B-R5R4", moved_to_sku: "MO04-2508D-R3R2" },
+    ]);
     if (q("html") === "1") return new Response(html, { headers: { "Content-Type": "text/html" } });
     const to = q("to");
     if (!to) return json({ error: "sample needs &to=addr, or &html=1 to just render it" }, 400);
@@ -662,11 +854,19 @@ Deno.serve(async (req: Request) => {
     for (const r of (prior || [])) priorBy[r.issue_key] = r;
     const openRows = (prior || []).filter((r: any) => !r.resolved_at);
 
-    const { found, cleared, problems, blind, stats } = await collect(wantStores, days, openRows);
+    const { found, cleared, problems, blind, stats } = await collect(wantStores, days, openRows,
+      new Set((prior || []).filter((r: any) => r.resolved_at).map((r: any) => r.issue_key)));
 
     // One row per line however it was reached (sweep and re-check can both see it).
     const uniq = new Map(found.map((f) => [f.key, f]));
-    const rows: Row[] = [...uniq.values()].map((f) => ({ ...f, ageDays: daysBetween(f.refundDay, today) }));
+    const rows: Row[] = [...uniq.values()].map((f) => ({
+      ...f, ageDays: daysBetween(f.refundDay, today), attempts: priorBy[f.key]?.attempts || [],
+    }));
+    // Closed from the app since the last mail (RESTOCKED UNDER ANOTHER SKU).
+    // Only for the stores this run covers, so &store=BAL doesn't eat OVL's.
+    const closed = (prior || []).filter((r: any) =>
+      r.resolved_at && r.closed_by && !r.closure_mailed_at && wantStores.includes(r.store_code))
+      .sort((a: any, b: any) => String(a.resolved_at).localeCompare(String(b.resolved_at)));
     // NEW = never mailed before. Anything already mailed and still not back in
     // stock is "still open", and goes on every morning's mail until it is.
     const fresh = rows.filter((r) => !priorBy[r.key]?.mailed_at)
@@ -675,11 +875,12 @@ Deno.serve(async (req: Request) => {
       .sort((a, b) => b.ageDays - a.ageDays);
 
     if (q("dryRun") === "1") {
-      if (q("html") === "1" && rows.length) {
-        return new Response(build(fresh, older, [...blind], days), { headers: { "Content-Type": "text/html" } });
+      if (q("html") === "1" && (rows.length || closed.length)) {
+        return new Response(build(fresh, older, [...blind], days, closed), { headers: { "Content-Type": "text/html" } });
       }
       return json({
         ok: true, dryRun: true, days, new: fresh.length, stillOpen: older.length,
+        closedByManager: closed.map((r: any) => ({ order: r.order_name, sku: r.sku, movedTo: r.moved_to_sku, by: r.closed_by })),
         wouldClear: cleared, blindStores: [...blind], stats, problems,
         rows: rows.map((r) => ({
           store: r.store, order: r.orderName, channel: r.channel, kind: r.kind, day: r.refundDay,
@@ -694,16 +895,20 @@ Deno.serve(async (req: Request) => {
     // Once per Chicago day, whatever triggered the run. &to= is a test send and
     // ignores the guard; &force=1 overrides it for a deliberate second send.
     const mailedToday = (prior || []).some((r: any) => r.last_mailed_at && chicagoDay(r.last_mailed_at) === today);
-    if (rows.length && mailedToday && !q("to") && q("force") !== "1") {
+    // A manager's close is news too: a morning with nothing open but a close to
+    // report still mails, so the DM sees it.
+    const anything = rows.length || closed.length;
+    if (anything && mailedToday && !q("to") && q("force") !== "1") {
       sent.push({ skipped: "already mailed today" });
-    } else if (rows.length) {
+    } else if (anything) {
       const to = q("to") || (await listFor(sb, "unrestocked_returns", "claims_disputes_dm")).join(",");
       if (!to) problems.push("nobody on unrestocked_returns or claims_disputes_dm");
       else {
-        const parts = [fresh.length ? `${fresh.length} new` : "", older.length ? `${older.length} still open` : ""];
+        const parts = [fresh.length ? `${fresh.length} new` : "", older.length ? `${older.length} still open` : "",
+          closed.length ? `${closed.length} closed by a manager` : ""];
         const r = await relay(to,
           `Returned but not back in stock — ${parts.filter(Boolean).join(", ")}`,
-          build(fresh, older, [...blind], days));
+          build(fresh, older, [...blind], days, closed));
         // A test send (&to=) records nothing, so the real mail still goes out.
         mailed = r.ok && !q("to");
         sent.push({ to, new: fresh.length, stillOpen: older.length, ...r });
@@ -725,6 +930,10 @@ Deno.serve(async (req: Request) => {
         times_mailed: (p?.times_mailed || 0) + (mailed ? 1 : 0),
         resolved_at: null, resolved_how: null,
       }, { onConflict: "issue_key" });
+    }
+    if (mailed && closed.length) {
+      await sb.from("unrestocked_returns").update({ closure_mailed_at: nowIso })
+        .in("issue_key", closed.map((r: any) => r.issue_key));
     }
     // Back on hand or sold again: resolved, not deleted, so "how many and how
     // fast" stays answerable.

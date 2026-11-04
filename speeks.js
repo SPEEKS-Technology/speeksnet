@@ -136,6 +136,8 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
     if (!on) return;
     const READ_POSTS = [
         { path: '/functions/v1/district-watch', actions: ['board', 'history'] },
+        // 'lookup' only reads the row and Shopify; 'close' writes and stays blocked.
+        { path: '/functions/v1/unrestocked-returns', actions: ['lookup'] },
     ];
     function isReadPost(url, init) {
         let action = '';
@@ -205,6 +207,7 @@ const B2B_INTAKE_URL    = `${_BASE}/b2b-intake`;
 const B2B_CAPTURE_URL   = `${_BASE}/b2b-capture-tool`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
+const UNRESTOCKED_URL   = `${_BASE}/unrestocked-returns`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const QP_LAYOUT_URL     = `${_BASE}/qp-layout`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
@@ -4504,6 +4507,9 @@ async function checkPIN() {
             if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
             if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
             if (typeof initB2bPage === 'function') initB2bPage();
+            // The morning mail's "Restocked Under Another SKU" link — a manager
+            // on a phone signs in on it far more often than they arrive signed in.
+            try { _restockHandleHash(); } catch (_) { /* not fatal to sign-in */ }
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
@@ -33907,6 +33913,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // A #jump=<feature> deep-link from the search box: land, then spotlight
         // the panel that was asked for.
         try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
+        try { _restockHandleHash(); } catch (_) { /* not fatal to the page */ }
         applyKpiReminder();
         // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
         setInterval(applyKpiReminder, 60000);
@@ -46419,6 +46426,156 @@ function _jumpHandleHash() {
     const key = decodeURIComponent(m[1]);
     setTimeout(() => _jumpSpotlight(key), 400);
     try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
+}
+
+// ============================================================================
+// RESTOCKED UNDER ANOTHER SKU (2026-11-04)
+// The "Returned But Not Back In Stock" mail links each open row here:
+//   index.html#restock=<issue_key>
+// For the item that went back on the shelf under a DIFFERENT listing than the
+// one it was refunded from. BAL #MO04-3622 was a JMGO projector listed as the
+// wrong model and restocked under the right one; the report only watches the
+// refunded SKU, which stays at 0, so it would have stayed on the mail forever.
+//
+// index.html IS the login page, so the hash survives the PIN screen: this runs
+// from page load (already signed in) AND from checkPIN (signed in on the link),
+// and until someone is signed in it leaves the hash alone for the second one.
+//
+// Built for managers doing this on a phone straight from the email (Ethan:
+// "I need them to do this"):
+//   - in-stock listings at that store with matching words are offered as
+//     one-tap picks, so most of the time nothing has to be typed;
+//   - a SKU that fails says WHY, right here, and keeps what was typed — the
+//     card never closes on a failure, so there is no going back to the email;
+//   - nothing closes on the manager's say-so: the function checks the SKU is on
+//     hand or has sold since the refund. A refusal is logged and shows on the
+//     next mail, and every close is listed there for the DM.
+// No toasts ([[no-floating-toasts]]): every message is inline on the card.
+// ============================================================================
+let _restockKey = null;
+
+function _restockHandleHash() {
+    const m = (location.hash || '').match(/^#restock=(.+)$/);
+    if (!m) return;
+    if (sessionStorage.getItem('speeksUnlocked') !== 'true') return;   // checkPIN calls again
+    if (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole()) return;
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
+    _restockOpen(decodeURIComponent(m[1]));
+}
+
+function _restockWho() {
+    return {
+        name: sessionStorage.getItem('speeksUserName') || '',
+        role: sessionStorage.getItem('speeksUserRole') || '',
+        store: sessionStorage.getItem('speeksUserStore') || '',
+        multiStore: sessionStorage.getItem('speeksMultiStore') === 'true',
+    };
+}
+
+async function _restockPost(body) {
+    const res = await fetch(UNRESTOCKED_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ key: _restockKey, who: _restockWho() }, body)),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok && !json.card) throw new Error(json.error || ('Error ' + res.status));
+    return json;
+}
+
+async function _restockOpen(key) {
+    const modal = document.getElementById('restockSkuModal');
+    const body = document.getElementById('restockSkuBody');
+    if (!modal || !body) return;
+    _restockKey = key;
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    body.innerHTML = '<p class="rsk-muted">Loading…</p>';
+    try {
+        const j = await _restockPost({ action: 'lookup' });
+        _restockRender(j, {});
+    } catch (e) {
+        body.innerHTML = `<p class="rsk-bad">${escapeHtml(e.message || 'Could not load this item.')}</p>`;
+    }
+}
+
+function _restockSummary(c) {
+    const day = c.refundDay ? new Date(c.refundDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    return `
+      <div class="rsk-item">
+        <div class="rsk-muted">${escapeHtml(c.storeName)} · ${escapeHtml(c.channel || '')} · ${c.kind === 'cancel' ? 'Cancelled' : 'Returned'} ${escapeHtml(day)}</div>
+        <div class="rsk-title">${escapeHtml(c.title || '')}</div>
+        <div><a href="${escapeHtml(c.orderUrl)}" target="_blank" rel="noopener">${escapeHtml(c.order)}</a>
+          · Refunded From SKU <b>${escapeHtml(c.sku || '—')}</b> · $${Number(c.amount || 0).toFixed(2)}</div>
+        ${c.note ? `<div class="rsk-muted">Note: “${escapeHtml(c.note)}”</div>` : ''}
+      </div>`;
+}
+
+function _restockRender(j, st) {
+    const body = document.getElementById('restockSkuBody');
+    if (!body) return;
+    const c = j.card || {};
+    let h = _restockSummary(c);
+    if (c.closed) {
+        h += `<div class="rsk-done">${st.justClosed ? 'Closed. ' : 'Already Closed. '}${escapeHtml(c.closedHow || '')}
+              ${st.justClosed ? '<br>It drops off tomorrow’s email, and the DM sees it there under Closed By A Manager.' : ''}</div>
+              <button class="btn-primary rsk-btn" onclick="closeAllModals()">Done</button>`;
+        body.innerHTML = h;
+        return;
+    }
+    if (!j.canClose) {
+        body.innerHTML = h + `<p class="rsk-bad">${escapeHtml(j.denied || 'You can’t close this one.')}</p>`;
+        return;
+    }
+    const sugg = j.suggestions || [];
+    if (sugg.length) {
+        h += `<label class="form-label-caps">In Stock At ${escapeHtml(c.store)} Now — Tap It If It’s One Of These</label>
+              <div class="rsk-sugg">${sugg.map(s => `
+                <button type="button" class="rsk-pick" onclick="_restockPick('${escapeHtml(s.sku)}')">
+                  <b>${escapeHtml(s.sku)}</b> <span class="rsk-muted">· ${s.onHand} On Hand</span><br>${escapeHtml(s.title)}
+                </button>`).join('')}</div>`;
+    }
+    h += `<label class="form-label-caps" for="restockSkuInput">${sugg.length ? 'Or Type ' : ''}The SKU It Went Back In Under</label>
+          <input id="restockSkuInput" class="form-input-lg rsk-input" autocomplete="off" autocapitalize="characters" spellcheck="false"
+                 placeholder="${escapeHtml(String(c.sku || '').split('-')[0] || 'SKU')}-…" value="${escapeHtml(st.typed || '')}"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();_restockSubmit();}">
+          ${st.msg ? `<p class="rsk-bad">${escapeHtml(st.msg)}</p>` : ''}
+          <button id="restockSkuBtn" class="btn-primary rsk-btn" onclick="_restockSubmit()">Check &amp; Close</button>
+          <p class="rsk-muted">It only closes if that SKU is on hand now or has sold since the refund.</p>`;
+    const tries = c.attempts || [];
+    if (tries.length) {
+        h += `<div class="rsk-tries"><div class="form-label-caps">Tried Before</div>${tries.slice(-3).reverse().map(a => `
+              <div class="rsk-muted">${escapeHtml(a.sku || '(blank)')} — ${escapeHtml(a.by || '')},
+              ${escapeHtml(new Date(a.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))}: ${escapeHtml(a.why || '')}</div>`).join('')}</div>`;
+    }
+    body.innerHTML = h;
+    window._restockLast = j;
+}
+
+function _restockPick(sku) {
+    const inp = document.getElementById('restockSkuInput');
+    if (inp) inp.value = sku;
+    _restockSubmit();
+}
+
+async function _restockSubmit() {
+    const inp = document.getElementById('restockSkuInput');
+    const btn = document.getElementById('restockSkuBtn');
+    const sku = (inp && inp.value || '').trim().toUpperCase();
+    const last = window._restockLast || {};
+    if (!sku) { _restockRender(last, { msg: 'Type the SKU it went back in under, or tap one above.' }); return; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    try {
+        const j = await _restockPost({ action: 'close', sku });
+        if (j.ok) {
+            _restockRender(j, { justClosed: !j.already });
+        } else {
+            // Keep the picks from the first load; only the card's tries changed.
+            _restockRender(Object.assign({}, last, { card: j.card || last.card }), { msg: j.why || j.error, typed: sku });
+        }
+    } catch (e) {
+        _restockRender(last, { msg: e.message || 'Could not reach the server. Try again.', typed: sku });
+    }
 }
 
 function _jumpBuildIndex() {
