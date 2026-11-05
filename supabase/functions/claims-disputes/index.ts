@@ -1450,7 +1450,47 @@ const isInr = (it: any) => it.kind === "inquiry" || (it.kind === "case" && it.ca
 // DM confirms → resolved for good. DM sends back → the review stops counting,
 // the item is due again at once, and the DM's reason rides on the card.
 // ===========================================================================
-function factCheck(type: string, it: any, review: any): { ok: boolean; why: string } {
+// ---------------------------------------------------------------------------
+// NOT DONE GOES BACK TO THE MANAGER (Ethan, 2026-11-04: "when someone clicks
+// resolved, the system needs to go and verify immediately, or at least the next
+// day. And then it should be still popped up as a mismatch or as an open item
+// if the user did not do what they were supposed to"). 0164 sent every
+// disagreement to the DM and took it OFF the manager's list — so a manager who
+// clicked Resolved without doing the work was never chased again; the DM was.
+// Now a verdict comes in three kinds:
+//   not_done      the sites were read AFTER the click and still disagree →
+//                 due for the manager again today, every day, on the card, the
+//                 feed and the 4pm mails. The DM sees it too and may confirm it
+//                 (the escape hatch for a mismatch that is right but will never
+//                 match — e.g. refunded through a payment dispute, not the order)
+//   pending       nothing has been read since the click yet (a mismatch waits
+//                 for the next 8:20 refund-mismatch read) → left resolved
+//   unverifiable  a read ran and could not see the order any more (Shopify
+//                 hides orders older than ~60 days from our tokens, so
+//                 refund-mismatch leaves those rows "unjudged" forever) → the DM,
+//                 because nothing the manager does can change what we can read
+// The 2026-11-04 backlog is why the third kind exists: 11 of 14 mismatches on
+// the first DM list were last seen BEFORE they were resolved, and the card said
+// "still don't match" about orders the system simply could no longer read.
+// ---------------------------------------------------------------------------
+type FactKind = "ok" | "not_done" | "pending" | "unverifiable";
+// refund-mismatch runs at 8:20 CT (0089). Give it 15 minutes to finish, and
+// call the most recent such moment "the last read".
+function lastMismatchRead(now = new Date()): number {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(now).map((x) => [x.type, x.value]));
+  let diff = Number(p.hour) * 60 + Number(p.minute) - (8 * 60 + 35);
+  if (diff < 0) diff += 1440;
+  return now.getTime() - diff * 60_000;
+}
+const usDay = (d: string) => new Date(d).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric" });
+
+function factCheck(type: string, it: any, review: any): { ok: boolean; why: string; kind: FactKind } {
+  const r = factCheckRaw(type, it, review);
+  return { ...r, kind: r.kind || (r.ok ? "ok" : "not_done") };
+}
+function factCheckRaw(type: string, it: any, review: any): { ok: boolean; why: string; kind?: FactKind } {
   const ok = { ok: true, why: "" };
   if (type === "dispute") {
     if (!it.is_open || !it.needs_response) return ok;
@@ -1465,16 +1505,39 @@ function factCheck(type: string, it: any, review: any): { ok: boolean; why: stri
       ? "Shopify can still charge this card — the order was not charged or cancelled"
       : `Shopify still shows ${usd(Number(it.amount))} unpaid on this order` };
   }
-  if (type === "mismatch") return it.resolved_at ? ok : { ok: false, why: "eBay and Shopify still don't match on this order" };
+  if (type === "mismatch") {
+    if (it.resolved_at) return ok;
+    const clicked = Date.parse(review?.updated_at || "") || 0;
+    const seen = Date.parse(it.last_seen || "") || 0;
+    // Read again after the click and still mismatched: the manager didn't fix it.
+    if (seen > clicked) {
+      return { ok: false, kind: "not_done",
+        why: `eBay and Shopify still didn't match on ${usDay(it.last_seen)}, after this was marked resolved` };
+    }
+    // No read since the click yet: tomorrow's 8:20 decides.
+    if (clicked >= lastMismatchRead()) return { ok: true, kind: "pending", why: "" };
+    // A read ran and never touched the row — it could not see the order.
+    return { ok: false, kind: "unverifiable",
+      why: `The system can't re-read this order any more to check it — it last saw eBay and Shopify not matching on ${seen ? usDay(it.last_seen) : "an earlier day"}, before it was marked resolved` };
+  }
   if (type === "ebay_case") {
     if (it.is_open && awaitingReply(it)) return { ok: false, why: "eBay still shows no reply from us" };
     if (it.is_open) return { ok: false, why: "eBay still has this open" };
     if (isInr(it) && it.outcome === "refunded") {
       if (review?.fact_verdict === "agrees") return ok;
-      return { ok: false, why: review?.fact_why || "The buyer was refunded, and nothing yet shows the money or the device came back" };
+      // Not read yet (recheckResolutions picks it up within the next sweep).
+      if (!review?.fact_verdict) return { ok: true, kind: "pending", why: "" };
+      // The manager is chased only when BOTH reads came back with a clear no.
+      // A read that couldn't answer (eBay has no payout row, the order is too
+      // old and its SKU is shared at BAL, a timeout) is our blind spot, not the
+      // store's failure — that goes to the DM as "can't verify" instead.
+      const ev = review?.fact_evidence || {};
+      const why = review?.fact_why || "The buyer was refunded, and nothing yet shows the money or the device came back";
+      if (ev.ebay?.ok === false && ev.shopify?.ok === false) return { ok: false, kind: "not_done", why };
+      return { ok: false, kind: "unverifiable", why };
     }
     if (it.outcome == null && (isInr(it) || (it.kind === "case" && it.case_type == null))) {
-      return { ok: false, why: "eBay's outcome hasn't been read yet" };
+      return { ok: true, kind: "pending", why: "" };
     }
   }
   return ok;
@@ -1497,13 +1560,25 @@ function stateOf(type: string, it: any, review: any, ctx: any): StateOut {
              dm: dmOf(review, false, fc.why) };
   }
   const s = baseState(type, it, review, ctx);
-  if (s.state === "needs_reply") return { ...s, dm: dmOf(review, true, fc.why) };
-  return { state: "dm_review", due_on: null, note: s.note, dm: dmOf(review, true, fc.why) };
+  if (s.state === "needs_reply") return { ...s, dm: dmOf(review, true, fc.why, fc.kind) };
+  // Not done: back on the manager's list, due today, exactly as if nobody had
+  // resolved it — the DM's list carries it too, so the DM can still sign off
+  // a resolution that is right but that the sites will never agree with.
+  if (fc.kind === "not_done") {
+    const b = baseState(type, it, null, ctx);
+    const quiet = ["waiting", "checked", "resolved"].includes(b.state);
+    return { ...(quiet ? { state: "due", due_on: ctx.today } : b), note: b.note, quiet_until: undefined,
+             dm: dmOf(review, true, fc.why, fc.kind) };
+  }
+  return { state: "dm_review", due_on: null, note: s.note, dm: dmOf(review, true, fc.why, fc.kind) };
 }
 // What the card, the DM list and the emails need to know about the DM's part.
-function dmOf(review: any, pending: boolean, why: string) {
+function dmOf(review: any, pending: boolean, why: string, kind: FactKind | null = null) {
   return {
     pending, why,
+    // 'not_done' = back on the manager's list; 'unverifiable' = only the DM can
+    // settle it. Read by the card, the feed card and the mails.
+    kind: pending ? kind : null,
     status: review.dm_status || null, by: review.dm_by || null,
     note: review.dm_note || null, at: review.dm_at || null,
     resolved_by: review.by_name || null, resolved_note: review.note || null, resolved_at: review.updated_at || null,
@@ -1934,11 +2009,16 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       // 4pm mail: the DM has just said it isn't done, and the card is how the
       // manager hears it — with the DM's reason (dm_note).
       const sentBack = x.dm?.status === "denied" && NEED_STATES.includes(x.state);
-      const on = nudgedOn[`${type}|${key}`] || (sentBack ? String(x.dm.at || "").slice(0, 10) || ctx.today : null);
+      // Marked resolved but not done (2026-11-04) goes on the card at once too:
+      // the manager believes it is off their plate, and this is how they learn
+      // it isn't.
+      const notDone = x.dm?.kind === "not_done" && NEED_STATES.includes(x.state);
+      const on = nudgedOn[`${type}|${key}`] || (sentBack ? String(x.dm.at || "").slice(0, 10) || ctx.today : null)
+        || (notDone ? ctx.today : null);
       if (!on || DUE_ALERT_DONE.includes(x.state)) continue;
       // A manager's own resolution clears their card (Ethan, 2026-10-08) —
       // unless the DM has since sent it back.
-      if (x.review?.status === "resolved" && !sentBack) continue;
+      if (x.review?.status === "resolved" && !sentBack && !notDone) continue;
       const dueAt = type === "payment" ? (x.capturable ? x.auth_expires_at : null) : x.respond_by;
       const due = dueAt ? chicagoDay(dueAt) : null;
       dueAlerts.push({
@@ -1948,12 +2028,13 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
         // (a card that already ran out).
         overdue: !!x.missed_window || (due ? due < ctx.today : on < ctx.today),
         amount: x.amount ?? null,
-        order: x.order_no || x.order_name || x.order_id || null,
+        order: x.order_no || x.order_name || x.order_id || x.ebay_order_id || null,
         title: x.item_title || x.reason || null,
         // What the front end's _holdKindChip reads to name the item.
         source: x.source, dispute_type: x.dispute_type, kind: x.kind, case_type: x.case_type,
         financial_status: x.financial_status, capturable: x.capturable,
         sent_back: sentBack ? { by: x.dm.by, note: x.dm.note } : null,
+        not_done: notDone ? { by: x.dm.resolved_by, at: x.dm.resolved_at, why: x.dm.why } : null,
       });
     }
   };
@@ -1974,6 +2055,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       dmQueue.push({
         type, key: keyOf(x), review_key: x.review_key, store_code: x.store_code, state: x.state,
         why: x.dm.why, resolved_by: x.dm.resolved_by, resolved_note: x.dm.resolved_note, resolved_at: x.dm.resolved_at,
+        fact_kind: x.dm.kind || null,
         amount: x.amount ?? null, order: x.order_no || x.order_name || x.order_id || x.ebay_order_id || null,
         title: x.item_title || x.reason || null,
         source: x.source, dispute_type: x.dispute_type, kind: x.kind, case_type: x.case_type,

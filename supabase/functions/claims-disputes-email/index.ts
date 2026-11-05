@@ -6,12 +6,12 @@
 // dispute (Ethan, 2026-09-28). Since 2026-10-02 "due today" means the deadline
 // is today OR TOMORROW — see dueSoon.
 //
-//   manager_daily   08:20 CT  to each store's manager. Everything of theirs that
+//   manager_daily   08:35 CT  to each store's manager. Everything of theirs that
 //                             needs a person, soonest deadline first.
 //   manager_nudge   16:00 CT  to a store, ONLY when something is due today, it
 //                             was on this morning's mail, and it still has not
 //                             been answered. Answer it and this never arrives.
-//   dm_digest       08:20 CT  to the DM. Counts per store, plus the two things a
+//   dm_digest       08:40 CT  to the DM. Counts per store, plus the two things a
 //                             manager cannot fix on their own.
 //   dm_due_today    16:00 CT  to the DM (Ethan, 2026-09-23: "anything that is due
 //                             today to send an email to the DM at 4:00pm central
@@ -130,6 +130,9 @@ type Row = {
   dueVerb?: string; missedText?: string;
   // 0164: the DM looked at a resolution of this and sent it back, with why.
   sentBack?: { by: string | null; note: string | null } | null;
+  // 2026-11-04: marked resolved, but the sites were read afterwards and still
+  // disagree — back on the manager's list every day, like a send-back.
+  notDone?: { by: string | null; why: string | null } | null;
 };
 
 // The states that mean a person still has to do something. Identical to the
@@ -385,6 +388,9 @@ function allRows(d: any): Row[] {
     if (x.dm?.status === "denied" && NEED.includes(r.state)) {
       r.sentBack = { by: x.dm.by || null, note: x.dm.note || null };
       if (!r.due || r.due > addDaysIso(today, 1)) r.due = today;
+    } else if (x.dm?.kind === "not_done" && NEED.includes(r.state)) {
+      r.notDone = { by: x.dm.resolved_by || null, why: x.dm.why || null };
+      if (!r.due || r.due > addDaysIso(today, 1)) r.due = today;
     }
     return r;
   };
@@ -473,9 +479,9 @@ function itemRow(r: Row, today: string) {
   const tomorrowDue = r.due && r.due === addDaysIso(today, 1);
   // A refunded INR, or anything the DM sent back, is due EVERY day until it is
   // dealt with — there is no deadline closing, so "closes today" would lie.
-  const everyDay = r.state === "needs_claim" || REFUNDED_INR_NOTES.includes(r.note || "") || !!r.sentBack;
+  const everyDay = r.state === "needs_claim" || REFUNDED_INR_NOTES.includes(r.note || "") || !!r.sentBack || !!r.notDone;
   const dueTxt = everyDay && !r.missed
-    ? `<span style="color:${C.bad};font-weight:700;"> · due today${r.sentBack ? " — sent back by the DM" : ""}</span>`
+    ? `<span style="color:${C.bad};font-weight:700;"> · due today${r.sentBack ? " — sent back by the DM" : r.notDone ? " — marked resolved, not done" : ""}</span>`
     : r.missed
     ?(r.missedText === "" ? "" : `<span style="color:${C.bad};font-weight:700;"> · ${esc(r.missedText || "reply window shut")}</span>`)
     : todayDue ? `<span style="color:${C.bad};font-weight:700;"> · closes today</span>`
@@ -498,6 +504,10 @@ function itemRow(r: Row, today: string) {
 // The one-line "so what" under an item, in the same words the card uses.
 function noteLine(r: Row): string {
   const base = noteBase(r);
+  if (r.notDone && !r.sentBack) {
+    const nd = `${r.notDone.by || "Someone"} marked this resolved, but it isn't done — the system says: ${r.notDone.why || "eBay and Shopify don't back it up"}.`;
+    return base ? `${nd} ${base}` : nd;
+  }
   if (!r.sentBack) return base;
   const back = `The DM sent this back${r.sentBack.by ? ` (${r.sentBack.by})` : ""}: "${r.sentBack.note || ""}"`;
   return base ? `${back} — ${base}` : back;
@@ -658,7 +668,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
         <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">${esc(what)} · marked resolved ${days ? `${days} day${days === 1 ? "" : "s"} ago` : "today"}</div>
         <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(q.store_code)} — ${money(q.amount)}${q.order ? ` · ${esc(q.order)}` : ""}</div>
         <div style="font-size:13px;color:${C.ink};line-height:1.6;"><b>${esc(q.resolved_by || "The manager")} said:</b> “${esc(q.resolved_note || "")}”<br>
-          <span style="color:${C.bad};"><b>The system says:</b> ${esc(q.why || "")}.</span></div>
+          <span style="color:${C.bad};"><b>The system says:</b> ${esc(q.why || "")}.</span>${q.fact_kind === "not_done" ? `<br><span style="color:${C.faint};">Back on the manager's list until it's fixed — confirm only if it's right and the sites will never match.</span>` : q.fact_kind === "unverifiable" ? `<br><span style="color:${C.faint};">Only you can settle this one — the store can't do anything more about what we can read.</span>` : ""}</div>
       </td></tr>`;
     }).join("");
     body += `<tr><td style="padding:12px 14px;border-top:1px solid ${C.line};font-size:12.5px;color:${C.faint};line-height:1.6;">Confirm or send each one back in Claims &amp; Disputes → To Confirm at <a href="${TOOL_URL}/workspace.html#claims" style="color:#1c6b47;">speeksnet.com</a>. Sending one back needs a reason; the manager sees it.</td></tr>`;

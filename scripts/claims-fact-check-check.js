@@ -99,6 +99,19 @@ t('waiting on the DM: amber, quotes the manager, says why', function () {
     return !/Resolved by Pat/.test(x) || 'also drew the green "Resolved by" block';
 });
 
+// 2026-11-04: re-read after the click and still contradicted → back in Needs
+// Attention for the manager, red, not the amber "waiting on the DM".
+t('marked resolved but not done: back on the manager\'s list, red, says what the system saw', function () {
+    var x = text(draw(inr({ state: 'due', review: { status: 'resolved', by_name: 'Pat', note: 'We got refunded. all is good.' },
+        dm: { pending: true, kind: 'not_done', why: 'The buyer was refunded: eBay\'s payouts show $179.85 refunded from us and not credited back', resolved_by: 'Pat', resolved_note: 'We got refunded. all is good.', resolved_at: '2026-10-09T15:00:00Z' } })));
+    if (!/Marked resolved — not done/.test(x)) return 'chip: ' + x.slice(0, 160);
+    if (!/Pat marked this resolved .*it isn't done/.test(x)) return 'block: ' + x.slice(0, 300);
+    if (!/\$179\.85 refunded from us/.test(x)) return 'why missing';
+    if (/waiting on the DM to confirm/.test(x)) return 'still says it is waiting on the DM';
+    if (_HOLD_VIEWS.due.states.indexOf('due') < 0) return 'due is not a Needs Attention state';
+    return !/Resolved by Pat/.test(x) || 'also drew the green "Resolved by" block';
+});
+
 t('sent back: chip says so, the DM\'s reason is on the card', function () {
     var x = text(draw(inr({ state: 'due', state_note: 'never_scanned', review: { status: 'resolved', by_name: 'Pat', note: 'found it' },
         dm: { pending: false, status: 'denied', by: 'Ethan', note: 'Not in stock — find the lens and restock it', at: '2026-11-03T18:00:00Z', resolved_by: 'Pat', resolved_note: 'found it' } })));

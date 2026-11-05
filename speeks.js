@@ -38251,6 +38251,9 @@ function _holdStateLabel(type, it, s) {
     if (it.dm && it.dm.status === 'denied' && it.state !== 'needs_reply'
         && _HOLD_VIEWS.due.states.includes(it.state)) return 'Sent back by DM';
     if (it.state === 'needs_reply') {
+    // 2026-11-04: resolved, re-read afterwards, and the sites still disagree.
+    if (it.dm && it.dm.kind === 'not_done' && it.state !== 'needs_reply'
+        && _HOLD_VIEWS.due.states.includes(it.state)) return 'Marked resolved — not done';
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
         if (it.missed_window) return 'Missed reply window';
@@ -39095,7 +39098,15 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     const dmx = it.dm || null;
     const dmPending = !!(dmx && dmx.pending && it.state_note !== 'resolution_disputed');
     const dmBack = !!(dmx && dmx.status === 'denied' && _HOLD_VIEWS.due.states.includes(st));
-    if (dmPending) {
+    // NOT DONE (Ethan, 2026-11-04): a resolution the sites were re-read after
+    // and still contradict is back in Needs Attention for the manager — red,
+    // with what the system saw, because the manager thinks it's finished.
+    const dmNotDone = !!(dmPending && dmx.kind === 'not_done' && _HOLD_VIEWS.due.states.includes(st));
+    if (dmNotDone) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(dmx.resolved_by || 'Someone')} marked this resolved${dmx.resolved_at ? ' ' + _holdDate(dmx.resolved_at) : ''} — it isn't done</b>
+            ${dmx.resolved_note ? `<div style="margin-top:2px;">“${escapeHtml(dmx.resolved_note)}”</div>` : ''}
+            <div style="margin-top:4px;">The system checked afterwards: ${escapeHtml(dmx.why || '')}. Fix it on eBay or Shopify and it clears at the next morning's read — or open a claim.</div></div>`;
+    } else if (dmPending) {
         said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>${escapeHtml(dmx.resolved_by || 'Someone')} marked this resolved${dmx.resolved_at ? ' ' + _holdDate(dmx.resolved_at) : ''} — waiting on the DM to confirm</b>
             ${dmx.resolved_note ? `<div style="margin-top:2px;">“${escapeHtml(dmx.resolved_note)}”</div>` : ''}
             <div style="margin-top:4px;">The system doesn't back it up yet: ${escapeHtml(dmx.why || '')}. If eBay or Shopify catch up, this clears by itself.</div></div>`;
@@ -40189,7 +40200,7 @@ async function checkAgingClaimsDM() {
 
 // --- RESOLUTIONS TO CONFIRM, AS THE DM'S FEED CARD (0164) ---------------------
 // Ethan, 2026-11-03: "if the system disagrees, then DM gets notified to confirm".
-// The DM's notice is this card plus the 8:20 digest. State-based like the
+// The DM's notice is this card plus the 8:40 digest. State-based like the
 // delete-request card: it stays while anything waits on the DM and leaves when
 // the queue is empty, so no snooze — a glance must not silence it. District
 // manager only, the role that answers them.
