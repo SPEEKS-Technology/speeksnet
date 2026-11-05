@@ -2154,37 +2154,9 @@ function toggleCalendar() {
     }
     toggleModal('calendarDropdown');
 }
-// Where an idea goes if the recipient list has not loaded (or is empty). Same
-// fallback pattern as every other emailing tool: the address that was hardcoded
-// into the form before the list existed, so a failed fetch sends the idea to the
-// person it has always gone to rather than nowhere.
-const IDEA_FALLBACK_TO = ['ethan.kushnir@speekstechnology.com'];
-
-// formsubmit.co takes ONE address in the URL and the rest through a _cc field,
-// so the list is split rather than joined. Called on open, not at inject time:
-// the recipient list is fetched lazily and a modal built at page load would keep
-// whatever address was current then for the rest of the session.
-async function _ideaSyncRecipients() {
-    const form = document.getElementById('ideaForm');
-    if (!form) return;
-    await _fetchEmailLists();
-    const to = _recipientsFor('idea_submissions', IDEA_FALLBACK_TO)
-        .map(a => String(a || '').trim()).filter(Boolean);
-    const list = to.length ? to : IDEA_FALLBACK_TO;
-    form.action = 'https://formsubmit.co/' + encodeURIComponent(list[0]);
-    // _cc is rewritten every open, including to empty — an address removed in the
-    // tool has to actually stop receiving ideas, and a stale hidden field would
-    // keep copying them in forever.
-    let cc = form.querySelector('input[name="_cc"]');
-    if (!cc) {
-        cc = document.createElement('input');
-        cc.type = 'hidden';
-        cc.name = '_cc';
-        form.appendChild(cc);
-    }
-    cc.value = list.slice(1).join(',');
-}
-
+// Recipients for Submit an Idea are read SERVER side now (the idea-submit edge
+// function reads the idea_submissions list and falls back to Ethan), so the
+// popup no longer fetches the list on open or rewrites a formsubmit _cc field.
 function toggleIdeaModal() {
     // Pre-fill the submitter's name from their session so they don't retype it.
     const nameEl = document.getElementById('ideaName');
@@ -2192,10 +2164,6 @@ function toggleIdeaModal() {
         const u = sessionStorage.getItem('speeksUserName');
         if (u && u.trim()) nameEl.value = u.trim();
     }
-    // Not awaited: the address only has to be right by the time Submit is
-    // pressed, and blocking the modal open on a network call to show a form
-    // would be a worse trade. The form carries the fallback until it resolves.
-    _ideaSyncRecipients();
     toggleModal('ideaModal');
 }
 
@@ -12590,21 +12558,27 @@ function handleSignOut() {
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
-let isIdeaSubmitting = false; 
+// Posts to the idea-submit edge function with fetch. It used to be a plain form
+// posted to formsubmit.co into a hidden iframe, which is why it "took forever"
+// (2026-11-05): the success screen waited on that free service's whole reply,
+// had no timeout, and showed "Submitted" on any iframe load — error pages too.
+// Now "Submitted" means the relay took the mail, and a failure says so.
+let isIdeaSubmitting = false;
+const IDEA_SUBMIT_URL = `${_BASE}/idea-submit`;
+// Long enough for a 10 MB phone photo on store Wi-Fi, short enough that a dead
+// request ends in a message rather than a button stuck on "Sending...".
+const IDEA_SUBMIT_TIMEOUT_MS = 45000;
 
 function injectIdeaModal() {
     if (!document.getElementById('ideaModal')) {
         const modalHtml = `
-        <iframe name="hidden_iframe" id="hidden_iframe" style="display:none;" onload="handleIframeLoad()"></iframe>
         <div class="modal-menu idea-menu" id="ideaModal">
             <div class="modal-header">
                 <h3>Submit an Idea</h3>
                 <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div class="modal-content" style="padding: 25px;">
-                <form id="ideaForm" action="https://formsubmit.co/ethan.kushnir@speekstechnology.com" method="POST" enctype="multipart/form-data" target="hidden_iframe" onsubmit="prepareIdeaSubmit()">
-                    <input type="hidden" name="_captcha" value="false">
-                    <input type="hidden" name="_subject" id="ideaDynamicSubject" value="New SPEEKS Idea">
+                <form id="ideaForm" onsubmit="submitIdea(event)">
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Your Name</label>
                         <input type="text" id="ideaName" name="Name" class="idea-input" required readonly aria-readonly="true" title="Pulled from your account" style="background:#f1f5f9; color:#475569; cursor:not-allowed;">
@@ -12627,6 +12601,7 @@ function injectIdeaModal() {
                         <input type="file" id="ideaFile" name="Attachment" class="idea-input" accept="image/*,.pdf,.doc,.docx" style="padding: 10px;">
                     </div>
                     <div style="display:flex; justify-content:flex-end; gap:10px;">
+                    <div id="ideaError" role="alert" style="display:none; color:#d64545; font-size:13px; font-weight:600; margin-bottom:12px;"></div>
                         <button type="button" class="btn-secondary" onclick="closeAllModals()">Cancel</button>
                         <button type="submit" class="btn-primary" id="submitIdeaBtn">Submit Idea</button>
                     </div>
@@ -12643,23 +12618,49 @@ function injectIdeaModal() {
     }
 }
 
-function prepareIdeaSubmit() {
-    isIdeaSubmitting = true; 
+async function submitIdea(ev) {
+    if (ev) ev.preventDefault();
+    if (isIdeaSubmitting) return; // a double-click must not send the idea twice
+    const form = document.getElementById('ideaForm');
     const btn = document.getElementById('submitIdeaBtn');
-    btn.innerText = 'Sending...';
-    btn.style.opacity = '0.7';
-    const category = document.getElementById('ideaCategory').value;
-    document.getElementById('ideaDynamicSubject').value = 'New SPEEKS Idea: ' + category;
-}
+    const errEl = document.getElementById('ideaError');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
-function handleIframeLoad() {
-    if (isIdeaSubmitting) {
-        document.getElementById('ideaForm').style.display = 'none';
+    // Checked here rather than left to the server: a 10 MB limit learnt after
+    // uploading 30 MB is the slow failure this rewrite exists to remove.
+    const fileEl = document.getElementById('ideaFile');
+    const f = fileEl && fileEl.files && fileEl.files[0];
+    if (f && f.size > 10 * 1024 * 1024) {
+        if (errEl) { errEl.textContent = 'That file is over 10 MB — please attach a smaller one.'; errEl.style.display = 'block'; }
+        return;
+    }
+
+    const fd = new FormData(form);
+    fd.append('Store', sessionStorage.getItem('speeksUserStore') || '');
+
+    isIdeaSubmitting = true;
+    btn.disabled = true;
+    btn.innerText = f ? 'Uploading...' : 'Sending...';
+    btn.style.opacity = '0.7';
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), IDEA_SUBMIT_TIMEOUT_MS);
+    try {
+        const res = await fetch(IDEA_SUBMIT_URL, { method: 'POST', body: fd, signal: ctl.signal });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success) throw new Error(json.error || `Server answered ${res.status}`);
+        form.style.display = 'none';
         document.getElementById('ideaSuccess').style.display = 'block';
-        const btn = document.getElementById('submitIdeaBtn');
+    } catch (e) {
+        const msg = e && e.name === 'AbortError'
+            ? 'This is taking too long — check your connection and try again.'
+            : `Your idea did not send: ${(e && e.message) || e}`;
+        if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+    } finally {
+        clearTimeout(timer);
+        isIdeaSubmitting = false;
+        btn.disabled = false;
         btn.innerText = 'Submit Idea';
         btn.style.opacity = '1';
-        isIdeaSubmitting = false; 
     }
 }
 
