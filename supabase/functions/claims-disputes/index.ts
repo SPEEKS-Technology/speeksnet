@@ -846,6 +846,52 @@ async function verifyRefundedInr(it: any, ebayRow: any, shopRow: any) {
   };
 }
 
+// A RETURN SETTLED FOR LESS THAN A FULL REFUND (Ethan, 2026-11-05: "as long as
+// the eBay partial refund and Shopify show the same partial refund, that should
+// be resolved and marked as good"). eBay leaves such a return OPEN in status
+// LESS_THAN_A_FULL_REFUND_ISSUED — the buyer can still escalate for a while —
+// so on eBay's word alone it sat on the list as needing us, forever red (LEE
+// 5331001474, $455.99 of $744.99). The thing a manager would check is whether
+// Shopify booked the same refund; if it did, the books agree and there is
+// nothing to do. Read-only, like every other read here; a read that fails or
+// finds no Shopify order is never taken as agreement.
+// Written to the return's outcome/outcome_detail, which a return otherwise
+// never uses (readOutcome leaves returns alone).
+const SHOPIFY_REFUNDED_FOR_EBAY_QL = `query ($q: String!) {
+  orders(first: 5, query: $q) {
+    edges { node {
+      name sourceIdentifier tags
+      customAttributes { key value }
+      totalRefundedSet { shopMoney { amount } }
+    } }
+  }
+}`;
+const isPartialReturn = (it: any) => it.kind === "return" && /LESS_THAN_A_FULL_REFUND/.test(String(it.ebay_status || ""));
+async function checkPartialRefund(it: any, shopRow: any): Promise<{ outcome: string; outcome_detail: string } | null> {
+  const order = String(it.order_id || "");
+  const ebay = Number(it.raw?.sellerTotalRefund?.actualRefundAmount?.value ?? it.amount);
+  if (!EBAY_ORDER_NO.test(order) || !(ebay > 0) || !shopRow?.access_token) return null;
+  try {
+    const d = await shopifyRead(shopRow.shop, shopRow.access_token, SHOPIFY_REFUNDED_FOR_EBAY_QL, { q: order });
+    // Shopify's search is fuzzy — only an order that really carries this eBay number counts.
+    const nodes = ((d?.orders?.edges || []) as any[]).map((e) => e.node).filter((n: any) =>
+      String(n.sourceIdentifier || "") === order
+      || (n.tags || []).some((t: string) => String(t).includes(order))
+      || (n.customAttributes || []).some((a: any) => String(a.value || "").includes(order)));
+    if (!nodes.length) {
+      return { outcome: "partial_unmatched", outcome_detail: `eBay refunded ${usd(ebay)}; couldn't find the Shopify order to compare` };
+    }
+    const shop = nodes.reduce((a: number, n: any) => a + (Number(n.totalRefundedSet?.shopMoney?.amount) || 0), 0);
+    const names = nodes.map((n: any) => n.name).join(", ");
+    if (Math.abs(shop - ebay) <= 0.01) {
+      return { outcome: "partial_matched", outcome_detail: `eBay and Shopify (${names}) both show ${usd(ebay)} refunded` };
+    }
+    return { outcome: "partial_unmatched", outcome_detail: `eBay refunded ${usd(ebay)} but Shopify (${names}) shows ${usd(shop)}` };
+  } catch {
+    return null;   // couldn't read — try again next sweep, decide nothing
+  }
+}
+
 async function credsFor(sb: any, store: string) {
   const [{ data: e }, { data: shops }] = await Promise.all([
     sb.from("ebay_stores").select("store_code,refresh_token,scopes,environment").eq("store_code", store).maybeSingle(),
@@ -1329,6 +1375,30 @@ async function sweepStore(sb: any, ebayRow: any) {
   if (detailFail) { failed = true; notes.push(`detail: ${detailFail} of ${reads.length} unread`); }
   else if (reads.length) notes.push(`detail ok (${reads.length})`);
 
+  // Partial refunds (see checkPartialRefund). Re-read every sweep until they
+  // agree — a Shopify refund keyed a day after eBay's must still clear it.
+  // Once matched it is not read again; the sweep is throttled per store anyway.
+  const { data: partials } = await sb.from("ebay_cases")
+    .select("case_key,kind,order_id,amount,raw,ebay_status,outcome")
+    .eq("store_code", store).eq("kind", "return").eq("is_open", true)
+    .ilike("ebay_status", "%LESS_THAN_A_FULL_REFUND%")
+    .or("outcome.is.null,outcome.neq.partial_matched")
+    .limit(DETAIL_PER_SWEEP);
+  if (partials?.length) {
+    const { shopRow } = await credsFor(sb, store);
+    let matched = 0, unsaved = 0;
+    for (const p of partials) {
+      const r = await checkPartialRefund(p, shopRow);
+      if (!r) continue;
+      // Checked, because the first deploy's writes were refused by the outcome
+      // check (0174) while this line went on reporting a match.
+      const { error } = await sb.from("ebay_cases").update(r).eq("case_key", p.case_key);
+      if (error) { unsaved++; continue; }
+      if (r.outcome === "partial_matched") matched++;
+    }
+    notes.push(`partial refunds ${matched}/${partials.length} match Shopify${unsaved ? `; ${unsaved} not saved` : ""}`);
+  }
+
   const detail = notes.join("; ");
   await sb.from("ebay_case_sync").upsert(
     { store_code: store, synced_at: nowIso, ok: !failed, detail }, { onConflict: "store_code" });
@@ -1713,6 +1783,12 @@ function baseState(type: string, it: any, review: any, ctx: any): StateOut {
     return { state: "due", due_on: today, note: "outcome unread" };
   }
   if (type === "mismatch" ? !!it.resolved_at : !it.is_open) return { state: "settled", due_on: null };
+  // A partial refund eBay and Shopify agree on is finished, though eBay keeps
+  // the return open (see checkPartialRefund). If the buyer escalates, the case
+  // eBay opens is its own item and comes back through the case rules.
+  if (type === "ebay_case" && isPartialReturn(it) && it.outcome === "partial_matched") {
+    return { state: "settled", due_on: null, note: "partial_refund_matched" };
+  }
   // ONCE A CLAIM EXISTS, THE CLAIM IS THE THING BEING CHASED (Ethan, 2026-09-22:
   // "if it is a claim that gets opened, then the current rules for reminding
   // about open claims is the norm for them. same with INR claims"). So the item
@@ -1945,6 +2021,10 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   const closedRecently = (x: any) => {
     if (x.state === "resolved") return (x.review?.updated_at || "") >= recent;
     if (x.state === "settled") {
+      // A partial refund the books agree on is settled while eBay still has the
+      // return OPEN (0174). The Returns tab matches Seller Hub's open list, so it
+      // stays on it — green, counted nowhere — until eBay closes it.
+      if (x.kind === "return" && x.is_open) return true;
       if (x.claim) return (x.claim.resolved_at || "") >= recent;
       return (x.resolved_at || x.closed_at || "") >= recent;
     }

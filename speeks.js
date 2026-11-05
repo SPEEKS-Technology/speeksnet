@@ -38269,6 +38269,7 @@ function _holdStateLabel(type, it, s) {
     if (it.state_note === 'delivered_after_refund') return 'Delivered — call eBay';
     if (it.state_note === 'returned_to_us') return 'Returned to us — restock it';
     if (it.state_note === 'never_scanned') return 'Never scanned — find it';
+    if (it.state_note === 'partial_refund_matched') return 'Partial refund — books match';
     return s.label;
 }
 
@@ -38328,6 +38329,14 @@ const _HOLD_REFUND_NOTES = ['delivered_after_refund', 'returned_to_us', 'never_s
 // A plain return only. An escalated one arrives folded into the case eBay opened
 // (0104), which is no longer a routine return, so it belongs with the cases.
 const _holdIsReturn = it => it.kind === 'return';
+// A return counts as NEEDING US only when the next move is ours (Ethan,
+// 2026-11-05: OVL's badge said 27 when a handful needed anything). The server
+// marks every return open past its first day 'due', including the ones sitting
+// on the buyer ("waiting for buyer to ship", "return shipped") that nobody
+// here can move. Same test the card uses to decide whether it shows a deadline,
+// so the tab badge and the QuickPortal cards count exactly the cards with one.
+// Only the COUNTS use this; the Returns list still shows every open return.
+const _holdReturnNeedsUs = it => !!it.is_open && _holdReturnAction(it).ours;
 const _holdItemKey = entry => _holdKeyFor(entry.type, entry.it);
 // One place that knows which column is an item's key, because three types now
 // use three different ones and getting it wrong silently posts against nothing.
@@ -38433,7 +38442,7 @@ function _holdDueCounts(ctx) {
     const due = (d.cases || []).filter(need);
     return {
         mismatch: (d.mismatches || []).filter(need).length,
-        returns: due.filter(_holdIsReturn).length,
+        returns: due.filter(c => _holdIsReturn(c) && _holdReturnNeedsUs(c)).length,
         // Disputes live on this tab too, and an unanswered one is the most
         // expensive thing the badge can be counting.
         cases: due.filter(c => !_holdIsReturn(c)).length + (d.disputes || []).filter(need).length,
@@ -38764,7 +38773,24 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
     // Most urgent state first, then oldest — the oldest open item is the one
     // closest to becoming a month-end adjusting entry.
     const at = it => new Date((type === 'mismatch' ? it.reversed_at : it.opened_at) || 0).getTime();
-    if (returns) rows.sort((a, b) => _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b));
+    // Returns: soonest deadline on top, ALWAYS (Ethan, 2026-11-05 — OVL had a
+    // run of delivered returns whose refund-by dates were scattered down the
+    // list, because the old order was status then age, and age is not when it
+    // is due). Only the date the card actually prints counts — the one shown
+    // when the next move is ours — so the order reads true on screen. Returns
+    // with no deadline of ours follow, in the old status-then-oldest order.
+    if (returns) {
+        const dueAt = it => {
+            if (!it.respond_by || !_holdReturnAction(it).ours) return Infinity;
+            const t = new Date(it.respond_by).getTime();
+            return isNaN(t) ? Infinity : t;
+        };
+        rows.sort((a, b) => {
+            const da = dueAt(a), db = dueAt(b);
+            if (da !== db) return da === Infinity ? 1 : db === Infinity ? -1 : da - db;
+            return _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b);
+        });
+    }
     else if (type === 'ebay_case') rows.sort((a, b) => _holdCaseRank(a) - _holdCaseRank(b) || at(a) - at(b));
     // Soonest deadline first among the ones waiting on us — with two of these
     // open, the date is the only thing that decides which to do first.
@@ -38840,6 +38866,9 @@ const _holdEbayDay = iso => {
 // appears only when the next move is ours, as it does in Seller Hub.
 function _holdReturnAction(it) {
     const st = String(it.ebay_status || '');
+    // A partial refund eBay and Shopify agree on (claims-disputes checkPartialRefund,
+    // Ethan 2026-11-05). eBay keeps it open, but nothing is left for us to do.
+    if (it.outcome === 'partial_matched') return { text: 'Partial refund — matches Shopify', ours: false };
     // Always red, not only inside the two-day window: the item is back in our
     // hands and the buyer is owed their money, so it is the one stage where the
     // clock is already running against us (Ethan, 2026-09-22).
@@ -39076,6 +39105,13 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             extra = box(_HOLD_C.red, `<b>${it.tracking_status ? 'The carrier never scanned this parcel' : 'There is no tracking on this one'}</b> — and the buyer was refunded. It may never have left the store, and a carrier won't pay a claim on a parcel it never had. Find the device and put it back in stock in Shopify, then mark this resolved. If it can't be found, say so — that goes to the DM.`);
         } else if (st === 'needs_claim') {
             extra = box(_HOLD_C.red, `<b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''} and the carrier still shows the parcel in transit. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.`);
+        }
+        // A partial refund, checked against Shopify (2026-11-05): matched says so
+        // in green and needs nothing; unmatched says what each side shows.
+        if (it.kind === 'return' && it.outcome === 'partial_matched' && it.outcome_detail) {
+            extra = box(_HOLD_C.green, `<b>Nothing to do</b> — ${escapeHtml(it.outcome_detail)}. eBay keeps a partial refund open until the buyer's window to escalate runs out; if they do, it comes back as a case.`);
+        } else if (it.kind === 'return' && it.outcome === 'partial_unmatched' && it.outcome_detail) {
+            extra = box(_HOLD_C.amber, `<b>The refunds don't match yet</b> — ${escapeHtml(it.outcome_detail)}. Once Shopify shows the same refund as eBay, this clears itself on the next read.`);
         }
         if (it.state_note === 'outcome unread') {
             extra += `<div style="font-size:11.5px; color:#b45309; margin-top:6px;">Closed on eBay, but we couldn't read whether the buyer was refunded yet. It clears itself on the next read, or check it on eBay.</div>`;
@@ -55617,7 +55653,8 @@ function _qpClaimsSplit(d) {
     const cases = (d.cases || []);
     const by = {
         mismatch: (d.mismatches || []).map(x => ({ x, type: 'mismatch' })),
-        returns: cases.filter(_holdIsReturn).map(x => ({ x, type: 'return' })),
+        // Returns waiting on the buyer are not counted as due (_holdReturnNeedsUs).
+        returns: cases.filter(c => _holdIsReturn(c) && (!need(c) || _holdReturnNeedsUs(c))).map(x => ({ x, type: 'return' })),
         cases: cases.filter(c => !_holdIsReturn(c)).map(x => ({ x, type: _holdIsInr(x) ? 'inr' : 'case' }))
             .concat((d.disputes || []).map(x => ({ x, type: x.source === 'shopify' ? 'chargeback' : 'dispute' }))),
         payments: (d.payments || []).map(x => ({ x, type: 'payment' })),
