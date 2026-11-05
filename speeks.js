@@ -39564,7 +39564,7 @@ function renderClaimsOversight() {
             ping = `<span title="Reminder sent ${sentTxt} and not yet reviewed. You can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or sooner if the manager reviews it."
                 style="display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:800; color:#94a3b8; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:7px; padding:5px 11px; cursor:default;">🔔 Reminded ${sentTxt}</span>`;
         } else {
-            ping = `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
+            ping = `<button onclick="pingStoreClaims('${s}', this)" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
         }
         html += `<tr>
             ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`, 'text-align:left;')}
@@ -39694,7 +39694,26 @@ async function ovDeleteClaim(id) {
 
 // Nudge a store's manager to review their open claims. Delivers as a dedicated RED
 // review pop-up on the manager's dashboard (separate from green store comments).
-async function pingStoreClaims(store) {
+//
+// The button confirms ITSELF — first click arms it ("Send to LEE?"), a second
+// click within 6s sends — and reports back on the button, never through
+// confirm()/alert(). Ethan 2026-11-04: "I just am clicking it and nothing is
+// happening." The handler was reaching confirm() fine; his browser was answering
+// it false without drawing it (Chrome's "don't let this page create more
+// dialogs", or a pane that blocks native dialogs), so the click silently did
+// nothing and no reminder had gone out since Oct 14. A native dialog is a single
+// point of failure the page can't see, so this one doesn't use any.
+const _claimPingArmed = {};
+function _claimPingSay(btn, text, tone) {
+    if (!btn) return;
+    const c = tone === 'bad' ? ['#fef2f2', '#fecaca', '#b91c1c']
+            : tone === 'ok'  ? ['#ecfdf5', '#a7f3d0', '#047857']
+            : tone === 'arm' ? ['#fffbeb', '#fde68a', '#b45309']
+            :                  ['#eff6ff', '#bfdbfe', '#1d4ed8'];
+    btn.textContent = text;
+    btn.style.background = c[0]; btn.style.borderColor = c[1]; btn.style.color = c[2];
+}
+async function pingStoreClaims(store, btn) {
     const rows = _oversightAll || [];
     // Reminders target only claims that are actually behind: open, over 7 days,
     // not yet reviewed ("Still in progress") and not already escalated to a claim.
@@ -39705,7 +39724,7 @@ async function pingStoreClaims(store) {
         && !sup.has(r.id)
         && _isClaimAging(r));
     if (!aging.length) {
-        alert(`${store} has no claims over 7 days awaiting review — nothing to remind about.`);
+        _claimPingSay(btn, 'Nothing over 7 days', 'bad');
         return;
     }
     // Belt-and-braces: the button is already hidden during the cooldown, but a stale
@@ -39714,10 +39733,23 @@ async function pingStoreClaims(store) {
     if (lock) {
         const backIn = Math.max(1, CLAIM_REMINDER_COOLDOWN_DAYS
             - Math.floor((Date.now() - new Date(lock.created_at).getTime()) / 86400000));
-        alert(`${store} was already reminded and hasn't reviewed yet.\n\nYou can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or as soon as they review it.`);
+        _claimPingSay(btn, `Already reminded — again in ${backIn}d`, 'bad');
         return;
     }
-    if (!confirm(`Send ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review?`)) return;
+    // First click arms, second click sends. The title says what will be sent.
+    if (!_claimPingArmed[store]) {
+        _claimPingArmed[store] = setTimeout(() => {
+            delete _claimPingArmed[store];
+            if (btn && btn.isConnected) _claimPingSay(btn, '🔔 Send reminder');
+        }, 6000);
+        if (btn) btn.title = `Sends ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review.`;
+        _claimPingSay(btn, `Send to ${store}? (${aging.length}) — click again`, 'arm');
+        return;
+    }
+    clearTimeout(_claimPingArmed[store]);
+    delete _claimPingArmed[store];
+    if (btn) btn.disabled = true;
+    _claimPingSay(btn, 'Sending…');
     // Message is generic — the manager's popup computes the live over-7-day count.
     try {
         const res = await fetch(CLAIMS_URL, {
@@ -39730,10 +39762,13 @@ async function pingStoreClaims(store) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
-        alert(`Reminder sent to ${store}.`);
-        fetchAllClaims(); // re-read reminders so the button flips to its locked state
+        _claimPingSay(btn, `✓ Sent to ${store}`, 'ok');
+        // Re-read reminders so the row flips to "Reminded today" — after a beat,
+        // because the reload wipes the table and the ✓ with it.
+        setTimeout(fetchAllClaims, 1500);
     } catch (e) {
-        alert('Could not send the reminder: ' + (e.message || e));
+        if (btn) { btn.disabled = false; btn.title = 'Could not send: ' + (e.message || e); }
+        _claimPingSay(btn, '✕ Not sent — click to retry', 'bad');
     }
 }
 
