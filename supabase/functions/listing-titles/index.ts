@@ -1698,6 +1698,10 @@ type NameVerdict = {
   // photos said when the listing's fields could not settle it. Absent means
   // nobody looked.
   photo?: PhotoAnswer | null;
+  // "label": built by the label check from the photos alone, never by the name
+  // check (see LABEL_SYSTEM). The photo IS the evidence, so analyse uses it even
+  // when no field repeats the title.
+  source?: "label";
 };
 type PhotoAnswer = {
   answer: "ours" | "listing" | "other" | "cannot_tell";
@@ -2034,6 +2038,154 @@ async function photoTiebreak(client: any, ask: {
       : { ...p, url: ask.urls[p.photo! - 1] },
     input: Number(res?.usage?.input_tokens || 0),
     output: Number(res?.usage?.output_tokens || 0),
+  };
+}
+
+// ===================== THE LABEL CHECK ======================================
+// Ethan, 2026-11-05 ("lets go option b"): every NEWLY name-checked listing that
+// carries a part number has its own photos read for the label, and a title code
+// or capacity the label contradicts becomes a fix.
+//
+// Why: the 2026-11-05 denials were all one shape — a title code the name check
+// could not judge from knowledge, and the label in the photos could:
+//   BAL ADATA (MO04-2525B-E3): AD4U2666 38 G19-B on the stick; MPN said 28.
+//   BAL Samsung T7 (MO04-2527B-E5): the label says 2TB and MU-PC2T0T.
+//   OVL HP Pavilion (KS01-7857A): the base label reads 14M-BA013DX.
+// The tiebreak only ever looked at rows the name check had already DISPUTED, so
+// a title the name check passed as "ok" was never looked at, however wrong its
+// code. This looks at those.
+//
+// ⚠️ IT ONLY EVER READS. The answer becomes an ordinary name verdict with the
+// photo attached as "ours" (source "label"), and analyse runs it through every
+// guard a model's verdict gets: the quoted span must be in the title, the
+// replacement cannot be a placeholder, a field that repeats the title is
+// corrected with it, and the reviewer is sent to the photo.
+//
+// ⚠️ ONLY NEW TITLES. It rides the name pass, which takes only titles it has not
+// asked about (candidatesFor), so the bill is per new listing, not per sweep.
+// ~$0.015 a listing on Sonnet (the tiebreak's measured rate, Oct 7 - Nov 4).
+const LABEL_MAX = 16;          // per store per run — see the deferral note at the call
+const LABEL_CONCURRENCY = 8;
+
+const LabelAnswerSchema = z.object({
+  mismatches: z.array(z.object({
+    title_text: z.string(),
+    label_text: z.string(),
+    photo: z.number().int(),
+    seen: z.string(),
+  })),
+});
+type LabelMismatch = { title_text: string; label_text: string; photo: number; seen: string };
+
+const LABEL_SYSTEM = `You check a used-electronics listing's title against the
+printed labels in the listing's own photos of the unit being sold.
+
+Look for printed or engraved text on THE ITEM ITSELF or its own box: a model or
+part number on a sticker, a caseback, a base label, a RAM stick, a drive label,
+a box label, or a settings / About / BIOS screen. Then compare it with the
+title. Report a mismatch ONLY when the title states a part number, model number
+or capacity, and a photo clearly shows a DIFFERENT value for that same thing on
+this unit.
+
+Never report:
+  - anything you cannot read clearly — a blurry or partly hidden digit is not a
+    mismatch
+  - serial numbers, dates, batch or lot codes, FCC / regulatory ids, barcode
+    digits, or a retailer's own sticker
+  - a value the title does not state at all (a missing detail is not a mismatch)
+  - the same value written differently (spaces, dashes, case)
+  - a label on an accessory, a charger, or a different item in the photo
+  - anything, if the photos show several different units or a stock /
+    manufacturer image rather than this unit
+
+For each mismatch:
+  title_text — the title's words for it, copied EXACTLY as they appear in the
+               title, character for character
+  label_text — what should replace them, written the way the title writes
+               things (the label's value, not a sentence)
+  photo      — the photo number it is printed in
+  seen       — what you read and where, in a few words a store manager can
+               check: "the stick's label reads AD4U266638G19-B"
+
+Almost every listing has no mismatch. An empty list is the normal answer and is
+never penalised.`;
+
+// Does this listing name a part to check? A token with two or more digits and a
+// letter (AD4U266638G19-B, MU-PC2T0T, 14M-BA013DX, CFI-2115), or a filled MPN.
+// A bare size or speed (512GB, 2666MHz, 1080p) is not a part code on its own.
+function hasPartCode(title: string, specs: Record<string, string> | undefined): boolean {
+  const mpn = String(specs?.["MPN"] || "").trim();
+  if (mpn && !PLACEHOLDER.test(mpn) && /\d/.test(mpn)) return true;
+  for (const tok of title.split(/[\s,/()]+/)) {
+    const t = tok.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+    if (t.length < 5) continue;
+    if ((t.match(/\d/g) || []).length < 2 || !/[A-Za-z]/.test(t)) continue;
+    if (/^\d+(\.\d+)?(gb|tb|mb|mhz|ghz|hz|w|mah|mm|cm|in|k|p|fps|rpm|wh|v|ft|oz|lbs?)$/i.test(t)) continue;
+    return true;
+  }
+  return false;
+}
+
+// The label answer, verified, as a name verdict analyse already knows how to
+// judge — or null. The first mismatch that survives wins; one name finding per
+// row is all analyse makes.
+//   ⚠️ THE QUOTE IS RE-FOUND IN THE TITLE (case-insensitive) AND THE TITLE'S OWN
+//   SPELLING IS USED, so analyse's exact indexOf finds the span it checks.
+//   ⚠️ "THE SAME VALUE WRITTEN DIFFERENTLY" IS CHECKED HERE TOO, not trusted to
+//   the prompt: MU-PC2T0T and MUPC2T0T is not a correction.
+function labelVerdict(title: string, ms: LabelMismatch[], urls: string[],
+                      fetched: boolean[]): NameVerdict | null {
+  const squash = (s: string) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+  for (const m of ms || []) {
+    const quote = String(m?.title_text || "").trim();
+    const fix = String(m?.label_text || "").trim();
+    const seen = String(m?.seen || "").trim().replace(/[.;,]$/, "");
+    const n = Number(m?.photo);
+    if (!quote || !fix || !seen) continue;
+    if (!Number.isInteger(n) || n < 1 || n > urls.length || !fetched[n - 1]) continue;
+    if (squash(quote) === squash(fix)) continue;
+    if (/[\[\]<>{}]|\b(actual|correct|real|proper|insert|unknown|tbd|xxx+|serial)\b/i.test(fix)) continue;
+    const at = title.toLowerCase().indexOf(quote.toLowerCase());
+    if (at < 0) continue;
+    const wrong = title.slice(at, at + quote.length);
+    return {
+      verdict: "wrong", wrong_text: wrong, correct_text: fix,
+      why: `Photo ${n} shows ${seen}`, source: "label",
+      photo: { answer: "ours", photo: n, seen, url: urls[n - 1] },
+    };
+  }
+  return null;
+}
+
+async function labelCheck(client: any, title: string, specs: Record<string, string> | undefined,
+                          urls: string[]): Promise<{ verdict: NameVerdict | null; input: number; output: number; photos: number }> {
+  const fields = Object.entries(nameCheckFields(specs))
+    .map(([k, v]) => `${k}: ${v}`).join("\n");
+  const blocks: any[] = [{ type: "text", text:
+    `TITLE: ${title}\n` + (fields ? `THE LISTING'S FIELDS (for context only — the photos decide):\n${fields}\n` : "")
+    + `\nThe listing's photos, in order:` }];
+  const photos = await Promise.all(urls.map(u => photoBlock(u).catch(() => null)));
+  let n = 0;
+  photos.forEach((b, i) => {
+    if (!b) return;
+    n++;
+    blocks.push({ type: "text", text: `Photo ${i + 1}` });
+    blocks.push(b);
+  });
+  if (!n) return { verdict: null, input: 0, output: 0, photos: 0 };
+  const res = await client.messages.parse({
+    model: PHOTO_MODEL, max_tokens: 8000, system: LABEL_SYSTEM,
+    messages: [{ role: "user", content: blocks }],
+    output_config: { effort: PHOTO_EFFORT, format: zodOutputFormat(LabelAnswerSchema) },
+  } as any);
+  const p = res?.parsed_output as { mismatches: LabelMismatch[] } | null;
+  // Null is "did not answer", never "no mismatch" — the caller retries next run.
+  if (!p) throw new Error("the label check returned nothing that matched its schema");
+  return {
+    verdict: labelVerdict(title, p.mismatches, urls, photos.map(b => !!b)),
+    input: Number(res?.usage?.input_tokens || 0),
+    output: Number(res?.usage?.output_tokens || 0),
+    photos: n,
   };
 }
 
@@ -2418,7 +2570,11 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // has to look. What it stops doing is proposing the swap.
     const echoed = listingSaysItself(wrong, identityFields(extra?.specs),
       changedSpan(wrong, right));
-    const respelling = !!right && (isMisspelling(wrong, right) || isM2Misnomer(wrong, right));
+    // A label read is never "a typo": AD4U266628G19-B → …38… is one character,
+    // and calling it a misspelling would word it as "not a real product name".
+    const fromLabel = nameVerdict.source === "label";
+    const respelling = !fromLabel && !!right
+      && (isMisspelling(wrong, right) || isM2Misnomer(wrong, right));
     const saidBy = respelling ? null : echoed;
     // ⚠️ A DISPUTE IS A QUESTION, AND IT IS OURS TO ANSWER, NOT THE REVIEWER'S.
     // MPL, 2026-10-05: five name-disputed rows dismissed "it's fine" in under a
@@ -2450,7 +2606,10 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
                              nameVerdict.evidence_field)
       : null;
-    const photo = saidBy && !backedBy ? (nameVerdict.photo || null) : null;
+    // A label verdict's photo counts with or without a field repeating the title:
+    // it is the only evidence there is, and the reviewer must be sent to it.
+    const photo = (saidBy && !backedBy) || (fromLabel && !backedBy)
+      ? (nameVerdict.photo || null) : null;
     const seen = String(photo?.seen || "").trim().replace(/[.;,]$/, "");
     const shot = photo?.photo ? `Photo ${photo.photo}` : "The photos";
     // ⚠️ "Neither" is an answer too. MPL's Watch6 titled "Classic Aluminum" is a
@@ -2520,7 +2679,10 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       const wrongIsWrong = (nameVerdict.verdict === "wrong" || settled) && !respelling;
       // The model's reason argued for ITS correction; when the photos chose a
       // different one, what the photo shows is the reason.
-      const why = photoFix ? `${shot} shows ${seen}` : String(nameVerdict.why || "").trim();
+      // A label verdict's reason IS the photo sentence, which is said below —
+      // leading with it too made the finding say the same thing twice.
+      const why = photoFix ? `${shot} shows ${seen}`
+        : fromLabel ? "" : String(nameVerdict.why || "").trim();
       const fits = swapped.length <= EBAY_TITLE_MAX;
       if (fits) { title = swapped; fixable = true; }
       // ⚠️ THE REASON LEADS WITH THE FACT, and the instruction is a SEPARATE
@@ -2558,7 +2720,9 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
               ? ` Look at ${shot.toLowerCase()}: ${seen}. The ${saidBy.field} field ("${saidBy.value}") says otherwise, and approving corrects that field too.`
               : photoFix && saidBy
                 ? ` The ${saidBy.field} field says "${saidBy.value}"; approving corrects it where it repeats the title.`
-                : "")
+                : photoSaysOurs && fromLabel
+                  ? ` Look at ${shot.toLowerCase()}: ${seen}.`
+                  : "")
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
         // finding on this page is read off the title and the spec table, and
@@ -3578,6 +3742,54 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     }
   }
 
+  // ===================== THE LABEL CHECK (see LABEL_SYSTEM) =================
+  // Every listing the name check just passed as "ok" that names a part. Rows the
+  // name check flagged are left to it and the tiebreak — one name finding a row.
+  const labelUsage = { looked: 0, input: 0, output: 0, found: 0, noPhotos: 0,
+                       deferred: 0, failed: [] as string[] };
+  if (wantLlm) {
+    const due = cands.filter(c => nameBy[c.product_id]?.verdict === "ok"
+      && !/\blot\s+of\b/i.test(c.title)
+      && hasPartCode(c.title, extras[c.product_id]?.specs));
+    const now = due.slice(0, LABEL_MAX);
+    // ⚠️ OVER THE CAP KEEPS THE OLD STAMP, exactly as the tiebreak's does, so the
+    // 5am run (and tomorrow's) asks again and looks. BAL put 67 new titles
+    // through one run on 2026-11-04; at ~15s a look, all of them would not fit
+    // the 150s wall beside the name pass. The re-ask costs the name check again
+    // (~$0.002 a title), which is cheaper than a sweep that dies mid-save.
+    for (const c of due.slice(LABEL_MAX)) photoDeferred.add(c.product_id);
+    labelUsage.deferred = due.length - now.length;
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    const client = apiKey ? new Anthropic({ apiKey }) : null;
+    let urls: Record<string, string[]> = {};
+    try {
+      if (client && now.length) {
+        const { shop, token } = await shopFor(store);
+        urls = await photoUrlsFor(shop, token, now.map(c => c.product_id));
+      }
+    } catch (e) {
+      for (const c of now) photoDeferred.add(c.product_id);
+      labelUsage.failed.push(`Shopify photos: ${String(e).slice(0, 120)}`);
+      now.length = 0;
+    }
+    for (let i = 0; client && i < now.length; i += LABEL_CONCURRENCY) {
+      await Promise.all(now.slice(i, i + LABEL_CONCURRENCY).map(async c => {
+        const list = urls[c.product_id] || [];
+        if (!list.length) { labelUsage.noPhotos++; return; }
+        try {
+          const r = await labelCheck(client, c.title, extras[c.product_id]?.specs, list);
+          labelUsage.looked++;
+          labelUsage.input += r.input; labelUsage.output += r.output;
+          if (r.verdict) { nameBy[c.product_id] = r.verdict; labelUsage.found++; }
+        } catch (e) {
+          // A failed look is not "no mismatch" — retry it next run.
+          photoDeferred.add(c.product_id);
+          labelUsage.failed.push(`${c.sku}: ${String(e).slice(0, 120)}`);
+        }
+      }));
+    }
+  }
+
   const out: any[] = [];
   // Pairs where the eBay listing mapped to this SKU is a DIFFERENT PRODUCT. Not
   // queued (they are not titles to rewrite) but counted, because silently
@@ -3649,7 +3861,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     // change to NAME_SYSTEM.
     // A verdict the PHOTOS overruled is not one the model invented; it is
     // counted as photoTiebreak.listing instead.
-    if (nv && nv.verdict !== "ok" && nv.photo?.answer !== "listing"
+    if (nv && nv.verdict !== "ok" && nv.photo?.answer !== "listing" && nv.source !== "label"
         && !a.findings.some(f => NAME_CODES.has(f.code))) {
       nameUnverified.push({ sku: row.sku, title: row.title,
                             claimed: String(nv.wrong_text || ""),
@@ -3809,6 +4021,30 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
     }
   }
+  // The label check's bill, its own row — the number Ethan approved at ~$30 a
+  // month (2026-11-05). If it runs well past that, LABEL_MAX or hasPartCode is
+  // letting too much through.
+  if (wantLlm && save && labelUsage.looked) {
+    try {
+      await sb("ai_usage_log", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          tool: "listing-titles:label-check",
+          store_code: store,
+          model: PHOTO_MODEL,
+          effort: PHOTO_EFFORT,
+          batches: labelUsage.looked,
+          items: labelUsage.looked,
+          input_tokens: labelUsage.input,
+          output_tokens: labelUsage.output,
+          cost_usd: labelUsage.input / 1e6 * PHOTO_PRICE[0] + labelUsage.output / 1e6 * PHOTO_PRICE[1],
+        }),
+      });
+    } catch (e) {
+      console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
+    }
+  }
 
   return {
     store, examined: cands.length, queued: out.length,
@@ -3823,7 +4059,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       // run that "felt expensive" can be checked instead of argued about.
       estCostUsd: Math.round(
         (nameUsage.input / 1e6 * 5 + nameUsage.output / 1e6 * 25) * 100) / 100,
-      flagged: Object.values(nameBy).filter(v => v?.verdict !== "ok").length,
+      flagged: Object.values(nameBy).filter(v => v?.verdict !== "ok" && v?.source !== "label").length,
       // The rate to watch. A model that starts quoting text which is not in the
       // title is a model that has started inventing, and these are the rows that
       // were dropped for it.
@@ -3838,6 +4074,14 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
         estCostUsd: Math.round((photoUsage.input / 1e6 * PHOTO_PRICE[0]
           + photoUsage.output / 1e6 * PHOTO_PRICE[1]) * 100) / 100,
         ...(photoUsage.failed.length ? { failed: photoUsage.failed.slice(0, 5) } : {}),
+      },
+      // `found` is labels that contradicted a title the name check passed.
+      labelCheck: {
+        looked: labelUsage.looked, found: labelUsage.found,
+        noPhotos: labelUsage.noPhotos, deferred: labelUsage.deferred,
+        estCostUsd: Math.round((labelUsage.input / 1e6 * PHOTO_PRICE[0]
+          + labelUsage.output / 1e6 * PHOTO_PRICE[1]) * 100) / 100,
+        ...(labelUsage.failed.length ? { failed: labelUsage.failed.slice(0, 5) } : {}),
       },
     } } : {}),
     saved: save,
