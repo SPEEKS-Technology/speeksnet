@@ -1278,6 +1278,18 @@ function screenSizePresent(title: string, v: string): boolean {
       || new RegExp(`(^|[^\\d.])${n}(?![\\d.])`).test(title);
 }
 
+// ⚠️ A TITLE THAT ALREADY STATES A SCREEN SIZE IS NOT MISSING ONE. OVL's HP
+// Pavilion 14M-BA013DX (KS01-7857A-R3R3, denied 2026-11-05) said 14" twice and
+// its Screen Size field said 15.6"; the rule only asked "is 15.6 here?", so it
+// put 15.6" in front of the 14" and suggested a title naming two screens. The
+// field was the wrong one — the 14M-BA013DX is a 14" laptop. When title and field
+// disagree that is a conflict for a person to settle, never a gap to fill, so
+// any inch-marked measurement already in the title keeps this rule quiet. Only
+// an inch-MARKED number counts here: a bare "13" is as likely "iPhone 13".
+function titleStatesScreen(title: string): boolean {
+  return /(^|[^\d.])\d{1,3}(?:\.\d+)?\s*(?:"|”|''|-?\s*in(ch(es)?)?\b)/i.test(title);
+}
+
 // ⚠️ THE NUMBER IS THE LISTING'S, THE UNIT MARK IS OURS. BAL's HP Chromebook
 // records `14in`, and "HP Chromebook … 14in" reads like a typo next to every
 // other title on the shelf. Normalising the unit to an inch mark is the only
@@ -1645,9 +1657,19 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 // A CPU or a memory total is the machine's own account of what is inside it,
 // read off the machine; outside knowledge of what a model "shipped with" does
 // not overrule it.
+//
+// ⚠️ AND STORAGE, 2026-11-05 — the same lesson twice more, both name-wrong,
+// both one click, both overruling a field that said otherwise in so many words:
+//   WSP PS5 Slim Digital CFI-2115 (MO02-5245A-E10): Storage Capacity = 825GB,
+//     we said "Slim models have 1TB".
+//   BAL Samsung T7 (MO04-2527B-E5): Capacity = 2TB; we read 1TB off a part
+//     number in the title that turned out to be the wrong one (a T7 Shield's).
+// A capacity field is the drive's own account of itself. Disagreeing with it is
+// a dispute for the photos, never a one-click swap.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
   "Maximum Aperture", "Focal Length", "Form Factor", "Processor", "Memory Size",
+  "Storage Capacity", "Capacity", "Storage", "Storage 1",
 ];
 
 // "2280mm" -> "2280": the one form-factor correction that is always right.
@@ -2237,6 +2259,13 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       return out;
     };
     const tUnits = unitsIn(original);
+    // ⚠️ A NUMBER THE TITLE CALLS RAM IS NOT A DRIVE. BAL's Azpen X1160
+    // (MO04-2532C-R3R2, denied 2026-11-05): "New Azpen X1160 4GB RAM" was flagged
+    // as contradicting Storage 1 = 128GB. The title never stated a drive at all.
+    // Storage-type fields are compared against the title with its RAM sizes
+    // taken out.
+    const tDriveUnits = unitsIn(original.replace(
+      /\b\d+(?:\.\d+)?\s?gb\s*(?:\(\s*\d+\s*x\s*\d+\s?gb\s*\)\s*)?(?:ddr\d\w*\s+)?(?:ram|memory)\b/gi, " "));
     // ⚠️ A PC WITH TWO DRIVES IS TITLED BY THE TOTAL. OVL's Cooler Master
     // (KS01-7824A-E10), denied 2026-09-22, "there are multiple storage
     // devices": Storage 1 = 1TB SSD, Storage 2 = 2TB HDD, title "3TB Storage".
@@ -2266,7 +2295,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       if (!v || PLACEHOLDER.test(v)) continue;
       const isDrive = drives.length > 1 && /^storage\s*\d+$/i.test(k);
       for (const [unit, vals] of unitsIn(v)) {
-        const mine = tUnits.get(unit);
+        const mine = (/storage|capacity/i.test(k) ? tDriveUnits : tUnits).get(unit);
         if (!mine || !mine.size) continue;
         // Only when they share NO value for that unit at all. A title listing
         // both 8GB RAM and 512GB storage must not fight a spec naming one.
@@ -2407,7 +2436,17 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // Either one makes this an ordinary fix, field correction included. Only
     // when neither can is it still disputed, and then it still says what we
     // recommend and exactly what to look at.
-    const backedBy = saidBy && right && !placeholder
+    // ⚠️ ONE CHARACTER APART IN A PART CODE IS A COIN TOSS, NOT A SECOND OPINION.
+    // BAL's ADATA (MO04-2525B-E3, denied 2026-11-05 "MPN field on listing was
+    // wrong"): Model = AD4U266638G19-B, MPN = AD4U266628G19-B. We let the MPN
+    // "back" the correction and rewrote the Model — and the MPN was the typo;
+    // the 38 part is the real one. When two of the listing's own fields differ
+    // by a single character of a code, either could be the slip, so neither
+    // settles it: the row stays disputed and goes to the photos (the label).
+    // A NAME backed by another field (the Kospet) is unaffected.
+    const oneCharCode = !!right && wrong.length === right.length && /\d/.test(wrong)
+      && [...wrong].filter((ch, i) => ch.toLowerCase() !== right[i].toLowerCase()).length === 1;
+    const backedBy = saidBy && right && !placeholder && !oneCharCode
       ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
                              nameVerdict.evidence_field)
       : null;
@@ -3068,6 +3107,8 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         // a spec of `6.7` or `6.7 in` into `6.7"`. Appending m.v raw meant the
         // two rules could write the same measurement two different ways.
         const isScreen = m.k === "Screen Size";
+        // See titleStatesScreen: a title with a different screen is a conflict.
+        if (isScreen && titleStatesScreen(title)) continue;
         const text = isScreen ? (screenSizeText(m.v) || m.v) : m.v;
         const placed = isScreen
           ? tryPlace(text, String(extra?.specs?.["Model"] || "").trim())
@@ -3099,14 +3140,14 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   if (!brokenTitle && !findings.some(f => f.severity >= 2) && !lazyUsed.has("Screen Size")
       && screenSpec && !PLACEHOLDER.test(screenSpec)
       && SCREEN_SHELVES.test(shelf) && !SCREEN_NOT.test(shelf)
-      && !screenSizePresent(title, screenSpec)) {
+      && !screenSizePresent(title, screenSpec) && !titleStatesScreen(title)) {
     const text = screenSizeText(screenSpec);
     // After the model, which is where every title in the estate that already
     // carries one puts it. See tryPlace.
     if (text && tryPlace(text, String(extra?.specs?.["Model"] || "").trim())) {
       findings.push({
         code: "missing-screen-size",
-        says: `This listing records a ${text} screen and the title does not say so. Screen size is one of the first things a buyer filters a phone or tablet by, so a title without it is missing from those results entirely. The measurement is the listing's own — only the inch mark is ours.`,
+        says: `This listing records a ${text} screen and the title does not say so. Screen size is one of the first things a buyer filters by, so a title without it is missing from those results entirely. The measurement is the listing's own — only the inch mark is ours.`,
         severity: 1, fixable: true,
       });
     }
@@ -5342,13 +5383,35 @@ async function handlePost(req: Request, scope: Scope) {
     if (!scope.corp) return json({ error: "forbidden", detail: "Only the DM or CEO can send a row back." }, 403);
     const note = String(body.note || "").trim().slice(0, 500);
     if (!note) return json({ error: "note required", detail: "Say why the suggestion was right — the store reads this on the row." }, 400);
-    await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}&status=eq.denied`, {
-      method: "PATCH", headers: { Prefer: "return=minimal" },
+    const back = await (await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}&status=eq.denied&select=current_title`, {
+      method: "PATCH", headers: { Prefer: "return=representation" },
       body: JSON.stringify({
         status: "open", returned_note: note, returned_by: scope.name,
         returned_at: new Date().toISOString(),
       }),
-    });
+    })).json().catch(() => []);
+    // The row went back into the store's queue silently until 2026-11-03 — no
+    // card, no mail — so a store only found it by opening Listing Health. Mailed
+    // to the store side of ec-view-titles (STORE_ROLES + EXTRA_ROLES above; MSM
+    // is "manager" by then in notify). Best-effort: the send-back already landed.
+    if (Array.isArray(back) && back.length) {
+      try {
+        await sb("notify_queue", {
+          method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            category: "categories", kind: "title_sent_back",
+            title: `A title was sent back to ${store}`,
+            body: `${String(back[0].current_title || "").slice(0, 120)} — ${note}`.slice(0, 300),
+            link: "operations.html", store,
+            audience_stores: [store],
+            audience_roles: ["manager", "owner (manager)", "owner manager", "assistant manager"],
+            audience_feature: TITLES_KEY,
+            exclude_user: String(scope.name || "").trim().toLowerCase() || null,
+            priority: "normal",
+          }),
+        });
+      } catch (_) { /* best-effort */ }
+    }
     return json({ ok: true, sentBack: productId });
   }
 
