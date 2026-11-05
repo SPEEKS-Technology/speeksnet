@@ -38250,10 +38250,10 @@ function _holdStateLabel(type, it, s) {
     // looks exactly like any other due item otherwise.
     if (it.dm && it.dm.status === 'denied' && it.state !== 'needs_reply'
         && _HOLD_VIEWS.due.states.includes(it.state)) return 'Sent back by DM';
-    if (it.state === 'needs_reply') {
     // 2026-11-04: resolved, re-read afterwards, and the sites still disagree.
     if (it.dm && it.dm.kind === 'not_done' && it.state !== 'needs_reply'
         && _HOLD_VIEWS.due.states.includes(it.state)) return 'Marked resolved — not done';
+    if (it.state === 'needs_reply') {
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
         if (it.missed_window) return 'Missed reply window';
