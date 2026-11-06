@@ -76,6 +76,9 @@ const LIST_KEYS = new Set([
   // (unrestocked-returns, 0153) — the DM. Empty, it falls back to
   // claims_disputes_dm.
   "unrestocked_returns",
+  // unrestocked_returns_<STORE>: the same mail cut to one store, sent only on
+  // mornings that store has a line open (2026-11-06, 0178). Empty = no store copy.
+  ...STORES.map((s) => `unrestocked_returns_${s}`),
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

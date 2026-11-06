@@ -577,7 +577,9 @@ function rowHtml(r: Row) {
     </td></tr>`;
 }
 
-function build(fresh: Row[], older: Row[], blind: string[], days: string[], closed: any[] = []) {
+// `store` set = one store's own copy (see STORE COPIES below): its name in the
+// heading, and nothing about the other four.
+function build(fresh: Row[], older: Row[], blind: string[], days: string[], closed: any[] = [], store = "") {
   const span = !days.length ? "" : days.length === 1 ? shortDay(days[0])
     : `${shortDay(days[0])} – ${shortDay(days[days.length - 1])}`;
   const section = (label: string) => `
@@ -597,7 +599,7 @@ function build(fresh: Row[], older: Row[], blind: string[], days: string[], clos
 <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
 <table width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#fff;border:1px solid ${C.line};border-radius:12px;overflow:hidden;">
   <tr><td style="padding:16px 14px;background:${C.chip};">
-    <div style="font-size:17px;font-weight:800;color:${C.ink};">Returned But Not Back In Stock</div>
+    <div style="font-size:17px;font-weight:800;color:${C.ink};">Returned But Not Back In Stock${store ? ` — ${esc(STORE_NAME[store] || store)}` : ""}</div>
     <div style="font-size:12.5px;color:${C.faint};margin-top:5px;line-height:1.6;">
       Items fully refunded or cancelled that were never put back in stock.${span ? `<br>Refunds From ${esc(span)}` : ""}
     </div>
@@ -615,6 +617,7 @@ function build(fresh: Row[], older: Row[], blind: string[], days: string[], clos
   <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:11px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
     Sent every morning while anything is open. Items stay on until they are back in stock or sold.
     Partial refunds are not included.
+    ${store ? `<br>Put it back in stock in Shopify. If it went back under a different listing, use Restocked Under Another SKU.` : ""}
     ${blind.length ? `<br><b style="color:${C.bad};">Could not check today: ${esc(blind.join(", "))}.</b>` : ""}
   </td></tr>
 </table></td></tr></table></body></html>`;
@@ -874,7 +877,29 @@ Deno.serve(async (req: Request) => {
     const older = rows.filter((r) => priorBy[r.key]?.mailed_at)
       .sort((a, b) => b.ageDays - a.ageDays);
 
+    // STORE COPIES (Ethan, 2026-11-06, after WSP said three lines were done that
+    // Shopify still showed at 0 on hand). Each store's manager gets the same
+    // mail cut to their own store, every morning that store has anything open.
+    // List unrestocked_returns_<STORE>; empty = that store gets nothing (no
+    // fallback — the DM copy above already has every line). Only open lines:
+    // "Closed By A Manager" is the DM's check on the managers, not theirs.
+    const storeMails = wantStores.map((s) => ({
+      store: s,
+      fresh: fresh.filter((r) => r.store === s),
+      older: older.filter((r) => r.store === s),
+    })).filter((m) => m.fresh.length || m.older.length);
+    const storeSubject = (m: { store: string; fresh: Row[]; older: Row[] }) =>
+      `${STORE_NAME[m.store] || m.store} — returned but not back in stock — ` +
+      [m.fresh.length ? `${m.fresh.length} new` : "", m.older.length ? `${m.older.length} still open` : ""]
+        .filter(Boolean).join(", ");
+
     if (q("dryRun") === "1") {
+      // &storeView=WSP previews that store's copy.
+      const sv = (q("storeView") || "").toUpperCase();
+      const svm = storeMails.find((m) => m.store === sv);
+      if (q("html") === "1" && svm) {
+        return new Response(build(svm.fresh, svm.older, [], days, [], sv), { headers: { "Content-Type": "text/html" } });
+      }
       if (q("html") === "1" && (rows.length || closed.length)) {
         return new Response(build(fresh, older, [...blind], days, closed), { headers: { "Content-Type": "text/html" } });
       }
@@ -882,6 +907,10 @@ Deno.serve(async (req: Request) => {
         ok: true, dryRun: true, days, new: fresh.length, stillOpen: older.length,
         closedByManager: closed.map((r: any) => ({ order: r.order_name, sku: r.sku, movedTo: r.moved_to_sku, by: r.closed_by })),
         wouldClear: cleared, blindStores: [...blind], stats, problems,
+        storeMails: await Promise.all(storeMails.map(async (m) => ({
+          store: m.store, subject: storeSubject(m),
+          to: (await listFor(sb, `unrestocked_returns_${m.store}`, "")).join(",") || "(list empty — not sent)",
+        }))),
         rows: rows.map((r) => ({
           store: r.store, order: r.orderName, channel: r.channel, kind: r.kind, day: r.refundDay,
           sku: r.sku, title: r.title, amount: r.amount, flag: r.flag, new: fresh.includes(r), recheck: r.recheck || null,
@@ -912,6 +941,17 @@ Deno.serve(async (req: Request) => {
         // A test send (&to=) records nothing, so the real mail still goes out.
         mailed = r.ok && !q("to");
         sent.push({ to, new: fresh.length, stillOpen: older.length, ...r });
+      }
+      // Store copies ride the same once-a-day guard. A test send (&to=) skips
+      // them, so testing the DM mail never lands in a manager's inbox.
+      if (!q("to")) {
+        for (const m of storeMails) {
+          const sto = (await listFor(sb, `unrestocked_returns_${m.store}`, "")).join(",");
+          if (!sto) continue;
+          const r = await relay(sto, storeSubject(m), build(m.fresh, m.older, [], days, [], m.store));
+          if (!r.ok) problems.push(`${m.store} store copy failed to send`);
+          sent.push({ store: m.store, to: sto, new: m.fresh.length, stillOpen: m.older.length, ...r });
+        }
       }
     }
 

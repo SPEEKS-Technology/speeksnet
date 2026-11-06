@@ -44744,6 +44744,9 @@ const EMAIL_LIST_GROUPS = [
               desc: '7:35am, every morning anything is open: whole items refunded or cancelled '
                   + '(in store, online or eBay) that never went back into inventory. '
                   + 'Left empty, it goes to the Claims & Disputes — District Manager list.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `unrestocked_returns_${s}`, label: `Returned But Not Back In Stock — ${s}`,
+              desc: `7:35am, only on mornings ${s} has something open: the same email, just ${s}'s lines. `
+                  + 'Left empty, the store gets nothing.' })),
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
