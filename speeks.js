@@ -46716,7 +46716,7 @@ function _restockRender(j, st) {
     let h = _restockSummary(c);
     if (c.closed) {
         h += `<div class="rsk-done">${st.justClosed ? 'Closed. ' : 'Already Closed. '}${escapeHtml(c.closedHow || '')}
-              ${st.justClosed ? '<br>It drops off tomorrow’s email, and the DM sees it there under Closed By A Manager.' : ''}</div>
+              ${st.justClosed ? (/never came back/.test(c.closedHow || '') ? '<br>It drops off tomorrow’s email.' : '<br>It drops off tomorrow’s email, and the DM sees it there under Closed By A Manager.') : ''}</div>
               <button class="btn-primary rsk-btn" onclick="closeAllModals()">Done</button>`;
         body.innerHTML = h;
         return;
@@ -46724,6 +46724,26 @@ function _restockRender(j, st) {
     if (!j.canClose) {
         body.innerHTML = h + `<p class="rsk-bad">${escapeHtml(j.denied || 'You can’t close this one.')}</p>`;
         return;
+    }
+    // NEVER CAME BACK waiting on the DM: the DM decides here; anyone else just
+    // sees it's waiting (the SKU route below still works for them).
+    const nb = c.nb || {};
+    if (nb.pending) {
+        const when = nb.at ? new Date(nb.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+        h += `<div class="rsk-nb rsk-nb-wait">
+                <div class="form-label-caps">Marked Never Came Back — Waiting On DM</div>
+                <div>${escapeHtml(nb.by || 'Unknown')}, ${escapeHtml(when)}: “${escapeHtml(nb.reason || '')}”</div>`;
+        if (j.canDecide) {
+            h += `<input id="restockNbNote" class="form-input-lg rsk-nb-note" placeholder="If you deny it, say why (optional)" value="${escapeHtml(st.note || '')}">
+                  ${st.nbMsg ? `<p class="rsk-bad">${escapeHtml(st.nbMsg)}</p>` : ''}
+                  <div class="rsk-nb-row">
+                    <button id="restockNbYes" class="btn-primary rsk-btn" onclick="_restockNbDecide('nb_confirm')">Confirm &amp; Close</button>
+                    <button id="restockNbNo" class="btn-secondary rsk-btn" onclick="_restockNbDecide('nb_deny')">Deny</button>
+                  </div>`;
+        } else {
+            h += `<div class="rsk-muted">It stays on the email until the DM confirms it.</div>`;
+        }
+        h += `</div>`;
     }
     const sugg = j.suggestions || [];
     if (sugg.length) {
@@ -46740,6 +46760,19 @@ function _restockRender(j, st) {
           ${st.msg ? `<p class="rsk-bad">${escapeHtml(st.msg)}</p>` : ''}
           <button id="restockSkuBtn" class="btn-primary rsk-btn" onclick="_restockSubmit()">Check &amp; Close</button>
           <p class="rsk-muted">It only closes if that SKU is on hand now or has sold since the refund.</p>`;
+    if (!nb.pending) {
+        const denied = nb.deniedAt
+            ? `<p class="rsk-bad">Denied by ${escapeHtml(nb.deniedBy || 'the DM')}: ${escapeHtml(nb.deniedNote || '')}</p>` : '';
+        h += `<div class="rsk-nb">
+                <div class="form-label-caps">Never Came Back?</div>
+                <div class="rsk-muted">Refunded but the item was never returned to the store (buyer kept it, lost in shipping).
+                  ${j.canDecide ? 'This closes it.' : 'The DM confirms it before it comes off the email.'}</div>
+                ${denied}
+                <textarea id="restockNbReason" class="form-input-lg rsk-nb-note" rows="2" placeholder="What happened to it?">${escapeHtml(st.reason || '')}</textarea>
+                ${st.nbMsg ? `<p class="rsk-bad">${escapeHtml(st.nbMsg)}</p>` : ''}
+                <button id="restockNbBtn" class="btn-secondary rsk-btn" onclick="_restockNeverBack()">${j.canDecide ? 'Close As Never Came Back' : 'Send To DM To Confirm'}</button>
+              </div>`;
+    }
     const tries = c.attempts || [];
     if (tries.length) {
         h += `<div class="rsk-tries"><div class="form-label-caps">Tried Before</div>${tries.slice(-3).reverse().map(a => `
@@ -46748,6 +46781,34 @@ function _restockRender(j, st) {
     }
     body.innerHTML = h;
     window._restockLast = j;
+}
+
+async function _restockNeverBack() {
+    const last = window._restockLast || {};
+    const reason = (document.getElementById('restockNbReason')?.value || '').trim();
+    if (reason.length < 5) { _restockRender(last, { nbMsg: 'Say what happened to it first.', reason }); return; }
+    const btn = document.getElementById('restockNbBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+        const j = await _restockPost({ action: 'never_back', reason });
+        if (j.ok && j.card && j.card.closed) { _restockRender(j, { justClosed: !j.already }); return; }
+        _restockRender(Object.assign({}, last, { card: j.card || last.card }), j.ok ? {} : { nbMsg: j.why || j.error, reason });
+    } catch (e) {
+        _restockRender(last, { nbMsg: e.message || 'Could not reach the server. Try again.', reason });
+    }
+}
+
+async function _restockNbDecide(action) {
+    const last = window._restockLast || {};
+    const note = (document.getElementById('restockNbNote')?.value || '').trim();
+    ['restockNbYes', 'restockNbNo'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
+    try {
+        const j = await _restockPost({ action, note });
+        if (j.ok && j.card && j.card.closed) { _restockRender(j, { justClosed: !j.already }); return; }
+        _restockRender(Object.assign({}, last, { card: j.card || last.card }), j.ok ? {} : { nbMsg: j.why || j.error, note });
+    } catch (e) {
+        _restockRender(last, { nbMsg: e.message || 'Could not reach the server. Try again.', note });
+    }
 }
 
 function _restockPick(sku) {

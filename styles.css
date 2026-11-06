@@ -27195,3 +27195,8 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 #restockSkuModal .rsk-input { font-size: 16px; text-transform: uppercase; }
 #restockSkuModal .rsk-btn { width: 100%; margin-top: 12px; padding: 12px; }
 #restockSkuModal .rsk-tries { margin-top: 16px; padding-top: 10px; border-top: 1px solid #e2e8f0; }
+#restockSkuModal .rsk-nb { margin-top: 18px; padding-top: 12px; border-top: 1px solid #e2e8f0; font-size: 13.5px; line-height: 1.55; }
+#restockSkuModal .rsk-nb-wait { margin: 0 0 16px; padding: 12px 14px; border: 1.5px solid #e8c77a; border-radius: 10px; background: #fff8e8; color: #5c3d00; }
+#restockSkuModal .rsk-nb-note { width: 100%; box-sizing: border-box; margin-top: 8px; font-size: 16px; resize: vertical; }
+#restockSkuModal .rsk-nb-row { display: flex; gap: 8px; }
+#restockSkuModal .rsk-nb-row .rsk-btn { flex: 1; }

@@ -511,7 +511,7 @@ const C = {
   bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1",
 };
 
-type Row = Candidate & { flag: string; ageDays: number; attempts?: any[] };
+type Row = Candidate & { flag: string; ageDays: number; attempts?: any[]; nb?: any };
 
 // Where the mail's "Restocked Under Another SKU" link lands: the dashboard,
 // which is also the login page, so the hash survives the PIN screen and the
@@ -548,6 +548,18 @@ function tried(r: Row) {
   return `<br><span style="color:${C.bad};">Tried ${esc(last.sku || "a blank SKU")} — ${esc(last.by || "Unknown")}, ${esc(shortAt(last.at))}${more}: ${esc(last.why || "")}</span>`;
 }
 
+// Never Came Back: waiting on the DM (orange), or the DM said no (red).
+function nbLine(r: Row) {
+  const nb = r.nb;
+  if (nb?.pending) {
+    return `<br><span style="color:${C.warn};font-weight:600;">Marked Never Came Back — ${esc(nb.by || "Unknown")}, ${esc(shortAt(nb.at))}: “${esc(nb.reason || "")}” · Waiting On DM</span>`;
+  }
+  if (nb?.deniedAt) {
+    return `<br><span style="color:${C.bad};">Never Came Back Denied — ${esc(nb.deniedBy || "DM")}, ${esc(shortAt(nb.deniedAt))}: ${esc(nb.deniedNote || "")}</span>`;
+  }
+  return "";
+}
+
 function rowHtml(r: Row) {
   const shopUrl = `https://${SHOP_BY_STORE[r.store]}/admin/orders/${r.orderId}`;
   const what = r.kind === "cancel" ? "Cancelled" : "Returned";
@@ -568,11 +580,14 @@ function rowHtml(r: Row) {
         ${r.refundNote ? `<br><span style="color:${C.faint};">Note: “${esc(r.refundNote)}”</span>` : ""}
         ${r.recheck ? `<br><span style="color:${C.warn};">${esc(r.recheck)}</span>` : ""}
         ${tried(r)}
+        ${nbLine(r)}
       </div>
       <div style="margin-top:8px;font-size:12px;">
         <a href="${shopUrl}" style="color:#1c6b47;">Open In Shopify</a>
         &nbsp;·&nbsp;
         <a href="${APP_URL}#restock=${encodeURIComponent(r.key)}" style="color:#1c6b47;">Restocked Under Another SKU</a>
+        &nbsp;·&nbsp;
+        <a href="${APP_URL}#restock=${encodeURIComponent(r.key)}" style="color:#1c6b47;">${r.nb?.pending ? "Confirm Or Deny" : "Never Came Back"}</a>
       </div>
     </td></tr>`;
 }
@@ -683,12 +698,16 @@ const PRODUCTS_LIKE_Q = `query($q: String!) {
     variants(first: 3) { nodes { sku inventoryQuantity } } } }
 }`;
 const MULTI_STORE = ["BAL", "MPL"];
-const DM_TIER = ["ceo", "mocd", "dm"];
+// Roles as users.role spells them, lowercased: "District Manager", not "dm".
+// The 11-04 build had only "dm" here, so the real DM was refused as "not a
+// manager" and LEE's "Owner (Manager)" likewise (found 2026-11-06).
+const DM_TIER = ["ceo", "mocd", "dm", "district manager"];
+const MANAGER_ROLES = ["manager", "owner (manager)"];
 
 function mayClose(row: any, who: any): string | null {
-  const role = String(who?.role || "").toLowerCase();
+  const role = String(who?.role || "").toLowerCase().trim();
   if (DM_TIER.includes(role)) return null;
-  if (role === "manager") {
+  if (MANAGER_ROLES.includes(role)) {
     const mine = String(who?.store || "").toUpperCase();
     if (row.store_code === mine) return null;
     if (who?.multiStore && MULTI_STORE.includes(row.store_code)) return null;
@@ -706,8 +725,23 @@ function cardOf(row: any) {
     sku: row.sku, title: row.title, amount: num(row.amount), note: row.refund_note,
     closed: !!row.resolved_at, closedHow: row.resolved_how, closedBy: row.closed_by, movedTo: row.moved_to_sku,
     attempts: Array.isArray(row.attempts) ? row.attempts : [],
+    nb: nbOf(row),
   };
 }
+
+// NEVER CAME BACK (2026-11-06, 0179). WSP #MO02-6752: refunded on eBay, the
+// laptop never came back to the store, so there is nothing to restock and no
+// SKU test can ever clear it. A manager says so with a reason; that does not
+// close it — it waits for the DM to confirm (closes) or deny (stays open, and
+// the "no" shows on the next mail). The DM's own mark closes at once.
+function nbOf(row: any) {
+  return {
+    pending: !!row.nb_requested_at && !row.resolved_at,
+    at: row.nb_requested_at || null, by: row.nb_requested_by || null, reason: row.nb_reason || null,
+    deniedAt: row.nb_denied_at || null, deniedBy: row.nb_denied_by || null, deniedNote: row.nb_denied_note || null,
+  };
+}
+const isDm = (who: any) => DM_TIER.includes(String(who?.role || "").toLowerCase().trim());
 
 // Listings at the store that it could have gone back in under: in stock, not
 // the refunded SKU, touched since the day before the refund, sharing words with
@@ -772,7 +806,41 @@ async function appAction(body: any): Promise<Response> {
     if (!row.resolved_at && !denied && shopRow?.access_token) {
       try { suggestions = await suggestionsFor(shopRow.shop, shopRow.access_token, row); } catch (_) { /* card still works without them */ }
     }
-    return json({ ok: true, card: cardOf(row), canClose: !denied, denied, suggestions });
+    return json({ ok: true, card: cardOf(row), canClose: !denied, denied, canDecide: isDm(body?.who), suggestions });
+  }
+
+  if (body.action === "never_back") {
+    if (denied) return json({ ok: false, error: denied }, 403);
+    if (row.resolved_at) return json({ ok: true, already: true, card: cardOf(row) });
+    const reason = String(body?.reason || "").trim().slice(0, 500);
+    if (reason.length < 5) return json({ ok: false, why: "Say what happened to it — e.g. buyer kept it, eBay refunded without a return.", card: cardOf(row) });
+    const by = String(body?.who?.name || "").trim() || "Unknown";
+    const nowIso = new Date().toISOString();
+    const patch: any = { nb_requested_at: nowIso, nb_requested_by: by, nb_reason: reason };
+    if (isDm(body?.who)) {
+      // The DM is the one who confirms, so their own mark closes it. Not listed
+      // under "Closed By A Manager" (closure_mailed_at set): nobody to check it.
+      Object.assign(patch, { resolved_at: nowIso, resolved_how: `never came back — ${reason} — closed by ${by}`,
+        closed_by: by, closure_mailed_at: nowIso, last_checked: nowIso });
+    }
+    const { data: done } = await sb.from("unrestocked_returns").update(patch).eq("issue_key", key).select("*").maybeSingle();
+    return json({ ok: true, card: cardOf(done || row) });
+  }
+
+  if (body.action === "nb_confirm" || body.action === "nb_deny") {
+    if (!isDm(body?.who)) return json({ ok: false, error: "Only the DM can confirm or deny this." }, 403);
+    if (row.resolved_at) return json({ ok: true, already: true, card: cardOf(row) });
+    if (!row.nb_requested_at) return json({ ok: false, why: "Nobody has marked this one Never Came Back.", card: cardOf(row) });
+    const by = String(body?.who?.name || "").trim() || "Unknown";
+    const nowIso = new Date().toISOString();
+    const patch: any = body.action === "nb_confirm"
+      ? { resolved_at: nowIso, last_checked: nowIso, closed_by: row.nb_requested_by, closure_mailed_at: nowIso,
+          resolved_how: `never came back — ${row.nb_reason} — marked by ${row.nb_requested_by}, confirmed by ${by}` }
+      : { nb_requested_at: null, nb_requested_by: null, nb_reason: null,
+          nb_denied_at: nowIso, nb_denied_by: by,
+          nb_denied_note: `${String(body?.note || "").trim().slice(0, 300) || "No reason given"} (they said: ${row.nb_reason})` };
+    const { data: done } = await sb.from("unrestocked_returns").update(patch).eq("issue_key", key).select("*").maybeSingle();
+    return json({ ok: true, card: cardOf(done || row) });
   }
 
   if (body.action === "close") {
@@ -864,6 +932,7 @@ Deno.serve(async (req: Request) => {
     const uniq = new Map(found.map((f) => [f.key, f]));
     const rows: Row[] = [...uniq.values()].map((f) => ({
       ...f, ageDays: daysBetween(f.refundDay, today), attempts: priorBy[f.key]?.attempts || [],
+      nb: priorBy[f.key] ? nbOf(priorBy[f.key]) : null,
     }));
     // Closed from the app since the last mail (RESTOCKED UNDER ANOTHER SKU).
     // Only for the stores this run covers, so &store=BAL doesn't eat OVL's.
