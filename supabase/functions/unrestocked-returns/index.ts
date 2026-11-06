@@ -884,10 +884,13 @@ Deno.serve(async (req: Request) => {
     const html = build([
       { ...base, key: "s1", store: "MPL", orderName: "#MO03-4043", channel: "eBay", kind: "cancel",
         refundDay: "2026-10-21", sku: "MO03-2696A-E10", title: "Apple iPad Pro 11in 256GB", amount: 709.99,
-        flag: "not_restocked", ageDays: 1 },
+        flag: "not_restocked", ageDays: 1,
+        nb: { pending: true, at: "2026-10-22T14:00:00Z", by: "Sample Manager", reason: "Buyer kept it; eBay refunded without a return" } },
       { ...base, key: "s2", store: "OVL", orderName: "#KS01-15686", channel: "In store", kind: "return",
         refundDay: "2026-10-21", sku: "", title: "Nintendo Switch OLED", amount: 54.99, refundNote: "changed mind",
-        flag: "listing_deleted", ageDays: 1 },
+        flag: "listing_deleted", ageDays: 1,
+        nb: { pending: false, deniedAt: "2026-10-22T15:00:00Z", deniedBy: "Sample DM",
+          deniedNote: "It was an in-store return, so it's in the building (they said: customer didn't bring it)" } },
     ], [
       { ...base, key: "s3", store: "MPL", orderName: "#MO03-3460", channel: "In store", kind: "return",
         refundDay: "2026-10-15", sku: "MO03-2368D-R7R1", title: "Xbox Wireless Controller", amount: 64.99,
