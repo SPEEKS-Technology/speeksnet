@@ -471,6 +471,13 @@ Deno.serve(async (req: Request) => {
   // --- match ---------------------------------------------------------------
   const byStore: Record<string, Item[]> = {};
   for (const it of items) (byStore[it.store_code] ||= []).push(it);
+  // Every in-stock title per collection — the vocabulary the constraint pass below
+  // asks "is this a word we use for products on this shelf?".
+  const byCategory = new Map<string, Item[]>();
+  for (const it of items) for (const c of it.collections) {
+    if (!byCategory.has(c)) byCategory.set(c, []);
+    byCategory.get(c)!.push(it);
+  }
 
   const rows: any[] = [];
   const perCallback: any[] = [];
@@ -516,9 +523,22 @@ Deno.serve(async (req: Request) => {
     //
     // Years are excluded: the range test already owns them, and requiring "2017"
     // literally would drop the 2018 machine that the range deliberately allows.
+    //
+    // ⚠️ THE EVIDENCE IS THE WHOLE SHELF, NOT THE CANDIDATES — changed 2026-11-06.
+    // BAL logged "Zelda Edition Nintendo Switch 2 Console" and was told at once it
+    // had a match: a plain black Switch 2. The type (Nintendo Switch 2) answered on
+    // its own, so the only candidates were plain Switch 2s, none of which says
+    // "zelda" — and a word in none of the candidates was read as an aside. That is
+    // circular: the variant they asked for is exactly the one we do not have, so of
+    // course no candidate carries its name. Asking the CATEGORY instead breaks the
+    // circle: two Zelda-edition consoles sit in video-game-systems across the
+    // district, so "zelda" is plainly a word we use for consoles and it stays
+    // required. "13th" in "iPhone 15 on the 13th" is in no phone title, so it is
+    // still an aside. All holding stores count, not just the one being scored.
     const named = residualFor(cb, ty).filter((t) => !/^(19[89]\d|20[0-4]\d)$/.test(t));
-    const pool = Object.values(perStore).flat();
-    const required = named.filter((t) => pool.some((h) => h.item._t.includes(t)));
+    const shelf = byCategory.get(cb.category_handle) ?? [];
+    const pool = [...shelf.map((it) => it._t), ...Object.values(perStore).flat().map((h) => h.item._t)];
+    const required = named.filter((t) => pool.some((title) => title.includes(t)));
 
     for (const st of holdingStores) {
       const hits = perStore[st].filter((h) => required.every((t) => h.item._t.includes(t)));
