@@ -32383,9 +32383,83 @@ function _cbMatchesSubtitle(entries) {
     return mine ? `${entries.length} You can answer` : `${entries.length} With stock`;
 }
 
+// ⚠️ A REDRAW MUST NEVER EAT WHAT SOMEBODY IS TYPING — 2026-11-06.
+// cbRender rebuilds the whole pane with innerHTML, quick-add form included, and
+// several things call it with nobody's say-so: the realtime repaint when the
+// matcher finds something (ANY store's add sets that off, so BAL's form emptied
+// because OVL logged a call back), the re-fetch five seconds after your own add,
+// and every row action. Only the 60s poll checked for focus. To the person at the
+// keyboard it looked exactly like a submit that never arrived.
+//
+// Guarding each caller was the old approach, and it is what missed these. So the
+// guard lives HERE instead: every field in the pane is read before the redraw and
+// put back after, cursor included. A redraw that is MEANT to empty the form (a
+// successful Add, Cancel, Add Another Item) says so through _cbFormReset.
+let _cbFormReset = false;
+let _cbDrawnEditId = null;   // which row's edit fields the last render drew
+
+function _cbSnapshotFields(body) {
+    // The row whose edit fields are ON SCREEN, not _cbEditingId: cbEditEntry has
+    // already moved that to the new row by the time it calls cbRender.
+    const snap = { vals: {}, focus: null, selStart: null, selEnd: null, editing: _cbDrawnEditId };
+    body.querySelectorAll('input[id], select[id], textarea[id]').forEach(el => {
+        snap.vals[el.id] = el.type === 'checkbox' ? { checked: el.checked } : { value: el.value };
+    });
+    const a = document.activeElement;
+    if (a && a.id && body.contains(a)) {
+        snap.focus = a.id;
+        try { snap.selStart = a.selectionStart; snap.selEnd = a.selectionEnd; } catch (_) {}
+    }
+    return snap;
+}
+
+function _cbRestoreFields(snap) {
+    if (!snap) return;
+    // The edit row's fields share one set of ids whichever row is open, so they
+    // are only put back into the SAME row — opening Edit on another one must show
+    // that row's values, not the last row's.
+    if (snap.editing !== _cbEditingId) {
+        Object.keys(snap.vals).forEach(id => { if (id.startsWith('cbEdit')) delete snap.vals[id]; });
+        if (snap.focus && snap.focus.startsWith('cbEdit')) snap.focus = null;
+    }
+    // Categories first: putting a category back has to rebuild its Type options
+    // before the Type value can be put back into them.
+    Object.keys(snap.vals).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !el.classList.contains('cb-cat-select')) return;
+        if (el.value !== snap.vals[id].value) {
+            el.value = snap.vals[id].value;
+            const typeSel = id === 'cbAddCategory' ? 'cbAddType' : id === 'cbEditCategory' ? 'cbEditType' : null;
+            if (typeSel) cbCategoryChanged(id, typeSel);
+        }
+    });
+    Object.keys(snap.vals).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || el.classList.contains('cb-cat-select')) return;
+        const v = snap.vals[id];
+        if ('checked' in v) el.checked = v.checked;
+        else if (el.value !== v.value) el.value = v.value;
+    });
+    if (snap.focus) {
+        const f = document.getElementById(snap.focus);
+        if (f) {
+            f.focus();
+            try { if (snap.selStart != null) f.setSelectionRange(snap.selStart, snap.selEnd); } catch (_) {}
+        }
+    }
+}
+
 function cbRender() {
     const body = document.getElementById('cbBody');
     if (!body) return;
+    const snap = _cbFormReset ? null : _cbSnapshotFields(body);
+    _cbFormReset = false;
+    _cbRenderInner(body);
+    _cbDrawnEditId = _cbEditingId;
+    _cbRestoreFields(snap);
+}
+
+function _cbRenderInner(body) {
     _cbSyncControls();
 
     const filterEl = document.getElementById('cbStoreFilter');
@@ -32437,6 +32511,7 @@ function cbRender() {
 function cbAddAnotherItem() {
     if (!_cbLastAdded) return;
     _cbAddFor = _cbLastAdded;
+    _cbFormReset = true;
     cbRender();
     document.getElementById('cbAddItem')?.focus();
 }
@@ -32445,6 +32520,7 @@ window.cbAddAnotherItem = cbAddAnotherItem;
 function cbAddForClear() {
     _cbAddFor = null;
     _cbLastAdded = null;
+    _cbFormReset = true;
     cbRender();
     document.getElementById('cbAddName')?.focus();
 }
@@ -32884,6 +32960,7 @@ async function cbQuickAdd() {
     // pre-filled one moves the streak to whoever was actually logged.
     _cbLastAdded = { name, phone, store };
     if (_cbAddFor) _cbAddFor = _cbLastAdded;
+    _cbFormReset = true;
     cbRender();
     // Mid-streak the name and number are already right, so the cursor belongs in
     // the only field that changes.
@@ -32899,7 +32976,11 @@ async function cbQuickAdd() {
         // The add kicks a match sweep server-side rather than waiting for the next
         // scheduled one, so the answer to "does anybody have this" lands a few
         // seconds later. Re-fetch once instead of making the person reload.
+        // Twice now: the server refreshes every store's stock BEFORE it matches
+        // (so a just-sold unit is not offered), which can take longer than 5s.
+        // Realtime repaints too when it finds something; this is the backstop.
         setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 5000);
+        setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 25000);
     } catch (e) {
         _cbCache = _cbCache.filter(x => x.id !== entry.id);
         cbRender();
@@ -32930,6 +33011,8 @@ function cbAddNote(id) {
         at: _cbDaysAgo(0)
     };
     e.notes.push(note);
+    // Emptied BEFORE the redraw, which now keeps whatever a field holds.
+    if (input) input.value = '';
     cbRender();
     cbPost({ action: 'note', id, note }).catch(() => cbLoad());
 }
@@ -33075,7 +33158,12 @@ async function checkCallbackMatchReminders() {
         // nagging about work in progress is how a feed stops being read.
         const hits = [];
         rows.forEach(e => {
-            if (e.status === 'completed' || e.archived_at) return;
+            // CONTACTED COUNTS AS ANSWERED — 2026-11-06. The card asks you to ring
+            // a customer; once somebody has rung them it has nothing left to ask.
+            // It used to wait for Completed, so on Nov 5-6 BAL's card still said
+            // "3 call backs" after Garrett had contacted two of them, and the one
+            // it led with was the only one nobody had touched yet.
+            if (e.status === 'completed' || e.status === 'contacted' || e.archived_at) return;
             const n = (e.matches || []).filter(m =>
                 m.state === 'suggested' && scope.includes(m.store_code)).length;
             if (n) hits.push({ entry: e, count: n });
@@ -53564,8 +53652,8 @@ const _QP_WSPEC = {
         },
     },
     // CUSTOMER CALL BACKS — In Stock is the feed card's own rule: a call back
-    // (any store's) with a SUGGESTED match at a store you hold, not completed or
-    // archived (checkCallbackMatchReminders). Open and Contacted are your own
+    // (any store's) with a SUGGESTED match at a store you hold, not contacted,
+    // completed or archived (checkCallbackMatchReminders). Open and Contacted are your own
     // store's list by status. The tool's GET; refreshed by its realtime ping.
     callbacks: {
         when: 'Right Now',
@@ -53577,7 +53665,8 @@ const _QP_WSPEC = {
             const live = (rows || []).filter(e => !e.archived_at && e.status !== 'completed');
             const link = ['Open Call Backs', "window.location.href='operations.html#callbacks'"];
             if (tab === 'instock') {
-                const hits = live.map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
+                // Contacted is answered — same rule as the feed card since 2026-11-06.
+                const hits = live.filter(e => e.status !== 'contacted').map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
                     .filter(h => h.m.length).sort((a, b) => String(a.e.date_of_call).localeCompare(String(b.e.date_of_call)));
                 return {
                     ...(hits.length ? {} : { clear: ['Nothing To Call About', 'Nothing a customer asked for is on your shelf yet'] }),
