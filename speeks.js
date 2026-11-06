@@ -38267,6 +38267,10 @@ function _holdStateLabel(type, it, s) {
     // The claim is open, so "Check-in due" would point at the wrong person: the
     // carrier does not owe this one, eBay does.
     if (it.state_note === 'delivered_after_refund') return 'Delivered — call eBay';
+    // Past eBay's 30 days with no claim, a delivered refund is written off
+    // (claims-disputes, Ethan 2026-11-06): settled, off the managers' list,
+    // listed in the closed view so the loss is on record.
+    if (it.state_note === 'written_off') return "Written off — eBay's window closed";
     if (it.state_note === 'returned_to_us') return 'Returned to us — restock it';
     if (it.state_note === 'never_scanned') return 'Never scanned — find it';
     if (it.state_note === 'partial_refund_matched') return 'Partial refund — books match';
@@ -38326,6 +38330,21 @@ const _HOLD_KINDS = [
 const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
 // A refunded INR that is NOT a carrier claim, by what the carrier says (2026-11-03).
 const _HOLD_REFUND_NOTES = ['delivered_after_refund', 'returned_to_us', 'never_scanned'];
+// EBAY PAYS A DELIVERED REFUND BACK FOR 30 DAYS AFTER THE CASE CLOSES (Ethan,
+// 2026-11-06). The server works out the last day (claims-disputes paybackBy →
+// it.payback_by, YYYY-MM-DD); this only counts the days left, in local days.
+const _holdPaybackLeft = it => {
+    if (!it.payback_by) return null;
+    const [y, m, d] = it.payback_by.split('-').map(Number);
+    const t = new Date();
+    return Math.round((new Date(y, m - 1, d) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / 86400000);
+};
+const _holdPaybackLine = it => {
+    const n = _holdPaybackLeft(it);
+    if (n == null || n < 0) return '';
+    const left = n === 0 ? 'today is the last day' : `${n} day${n === 1 ? '' : 's'} left`;
+    return ` <b style="${n <= 7 ? 'color:#b91c1c;' : ''}">eBay pays it back only until ${_holdDay(it.payback_by)} (${left}).</b>`;
+};
 // A plain return only. An escalated one arrives folded into the case eBay opened
 // (0104), which is no longer a routine return, so it belongs with the cases.
 const _holdIsReturn = it => it.kind === 'return';
@@ -39084,7 +39103,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // What the carrier says. A refunded INR that turns up delivered is the
         // one to look at first: eBay refunds us for it, no claim needed (0106).
         if (it.tracking_status) {
-            const del = /DELIVERED/i.test(it.tracking_status);
+            // Green "Delivered" means "eBay pays this back"; a written-off one it
+            // didn't, so the status is shown plain, like any other.
+            const del = /DELIVERED/i.test(it.tracking_status) && it.state_note !== 'written_off';
             const tn = it.tracking_number ? `${escapeHtml(it.tracking_carrier || '')} ${escapeHtml(it.tracking_number)}${siteCopyBtn(it.tracking_number, 'tracking number')}` : '';
             facts.push(`<span style="white-space:nowrap; ${del ? `color:${_HOLD_C.green.fg}; font-weight:800;` : 'color:#475569;'}">${del ? 'Delivered' : escapeHtml(_holdPretty(it.tracking_status))}${tn ? ' · ' + tn : ''}</span>`);
         }
@@ -39096,15 +39117,18 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // neither backs it up it goes to the DM, never straight off the list.
         const box = (c, html) => `<div style="font-size:12px; background:${c.bg}; border:1px solid ${c.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${c.fg};">${html}</div>`;
         if (it.state_note === 'delivered_after_refund') {
-            extra = box(_HOLD_C.green, it.claim
+            extra = box(_HOLD_C.green, (it.claim
                 ? `<b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.`
-                : `<b>The carrier says this was delivered</b> — even though the buyer was refunded. eBay covers a delivered item-not-received, so call eBay for it rather than filing a claim, then mark this resolved and say what eBay did. The system checks eBay's payouts for the money coming back.`);
+                : `<b>The carrier says this was delivered</b> — even though the buyer was refunded. eBay covers a delivered item-not-received, so call eBay for it rather than filing a claim, then mark this resolved and say what eBay did. The system checks eBay's payouts for the money coming back — if eBay says it takes a day or two, that's fine; it waits 3 days for it to show.`)
+                + _holdPaybackLine(it));
+        } else if (it.state_note === 'written_off') {
+            extra = box(_HOLD_C.grey, `<b>Written off.</b> The carrier says it was delivered, and eBay didn't pay it back before its 30 days ran out on ${_holdDay(it.payback_by)}. A carrier won't pay a claim on a delivered parcel, so there is nothing left to do — it is listed here for the record.`);
         } else if (it.state_note === 'returned_to_us') {
             extra = box(_HOLD_C.amber, `<b>The carrier sent this back to us</b> — after the buyer was refunded, so nobody owes us for it and no claim is needed. Put the device back in stock in Shopify, then mark this resolved. The system checks Shopify for it.`);
         } else if (it.state_note === 'never_scanned') {
             extra = box(_HOLD_C.red, `<b>${it.tracking_status ? 'The carrier never scanned this parcel' : 'There is no tracking on this one'}</b> — and the buyer was refunded. It may never have left the store, and a carrier won't pay a claim on a parcel it never had. Find the device and put it back in stock in Shopify, then mark this resolved. If it can't be found, say so — that goes to the DM.`);
         } else if (st === 'needs_claim') {
-            extra = box(_HOLD_C.red, `<b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''} and the carrier still shows the parcel in transit. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.`);
+            extra = box(_HOLD_C.red, `<b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''} and the carrier still shows the parcel in transit. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.${(_holdPaybackLeft(it) ?? -1) >= 0 ? ` If it shows delivered by ${_holdDay(it.payback_by)}, eBay pays it back instead.` : ''}`);
         }
         // A partial refund, checked against Shopify (2026-11-05): matched says so
         // in green and needs nothing; unmatched says what each side shows.

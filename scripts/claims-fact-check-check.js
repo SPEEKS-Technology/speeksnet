@@ -82,6 +82,39 @@ t('refunded INR, delivered with no claim: call eBay', function () {
     return /Delivered — Resolve it/.test(x) || 'button';
 });
 
+// eBay's 30-day payback window (2026-11-06). Dates are built from today so the
+// check doesn't rot: the card counts days left in the viewer's local day.
+function dayFromNow(n) {
+    var d = new Date(); d.setDate(d.getDate() + n);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+t('delivered refund prints eBay\'s last payback day and the days left', function () {
+    var x = text(draw(inr({ state_note: 'delivered_after_refund', tracking_status: 'DELIVERED', payback_by: dayFromNow(5) })));
+    if (!/eBay pays it back only until/.test(x)) return 'no payback line: ' + x.slice(0, 400);
+    if (!/5 days left/.test(x)) return 'no days-left count';
+    return /waits 3 days/.test(x) || 'does not say a 24-48h payback is waited for';
+});
+
+// Ethan, 2026-11-06: past eBay's window with no claim it is written off —
+// settled, off the managers' list, nothing to press.
+t('delivered refund past the window: written off, nothing to do', function () {
+    var x = text(draw(inr({ state: 'settled', state_note: 'written_off', tracking_status: 'DELIVERED', payback_by: dayFromNow(-3) })));
+    if (!/Written off — eBay's window closed/.test(x)) return 'chip: ' + x.slice(0, 200);
+    if (/call eBay/.test(x)) return 'still says to call eBay';
+    if (!/ran out on/.test(x)) return 'box';
+    if (/pays it back only until/.test(x)) return 'still printed a live window';
+    if (/Open or link a claim|Resolve another way/.test(x)) return 'offered an action on a written-off item';
+    return true;
+});
+
+t('lost in transit: says eBay pays if it lands in time; no date, no line', function () {
+    var x = text(draw(inr({ state: 'needs_claim', tracking_status: 'IN_TRANSIT', payback_by: dayFromNow(10) })));
+    if (!/If it shows delivered by/.test(x)) return 'no delivered-in-time line';
+    var y = text(draw(inr({ state: 'needs_claim', tracking_status: 'IN_TRANSIT' })));
+    return !/If it shows delivered by/.test(y) || 'printed a delivered-by line with no payback date';
+});
+
 t('lost in transit: claim first, resolving still possible', function () {
     var x = text(draw(inr({ state: 'needs_claim', tracking_status: 'IN_TRANSIT' })));
     if (!/Lost in transit — needs a claim/.test(x)) return 'chip';

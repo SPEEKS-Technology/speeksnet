@@ -133,6 +133,10 @@ type Row = {
   // 2026-11-04: marked resolved, but the sites were read afterwards and still
   // disagree — back on the manager's list every day, like a send-back.
   notDone?: { by: string | null; why: string | null } | null;
+  // 2026-11-06: a refunded INR's last day for eBay to pay it back
+  // (claims-disputes EBAY_PAYBACK_DAYS), and whether a delivered one is in its
+  // last week — those go in the DM digest every morning.
+  paybackBy?: string | null; paybackClosing?: boolean;
 };
 
 // The states that mean a person still has to do something. Identical to the
@@ -194,6 +198,7 @@ function caseRow(c: any): Row {
     link: "", linkLabel: "",
     quiet: c.quiet_until || null, missed: !!c.missed_window,
     contestedSince: c.resolution_disputed_since || null, openedAt: c.opened_at || "",
+    paybackBy: c.payback_by || null, paybackClosing: !!c.payback_closing,
   };
 }
 
@@ -521,7 +526,7 @@ function noteBase(r: Row): string {
     return "Fulfil the order to charge the card, or cancel it if it isn't going.";
   }
   if (r.note === "delivered_after_refund")
-    return "It turned up after we refunded the buyer. The carrier does not owe this one — call eBay, then record what they did.";
+    return `It turned up after we refunded the buyer. The carrier does not owe this one — call eBay, then record what they did.${r.paybackBy ? ` eBay pays it back only until ${prettyDay(r.paybackBy)}.` : ""}`;
   if (r.note === "returned_to_us")
     return "The carrier sent it back to us. Put it back in stock in Shopify, then mark it resolved — the system checks Shopify.";
   if (r.note === "never_scanned")
@@ -601,7 +606,7 @@ function managerNudge(store: string, rows: Row[], today: string) {
 // ---------------------------------------------------------------------------
 // 3. The DM digest
 // ---------------------------------------------------------------------------
-function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], toConfirm: any[], today: string) {
+function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], toConfirm: any[], today: string, closing: Row[] = [], writtenOff: Row[] = []) {
   // ROW RULES ACROSS THE WHOLE ROW (desktop, 2026-10-24). The line used to sit
   // on the store cell only, so on a wide screen each store got a short stub
   // under its name and the numbers floated free of it. Every cell carries the
@@ -651,6 +656,37 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
         <span style="color:${C.faint};">${r.type === "payment"
           ? "The card authorization ran out before the order was charged. The money has to be collected another way now."
           : "The deadline passed with no response recorded from the store."}</span></div>
+    </td></tr>`).join("");
+  }
+  // EBAY'S PAYBACK WINDOW CLOSING (2026-11-06). A delivered refund eBay hasn't
+  // paid back, in its last PAYBACK_WARN_DAYS — after that day the money is gone
+  // for good, so it is listed every morning (not once, like a missed window),
+  // soonest first, until eBay pays or the window shuts.
+  if (closing.length) {
+    const left = (by: string) => Math.round((Date.parse(by) - Date.parse(today)) / 86400000);
+    body += sectionRow(`eBay payback window closing — ${closing.length}`, C.bad);
+    body += [...closing].sort((a, b) => String(a.paybackBy).localeCompare(String(b.paybackBy))).map((r) => {
+      const n = left(r.paybackBy || today);
+      return `<tr><td style="padding:14px;border-top:1px solid ${C.line};">
+      <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">Delivered after we refunded · <span style="color:${C.bad};font-weight:700;">${n <= 0 ? "last day today" : `${n} day${n === 1 ? "" : "s"} left`}</span></div>
+      <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(r.store)} — ${money(r.amount)} · ${esc(r.title)}</div>
+      <div style="font-size:13px;color:${C.ink};line-height:1.6;">${esc(r.facts.join(" · "))}<br>
+        <span style="color:${C.faint};">The carrier says it was delivered, and eBay's payouts don't show the money back yet. eBay pays it back only until ${esc(prettyDay(r.paybackBy || ""))}.</span></div>
+    </td></tr>`;
+    }).join("");
+  }
+  // WRITTEN OFF (Ethan, 2026-11-06). A delivered refund eBay never paid back
+  // inside its 30 days, with no claim on it: nobody is left to pay, so it left
+  // the managers' list. Said here ONCE (hold_email_log, like a missed window) so
+  // the loss is seen rather than vanishing.
+  if (writtenOff.length) {
+    const total = writtenOff.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+    body += sectionRow(`Written off — ${writtenOff.length}, ${money(total)}`, C.bad);
+    body += writtenOff.map((r) => `<tr><td style="padding:14px;border-top:1px solid ${C.line};">
+      <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">Delivered after we refunded · eBay's window closed ${esc(prettyDay(r.paybackBy || ""))}</div>
+      <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(r.store)} — ${money(r.amount)} · ${esc(r.title)}</div>
+      <div style="font-size:13px;color:${C.ink};line-height:1.6;">${esc(r.facts.join(" · "))}<br>
+        <span style="color:${C.faint};">eBay didn't pay it back within its 30 days and no claim was opened. A carrier won't pay on a delivered parcel, so it has come off the store's list. Shown once.</span></div>
     </td></tr>`).join("");
   }
   // RESOLUTIONS TO CONFIRM (0164). Every "resolved" a manager saved that eBay
@@ -1022,23 +1058,31 @@ Deno.serve(async (req: Request) => {
       // Resolutions the sites don't back up, waiting on the DM (0164). They
       // repeat every morning, because each one is still the DM's to answer.
       const toConfirm = (data.dmQueue || []) as any[];
+      // Unrecovered delivered refunds in eBay's last week (claims-disputes
+      // payback_closing) — on the managers' lists, so they are in `rows`.
+      const closing = rows.filter((r) => r.paybackClosing);
+      // Written off — settled, so not in `rows` (managers' items); read from the
+      // cases themselves and shown once, logged with the missed windows below.
+      const writtenOff = ((data.cases || []) as any[])
+        .filter((c) => c.state_note === "written_off" && !told.has(`ebay_case|${c.case_key}`))
+        .map(caseRow);
 
       const backupWarn = await backupWarning();
-      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || toConfirm.length || dmWarn.length || backupWarn.length;
+      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || toConfirm.length || closing.length || writtenOff.length || dmWarn.length || backupWarn.length;
       if (!anything) sent.push({ skipped: "nothing outstanding anywhere" });
       else {
-        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, toConfirm, today), dmWarn), backupWarn);
+        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, toConfirm, today, closing, writtenOff), dmWarn), backupWarn);
         previews.push(html);
         const subject = `Claims & Disputes — what is still with the managers`;
         const to = await listFor("claims_disputes_dm");
         if (!to.length) sent.push({ skipped: "no recipients" });
-        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, toConfirm: toConfirm.length, backupWarn });
+        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, toConfirm: toConfirm.length, writtenOff: writtenOff.length, backupWarn });
         else {
           const r = await relay(to.join(","), subject, html);
           // Only the missed windows are logged for this mail: they are the ones
           // whose whole behaviour depends on having been said once. Logging the
           // table's contents would make every count "already seen" tomorrow.
-          if (r.ok) for (const m of newMissed) await logIt("dm_digest", m.store, [m], today);
+          if (r.ok) for (const m of [...newMissed, ...writtenOff]) await logIt("dm_digest", m.store, [m], today);
           sent.push({ to, subject, newMissed: newMissed.length, toConfirm: toConfirm.length, backupWarn, ...r });
         }
       }

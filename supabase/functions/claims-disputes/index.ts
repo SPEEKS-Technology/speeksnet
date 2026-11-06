@@ -591,6 +591,39 @@ const INR_ROUTE_NOTE: Record<InrRoute, string> = {
   delivered: "delivered_after_refund", returned: "returned_to_us", never_scanned: "never_scanned", lost: "",
 };
 
+// EBAY ONLY PAYS BACK FOR 30 DAYS (Ethan, 2026-11-06: "eBay just told me that
+// after a case gets closed we only have 30 days for it to be delivered and for
+// us to get our money back on it"). Until this the "call eBay" ask on a
+// delivered refund ran forever with no date on it, and a resolution saying
+// "eBay will pay it back in 24-48 hours" was accepted on Shopify's restock flag
+// alone (BAL case 5388587198, $27.99) — then never looked at again, so if eBay
+// never paid, nothing would have said so.
+//   payback_by       the close day + 30 (Chicago). Shown on every refunded INR,
+//                    because a parcel still moving today can still land inside it.
+//   PAYBACK_WARN     inside the last 7 days an unrecovered delivered refund goes
+//                    into the DM's 8:40 digest, every morning until it is dealt with.
+//   PAYBACK_WAIT     "eBay said 24-48 hours" is honest and common, so a resolution
+//                    on a delivered refund that eBay's payouts don't back yet is
+//                    left standing for 3 days (never past payback_by) while every
+//                    sweep re-reads the payouts. Credit shows → it stands for good.
+//                    Nothing by then → it is the ordinary 0164 fact-check verdict.
+// The window is counted from closed_at, the day our sweep saw it close — at most
+// a sweep late, so the date we print is never EARLIER than eBay's.
+// Deliberately NOT inferring a delivery date from tracking_at: the 0106 backfill
+// read old parcels weeks after they landed, so "first seen delivered" would
+// call parcels late that were not.
+const EBAY_PAYBACK_DAYS = 30;
+const PAYBACK_WARN_DAYS = 7;
+const PAYBACK_WAIT_DAYS = 3;
+// How long a written-off delivered refund stays in the closed view after eBay's
+// window shut. 90 so the five already past it on 2026-11-06 (oldest Sep 3) are
+// still listed for the digest's one-time mention.
+const WRITTEN_OFF_LISTED_DAYS = 90;
+const isRefundedInr = (it: any) => isInr(it) && it.outcome === "refunded";
+function paybackBy(it: any): string | null {
+  return isRefundedInr(it) && it.closed_at ? addDays(chicagoDay(it.closed_at), EBAY_PAYBACK_DAYS) : null;
+}
+
 // WHOSE MOVE IS IT (0107). Every entry in a case or inquiry history is stamped
 // BUYER, SELLER or SYSTEM, so the last word tells us whether eBay is waiting on
 // us. SYSTEM entries ("Auto Dispose Approve the case") are eBay talking to
@@ -835,12 +868,20 @@ async function checkShopifyRestock(it: any, shopRow: any, ebayRow?: any): Promis
 
 // Both reads, one verdict. Agreement needs a positive answer from at least one;
 // "couldn't read" is never agreement.
+// EXCEPT A DELIVERED ONE (2026-11-06): the carrier put that device in the
+// buyer's hands, so it cannot be on our shelf — a Shopify "restocked" there is
+// the checkbox ticked when the refund was keyed, or (BAL) another product on a
+// shared SKU. Only eBay's payout proves it; the Shopify read is still stored, and
+// a yes from it sends the item to the DM rather than closing it (factCheckRaw).
 async function verifyRefundedInr(it: any, ebayRow: any, shopRow: any) {
   const [pay, stock] = await Promise.all([checkEbayPayback(it, ebayRow), checkShopifyRestock(it, shopRow, ebayRow)]);
-  const hit = pay.ok ? pay : stock.ok ? stock : null;
+  const delivered = inrRoute(it) === "delivered";
+  const hit = pay.ok ? pay : (stock.ok && !delivered) ? stock : null;
   return {
     fact_verdict: hit ? "agrees" : "disagrees",
-    fact_why: hit ? hit.why : `The buyer was refunded: ${pay.why}, and ${stock.why}`,
+    fact_why: hit ? hit.why
+      : delivered && stock.ok ? `The carrier says it was delivered to the buyer, so only eBay can pay this back — ${pay.why} (Shopify's restock can't count: ${stock.why})`
+      : `The buyer was refunded: ${pay.why}, and ${stock.why}`,
     fact_evidence: { ebay: pay, shopify: stock },
     fact_checked_at: new Date().toISOString(),
   };
@@ -920,8 +961,10 @@ async function recheckResolutions(sb: any, store: string) {
     .or(`fact_verdict.is.null,and(fact_verdict.eq.disagrees,fact_checked_at.lt.${stale})`)
     .order("fact_checked_at", { ascending: true, nullsFirst: true }).limit(RECHECK_PER_SWEEP);
   if (!rvs?.length) return 0;
+  // tracking_status: verifyRefundedInr routes on it (delivered → eBay only).
+  // It was missing here, so every re-read judged a delivered refund as "lost".
   const { data: rows } = await sb.from("ebay_cases")
-    .select("case_key,store_code,kind,case_type,ebay_id,outcome,order_no,opened_at,first_seen")
+    .select("case_key,store_code,kind,case_type,ebay_id,outcome,order_no,opened_at,first_seen,tracking_status")
     .in("case_key", rvs.map((r: any) => r.item_key));
   // The refund can sit on the escalated case's row, not the inquiry's.
   const ids = (rows || []).map((r: any) => r.ebay_id);
@@ -1554,6 +1597,9 @@ function lastMismatchRead(now = new Date()): number {
   if (diff < 0) diff += 1440;
   return now.getTime() - diff * 60_000;
 }
+// A bare YYYY-MM-DD is UTC midnight, which is the evening before in Chicago —
+// so a day string is read at noon UTC to print the day it names.
+const usDayOf = (day: string) => usDay(day + "T12:00:00Z");
 const usDay = (d: string) => new Date(d).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric" });
 
 function factCheck(type: string, it: any, review: any): { ok: boolean; why: string; kind: FactKind } {
@@ -1597,12 +1643,37 @@ function factCheckRaw(type: string, it: any, review: any): { ok: boolean; why: s
       if (review?.fact_verdict === "agrees") return ok;
       // Not read yet (recheckResolutions picks it up within the next sweep).
       if (!review?.fact_verdict) return { ok: true, kind: "pending", why: "" };
+      const ev = review?.fact_evidence || {};
+      const why = review?.fact_why || "The buyer was refunded, and nothing yet shows the money or the device came back";
+      // DELIVERED: eBay's payout is the only proof, and it has a clock
+      // (EBAY_PAYBACK_DAYS). "eBay said 24-48 hours" gets PAYBACK_WAIT_DAYS
+      // to show up in the payouts, re-read every sweep; it never waits past
+      // the window. Once the window has shut nothing the store does brings the
+      // money back, so an unbacked resolution is the DM's to sign off.
+      if (inrRoute(it) === "delivered") {
+        const today = chicagoDay(new Date());
+        const by = paybackBy(it);
+        const waitTo = review?.updated_at ? addDays(chicagoDay(review.updated_at), PAYBACK_WAIT_DAYS) : today;
+        if (by && today > by) {
+          return { ok: false, kind: "unverifiable",
+            why: `${why}. eBay's 30 days to pay it back ran out on ${usDayOf(by)}` };
+        }
+        if (today < waitTo) return { ok: true, kind: "pending", why: "" };
+        // Past the wait: the manager is chased when eBay clearly says no, and
+        // the window is still open — that is still theirs to fix with eBay.
+        // But not when Shopify shows it restocked: eBay's tracking can read
+        // DELIVERED on a parcel that went back to us (BAL inquiry 5388460438,
+        // "delivered back to the store and resold it"), and no call to eBay
+        // fixes that — only the DM can tell which it was.
+        if (ev.ebay?.ok === false && ev.shopify?.ok !== true) {
+          return { ok: false, kind: "not_done", why: by ? `${why}. eBay pays back only until ${usDayOf(by)}` : why };
+        }
+        return { ok: false, kind: "unverifiable", why };
+      }
       // The manager is chased only when BOTH reads came back with a clear no.
       // A read that couldn't answer (eBay has no payout row, the order is too
       // old and its SKU is shared at BAL, a timeout) is our blind spot, not the
       // store's failure — that goes to the DM as "can't verify" instead.
-      const ev = review?.fact_evidence || {};
-      const why = review?.fact_why || "The buyer was refunded, and nothing yet shows the money or the device came back";
       if (ev.ebay?.ok === false && ev.shopify?.ok === false) return { ok: false, kind: "not_done", why };
       return { ok: false, kind: "unverifiable", why };
     }
@@ -1737,14 +1808,28 @@ function baseState(type: string, it: any, review: any, ctx: any): StateOut {
       // (0106: eBay hands that money back itself); returned means it is on our
       // shelf; never scanned means it may never have left the store.
       const route = inrRoute(it);
+      // PAST EBAY'S 30 DAYS WITH NO CLAIM, A DELIVERED REFUND IS WRITTEN OFF
+      // (Ethan, 2026-11-06). eBay won't pay it back now (EBAY_PAYBACK_DAYS), and
+      // a carrier claim on a parcel its own tracking calls delivered is denied —
+      // so nobody is left to pay us, and a daily "needs a claim" would only send
+      // a manager to file one that can't succeed. It leaves the managers' list
+      // and mails (settled, note written_off), is listed in the closed view for
+      // WRITTEN_OFF_LISTED_DAYS, and is told to the DM ONCE in the 8:40 digest —
+      // a loss recorded, not one that quietly vanishes. (Same day, he had first
+      // asked for these to stay active as needs_claim; that was replaced.)
+      // One already under an In Progress claim keeps it: the claim runs its
+      // course and a Recovered/Denied claim settles it like any other.
+      const by = paybackBy(it);
+      const pastWindow = route === "delivered" && !!by && today > by;
       if (claim) {
         // Ethan, 2026-09-23: "the daily email will notify them if the item ever
         // ends up delivered so they can call ebay about it". A claim normally
         // takes the chasing over — but a claim still In Progress against a
-        // parcel that arrived is chasing money the carrier does not owe. So it
-        // comes back due, saying which call to make.
+        // parcel that arrived INSIDE eBay's window is chasing money the carrier
+        // does not owe while eBay still would. So it comes back due, saying
+        // which call to make. Past the window the claim is the right move again.
         if (claim.status === "in_progress") {
-          return route === "delivered"
+          return route === "delivered" && !pastWindow
             ? { state: "due", due_on: today, note: "delivered_after_refund" }
             : { state: "covered", due_on: null };
         }
@@ -1752,6 +1837,7 @@ function baseState(type: string, it: any, review: any, ctx: any): StateOut {
       }
       // Due every day from the refund on, with no timeframe: the money has
       // already gone out, so there is nothing to wait for.
+      if (pastWindow) return { state: "settled", due_on: null, note: "written_off" };
       if (route === "lost") return { state: "needs_claim", due_on: today };
       return { state: "due", due_on: today, note: INR_ROUTE_NOTE[route] };
     }
@@ -2007,6 +2093,13 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
              // "whenever it is due". Only the emails read it — the tool lists
              // the item either way (see the INR branch of stateOf).
              quiet_until: s.quiet_until || null,
+             // 2026-11-06: the last day eBay pays back a refunded INR that turns
+             // up delivered (EBAY_PAYBACK_DAYS); null on everything else.
+             // payback_closing = delivered, not settled, and inside the last
+             // PAYBACK_WARN_DAYS — the DM digest lists these every morning.
+             payback_by: type === "ebay_case" ? paybackBy(it) : null,
+             payback_closing: type === "ebay_case" && s.note === "delivered_after_refund"
+               && !!paybackBy(it) && ctx.today >= addDays(paybackBy(it)!, -PAYBACK_WARN_DAYS),
              // 0107: whose move eBay thinks it is
              awaiting_reply: type === "ebay_case" && ctx.awaiting(it),
              // The reply window has shut — nothing anyone presses brings it back.
@@ -2025,6 +2118,12 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       // return OPEN (0174). The Returns tab matches Seller Hub's open list, so it
       // stays on it — green, counted nowhere — until eBay closes it.
       if (x.kind === "return" && x.is_open) return true;
+      // A write-off (2026-11-06) closed weeks before it was written off, so
+      // closed_at would drop it at once — before the DM digest ever saw it to
+      // say so. It is listed by the day eBay's window shut instead.
+      if (x.state_note === "written_off") {
+        return (x.payback_by || "") >= addDays(chicagoDay(new Date()), -WRITTEN_OFF_LISTED_DAYS);
+      }
       if (x.claim) return (x.claim.resolved_at || "") >= recent;
       return (x.resolved_at || x.closed_at || "") >= recent;
     }
