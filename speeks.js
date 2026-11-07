@@ -38886,13 +38886,20 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
     // is due). Only the date the card actually prints counts — the one shown
     // when the next move is ours — so the order reads true on screen. Returns
     // with no deadline of ours follow, in the old status-then-oldest order.
+    // Delivered returns outrank that, though (Ethan, 2026-11-06): the item is
+    // back and the buyer is owed money, so every delivered return sits above
+    // every label-pending one even when the label's date is sooner. Deadline
+    // order still holds within each group.
     if (returns) {
         const dueAt = it => {
             if (!it.respond_by || !_holdReturnAction(it).ours) return Infinity;
             const t = new Date(it.respond_by).getTime();
             return isNaN(t) ? Infinity : t;
         };
+        const delivered = it => /ITEM_DELIVERED/.test(String(it.ebay_status || '')) && it.outcome !== 'partial_matched' ? 0 : 1;
         rows.sort((a, b) => {
+            const ga = delivered(a), gb = delivered(b);
+            if (ga !== gb) return ga - gb;
             const da = dueAt(a), db = dueAt(b);
             if (da !== db) return da === Infinity ? 1 : db === Infinity ? -1 : da - db;
             return _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b);
@@ -38980,7 +38987,9 @@ function _holdReturnAction(it) {
     // hands and the buyer is owed their money, so it is the one stage where the
     // clock is already running against us (Ethan, 2026-09-22).
     if (/ITEM_DELIVERED/.test(st)) return { text: 'Return delivered — issue refund by', ours: true, urgent: true };
-    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return { text: 'Provide return shipping label by', ours: true };
+    // Red too (Ethan, 2026-11-06): the return can't move until we send the
+    // label, so it is ours to act on now, not something to wait out.
+    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return { text: 'Provide return shipping label by', ours: true, urgent: true };
     if (/READY_FOR_SHIPPING|ITEM_READY_TO_SHIP/.test(st)) return { text: 'Waiting for buyer to ship', ours: false };
     if (/ITEM_SHIPPED/.test(st)) return { text: 'Return shipped', ours: false };
     return { text: _holdPretty(st.split(' / ').pop()), ours: true };
