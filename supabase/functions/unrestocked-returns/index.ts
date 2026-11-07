@@ -420,6 +420,32 @@ async function collect(wantStores: string[], days: string[], openRows: any[], re
     problems.push(`could not read ebay_cases (item-not-received refunds not excluded): ${String(e).slice(0, 120)}`);
   }
 
+  // RECYCLED (2026-11-07). A unit put back on hand and then recycled out ends
+  // at 0 on hand with no resale, which reads exactly like "never restocked"
+  // (WSP #MO02-7701 / #MO02-7660: recycle requests approved 11-05, recycled in
+  // POS 11-06, still mailed 11-07). A recycle request for the same store + SKU,
+  // made after the refund, approved For or Against (not Denied/Ignore) and
+  // ticked Recycled In POS, is proof the unit came back — it cannot be recycled
+  // out of stock it was never in. Approved but not yet ticked stays on the
+  // mail: until the POS tick, nothing says the count was raised.
+  const recycled = new Map<string, any[]>();
+  try {
+    const rows = await sbGet(
+      `recycle_requests?select=store,sku,created_at,pos_done_at,pos_done_by&review_verdict=in.(for,against)&pos_done_at=not.is.null`);
+    for (const r of rows || []) {
+      const k = `${String(r.store || "").toUpperCase()}|${String(r.sku || "").trim()}`;
+      if (!recycled.has(k)) recycled.set(k, []);
+      recycled.get(k)!.push(r);
+    }
+  } catch (e) {
+    problems.push(`could not read recycle_requests (recycled units not excluded): ${String(e).slice(0, 120)}`);
+  }
+  const recycledHow = (store: string, sku: string, refundAt: string): string | null => {
+    const hit = (recycled.get(`${store}|${String(sku || "").trim()}`) || [])
+      .find((r) => !refundAt || String(r.created_at) > String(refundAt));
+    return hit ? `recycled in POS ${chicagoDay(hit.pos_done_at)}${hit.pos_done_by ? ` by ${hit.pos_done_by}` : ""} (approved recycle request)` : null;
+  };
+
   for (const store of wantStores) {
     const shopRow = shopRows.find((s: any) => (s.store_code || STORE_BY_SHOP[s.shop]) === store);
     if (!shopRow?.access_token) { problems.push(`${store}: no Shopify token`); blind.add(store); continue; }
@@ -464,6 +490,7 @@ async function collect(wantStores: string[], days: string[], openRows: any[], re
         seen.add(c.key);
         try {
           const v = await judge(shop, token, o, c, lost);
+          if (v.state === "flag" && recycledHow(store, c.sku, c.refundAt)) { st.back_by_hand++; continue; }
           if (v.state === "flag") { found.push({ ...c, flag: v.flag }); st.flagged++; }
           else if (v.state === "ok") st.back_by_hand++;
           else problems.push(`${store} ${c.orderName} ${c.sku}: ${v.why}`);
@@ -476,6 +503,8 @@ async function collect(wantStores: string[], days: string[], openRows: any[], re
     // --- 2. re-check every row still open from earlier mornings -------------
     for (const row of openRows.filter((r) => r.store_code === store && !seen.has(r.issue_key))) {
       st.rechecked++;
+      const rec = recycledHow(store, row.sku, row.refund_at);
+      if (rec) { cleared.push({ key: row.issue_key, how: rec }); continue; }
       try {
         let o = byId.get(String(row.order_id));
         if (!o) {
