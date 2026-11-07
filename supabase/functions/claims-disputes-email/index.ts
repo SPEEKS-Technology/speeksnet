@@ -128,6 +128,7 @@ type Row = {
   // A payment's deadline is a card running out, not a reply (0119), so it
   // carries its own words for "answer by" and "reply window shut".
   dueVerb?: string; missedText?: string;
+  respondBy?: string;
   // 0164: the DM looked at a resolution of this and sent it back, with why.
   sentBack?: { by: string | null; note: string | null } | null;
   // 2026-11-04: marked resolved, but the sites were read afterwards and still
@@ -137,6 +138,12 @@ type Row = {
   // (claims-disputes EBAY_PAYBACK_DAYS), and whether a delivered one is in its
   // last week — those go in the DM digest every morning.
   paybackBy?: string | null; paybackClosing?: boolean;
+  // 2026-11-07: replied to, or past a reply window that can't reopen — listed in
+  // the tool, never mailed to the manager (claims-disputes hushOf).
+  hush?: string | null;
+  // 2026-11-07: a return that is back with us or waiting on our label — today's
+  // job, itemised (claims-disputes returnActNow).
+  actNow?: boolean;
 };
 
 // The states that mean a person still has to do something. Identical to the
@@ -162,6 +169,7 @@ function disputeRow(d: any): Row {
     linkLabel: ebay ? "Respond on eBay" : "Respond in Shopify",
     quiet: d.quiet_until || null, missed: !!d.missed_window,
     contestedSince: d.resolution_disputed_since || null, openedAt: d.opened_at || "",
+    hush: d.hush || null,
   };
 }
 
@@ -179,7 +187,7 @@ function caseRow(c: any): Row {
       : c.state_note === "never_scanned" ? "Refunded — carrier never scanned it"
       : inr ? (escalated ? "Item not received — escalated" : "Item not received")
       : "eBay case",
-    title: c.item_title || (inr ? "Item not received" : "eBay case"),
+    title: unentity(c.item_title) || (inr ? "Item not received" : "eBay case"),
     facts: [
       c.order_no ? `Order ${c.order_no}` : "",
       c.buyer ? `Buyer ${c.buyer}` : "",
@@ -199,7 +207,39 @@ function caseRow(c: any): Row {
     quiet: c.quiet_until || null, missed: !!c.missed_window,
     contestedSince: c.resolution_disputed_since || null, openedAt: c.opened_at || "",
     paybackBy: c.payback_by || null, paybackClosing: !!c.payback_closing,
+    hush: c.hush || null,
   };
+}
+
+// A RETURN TO HANDLE TODAY (Ethan, 2026-11-07: "we shouldn't wait on, we should
+// handle immediately when they pop up or get delivered"). claims-disputes marks
+// these due the day they appear (note return_delivered / return_label); the
+// rest of the returns stay a count at the bottom. Due today, every day, until
+// eBay moves it on — eBay's own date is printed in the note, not used as the
+// deadline, because waiting for it is exactly what he said not to do.
+const unentity = (t: any) => String(t || "").replace(/&#(\d+);/g, (_m, n) => String.fromCharCode(Number(n)))
+  .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+const returnActNow = (c: any) => c.kind === "return" && NEED.includes(c.state)
+  && (c.state_note === "return_delivered" || c.state_note === "return_label");
+function returnRow(c: any): Row {
+  const delivered = c.state_note === "return_delivered";
+  return {
+    type: "ebay_case", key: c.case_key, store: c.store_code, state: c.state, note: c.state_note || null,
+    kindLabel: delivered ? "Return delivered — refund the buyer" : "Return — send the label",
+    // eBay sends titles HTML-encoded (7&#34;); esc() would print the entity.
+    title: unentity(c.item_title) || "eBay return",
+    facts: [
+      (c.return_id || c.ebay_id) ? `Return ID ${c.return_id || c.ebay_id}` : "",
+      (c.order_no || c.order_id) ? `Order ${c.order_no || c.order_id}` : "",
+      c.buyer ? `Buyer ${c.buyer}` : "",
+      c.reason ? pretty(c.reason) : "",
+    ].filter(Boolean),
+    amount: c.amount == null ? null : Number(c.amount),
+    due: c.due_on || "", link: "https://www.ebay.com/sh/ord/returns", linkLabel: "Open returns on eBay",
+    quiet: null, missed: false,
+    contestedSince: null, openedAt: c.opened_at || "",
+    actNow: true, respondBy: chicagoDay(c.respond_by),
+  } as Row;
 }
 
 function mismatchRow(m: any): Row {
@@ -402,6 +442,7 @@ function allRows(d: any): Row[] {
   return [
     ...(d.disputes || []).map(tag(disputeRow)),
     ...(d.cases || []).filter((c: any) => !isPlainReturn(c)).map(tag(caseRow)),
+    ...(d.cases || []).filter(returnActNow).map(tag(returnRow)),
     ...(d.mismatches || []).map(tag(mismatchRow)),
     ...(d.payments || []).map(tag(paymentRow)),
   ];
@@ -414,7 +455,7 @@ function allRows(d: any): Row[] {
 // Quiet ends a day before the refund day, not on it — see DUE TODAY MEANS BY
 // TOMORROW below. Otherwise an INR would be hidden on the very day it is meant
 // to be called due.
-const mailable = (r: Row, today: string) => NEED.includes(r.state) && !(r.quiet && r.quiet > addDaysIso(today, 1));
+const mailable = (r: Row, today: string) => NEED.includes(r.state) && !r.hush && !(r.quiet && r.quiet > addDaysIso(today, 1));
 
 // DUE TODAY MEANS BY TOMORROW (Ethan, 2026-10-02: "something due tomorrow we
 // would get alerted as due today today, so keep everything the same just move it
@@ -484,7 +525,7 @@ function itemRow(r: Row, today: string) {
   const tomorrowDue = r.due && r.due === addDaysIso(today, 1);
   // A refunded INR, or anything the DM sent back, is due EVERY day until it is
   // dealt with — there is no deadline closing, so "closes today" would lie.
-  const everyDay = r.state === "needs_claim" || REFUNDED_INR_NOTES.includes(r.note || "") || !!r.sentBack || !!r.notDone;
+  const everyDay = r.state === "needs_claim" || REFUNDED_INR_NOTES.includes(r.note || "") || !!r.sentBack || !!r.notDone || !!r.actNow;
   const dueTxt = everyDay && !r.missed
     ? `<span style="color:${C.bad};font-weight:700;"> · due today${r.sentBack ? " — sent back by the DM" : r.notDone ? " — marked resolved, not done" : ""}</span>`
     : r.missed
@@ -525,6 +566,10 @@ function noteBase(r: Row): string {
     if (r.missed) return "Shopify can't charge this card any more. Collect it another way, or cancel or refund what didn't ship.";
     return "Fulfil the order to charge the card, or cancel it if it isn't going.";
   }
+  if (r.note === "return_delivered")
+    return `The return is back with us. Check it over and issue the refund today${r.respondBy ? ` — eBay's deadline is ${prettyDay(r.respondBy)}, but don't wait for it` : ""}.`;
+  if (r.note === "return_label")
+    return `The buyer can't send it back until we provide a label. Send it today${r.respondBy ? ` — eBay's deadline is ${prettyDay(r.respondBy)}` : ""}.`;
   if (r.note === "delivered_after_refund")
     return `It turned up after we refunded the buyer. The carrier does not owe this one — call eBay, then record what they did.${r.paybackBy ? ` eBay pays it back only until ${prettyDay(r.paybackBy)}.` : ""}`;
   if (r.note === "returned_to_us")
@@ -543,7 +588,7 @@ function noteBase(r: Row): string {
 // ---------------------------------------------------------------------------
 // 1. Manager daily
 // ---------------------------------------------------------------------------
-function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { returns: number; claims: number; quiet: number }, today: string) {
+function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { returns: number; claims: number; quiet: number; waiting?: number }, today: string) {
   const list = rows.slice().sort(bySoonest);
   const fresh = list.filter((r) => !seen.has(`${r.type}|${r.key}`));
   const rest = list.filter((r) => seen.has(`${r.type}|${r.key}`));
@@ -567,7 +612,10 @@ function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { r
   }
 
   const quiet: string[] = [];
-  if (extras.returns) quiet.push(`${extras.returns} open return${extras.returns === 1 ? "" : "s"}`);
+  if (extras.returns) quiet.push(`${extras.returns} ${extras.returns === 1 ? "return" : "returns"} waiting on the buyer`);
+  // Replied to, or past a window eBay won't reopen — still open, nothing to do
+  // until eBay decides (claims-disputes hushOf).
+  if (extras.waiting) quiet.push(`${extras.waiting} case${extras.waiting === 1 ? "" : "s"} waiting on eBay's decision`);
   if (extras.claims) quiet.push(`${extras.claims} claim${extras.claims === 1 ? "" : "s"} over 7 days`);
   // An INR that has been told about once and is waiting for its refund date is
   // not "nothing" — it is a date being kept. Saying so is what stops someone
@@ -956,7 +1004,9 @@ Deno.serve(async (req: Request) => {
         // an empty list gets the mail anyway, because the warning IS the news.
         if (!list.length && !storeWarn(s).length) { sent.push({ store: s, skipped: "nothing to say" }); continue; }
         const extras = {
-          returns: (data.cases || []).filter((c: any) => isPlainReturn(c) && c.store_code === s && c.is_open).length,
+          // The ones itemised above (returnActNow) are not counted again here.
+          returns: (data.cases || []).filter((c: any) => isPlainReturn(c) && c.store_code === s && c.is_open && !returnActNow(c)).length,
+          waiting: rows.filter((r) => r.store === s && r.hush && NEED.includes(r.state)).length,
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
           quiet: rows.filter((r) => r.store === s && r.quiet && r.quiet > addDaysIso(today, 1)).length,
         };

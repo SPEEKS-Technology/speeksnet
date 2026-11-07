@@ -208,3 +208,30 @@ t('DM feed card: shows for the DM only, no snooze, opens To Confirm', function (
         });
     });
 });
+
+// LISTED, NOT NOTIFIED (claims-disputes hushOf, Ethan 2026-11-07): a case we
+// replied to, or past a window eBay won't reopen, stays on the list but is not
+// counted on the badge or the QuickPortal, and its card drops the red edge.
+// A delivered / label-needed return keeps counting.
+t('hushed cases: listed, not counted; act-now return still counted', function () {
+    var hushed = inr({ case_key: 'case:h1', kind: 'case', case_type: 'RETURN', is_open: true, outcome: null,
+        state: 'needs_reply', state_note: 'missed_window', missed_window: true, awaiting_reply: true, hush: 'missed_window' });
+    var replied = inr({ case_key: 'case:h2', kind: 'case', case_type: 'RETURN', is_open: true, outcome: null,
+        state: 'due', hush: 'replied' });
+    var live = inr({ case_key: 'case:h3', kind: 'case', case_type: 'RETURN', is_open: true, outcome: null, state: 'needs_reply', awaiting_reply: true });
+    var ret = inr({ case_key: 'return:r1', kind: 'return', case_type: null, is_open: true, outcome: null,
+        state: 'due', state_note: 'return_delivered', ebay_status: 'ITEM_DELIVERED / ITEM_DELIVERED' });
+    _holdData.chk = { cases: [hushed, replied, live, ret], disputes: [{ dispute_key: 'ebay:1', state: 'needs_reply', hush: 'missed_window' }], mismatches: [], payments: [] };
+    var n = _holdDueCounts('chk');
+    if (n.cases !== 1) return 'cases badge should count only the live one, got ' + n.cases;
+    if (n.returns !== 1) return 'delivered return should count, got ' + n.returns;
+    var q = _qpClaimsSplit(_holdData.chk);
+    if (q.cases.due.length !== 1) return 'QuickPortal due should be 1, got ' + q.cases.due.length;
+    if (q.cases.waiting < 3) return 'hushed items should count as waiting, got ' + q.cases.waiting;
+    _holdIndex.chk = [];
+    var html = _holdCard('chk', 'ebay_case', replied, false, {}, {});
+    if (/inset 3px 0 0/.test(html)) return 'hushed card still has the red edge';
+    if (html.indexOf('Replied — waiting on eBay') < 0) return 'replied chip missing';
+    delete _holdData.chk; delete _holdIndex.chk;
+    return true;
+});

@@ -38342,6 +38342,8 @@ function _holdStateLabel(type, it, s) {
     // 2026-11-04: resolved, re-read afterwards, and the sites still disagree.
     if (it.dm && it.dm.kind === 'not_done' && it.state !== 'needs_reply'
         && _HOLD_VIEWS.due.states.includes(it.state)) return 'Marked resolved — not done';
+    // Our reply is eBay's last word on it — nothing to do until eBay decides.
+    if (it.hush === 'replied') return 'Replied — waiting on eBay';
     if (it.state === 'needs_reply') {
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
@@ -38541,10 +38543,12 @@ function _holdNotLive(ctx) {
     });
 }
 
-// Items needing someone today, for the tab badges.
+// Items needing someone today, for the tab badges. A hushed item (replied to,
+// or past a reply window eBay won't reopen — claims-disputes hushOf, Ethan
+// 2026-11-07) stays listed but is not counted: it waits on eBay, not on us.
 function _holdDueCounts(ctx) {
     const d = _holdData[ctx];
-    const need = x => _HOLD_VIEWS.due.states.includes(x.state);
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush;
     if (!d) return { mismatch: 0, returns: 0, cases: 0, payments: 0 };
     const due = (d.cases || []).filter(need);
     return {
@@ -38786,7 +38790,7 @@ function _holdInView(ctx, items) {
 // from the top of a long tab.
 function _holdSectionHead(t, rows) {
     const list = rows || [];
-    const hot = list.some(x => _HOLD_VIEWS.due.states.includes(x.state));
+    const hot = list.some(x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush);
     const bar = hot ? _HOLD_C.red.solid : '#94a3b8';
     const count = list.length
         ? `<span style="font-size:10.5px; font-weight:900; padding:2px 8px; border-radius:999px; background:${hot ? _HOLD_C.red.bg : '#e2e8f0'}; color:${hot ? _HOLD_C.red.fg : '#475569'};">${list.length}</span>`
@@ -39038,7 +39042,10 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     const idx = _holdIndex[ctx].push({ type, it }) - 1;
     const readOnly = !!(opts && opts.returns);
     const st = it.state;
-    const s = _HOLD_STATE[st] || _HOLD_STATE.due;
+    // Hushed (claims-disputes hushOf, Ethan 2026-11-07): replied to, or past a
+    // window eBay won't reopen. Still listed here, but it is waiting on eBay's
+    // decision, so the chip is blue and the card has no red edge.
+    const s = it.hush ? _HOLD_STATE.answered : (_HOLD_STATE[st] || _HOLD_STATE.due);
     const key = _holdKeyFor(type, it);
     let form = _holdOpenForm[ctx] && _holdOpenForm[ctx].id === `${type}|${key}` ? _holdOpenForm[ctx].mode : null;
     if (readOnly) form = null;
@@ -39395,7 +39402,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         formHtml = _holdClaimForm(ctx, idx, it);
     }
 
-    const edge = (st === 'due' || st === 'needs_claim' || st === 'needs_reply') ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};` : '';
+    const edge = !it.hush && (st === 'due' || st === 'needs_claim' || st === 'needs_reply') ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};` : '';
     return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; ${edge}">
         <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
             <div style="min-width:0; flex:1 1 240px;">
@@ -55847,8 +55854,10 @@ function _qpClaimsStrip(b) {
     return '<div class="qp-tls">' + cell('r', b.late, 'Overdue') + cell('a', b.today, 'Today') + cell('y', b.week, 'This Week') + cell('n', b.later, 'Later') + '</div>';
 }
 function _qpClaimsSplit(d) {
-    const need = x => _HOLD_VIEWS.due.states.includes(x.state);
-    const wait = x => _HOLD_VIEWS.waiting.states.includes(x.state) && !_HOLD_DONE.includes(x.state);
+    // Hushed items (claims-disputes hushOf) count as waiting, not due.
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush;
+    const wait = x => (_HOLD_VIEWS.waiting.states.includes(x.state) && !_HOLD_DONE.includes(x.state))
+        || (_HOLD_VIEWS.due.states.includes(x.state) && !!x.hush);
     const cases = (d.cases || []);
     const by = {
         mismatch: (d.mismatches || []).map(x => ({ x, type: 'mismatch' })),

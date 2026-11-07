@@ -924,6 +924,13 @@ const SHOPIFY_REFUNDED_FOR_EBAY_QL = `query ($q: String!) {
   }
 }`;
 const isPartialReturn = (it: any) => it.kind === "return" && /LESS_THAN_A_FULL_REFUND/.test(String(it.ebay_status || ""));
+// A plain return whose next move is ours TODAY (Ethan, 2026-11-07): it has
+// arrived back (refund the buyer) or eBay is waiting on our label. Same status
+// words the card reads (speeks.js _holdReturnAction). Due the day it appears and
+// itemised on the managers' morning mail — the other returns are only counted.
+const returnActNow = (it: any) => it.kind === "return" && !!it.is_open && it.outcome !== "partial_matched"
+  && /ITEM_DELIVERED|WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(String(it.ebay_status || ""));
+const returnActNote = (it: any) => /ITEM_DELIVERED/.test(String(it.ebay_status || "")) ? "return_delivered" : "return_label";
 async function checkPartialRefund(it: any, shopRow: any): Promise<{ outcome: string; outcome_detail: string } | null> {
   const order = String(it.order_id || "");
   const ebay = Number(it.raw?.sellerTotalRefund?.actualRefundAmount?.value ?? it.amount);
@@ -1730,6 +1737,30 @@ function stateOf(type: string, it: any, review: any, ctx: any): StateOut {
   }
   return { state: "dm_review", due_on: null, note: s.note, dm: dmOf(review, true, fc.why, fc.kind) };
 }
+// LISTED, NOT NOTIFIED (Ethan, 2026-11-07: "active cases that have either been
+// replied to or have missed the window should stay active, but don't need the
+// notification there until the case processes"). The state is left exactly as
+// stateOf decided — the card stays in Needs Attention and still says what it
+// is — but nothing chases a manager about it: no tab badge, no QuickPortal
+// count, no feed card, no manager mail. It comes back by itself when it
+// changes: the buyer writes again (awaiting → needs_reply), the site closes it
+// (settled), or the DM sends a resolution back.
+//   'replied'        an open eBay case or INR whose last word is ours. An INR
+//                    only until its refund day — that day is a real decision.
+//   'missed_window'  eBay's reply window shut (eBay case or eBay dispute). The
+//                    DM digest still says so once (it reads every row).
+// Not a payment: a card that can't be charged is still the manager's to chase.
+function hushOf(type: string, it: any, s: StateOut, ctx: any): string | null {
+  if (!NEED_STATES.includes(s.state)) return null;
+  if (s.dm && (s.dm.status === "denied" || s.dm.kind === "not_done")) return null;
+  if (s.note === "missed_window" && type !== "payment") return "missed_window";
+  if (type === "ebay_case" && it.is_open && it.kind !== "return" && !ctx.awaiting(it) && it.seller_replied_at) {
+    if (it.kind === "case") return "replied";
+    if (it.respond_by && chicagoDay(it.respond_by) > ctx.today) return "replied";
+  }
+  return null;
+}
+
 // What the card, the DM list and the emails need to know about the DM's part.
 function dmOf(review: any, pending: boolean, why: string, kind: FactKind | null = null) {
   return {
@@ -1924,6 +1955,11 @@ function baseState(type: string, it: any, review: any, ctx: any): StateOut {
   if (type === "ebay_case" && ctx.awaiting(it)) {
     return { state: "needs_reply", due_on: today, note: missedWindow(type, it) ? "missed_window" : undefined };
   }
+
+  // A RETURN THAT IS BACK WITH US, OR WAITING ON OUR LABEL, IS TODAY'S JOB
+  // (Ethan, 2026-11-07: "we shouldn't wait on, we should handle immediately when
+  // they pop up or get delivered"). No first-day wait: due the day it appears.
+  if (type === "ebay_case" && returnActNow(it)) return { state: "due", due_on: today, note: returnActNote(it) };
 
   // DUE TODAY DOES NOT CHANGE (Ethan, 2026-09-23). The one-day wait below is
   // about how fast we notice something NEW; it is never a reason to sit on a
@@ -2122,6 +2158,8 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
              awaiting_reply: type === "ebay_case" && ctx.awaiting(it),
              // The reply window has shut — nothing anyone presses brings it back.
              missed_window: s.note === "missed_window",
+             // Listed, not notified (hushOf).
+             hush: hushOf(type, it, s, ctx),
              // Someone called this resolved and the site still disagrees. The
              // date is when they said so, which is what the escalation counts
              // from — exposed rather than re-derived, so the email and the DM
@@ -2213,6 +2251,9 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       const on = nudgedOn[`${type}|${key}`] || (sentBack ? String(x.dm.at || "").slice(0, 10) || ctx.today : null)
         || (notDone ? ctx.today : null);
       if (!on || DUE_ALERT_DONE.includes(x.state)) continue;
+      // Replied to, or past a window that can't be reopened: waiting on the
+      // site's decision, so it is not the manager's to-do (hushOf).
+      if (x.hush) continue;
       // A manager's own resolution clears their card (Ethan, 2026-10-08) —
       // unless the DM has since sent it back.
       if (x.review?.status === "resolved" && !sentBack && !notDone) continue;
