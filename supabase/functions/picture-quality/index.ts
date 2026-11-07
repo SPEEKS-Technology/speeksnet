@@ -1594,7 +1594,10 @@ function modelAnswers(g: any) {
 // trained on until he confirms it. `more` reopens those listings, and the ones
 // he commented on (the hard cases), weakest sheet first: the sheets with the
 // fewest of his own confirmations, ties to the busier sheet. A sheet drops
-// out at CONFIRM_TARGET of his own.
+// out at CONFIRM_TARGET of his own — EXCEPT for local-prefill listings (0157),
+// which never drop out: they were picked on purpose for a weak sheet, and on
+// 2026-11-02 the 40 cap hid 77 of the 80 misc and 13 of the 17 lenses he had
+// asked for (he saw ~16 of 114). Each open one counts toward `need`.
 // REOPENED FOR A RE-CHECK (Ethan, 2026-10-21). Listings he confirmed before a
 // rule was settled, put back in his queue until he saves them again after the
 // date given: Extra = another view of the item the guide doesn't ask for,
@@ -1784,7 +1787,7 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>, more =
     const open = (g: any) => !done.has(g.product_id) && !skip.has(g.product_id) && g.status !== "dismissed" && (more || !known(g));
     return { slug, name: nameOf.get(slug) || slug, graded: list.length, confirmed, judged,
              left: list.filter(open).length,
-             need: more ? Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed)
+             need: more ? Math.max(Math.min(CONFIRM_TARGET, list.length) - confirmed, list.filter(g => g.local && open(g)).length, 0)
                         : Math.max(0, Math.min(CONFIRM_TARGET, list.length) - confirmed - judged) };
   }).sort((a, b) => more ? (Number(!b.need) - Number(!a.need)) || (a.confirmed - b.confirmed) || (b.graded - a.graded)
                          : (b.need - a.need) || (b.graded - a.graded));

@@ -133,10 +133,26 @@ async function computeNeedsDetail(
 // The sweep runs three times a day, but a manager who has just logged "iPhone 15"
 // should not wait until 12:30 to be told WSP has one. Fired without awaiting so
 // the add stays instant; the pane re-fetches a few seconds later and finds it.
+//
+// ⚠️ STOCK FIRST, THEN MATCH — added 2026-11-06. The matcher reads ebay_catalog,
+// and that cache is only refreshed at 9:28 / 12:28 / 3:28 Central. A call back
+// logged at 2:14pm was matched against 12:28 stock: BAL was told it had a Switch
+// 2 that had sold in the meantime. So the kick now runs the cheap incremental
+// catalog sweep for every store (products touched since the last run, usually one
+// page each — Shopify reads, nothing paid) and only then matches. A store whose
+// refresh fails is matched on what we had, which is the old behaviour.
+async function refreshStockThenMatch(): Promise<void> {
+  const stores = ["OVL", "LEE", "WSP", "MPL", "BAL"];
+  await Promise.all(stores.map((s) =>
+    fetch(`${SB_URL}/functions/v1/ebay-catalog?store=${s}&sweep=1&secret=${MATCH_SECRET}`)
+      .then((r) => r.text()).catch(() => {})));
+  await fetch(`${SB_URL}/functions/v1/callback-match?sweep=1&secret=${MATCH_SECRET}`)
+    .then((r) => r.text()).catch(() => {});
+}
+
 function kickMatchSweep(): void {
   try {
-    const p = fetch(`${SB_URL}/functions/v1/callback-match?sweep=1&secret=${MATCH_SECRET}`)
-      .catch(() => {});
+    const p = refreshStockThenMatch().catch(() => {});
     // deno-lint-ignore no-explicit-any
     const rt = (globalThis as any).EdgeRuntime;
     if (rt?.waitUntil) rt.waitUntil(p);

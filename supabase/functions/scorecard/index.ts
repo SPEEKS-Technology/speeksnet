@@ -508,7 +508,8 @@ Deno.serve(async (req: Request) => {
             : `Average ${(Math.round(storeAverage * 10) / 10).toFixed(1)} across ${provided.length} categor${provided.length === 1 ? "y" : "ies"}.`,
           link: "index.html",
           store,
-          audienceRoles: ["district manager", "ceo", "mocd"],
+          // Not MOCD (Ethan, 2026-11-03): they don't need the scorecard mail.
+          audienceRoles: ["district manager", "ceo"],
           audienceFeature: "tool-submit-scores",
           excludeUser: body.submittedBy ? String(body.submittedBy).trim() : null,
         });

@@ -136,6 +136,8 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
     if (!on) return;
     const READ_POSTS = [
         { path: '/functions/v1/district-watch', actions: ['board', 'history'] },
+        // 'lookup' only reads the row and Shopify; 'close' writes and stays blocked.
+        { path: '/functions/v1/unrestocked-returns', actions: ['lookup'] },
     ];
     function isReadPost(url, init) {
         let action = '';
@@ -205,6 +207,7 @@ const B2B_INTAKE_URL    = `${_BASE}/b2b-intake`;
 const B2B_CAPTURE_URL   = `${_BASE}/b2b-capture-tool`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
+const UNRESTOCKED_URL   = `${_BASE}/unrestocked-returns`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const QP_LAYOUT_URL     = `${_BASE}/qp-layout`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
@@ -2151,37 +2154,9 @@ function toggleCalendar() {
     }
     toggleModal('calendarDropdown');
 }
-// Where an idea goes if the recipient list has not loaded (or is empty). Same
-// fallback pattern as every other emailing tool: the address that was hardcoded
-// into the form before the list existed, so a failed fetch sends the idea to the
-// person it has always gone to rather than nowhere.
-const IDEA_FALLBACK_TO = ['ethan.kushnir@speekstechnology.com'];
-
-// formsubmit.co takes ONE address in the URL and the rest through a _cc field,
-// so the list is split rather than joined. Called on open, not at inject time:
-// the recipient list is fetched lazily and a modal built at page load would keep
-// whatever address was current then for the rest of the session.
-async function _ideaSyncRecipients() {
-    const form = document.getElementById('ideaForm');
-    if (!form) return;
-    await _fetchEmailLists();
-    const to = _recipientsFor('idea_submissions', IDEA_FALLBACK_TO)
-        .map(a => String(a || '').trim()).filter(Boolean);
-    const list = to.length ? to : IDEA_FALLBACK_TO;
-    form.action = 'https://formsubmit.co/' + encodeURIComponent(list[0]);
-    // _cc is rewritten every open, including to empty — an address removed in the
-    // tool has to actually stop receiving ideas, and a stale hidden field would
-    // keep copying them in forever.
-    let cc = form.querySelector('input[name="_cc"]');
-    if (!cc) {
-        cc = document.createElement('input');
-        cc.type = 'hidden';
-        cc.name = '_cc';
-        form.appendChild(cc);
-    }
-    cc.value = list.slice(1).join(',');
-}
-
+// Recipients for Submit an Idea are read SERVER side now (the idea-submit edge
+// function reads the idea_submissions list and falls back to Ethan), so the
+// popup no longer fetches the list on open or rewrites a formsubmit _cc field.
 function toggleIdeaModal() {
     // Pre-fill the submitter's name from their session so they don't retype it.
     const nameEl = document.getElementById('ideaName');
@@ -2189,10 +2164,6 @@ function toggleIdeaModal() {
         const u = sessionStorage.getItem('speeksUserName');
         if (u && u.trim()) nameEl.value = u.trim();
     }
-    // Not awaited: the address only has to be right by the time Submit is
-    // pressed, and blocking the modal open on a network call to show a form
-    // would be a worse trade. The form carries the fallback until it resolves.
-    _ideaSyncRecipients();
     toggleModal('ideaModal');
 }
 
@@ -4504,6 +4475,9 @@ async function checkPIN() {
             if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
             if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
             if (typeof initB2bPage === 'function') initB2bPage();
+            // The morning mail's "Restocked Under Another SKU" link — a manager
+            // on a phone signs in on it far more often than they arrive signed in.
+            try { _restockHandleHash(); } catch (_) { /* not fatal to sign-in */ }
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
@@ -7929,10 +7903,9 @@ function _wsFitPanels() {
         if (!panel.offsetParent) return;                    // hidden pane
         const top = panel.getBoundingClientRect().top + window.scrollY;
         const docTop = top - window.scrollY;                // viewport-relative
-        // The B2B page runs edge to edge (2026-10), so its panel goes to the
-        // bottom of the window with no gap under it.
-        const gap = panel.closest('.b2b-wrap') ? 0 : GAP;
-        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + gap}px`);
+        // B2B ran edge to edge with no gap here until 2026-10-31; it has the
+        // standard page header and card now, so it keeps the same gap as the rest.
+        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + GAP}px`);
     });
     // The deal page takes the hub's place, so it needs the same top to size to
     // -- measured off the wrapper, which is there whether or not a deal is open.
@@ -12585,21 +12558,27 @@ function handleSignOut() {
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
-let isIdeaSubmitting = false; 
+// Posts to the idea-submit edge function with fetch. It used to be a plain form
+// posted to formsubmit.co into a hidden iframe, which is why it "took forever"
+// (2026-11-05): the success screen waited on that free service's whole reply,
+// had no timeout, and showed "Submitted" on any iframe load — error pages too.
+// Now "Submitted" means the relay took the mail, and a failure says so.
+let isIdeaSubmitting = false;
+const IDEA_SUBMIT_URL = `${_BASE}/idea-submit`;
+// Long enough for a 10 MB phone photo on store Wi-Fi, short enough that a dead
+// request ends in a message rather than a button stuck on "Sending...".
+const IDEA_SUBMIT_TIMEOUT_MS = 45000;
 
 function injectIdeaModal() {
     if (!document.getElementById('ideaModal')) {
         const modalHtml = `
-        <iframe name="hidden_iframe" id="hidden_iframe" style="display:none;" onload="handleIframeLoad()"></iframe>
         <div class="modal-menu idea-menu" id="ideaModal">
             <div class="modal-header">
                 <h3>Submit an Idea</h3>
                 <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div class="modal-content" style="padding: 25px;">
-                <form id="ideaForm" action="https://formsubmit.co/ethan.kushnir@speekstechnology.com" method="POST" enctype="multipart/form-data" target="hidden_iframe" onsubmit="prepareIdeaSubmit()">
-                    <input type="hidden" name="_captcha" value="false">
-                    <input type="hidden" name="_subject" id="ideaDynamicSubject" value="New SPEEKS Idea">
+                <form id="ideaForm" onsubmit="submitIdea(event)">
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Your Name</label>
                         <input type="text" id="ideaName" name="Name" class="idea-input" required readonly aria-readonly="true" title="Pulled from your account" style="background:#f1f5f9; color:#475569; cursor:not-allowed;">
@@ -12622,6 +12601,7 @@ function injectIdeaModal() {
                         <input type="file" id="ideaFile" name="Attachment" class="idea-input" accept="image/*,.pdf,.doc,.docx" style="padding: 10px;">
                     </div>
                     <div style="display:flex; justify-content:flex-end; gap:10px;">
+                    <div id="ideaError" role="alert" style="display:none; color:#d64545; font-size:13px; font-weight:600; margin-bottom:12px;"></div>
                         <button type="button" class="btn-secondary" onclick="closeAllModals()">Cancel</button>
                         <button type="submit" class="btn-primary" id="submitIdeaBtn">Submit Idea</button>
                     </div>
@@ -12638,23 +12618,49 @@ function injectIdeaModal() {
     }
 }
 
-function prepareIdeaSubmit() {
-    isIdeaSubmitting = true; 
+async function submitIdea(ev) {
+    if (ev) ev.preventDefault();
+    if (isIdeaSubmitting) return; // a double-click must not send the idea twice
+    const form = document.getElementById('ideaForm');
     const btn = document.getElementById('submitIdeaBtn');
-    btn.innerText = 'Sending...';
-    btn.style.opacity = '0.7';
-    const category = document.getElementById('ideaCategory').value;
-    document.getElementById('ideaDynamicSubject').value = 'New SPEEKS Idea: ' + category;
-}
+    const errEl = document.getElementById('ideaError');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
-function handleIframeLoad() {
-    if (isIdeaSubmitting) {
-        document.getElementById('ideaForm').style.display = 'none';
+    // Checked here rather than left to the server: a 10 MB limit learnt after
+    // uploading 30 MB is the slow failure this rewrite exists to remove.
+    const fileEl = document.getElementById('ideaFile');
+    const f = fileEl && fileEl.files && fileEl.files[0];
+    if (f && f.size > 10 * 1024 * 1024) {
+        if (errEl) { errEl.textContent = 'That file is over 10 MB — please attach a smaller one.'; errEl.style.display = 'block'; }
+        return;
+    }
+
+    const fd = new FormData(form);
+    fd.append('Store', sessionStorage.getItem('speeksUserStore') || '');
+
+    isIdeaSubmitting = true;
+    btn.disabled = true;
+    btn.innerText = f ? 'Uploading...' : 'Sending...';
+    btn.style.opacity = '0.7';
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), IDEA_SUBMIT_TIMEOUT_MS);
+    try {
+        const res = await fetch(IDEA_SUBMIT_URL, { method: 'POST', body: fd, signal: ctl.signal });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success) throw new Error(json.error || `Server answered ${res.status}`);
+        form.style.display = 'none';
         document.getElementById('ideaSuccess').style.display = 'block';
-        const btn = document.getElementById('submitIdeaBtn');
+    } catch (e) {
+        const msg = e && e.name === 'AbortError'
+            ? 'This is taking too long — check your connection and try again.'
+            : `Your idea did not send: ${(e && e.message) || e}`;
+        if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+    } finally {
+        clearTimeout(timer);
+        isIdeaSubmitting = false;
+        btn.disabled = false;
         btn.innerText = 'Submit Idea';
         btn.style.opacity = '1';
-        isIdeaSubmitting = false; 
     }
 }
 
@@ -14900,24 +14906,25 @@ function _gpBuyDaysHtml(editable) {
 function _gpAddClosed() {
     const inp = document.getElementById('gpClosedDate');
     const lab = document.getElementById('gpClosedLabel');
-    if (!inp) return;
+    if (!inp) return false;
     // "2026-11-26" is read by its PARTS. new Date('2026-11-26') is parsed as UTC
     // and lands on the 25th here, which would close the wrong day.
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(inp.value || ''));
-    if (!m) { alert('Pick the day the stores are closed.'); return; }
+    if (!m) { alert('Pick the day the stores are closed.'); return false; }
     if (m[1] + '-' + m[2] !== _gpGoals.month) {
         alert('That day is not in ' + _gpMonthName(_gpGoals.month) + '.');
-        return;
+        return false;
     }
     const day = parseInt(m[3], 10);
     if (new Date(+m[1], +m[2] - 1, day).getDay() === 0) {
         alert('Sundays are already excluded — no need to add one.');
-        return;
+        return false;
     }
-    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return; }
+    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return false; }
     _gpClosed.push({ day, label: String((lab && lab.value) || '').trim() });
     _gpHarvestGoals();
     renderGpGoals();
+    return true;
 }
 function _gpRemoveClosed(day) {
     _gpClosed = _gpClosed.filter(c => c.day !== day);
@@ -14981,10 +14988,34 @@ function _gpUpdateTotal() {
     el.textContent = any ? _lvMoney(total, false) : '—';
 }
 
+// What the workbook said about the push, in a sentence — empty when it took.
+// gp-goals has always returned the script's answer as `sheet` and nothing read
+// it, which is how a push that never ran went unnoticed for months. Only the NP
+// goals and the buying days are judged: an NP month also gets a "no Sales tab"
+// back from the retired GP write, and that one is expected.
+function _gpSheetNote(sheet) {
+    const s = String(sheet || '');
+    if (!s) return '';
+    if (!/^ok /.test(s)) return '\n\nThe spreadsheet was NOT updated (' + s.slice(0, 120) + ').';
+    let r = null;
+    try { r = JSON.parse(s.slice(3)); } catch (_) { return ''; }   // answer cut short — it ran
+    const what = { npGoals: 'NP goals', buyDays: 'buying days', closedDays: 'closed-day $0s' };
+    const bad = Object.keys(what)
+        .filter(k => r && r[k] && r[k].ok === false)
+        .map(k => what[k] + ': ' + (r[k].error || (r[k].skipped || []).join('; ')));
+    return bad.length ? '\n\nThe spreadsheet did not take everything — ' + bad.join(' / ') : '';
+}
+
 async function saveGpGoals() {
     if (_gpGoalsBusy || !_gpGoals) return;
     const pin = sessionStorage.getItem('speeksUserPin') || '';
     if (!pin) { alert('Sign in again to save goals.'); return; }
+    // A date picked but never Added is still a closure they meant. On 2026-11-02
+    // Thanksgiving sat in the box, Save Month sent the empty list, and the month
+    // quietly kept 25 buying days. Added here first — before the button is looked
+    // up, because adding re-renders the panel and replaces it.
+    const pending = document.getElementById('gpClosedDate');
+    if (pending && pending.value && !_gpAddClosed()) return;
     const btn = document.getElementById('gpGoalSaveBtn');
     const goals = {};
     let bad = '';
@@ -15012,7 +15043,8 @@ async function saveGpGoals() {
         const j = await res.json().catch(() => ({}));
         if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
         alert((j.complete ? 'Saved. Every store has a goal' : 'Saved')
-            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.'));
+            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.')
+            + _gpSheetNote(j.sheet));
         _gpGoals = await _gpFetch(_gpGoals.month);
         _gpClosed = (_gpGoals.closed || []).map(c => ({ day: Number(c.day), label: String(c.label || '') }));
         renderGpGoals();
@@ -22439,6 +22471,13 @@ function b2bSetView(view) {
     if (changed) {
         const body = document.getElementById('b2bBody');
         if (body) body.scrollTop = 0;
+        // Since 2026-10-31 the hub grows and the PAGE scrolls, so the same
+        // rule applies to the window: scrolled past the tab row, come back up
+        // to it. Left alone when the tabs are already on screen.
+        const tabs = document.querySelector('.b2b-view-tabs');
+        if (tabs && tabs.getBoundingClientRect().top < 64) {
+            window.scrollTo({ top: Math.max(0, tabs.getBoundingClientRect().top + window.scrollY - 80) });
+        }
     }
 }
 
@@ -22478,7 +22517,7 @@ function b2bRender() {
     const queue  = scoped.filter(d => _b2bActionFor(d));
 
     // Header chrome
-    document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => {
+    document.querySelectorAll('.b2b-view-tabs .ws-tab').forEach(b => {
         b.classList.remove('active');
         // The active tab was conveyed by colour and a border only, so a screen
         // reader had no way to know which view it was on. role="tab" is in the
@@ -22491,8 +22530,16 @@ function b2bRender() {
     const activeBtn = document.getElementById(btn);
     activeBtn?.classList.add('active');
     activeBtn?.setAttribute('aria-selected', 'true');
-    // Keeps the chosen tab in view once the strip scrolls (see .b2b-view-toggle).
-    try { activeBtn?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
+    // Keeps the chosen tab in view once the strip scrolls (.ws-subtabs scrolls on
+    // phones). Scrolls the strip only: since it moved out of the card head
+    // (2026-10-31) scrollIntoView could also scroll the PAGE, and b2bRender runs
+    // on every 60s poll.
+    const strip = activeBtn?.parentElement;
+    if (strip && strip.scrollWidth > strip.clientWidth) {
+        const l = activeBtn.offsetLeft - strip.offsetLeft, r = l + activeBtn.offsetWidth;
+        if (l < strip.scrollLeft) strip.scrollLeft = l;
+        else if (r > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = r - strip.clientWidth;
+    }
 
     // Evaluations waiting on somebody. Not folded into the Needs You queue: that
     // queue derives ownership from a deal's stage, and an evaluation has no
@@ -32383,9 +32430,83 @@ function _cbMatchesSubtitle(entries) {
     return mine ? `${entries.length} You can answer` : `${entries.length} With stock`;
 }
 
+// ⚠️ A REDRAW MUST NEVER EAT WHAT SOMEBODY IS TYPING — 2026-11-06.
+// cbRender rebuilds the whole pane with innerHTML, quick-add form included, and
+// several things call it with nobody's say-so: the realtime repaint when the
+// matcher finds something (ANY store's add sets that off, so BAL's form emptied
+// because OVL logged a call back), the re-fetch five seconds after your own add,
+// and every row action. Only the 60s poll checked for focus. To the person at the
+// keyboard it looked exactly like a submit that never arrived.
+//
+// Guarding each caller was the old approach, and it is what missed these. So the
+// guard lives HERE instead: every field in the pane is read before the redraw and
+// put back after, cursor included. A redraw that is MEANT to empty the form (a
+// successful Add, Cancel, Add Another Item) says so through _cbFormReset.
+let _cbFormReset = false;
+let _cbDrawnEditId = null;   // which row's edit fields the last render drew
+
+function _cbSnapshotFields(body) {
+    // The row whose edit fields are ON SCREEN, not _cbEditingId: cbEditEntry has
+    // already moved that to the new row by the time it calls cbRender.
+    const snap = { vals: {}, focus: null, selStart: null, selEnd: null, editing: _cbDrawnEditId };
+    body.querySelectorAll('input[id], select[id], textarea[id]').forEach(el => {
+        snap.vals[el.id] = el.type === 'checkbox' ? { checked: el.checked } : { value: el.value };
+    });
+    const a = document.activeElement;
+    if (a && a.id && body.contains(a)) {
+        snap.focus = a.id;
+        try { snap.selStart = a.selectionStart; snap.selEnd = a.selectionEnd; } catch (_) {}
+    }
+    return snap;
+}
+
+function _cbRestoreFields(snap) {
+    if (!snap) return;
+    // The edit row's fields share one set of ids whichever row is open, so they
+    // are only put back into the SAME row — opening Edit on another one must show
+    // that row's values, not the last row's.
+    if (snap.editing !== _cbEditingId) {
+        Object.keys(snap.vals).forEach(id => { if (id.startsWith('cbEdit')) delete snap.vals[id]; });
+        if (snap.focus && snap.focus.startsWith('cbEdit')) snap.focus = null;
+    }
+    // Categories first: putting a category back has to rebuild its Type options
+    // before the Type value can be put back into them.
+    Object.keys(snap.vals).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !el.classList.contains('cb-cat-select')) return;
+        if (el.value !== snap.vals[id].value) {
+            el.value = snap.vals[id].value;
+            const typeSel = id === 'cbAddCategory' ? 'cbAddType' : id === 'cbEditCategory' ? 'cbEditType' : null;
+            if (typeSel) cbCategoryChanged(id, typeSel);
+        }
+    });
+    Object.keys(snap.vals).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || el.classList.contains('cb-cat-select')) return;
+        const v = snap.vals[id];
+        if ('checked' in v) el.checked = v.checked;
+        else if (el.value !== v.value) el.value = v.value;
+    });
+    if (snap.focus) {
+        const f = document.getElementById(snap.focus);
+        if (f) {
+            f.focus();
+            try { if (snap.selStart != null) f.setSelectionRange(snap.selStart, snap.selEnd); } catch (_) {}
+        }
+    }
+}
+
 function cbRender() {
     const body = document.getElementById('cbBody');
     if (!body) return;
+    const snap = _cbFormReset ? null : _cbSnapshotFields(body);
+    _cbFormReset = false;
+    _cbRenderInner(body);
+    _cbDrawnEditId = _cbEditingId;
+    _cbRestoreFields(snap);
+}
+
+function _cbRenderInner(body) {
     _cbSyncControls();
 
     const filterEl = document.getElementById('cbStoreFilter');
@@ -32437,6 +32558,7 @@ function cbRender() {
 function cbAddAnotherItem() {
     if (!_cbLastAdded) return;
     _cbAddFor = _cbLastAdded;
+    _cbFormReset = true;
     cbRender();
     document.getElementById('cbAddItem')?.focus();
 }
@@ -32445,6 +32567,7 @@ window.cbAddAnotherItem = cbAddAnotherItem;
 function cbAddForClear() {
     _cbAddFor = null;
     _cbLastAdded = null;
+    _cbFormReset = true;
     cbRender();
     document.getElementById('cbAddName')?.focus();
 }
@@ -32884,6 +33007,7 @@ async function cbQuickAdd() {
     // pre-filled one moves the streak to whoever was actually logged.
     _cbLastAdded = { name, phone, store };
     if (_cbAddFor) _cbAddFor = _cbLastAdded;
+    _cbFormReset = true;
     cbRender();
     // Mid-streak the name and number are already right, so the cursor belongs in
     // the only field that changes.
@@ -32899,7 +33023,11 @@ async function cbQuickAdd() {
         // The add kicks a match sweep server-side rather than waiting for the next
         // scheduled one, so the answer to "does anybody have this" lands a few
         // seconds later. Re-fetch once instead of making the person reload.
+        // Twice now: the server refreshes every store's stock BEFORE it matches
+        // (so a just-sold unit is not offered), which can take longer than 5s.
+        // Realtime repaints too when it finds something; this is the backstop.
         setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 5000);
+        setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 25000);
     } catch (e) {
         _cbCache = _cbCache.filter(x => x.id !== entry.id);
         cbRender();
@@ -32930,6 +33058,8 @@ function cbAddNote(id) {
         at: _cbDaysAgo(0)
     };
     e.notes.push(note);
+    // Emptied BEFORE the redraw, which now keeps whatever a field holds.
+    if (input) input.value = '';
     cbRender();
     cbPost({ action: 'note', id, note }).catch(() => cbLoad());
 }
@@ -33075,7 +33205,12 @@ async function checkCallbackMatchReminders() {
         // nagging about work in progress is how a feed stops being read.
         const hits = [];
         rows.forEach(e => {
-            if (e.status === 'completed' || e.archived_at) return;
+            // CONTACTED COUNTS AS ANSWERED — 2026-11-06. The card asks you to ring
+            // a customer; once somebody has rung them it has nothing left to ask.
+            // It used to wait for Completed, so on Nov 5-6 BAL's card still said
+            // "3 call backs" after Garrett had contacted two of them, and the one
+            // it led with was the only one nobody had touched yet.
+            if (e.status === 'completed' || e.status === 'contacted' || e.archived_at) return;
             const n = (e.matches || []).filter(m =>
                 m.state === 'suggested' && scope.includes(m.store_code)).length;
             if (n) hits.push({ entry: e, count: n });
@@ -33742,7 +33877,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkClaimsConfirmAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -33867,6 +34002,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // A #jump=<feature> deep-link from the search box: land, then spotlight
         // the panel that was asked for.
         try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
+        try { _restockHandleHash(); } catch (_) { /* not fatal to the page */ }
         applyKpiReminder();
         // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
         setInterval(applyKpiReminder, 60000);
@@ -38163,13 +38299,20 @@ const _HOLD_STATE = {
     // _holdStateLabel always overrides this one (it has to name the right site),
     // so this string is a fallback only — kept accurate so it cannot mislead.
     needs_reply: { label: 'Needs a reply from us',    bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
-    needs_claim: { label: 'Refunded — needs a claim', bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    // Since 2026-11-03 only a parcel LOST IN TRANSIT is a claim — a refunded INR
+    // the carrier delivered, returned, or never scanned arrives as 'due' with a
+    // note saying which (see _holdStateLabel), because a claim is the wrong move.
+    needs_claim: { label: 'Lost in transit — needs a claim', bg: _HOLD_C.red.bg, fg: _HOLD_C.red.fg, rank: 0 },
     due:         { label: 'Check-in due',             bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 1 },
     checked:     { label: 'Checked in',               bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
     // 0112: we answered a dispute and the card network decides now. Nothing is
     // due from us, so it sits with the other "moving, not waiting on you" states.
     answered:    { label: 'Answered — with them',     bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
     covered:     { label: 'Claim open',               bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
+    // 0164: a manager marked it resolved, eBay/Shopify don't back that up, and
+    // it is the DM's call now. Off the manager's Needs Attention, on the DM's
+    // To Confirm tab.
+    dm_review:   { label: 'Waiting on DM',            bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
     resolved:    { label: 'Resolved',                 bg: _HOLD_C.green.bg, fg: _HOLD_C.green.fg, rank: 4 },
     settled:     { label: 'Settled',                  bg: _HOLD_C.grey.bg,  fg: _HOLD_C.grey.fg,  rank: 5 },
 };
@@ -38192,6 +38335,13 @@ function _holdStateLabel(type, it, s) {
         if (it.state === 'due') return 'Card expired — not collected';
         return s.label;
     }
+    // 0164: the DM sent a resolution back. Said on the chip, because the card
+    // looks exactly like any other due item otherwise.
+    if (it.dm && it.dm.status === 'denied' && it.state !== 'needs_reply'
+        && _HOLD_VIEWS.due.states.includes(it.state)) return 'Sent back by DM';
+    // 2026-11-04: resolved, re-read afterwards, and the sites still disagree.
+    if (it.dm && it.dm.kind === 'not_done' && it.state !== 'needs_reply'
+        && _HOLD_VIEWS.due.states.includes(it.state)) return 'Marked resolved — not done';
     if (it.state === 'needs_reply') {
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
@@ -38205,6 +38355,13 @@ function _holdStateLabel(type, it, s) {
     // The claim is open, so "Check-in due" would point at the wrong person: the
     // carrier does not owe this one, eBay does.
     if (it.state_note === 'delivered_after_refund') return 'Delivered — call eBay';
+    // Past eBay's 30 days with no claim, a delivered refund is written off
+    // (claims-disputes, Ethan 2026-11-06): settled, off the managers' list,
+    // listed in the closed view so the loss is on record.
+    if (it.state_note === 'written_off') return "Written off — eBay's window closed";
+    if (it.state_note === 'returned_to_us') return 'Returned to us — restock it';
+    if (it.state_note === 'never_scanned') return 'Never scanned — find it';
+    if (it.state_note === 'partial_refund_matched') return 'Partial refund — books match';
     return s.label;
 }
 
@@ -38240,7 +38397,7 @@ const _HOLD_VIEWS = {
     // settled in neither view the card simply vanished, with nothing to show
     // the link had worked. Settled and resolved are both FINISHED, so they sit
     // in the collapsed group at the bottom of this view rather than in the list.
-    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'resolved', 'settled'] },
+    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'dm_review', 'resolved', 'settled'] },
 };
 // Which of that view's states are done with, and fold away.
 const _HOLD_DONE = ['resolved', 'settled'];
@@ -38259,9 +38416,34 @@ const _HOLD_KINDS = [
 ];
 
 const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
+// A refunded INR that is NOT a carrier claim, by what the carrier says (2026-11-03).
+const _HOLD_REFUND_NOTES = ['delivered_after_refund', 'returned_to_us', 'never_scanned'];
+// EBAY PAYS A DELIVERED REFUND BACK FOR 30 DAYS AFTER THE CASE CLOSES (Ethan,
+// 2026-11-06). The server works out the last day (claims-disputes paybackBy →
+// it.payback_by, YYYY-MM-DD); this only counts the days left, in local days.
+const _holdPaybackLeft = it => {
+    if (!it.payback_by) return null;
+    const [y, m, d] = it.payback_by.split('-').map(Number);
+    const t = new Date();
+    return Math.round((new Date(y, m - 1, d) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / 86400000);
+};
+const _holdPaybackLine = it => {
+    const n = _holdPaybackLeft(it);
+    if (n == null || n < 0) return '';
+    const left = n === 0 ? 'today is the last day' : `${n} day${n === 1 ? '' : 's'} left`;
+    return ` <b style="${n <= 7 ? 'color:#b91c1c;' : ''}">eBay pays it back only until ${_holdDay(it.payback_by)} (${left}).</b>`;
+};
 // A plain return only. An escalated one arrives folded into the case eBay opened
 // (0104), which is no longer a routine return, so it belongs with the cases.
 const _holdIsReturn = it => it.kind === 'return';
+// A return counts as NEEDING US only when the next move is ours (Ethan,
+// 2026-11-05: OVL's badge said 27 when a handful needed anything). The server
+// marks every return open past its first day 'due', including the ones sitting
+// on the buyer ("waiting for buyer to ship", "return shipped") that nobody
+// here can move. Same test the card uses to decide whether it shows a deadline,
+// so the tab badge and the QuickPortal cards count exactly the cards with one.
+// Only the COUNTS use this; the Returns list still shows every open return.
+const _holdReturnNeedsUs = it => !!it.is_open && _holdReturnAction(it).ours;
 const _holdItemKey = entry => _holdKeyFor(entry.type, entry.it);
 // One place that knows which column is an item's key, because three types now
 // use three different ones and getting it wrong silently posts against nothing.
@@ -38367,7 +38549,7 @@ function _holdDueCounts(ctx) {
     const due = (d.cases || []).filter(need);
     return {
         mismatch: (d.mismatches || []).filter(need).length,
-        returns: due.filter(_holdIsReturn).length,
+        returns: due.filter(c => _holdIsReturn(c) && _holdReturnNeedsUs(c)).length,
         // Disputes live on this tab too, and an unanswered one is the most
         // expensive thing the badge can be counting.
         cases: due.filter(c => !_holdIsReturn(c)).length + (d.disputes || []).filter(need).length,
@@ -38376,7 +38558,9 @@ function _holdDueCounts(ctx) {
 }
 function _holdPaintBadges(ctx) {
     const n = _holdDueCounts(ctx);
-    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments]].forEach(([t, v]) => {
+    // 0164: the DM's To Confirm count — only the oversight view has that tab.
+    const conf = ctx === 'ov' ? (((_holdData[ctx] || {}).dmQueue) || []).length : 0;
+    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments], ['confirm', conf]].forEach(([t, v]) => {
         const b = document.getElementById(`hold-${ctx}-badge-${t}`);
         if (!b) return;
         b.textContent = v ? String(v) : '';
@@ -38418,6 +38602,92 @@ function renderHoldItems(ctx) {
     // because nothing here involves eBay and the fix is always on Shopify.
     const pw = _holdWrap(ctx, 'payments');
     if (pw) pw.innerHTML = _holdToolbar(ctx, 'payment') + _holdPaymentSyncLine(d) + _holdList(ctx, 'payment', d.payments || [], null);
+    // 0164: the DM's queue of resolutions the sites don't back up.
+    const fw = _holdWrap(ctx, 'confirm');
+    if (fw) fw.innerHTML = _holdConfirmList(ctx, d);
+}
+
+// =========================================================
+//  TO CONFIRM — the DM's half of the fact check (0164)
+// =========================================================
+// Ethan, 2026-11-03: "make sure anytime a manager resolves something, it gets
+// fact checked and if the system disagrees, then DM gets notified to confirm and
+// take a deeper look and confirming then gets rid of it from the sheet and
+// denying needs a reason and goes back to manager with the reason".
+//
+// The server decides what is on this list (claims-disputes dmQueue: every
+// resolution factCheck disagrees with that the DM has not answered). Each card
+// puts the manager's account beside the system's, with the item's own facts.
+// Confirm: it stands, gone for good. Send back: needs a reason, and the item is
+// due for that store again at once — on their list, their 4pm mail and their
+// feed card — with the reason on it. Items the sites catch up on (eBay posts
+// the payback, the device gets restocked) leave this list by themselves.
+let _holdDmIndex = [];
+function _holdConfirmList(ctx, d) {
+    const q = d.dmQueue || [];
+    _holdDmIndex = q.slice();
+    if (!q.length) return `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.7;">Nothing to confirm.<div style="margin-top:4px; font-weight:600; color:#cbd5e1;">When a manager marks something resolved and eBay or Shopify don't back it up, it lands here.</div></div>`;
+    // The full item, from the lists already loaded, for the facts line.
+    const find = x => {
+        const list = x.type === 'mismatch' ? d.mismatches : x.type === 'dispute' ? d.disputes : x.type === 'payment' ? d.payments : d.cases;
+        return (list || []).find(it => _holdKeyFor(x.type, it) === x.key) || {};
+    };
+    const tabOf = x => x.type === 'mismatch' ? 'mismatch' : x.type === 'payment' ? 'payments' : 'cases';
+    const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
+    return `<div style="font-size:12px; color:#64748b; margin:2px 0 12px; line-height:1.6;"><b style="color:var(--slate-charcoal);">${q.length} resolution${q.length === 1 ? '' : 's'} · ${_holdMoney(total)}</b> — marked resolved by a manager, not backed up by eBay or Shopify. Oldest first.</div>
+    <div style="display:flex; flex-direction:column; gap:10px;">${q.map((x, i) => {
+        const it = find(x);
+        const kind = _holdKindChip(x.type, it.type ? it : x) || (x.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
+        const title = x.type === 'mismatch'
+            ? (it.direction === 'ebay_only' ? 'Refunded on eBay — still a sale in Shopify' : 'Refunded in Shopify — still a sale on eBay')
+            : (x.title || it.item_title || kind);
+        const order = x.order || it.ebay_order_id || '';
+        return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; box-shadow:inset 3px 0 0 ${_HOLD_C.amber.fg};">
+            <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
+                <div style="min-width:0; flex:1 1 240px;">
+                    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
+                        <span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#f1f5f9; color:#475569;">${escapeHtml(x.store_code || '')}</span>
+                        <span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#e2e8f0; color:#334155;">${escapeHtml(kind)}</span>
+                        ${x.state === 'needs_reply' ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${_HOLD_C.red.bg}; color:${_HOLD_C.red.fg};">Deadline still open</span>` : ''}
+                    </div>
+                    <div style="font-weight:800; font-size:13.5px; color:var(--slate-charcoal);">${escapeHtml(title)}</div>
+                    ${order ? `<div style="font-size:12px; color:#334155; margin-top:3px;"><span style="color:#94a3b8;">Order</span> ${escapeHtml(order)}${siteCopyBtn(order, 'order number')}</div>` : ''}
+                </div>
+                <span style="font-weight:900; font-size:15px; color:var(--slate-charcoal);">${x.amount != null ? _holdMoney(x.amount) : ''}</span>
+            </div>
+            <div style="font-size:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; margin-top:8px; color:#334155;">
+                <b>${escapeHtml(x.resolved_by || 'The manager')} said</b>${x.resolved_at ? ' · ' + _holdDate(x.resolved_at) : ''}<div style="margin-top:2px;">“${escapeHtml(x.resolved_note || '')}”</div></div>
+            <div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:6px; color:${_HOLD_C.red.fg};"><b>The system says:</b> ${escapeHtml(x.why || '')}.</div>
+            <div style="margin-top:10px;">
+                <label class="form-label-caps" for="hold-dm-note-${i}">Note — optional to confirm, required to send back</label>
+                <textarea id="hold-dm-note-${i}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;" placeholder="e.g. Checked Seller Hub — eBay credited it Oct 30 / Not good enough: call eBay and get the case number"></textarea>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                    <button onclick="_holdDmAnswer(${i}, 'dm_confirm')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Confirm resolved</button>
+                    <button onclick="_holdDmAnswer(${i}, 'dm_send_back')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Send back to manager</button>
+                    <button onclick="switchOversightTab('${tabOf(x)}')" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">See it in ${tabOf(x) === 'mismatch' ? 'Mismatches' : tabOf(x) === 'payments' ? 'Payments' : 'Cases'}</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('')}</div>`;
+}
+async function _holdDmAnswer(i, action) {
+    const x = _holdDmIndex[i];
+    if (!x) return;
+    const ta = document.getElementById(`hold-dm-note-${i}`);
+    const note = ta ? ta.value.trim() : '';
+    if (action === 'dm_send_back' && note.length < HOLD_MIN_REASON) {
+        alert('Say why it is going back — the manager sees this.');
+        if (ta) ta.focus();
+        return;
+    }
+    try {
+        // review_key: the row the resolution actually lives on — an escalated
+        // INR's note can sit on the inquiry it came from.
+        await _holdPost({ action, item_type: x.type, item_key: x.review_key || x.key, note: note || null });
+        await _holdAfterWrite('ov');
+        if (typeof checkClaimsConfirmAlerts === 'function') checkClaimsConfirmAlerts();
+    } catch (e) { alert('Could not save: ' + e.message); }
 }
 
 // Payments are read from Shopify only, so a failure says Shopify — the eBay
@@ -38610,7 +38880,24 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
     // Most urgent state first, then oldest — the oldest open item is the one
     // closest to becoming a month-end adjusting entry.
     const at = it => new Date((type === 'mismatch' ? it.reversed_at : it.opened_at) || 0).getTime();
-    if (returns) rows.sort((a, b) => _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b));
+    // Returns: soonest deadline on top, ALWAYS (Ethan, 2026-11-05 — OVL had a
+    // run of delivered returns whose refund-by dates were scattered down the
+    // list, because the old order was status then age, and age is not when it
+    // is due). Only the date the card actually prints counts — the one shown
+    // when the next move is ours — so the order reads true on screen. Returns
+    // with no deadline of ours follow, in the old status-then-oldest order.
+    if (returns) {
+        const dueAt = it => {
+            if (!it.respond_by || !_holdReturnAction(it).ours) return Infinity;
+            const t = new Date(it.respond_by).getTime();
+            return isNaN(t) ? Infinity : t;
+        };
+        rows.sort((a, b) => {
+            const da = dueAt(a), db = dueAt(b);
+            if (da !== db) return da === Infinity ? 1 : db === Infinity ? -1 : da - db;
+            return _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b);
+        });
+    }
     else if (type === 'ebay_case') rows.sort((a, b) => _holdCaseRank(a) - _holdCaseRank(b) || at(a) - at(b));
     // Soonest deadline first among the ones waiting on us — with two of these
     // open, the date is the only thing that decides which to do first.
@@ -38686,6 +38973,9 @@ const _holdEbayDay = iso => {
 // appears only when the next move is ours, as it does in Seller Hub.
 function _holdReturnAction(it) {
     const st = String(it.ebay_status || '');
+    // A partial refund eBay and Shopify agree on (claims-disputes checkPartialRefund,
+    // Ethan 2026-11-05). eBay keeps it open, but nothing is left for us to do.
+    if (it.outcome === 'partial_matched') return { text: 'Partial refund — matches Shopify', ours: false };
     // Always red, not only inside the two-day window: the item is back in our
     // hands and the buyer is owed their money, so it is the one stage where the
     // clock is already running against us (Ethan, 2026-09-22).
@@ -38802,9 +39092,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on ${ebay ? 'eBay' : 'Shopify'} ↗</a>` : '',
         ];
         if (st === 'needs_reply' && it.missed_window) {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and no longer takes one, so this is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and won't take one now. That doesn't mean we lose: it still decides on what it has, and this clears itself when it closes. If you hear the outcome first, mark it resolved and say what happened.</div>`;
         } else if (st === 'needs_reply') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Without our evidence, it is decided on the buyer's side alone.</div>`;
         } else if (st === 'answered') {
             extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We responded${it.responded_at ? ` ${_holdDate(it.responded_at)}` : ''} — the ${ebay ? 'eBay' : 'card'} decision can take weeks. Nothing to do until it lands.</div>`;
         } else if (st === 'settled') {
@@ -38901,16 +39191,39 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // What the carrier says. A refunded INR that turns up delivered is the
         // one to look at first: eBay refunds us for it, no claim needed (0106).
         if (it.tracking_status) {
-            const del = /DELIVERED/i.test(it.tracking_status);
+            // Green "Delivered" means "eBay pays this back"; a written-off one it
+            // didn't, so the status is shown plain, like any other.
+            const del = /DELIVERED/i.test(it.tracking_status) && it.state_note !== 'written_off';
             const tn = it.tracking_number ? `${escapeHtml(it.tracking_carrier || '')} ${escapeHtml(it.tracking_number)}${siteCopyBtn(it.tracking_number, 'tracking number')}` : '';
             facts.push(`<span style="white-space:nowrap; ${del ? `color:${_HOLD_C.green.fg}; font-weight:800;` : 'color:#475569;'}">${del ? 'Delivered' : escapeHtml(_holdPretty(it.tracking_status))}${tn ? ' · ' + tn : ''}</span>`);
         }
+        // A REFUNDED INR SAYS WHAT TO DO BY WHAT THE CARRIER SAYS (2026-11-03).
+        // Only a parcel lost in transit is a carrier claim; the other three are
+        // a phone call to eBay or a device on our own shelf. Each ends the same
+        // way — mark it resolved — and that resolution is CHECKED: eBay's payouts
+        // for the money coming back, Shopify for the device back in stock. If
+        // neither backs it up it goes to the DM, never straight off the list.
+        const box = (c, html) => `<div style="font-size:12px; background:${c.bg}; border:1px solid ${c.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${c.fg};">${html}</div>`;
         if (it.state_note === 'delivered_after_refund') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.</div>`;
-        } else if (st === 'needs_claim' && _holdDelivered(it)) {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>The carrier says this was delivered</b> — Even though the buyer was refunded. eBay covers a delivered item-not-received, so ask eBay for it rather than filing a claim, then mark this resolved and say what eBay did.</div>`;
+            extra = box(_HOLD_C.green, (it.claim
+                ? `<b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.`
+                : `<b>The carrier says this was delivered</b> — even though the buyer was refunded. eBay covers a delivered item-not-received, so call eBay for it rather than filing a claim, then mark this resolved and say what eBay did. The system checks eBay's payouts for the money coming back — if eBay says it takes a day or two, that's fine; it waits 3 days for it to show.`)
+                + _holdPaybackLine(it));
+        } else if (it.state_note === 'written_off') {
+            extra = box(_HOLD_C.grey, `<b>Written off.</b> The carrier says it was delivered, and eBay didn't pay it back before its 30 days ran out on ${_holdDay(it.payback_by)}. A carrier won't pay a claim on a delivered parcel, so there is nothing left to do — it is listed here for the record.`);
+        } else if (it.state_note === 'returned_to_us') {
+            extra = box(_HOLD_C.amber, `<b>The carrier sent this back to us</b> — after the buyer was refunded, so nobody owes us for it and no claim is needed. Put the device back in stock in Shopify, then mark this resolved. The system checks Shopify for it.`);
+        } else if (it.state_note === 'never_scanned') {
+            extra = box(_HOLD_C.red, `<b>${it.tracking_status ? 'The carrier never scanned this parcel' : 'There is no tracking on this one'}</b> — and the buyer was refunded. It may never have left the store, and a carrier won't pay a claim on a parcel it never had. Find the device and put it back in stock in Shopify, then mark this resolved. If it can't be found, say so — that goes to the DM.`);
         } else if (st === 'needs_claim') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''}. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.</div>`;
+            extra = box(_HOLD_C.red, `<b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''} and the carrier still shows the parcel in transit. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.${(_holdPaybackLeft(it) ?? -1) >= 0 ? ` If it shows delivered by ${_holdDay(it.payback_by)}, eBay pays it back instead.` : ''}`);
+        }
+        // A partial refund, checked against Shopify (2026-11-05): matched says so
+        // in green and needs nothing; unmatched says what each side shows.
+        if (it.kind === 'return' && it.outcome === 'partial_matched' && it.outcome_detail) {
+            extra = box(_HOLD_C.green, `<b>Nothing to do</b> — ${escapeHtml(it.outcome_detail)}. eBay keeps a partial refund open until the buyer's window to escalate runs out; if they do, it comes back as a case.`);
+        } else if (it.kind === 'return' && it.outcome === 'partial_unmatched' && it.outcome_detail) {
+            extra = box(_HOLD_C.amber, `<b>The refunds don't match yet</b> — ${escapeHtml(it.outcome_detail)}. Once Shopify shows the same refund as eBay, this clears itself on the next read.`);
         }
         if (it.state_note === 'outcome unread') {
             extra += `<div style="font-size:11.5px; color:#b45309; margin-top:6px;">Closed on eBay, but we couldn't read whether the buyer was refunded yet. It clears itself on the next read, or check it on eBay.</div>`;
@@ -38927,10 +39240,34 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     // A contested resolution gets the red block below INSTEAD of the green
     // "Resolved by…" one — showing both would have the same card saying it is
     // settled and not settled at once.
-    if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
+    // 0164. Every resolution is fact-checked. One the sites don't back up waits
+    // on the DM (amber); one the DM sent back is due again with the DM's reason
+    // (red). A live-deadline item keeps its red "site disagrees" block below
+    // instead, so it is not said twice.
+    const dmx = it.dm || null;
+    const dmPending = !!(dmx && dmx.pending && it.state_note !== 'resolution_disputed');
+    const dmBack = !!(dmx && dmx.status === 'denied' && _HOLD_VIEWS.due.states.includes(st));
+    // NOT DONE (Ethan, 2026-11-04): a resolution the sites were re-read after
+    // and still contradict is back in Needs Attention for the manager — red,
+    // with what the system saw, because the manager thinks it's finished.
+    const dmNotDone = !!(dmPending && dmx.kind === 'not_done' && _HOLD_VIEWS.due.states.includes(st));
+    if (dmNotDone) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(dmx.resolved_by || 'Someone')} marked this resolved${dmx.resolved_at ? ' ' + _holdDate(dmx.resolved_at) : ''} — it isn't done</b>
+            ${dmx.resolved_note ? `<div style="margin-top:2px;">“${escapeHtml(dmx.resolved_note)}”</div>` : ''}
+            <div style="margin-top:4px;">The system checked afterwards: ${escapeHtml(dmx.why || '')}. Fix it on eBay or Shopify and it clears at the next morning's read — or open a claim.</div></div>`;
+    } else if (dmPending) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>${escapeHtml(dmx.resolved_by || 'Someone')} marked this resolved${dmx.resolved_at ? ' ' + _holdDate(dmx.resolved_at) : ''} — waiting on the DM to confirm</b>
+            ${dmx.resolved_note ? `<div style="margin-top:2px;">“${escapeHtml(dmx.resolved_note)}”</div>` : ''}
+            <div style="margin-top:4px;">The system doesn't back it up yet: ${escapeHtml(dmx.why || '')}. If eBay or Shopify catch up, this clears by itself.</div></div>`;
+    } else if (dmBack) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The DM sent this back${dmx.by ? ' — ' + escapeHtml(dmx.by) : ''}${dmx.at ? ', ' + _holdDate(dmx.at) : ''}</b>
+            <div style="margin-top:2px; font-weight:700;">“${escapeHtml(dmx.note || '')}”</div>
+            ${dmx.resolved_note ? `<div style="margin-top:4px;">It had been marked resolved${dmx.resolved_by ? ' by ' + escapeHtml(dmx.resolved_by) : ''}: “${escapeHtml(dmx.resolved_note)}”</div>` : ''}</div>`;
+    } else if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
         const who = escapeHtml(rv.by_name || 'Someone');
         if (rv.status === 'resolved') {
-            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
+            const ok = dmx && dmx.status === 'confirmed' ? ` · confirmed by ${escapeHtml(dmx.by || 'the DM')}` : '';
+            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}${ok}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
         } else {
             said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>Still open</b> — ${who}, ${_holdDate(rv.updated_at)}${st === 'checked' && it.due_on ? ` · back on the list ${_holdDay(it.due_on)}` : ''}${rv.note ? `<div style="margin-top:2px;">${escapeHtml(rv.note)}</div>` : ''}</div>`;
         }
@@ -38955,7 +39292,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(still)}</b>
             ${rv && rv.note ? `<div style="margin-top:2px; font-weight:600;">“${escapeHtml(rv.note)}”</div>` : ''}
-            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now${age >= days ? ' — this has already gone to the DM.' : ` — after ${days} day${days === 1 ? '' : 's'} it goes to the DM.`}</div>
+            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now — it has gone to the DM to confirm${age >= days ? '' : ''}.</div>
         </div>`;
     }
     // Cases only: a dispute says its own version of this above, naming the right
@@ -38969,7 +39306,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // gone changes what this card should ask for: a record, not an argument.
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>We missed the window to reply${it.respond_by ? ` — eBay wanted an answer by ${_holdEbayDay(it.respond_by)}` : ''}.</b>
-            eBay does not take a late reply, so this is very likely decided against us. Mark it resolved and say what happened, so there is a record of it.</div>`;
+            eBay won't take a late reply, but that doesn't mean we lose the case — eBay still decides it on what it has, and this clears itself when eBay closes it. If you learn the outcome first, mark it resolved and say what happened.</div>`;
     } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
     }
@@ -38990,18 +39327,20 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     if (readOnly) { /* nothing to press: the daily read moves a return along */ }
     else if (st === 'resolved') {
         acts.push(`<button onclick="_holdReopen('${ctx}', ${idx})" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Reopen</button>`);
-    } else if (st === 'needs_claim' || it.state_note === 'delivered_after_refund') {
-        // Delivered after all: eBay pays that one back, so the first move is a
-        // note saying what eBay did, not a carrier claim (0106). Once a claim
-        // has already been opened the card arrives here as 'due' instead — same
-        // parcel, same move, so it gets the same button rather than a generic
-        // "Update status" that says nothing about who to ring.
-        if (_holdDelivered(it)) {
-            acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${form === 'status' ? 'Close' : 'Delivered — Resolve it'}</button>`);
-        }
+    } else if (st === 'needs_claim' || _HOLD_REFUND_NOTES.includes(it.state_note)) {
+        // A REFUNDED INR (2026-11-03): the button names the move the carrier's
+        // word calls for. Lost in transit leads with the claim; the other three
+        // with a resolution — which is fact-checked, and goes to the DM if eBay
+        // and Shopify don't back it up. Lost in transit can be resolved too (it
+        // turned up in the store after all), checked the same way.
         if (st === 'needs_claim') {
             acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">${form === 'claim' ? 'Close' : 'Open or link a claim'}</button>`);
         }
+        const lbl = it.state_note === 'delivered_after_refund' ? 'Delivered — Resolve it'
+            : it.state_note === 'returned_to_us' ? 'Restocked — Resolve it'
+            : it.state_note === 'never_scanned' ? 'Found it — Resolve it' : 'Resolve another way';
+        const c = st === 'needs_claim' ? _HOLD_C.grey : _HOLD_C.green;
+        acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${c.bg}; border:1.5px solid ${c.line}; color:${c.fg};">${form === 'status' ? 'Close' : lbl}</button>`);
     } else if (st === 'needs_reply' || st === 'due' || st === 'checked') {
         acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">${form === 'status' ? 'Close' : 'Update status'}</button>`);
     }
@@ -39009,6 +39348,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     let formHtml = '';
     if (form === 'status' && (st === 'due' || st === 'checked' || st === 'needs_claim' || st === 'needs_reply')) {
         const days = ((_holdData[ctx] || {}).timers || {})[type] || 0;
+        // A refunded INR is due every day until it is dealt with (2026-11-03) —
+        // the money has already gone out — so it has no "Still open" to hide it.
+        const refInr = inr && it.outcome === 'refunded';
         formHtml = `
         <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
             <label class="form-label-caps" for="hold-note-${ctx}-${idx}">Note</label>
@@ -39017,7 +39359,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
                     : type === 'dispute' ? 'e.g. Refunded the buyer and accepted it — cheaper than losing the chargeback fee too'
                     : type === 'payment' ? 'e.g. Customer paid the $28.20 in store 9/29, receipt #…'
                     : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
-            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply' && type === 'payment'
+            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${refInr
+                ? `The buyer has already been refunded, so this can't be checked in — it stays on the list every day until it's dealt with. Say what happened: what eBay did, or that the device is back in stock.`
+                : st === 'needs_reply' && type === 'payment'
                 ? `<b>Still open</b> is off the table while Shopify can still charge the card — fulfilling or cancelling the order is the fix, and the next read sees it. <b>Resolved</b> is recorded, but it stays on the list until Shopify agrees.`
                 : st === 'needs_reply'
                 ? (type === 'dispute'
@@ -39027,14 +39371,15 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
                     : `<b>Still open</b> is off the table until eBay shows our reply — that is the point of this one. <b>Resolved</b> is still here for a case that ended some other way, and needs a reason.`)
                 : type === 'mismatch'
                 ? `<b>Insurance Claim</b> opens the claim form and takes this off the list for ${days} day${days === 1 ? '' : 's'}. <b>Resolved</b> needs a reason — why it is fine that the two sites don’t match, or what you fixed.`
-                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}</div>
+                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}
+                <div style="margin-top:4px;"><b>Resolved is checked</b> against eBay and Shopify. If they don't back it up, it goes to the DM to confirm — and the DM can send it back to you with a reason.</div></div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                ${st === 'needs_reply' ? ''
+                ${st === 'needs_reply' || refInr ? ''
                     : type === 'mismatch'
                     ? `<button onclick="_holdInsuranceClaim('${ctx}', ${idx})" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Insurance Claim</button>`
                     : `<button onclick="_holdSave('${ctx}', ${idx}, 'still_open')" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Still open</button>`}
                 <button onclick="_holdSave('${ctx}', ${idx}, 'resolved')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Mark resolved</button>
-                ${inr && st !== 'needs_claim' ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
+                ${inr && !refInr ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
             </div>
         </div>`;
     } else if (form === 'claim' && (inr || type === 'mismatch')) {
@@ -39208,13 +39553,13 @@ async function _holdOpenClaim(ctx, idx) {
 // DM/CEO oversight view: the claims summary plus the same two tabs across
 // every rolled-out store.
 function switchOversightTab(tab) {
-    ['claims', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
+    ['claims', 'confirm', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const b = document.getElementById(`ov-tab-${t}`);
         const p = document.getElementById(`ov-panel-${t}`);
         if (b) b.classList.toggle('active', t === tab);
         if (p) p.style.display = t === tab ? 'block' : 'none';
     });
-    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
+    if (tab === 'confirm' || tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
         if (_holdLoading.ov) renderHoldItems('ov');
         else loadHoldItems('ov', { sync: !_holdData.ov });
     }
@@ -39368,7 +39713,7 @@ function renderClaimsOversight() {
             ping = `<span title="Reminder sent ${sentTxt} and not yet reviewed. You can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or sooner if the manager reviews it."
                 style="display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:800; color:#94a3b8; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:7px; padding:5px 11px; cursor:default;">🔔 Reminded ${sentTxt}</span>`;
         } else {
-            ping = `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
+            ping = `<button onclick="pingStoreClaims('${s}', this)" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
         }
         html += `<tr>
             ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`, 'text-align:left;')}
@@ -39498,7 +39843,26 @@ async function ovDeleteClaim(id) {
 
 // Nudge a store's manager to review their open claims. Delivers as a dedicated RED
 // review pop-up on the manager's dashboard (separate from green store comments).
-async function pingStoreClaims(store) {
+//
+// The button confirms ITSELF — first click arms it ("Send to LEE?"), a second
+// click within 6s sends — and reports back on the button, never through
+// confirm()/alert(). Ethan 2026-11-04: "I just am clicking it and nothing is
+// happening." The handler was reaching confirm() fine; his browser was answering
+// it false without drawing it (Chrome's "don't let this page create more
+// dialogs", or a pane that blocks native dialogs), so the click silently did
+// nothing and no reminder had gone out since Oct 14. A native dialog is a single
+// point of failure the page can't see, so this one doesn't use any.
+const _claimPingArmed = {};
+function _claimPingSay(btn, text, tone) {
+    if (!btn) return;
+    const c = tone === 'bad' ? ['#fef2f2', '#fecaca', '#b91c1c']
+            : tone === 'ok'  ? ['#ecfdf5', '#a7f3d0', '#047857']
+            : tone === 'arm' ? ['#fffbeb', '#fde68a', '#b45309']
+            :                  ['#eff6ff', '#bfdbfe', '#1d4ed8'];
+    btn.textContent = text;
+    btn.style.background = c[0]; btn.style.borderColor = c[1]; btn.style.color = c[2];
+}
+async function pingStoreClaims(store, btn) {
     const rows = _oversightAll || [];
     // Reminders target only claims that are actually behind: open, over 7 days,
     // not yet reviewed ("Still in progress") and not already escalated to a claim.
@@ -39509,7 +39873,7 @@ async function pingStoreClaims(store) {
         && !sup.has(r.id)
         && _isClaimAging(r));
     if (!aging.length) {
-        alert(`${store} has no claims over 7 days awaiting review — nothing to remind about.`);
+        _claimPingSay(btn, 'Nothing over 7 days', 'bad');
         return;
     }
     // Belt-and-braces: the button is already hidden during the cooldown, but a stale
@@ -39518,10 +39882,23 @@ async function pingStoreClaims(store) {
     if (lock) {
         const backIn = Math.max(1, CLAIM_REMINDER_COOLDOWN_DAYS
             - Math.floor((Date.now() - new Date(lock.created_at).getTime()) / 86400000));
-        alert(`${store} was already reminded and hasn't reviewed yet.\n\nYou can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or as soon as they review it.`);
+        _claimPingSay(btn, `Already reminded — again in ${backIn}d`, 'bad');
         return;
     }
-    if (!confirm(`Send ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review?`)) return;
+    // First click arms, second click sends. The title says what will be sent.
+    if (!_claimPingArmed[store]) {
+        _claimPingArmed[store] = setTimeout(() => {
+            delete _claimPingArmed[store];
+            if (btn && btn.isConnected) _claimPingSay(btn, '🔔 Send reminder');
+        }, 6000);
+        if (btn) btn.title = `Sends ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review.`;
+        _claimPingSay(btn, `Send to ${store}? (${aging.length}) — click again`, 'arm');
+        return;
+    }
+    clearTimeout(_claimPingArmed[store]);
+    delete _claimPingArmed[store];
+    if (btn) btn.disabled = true;
+    _claimPingSay(btn, 'Sending…');
     // Message is generic — the manager's popup computes the live over-7-day count.
     try {
         const res = await fetch(CLAIMS_URL, {
@@ -39534,10 +39911,13 @@ async function pingStoreClaims(store) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
-        alert(`Reminder sent to ${store}.`);
-        fetchAllClaims(); // re-read reminders so the button flips to its locked state
+        _claimPingSay(btn, `✓ Sent to ${store}`, 'ok');
+        // Re-read reminders so the row flips to "Reminded today" — after a beat,
+        // because the reload wipes the table and the ✓ with it.
+        setTimeout(fetchAllClaims, 1500);
     } catch (e) {
-        alert('Could not send the reminder: ' + (e.message || e));
+        if (btn) { btn.disabled = false; btn.title = 'Could not send: ' + (e.message || e); }
+        _claimPingSay(btn, '✕ Not sent — click to retry', 'bad');
     }
 }
 
@@ -40002,6 +40382,48 @@ async function checkAgingClaimsDM() {
     }
 }
 
+// --- RESOLUTIONS TO CONFIRM, AS THE DM'S FEED CARD (0164) ---------------------
+// Ethan, 2026-11-03: "if the system disagrees, then DM gets notified to confirm".
+// The DM's notice is this card plus the 8:40 digest. State-based like the
+// delete-request card: it stays while anything waits on the DM and leaves when
+// the queue is empty, so no snooze — a glance must not silence it. District
+// manager only, the role that answers them.
+let _claimsConfirmPollStarted = false;
+function _claimsConfirmBubbleEl() {
+    let b = document.getElementById('claimsConfirmAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'claimsConfirmAlertBubble';
+    // FEED ONLY — invisible state-carrier (see _claimsDueBubbleEl, and the
+    // retired-bubble rule in styles.css that this id is listed in).
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="claimsConfirmAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+async function checkClaimsConfirmAlerts() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const hide = () => { const b = document.getElementById('claimsConfirmAlertBubble'); if (b) b.style.display = 'none'; };
+    if (role !== 'district manager') { hide(); return; }
+    if (!_claimsConfirmPollStarted) { _claimsConfirmPollStarted = true; setInterval(checkClaimsConfirmAlerts, 30 * 60 * 1000); }
+    try {
+        const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(_CLAIMS_OVERSIGHT_STORES.join(','))}&v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success) return;
+        const q = j.dmQueue || [];
+        if (!q.length) { hide(); return; }
+        const b = _claimsConfirmBubbleEl();
+        const t = document.getElementById('claimsConfirmAlertBubbleText');
+        if (!b || !t) return;
+        const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
+        const stores = [...new Set(q.map(x => x.store_code))];
+        t.textContent = `${q.length} resolution${q.length === 1 ? '' : 's'} (${_holdMoney(total)}) the system doesn't back up — ${stores.join(', ')}. Confirm or send back.`;
+        b.style.display = 'flex';
+    } catch (_) { /* next poll or ping retries */ }
+}
+
 // --- THE 4PM "DUE TODAY" ALERT, AS A FEED CARD -------------------------------
 // Ethan, 2026-10-08: "add a feed notification for the claims and disputes tool
 // only for that 4:00pm due today reminder ... they can't snooze it and it doesn't
@@ -40054,7 +40476,14 @@ async function checkClaimsDueAlerts() {
         const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const j = await res.json();
         if (!j || !j.success) return;           // a failed read leaves the card as it was
-        const items = j.dueAlerts || [];
+        // ONLY WHAT IS DUE NOW (Ethan, 2026-11-06: "we shouldn't show a feed
+        // notification unless something is due tomorrow or due today"). Overdue,
+        // due today, due tomorrow, or with no date of its own (it was mailed
+        // today and is due as of now). Something due Dec 3 stays on the tab and
+        // in the morning mail, and reaches this card the day before.
+        const _cdNow = j.today || _kpiCentralToday();
+        const items = (j.dueAlerts || []).filter(it => it.overdue || !it.due
+            || _b2bDayDiff(_cdNow, String(it.due).slice(0, 10)) <= 1);
         if (!items.length) { hide(); return; }
         const b = _claimsDueBubbleEl();
         const t = document.getElementById('claimsDueAlertBubbleText');
@@ -40064,7 +40493,13 @@ async function checkClaimsDueAlerts() {
         const line = it => {
             const what = _holdKindChip(it.type, it) || (it.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
             const amt = Number(it.amount) > 0 ? ' $' + Number(it.amount).toFixed(2) : '';
-            const when = it.overdue ? 'overdue' : it.due === today ? 'due today' : it.due ? 'due tomorrow' : '';
+            // Named by its real date: until 2026-11-06 anything not due today
+            // read "due tomorrow", so a BAL case eBay wanted answered by Dec 3
+            // said "due tomorrow" under a "Due Dec 3" badge.
+            const left = it.due && today ? _b2bDayDiff(today, String(it.due).slice(0, 10)) : null;
+            const when = it.overdue ? 'overdue' : !it.due ? ''
+                : left <= 0 ? 'due today' : left === 1 ? 'due tomorrow'
+                : 'due ' + new Date(String(it.due).slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
             return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
         };
         const overdue = items.some(it => it.overdue);
@@ -44322,6 +44757,9 @@ const EMAIL_LIST_GROUPS = [
               desc: '7:35am, every morning anything is open: whole items refunded or cancelled '
                   + '(in store, online or eBay) that never went back into inventory. '
                   + 'Left empty, it goes to the Claims & Disputes — District Manager list.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `unrestocked_returns_${s}`, label: `Returned But Not Back In Stock — ${s}`,
+              desc: `7:35am, only on mornings ${s} has something open: the same email, just ${s}'s lines. `
+                  + 'Left empty, the store gets nothing.' })),
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
@@ -46199,6 +46637,217 @@ function _jumpHandleHash() {
     const key = decodeURIComponent(m[1]);
     setTimeout(() => _jumpSpotlight(key), 400);
     try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
+}
+
+// ============================================================================
+// RESTOCKED UNDER ANOTHER SKU (2026-11-04)
+// The "Returned But Not Back In Stock" mail links each open row here:
+//   index.html#restock=<issue_key>
+// For the item that went back on the shelf under a DIFFERENT listing than the
+// one it was refunded from. BAL #MO04-3622 was a JMGO projector listed as the
+// wrong model and restocked under the right one; the report only watches the
+// refunded SKU, which stays at 0, so it would have stayed on the mail forever.
+//
+// index.html IS the login page, so the hash survives the PIN screen: this runs
+// from page load (already signed in) AND from checkPIN (signed in on the link),
+// and until someone is signed in it leaves the hash alone for the second one.
+//
+// Built for managers doing this on a phone straight from the email (Ethan:
+// "I need them to do this"):
+//   - in-stock listings at that store with matching words are offered as
+//     one-tap picks, so most of the time nothing has to be typed;
+//   - a SKU that fails says WHY, right here, and keeps what was typed — the
+//     card never closes on a failure, so there is no going back to the email;
+//   - nothing closes on the manager's say-so: the function checks the SKU is on
+//     hand or has sold since the refund. A refusal is logged and shows on the
+//     next mail, and every close is listed there for the DM.
+// No toasts ([[no-floating-toasts]]): every message is inline on the card.
+// ============================================================================
+let _restockKey = null;
+
+function _restockHandleHash() {
+    const m = (location.hash || '').match(/^#restock=(.+)$/);
+    if (!m) return;
+    if (sessionStorage.getItem('speeksUnlocked') !== 'true') return;   // checkPIN calls again
+    if (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole()) return;
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
+    _restockOpen(decodeURIComponent(m[1]));
+}
+
+function _restockWho() {
+    return {
+        name: sessionStorage.getItem('speeksUserName') || '',
+        role: sessionStorage.getItem('speeksUserRole') || '',
+        store: sessionStorage.getItem('speeksUserStore') || '',
+        multiStore: sessionStorage.getItem('speeksMultiStore') === 'true',
+    };
+}
+
+async function _restockPost(body) {
+    const res = await fetch(UNRESTOCKED_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ key: _restockKey, who: _restockWho() }, body)),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok && !json.card) throw new Error(json.error || ('Error ' + res.status));
+    return json;
+}
+
+async function _restockOpen(key) {
+    const modal = document.getElementById('restockSkuModal');
+    const body = document.getElementById('restockSkuBody');
+    if (!modal || !body) return;
+    _restockKey = key;
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    body.innerHTML = '<p class="rsk-muted">Loading…</p>';
+    try {
+        const j = await _restockPost({ action: 'lookup' });
+        _restockRender(j, {});
+    } catch (e) {
+        body.innerHTML = `<p class="rsk-bad">${escapeHtml(e.message || 'Could not load this item.')}</p>`;
+    }
+}
+
+function _restockSummary(c) {
+    const day = c.refundDay ? new Date(c.refundDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    return `
+      <div class="rsk-item">
+        <div class="rsk-muted">${escapeHtml(c.storeName)} · ${escapeHtml(c.channel || '')} · ${c.kind === 'cancel' ? 'Cancelled' : 'Returned'} ${escapeHtml(day)}</div>
+        <div class="rsk-title">${escapeHtml(c.title || '')}</div>
+        <div><a href="${escapeHtml(c.orderUrl)}" target="_blank" rel="noopener">${escapeHtml(c.order)}</a>
+          · Refunded From SKU <b>${escapeHtml(c.sku || '—')}</b> · $${Number(c.amount || 0).toFixed(2)}</div>
+        ${c.note ? `<div class="rsk-muted">Note: “${escapeHtml(c.note)}”</div>` : ''}
+      </div>`;
+}
+
+function _restockRender(j, st) {
+    const body = document.getElementById('restockSkuBody');
+    if (!body) return;
+    const c = j.card || {};
+    let h = _restockSummary(c);
+    if (c.closed) {
+        h += `<div class="rsk-done">${st.justClosed ? 'Closed. ' : 'Already Closed. '}${escapeHtml(c.closedHow || '')}
+              ${st.justClosed ? (/never came back/.test(c.closedHow || '') ? '<br>It drops off tomorrow’s email.' : '<br>It drops off tomorrow’s email, and the DM sees it there under Closed By A Manager.') : ''}</div>
+              <button class="btn-primary rsk-btn" onclick="closeAllModals()">Done</button>`;
+        body.innerHTML = h;
+        return;
+    }
+    if (!j.canClose) {
+        body.innerHTML = h + `<p class="rsk-bad">${escapeHtml(j.denied || 'You can’t close this one.')}</p>`;
+        return;
+    }
+    // NEVER CAME BACK waiting on the DM: the DM decides here; anyone else just
+    // sees it's waiting (the SKU route below still works for them).
+    const nb = c.nb || {};
+    if (nb.pending) {
+        const when = nb.at ? new Date(nb.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+        h += `<div class="rsk-nb rsk-nb-wait">
+                <div class="form-label-caps">Marked Never Came Back — Waiting On DM</div>
+                <div>${escapeHtml(nb.by || 'Unknown')}, ${escapeHtml(when)}: “${escapeHtml(nb.reason || '')}”</div>`;
+        if (j.canDecide) {
+            h += `<input id="restockNbNote" class="form-input-lg rsk-nb-note" placeholder="If you deny it, say why (optional)" value="${escapeHtml(st.note || '')}">
+                  ${st.nbMsg ? `<p class="rsk-bad">${escapeHtml(st.nbMsg)}</p>` : ''}
+                  <div class="rsk-nb-row">
+                    <button id="restockNbYes" class="btn-primary rsk-btn" onclick="_restockNbDecide('nb_confirm')">Confirm &amp; Close</button>
+                    <button id="restockNbNo" class="btn-secondary rsk-btn" onclick="_restockNbDecide('nb_deny')">Deny</button>
+                  </div>`;
+        } else {
+            h += `<div class="rsk-muted">It stays on the email until the DM confirms it.</div>`;
+        }
+        h += `</div>`;
+    }
+    const sugg = j.suggestions || [];
+    if (sugg.length) {
+        h += `<label class="form-label-caps">In Stock At ${escapeHtml(c.store)} Now — Tap It If It’s One Of These</label>
+              <div class="rsk-sugg">${sugg.map(s => `
+                <button type="button" class="rsk-pick" onclick="_restockPick('${escapeHtml(s.sku)}')">
+                  <b>${escapeHtml(s.sku)}</b> <span class="rsk-muted">· ${s.onHand} On Hand</span><br>${escapeHtml(s.title)}
+                </button>`).join('')}</div>`;
+    }
+    h += `<label class="form-label-caps" for="restockSkuInput">${sugg.length ? 'Or Type ' : ''}The SKU It Went Back In Under</label>
+          <input id="restockSkuInput" class="form-input-lg rsk-input" autocomplete="off" autocapitalize="characters" spellcheck="false"
+                 placeholder="${escapeHtml(String(c.sku || '').split('-')[0] || 'SKU')}-…" value="${escapeHtml(st.typed || '')}"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();_restockSubmit();}">
+          ${st.msg ? `<p class="rsk-bad">${escapeHtml(st.msg)}</p>` : ''}
+          <button id="restockSkuBtn" class="btn-primary rsk-btn" onclick="_restockSubmit()">Check &amp; Close</button>
+          <p class="rsk-muted">It only closes if that SKU is on hand now or has sold since the refund.</p>`;
+    if (!nb.pending) {
+        const denied = nb.deniedAt
+            ? `<p class="rsk-bad">Denied by ${escapeHtml(nb.deniedBy || 'the DM')}: ${escapeHtml(nb.deniedNote || '')}</p>` : '';
+        h += `<div class="rsk-nb">
+                <div class="form-label-caps">Never Came Back?</div>
+                <div class="rsk-muted">Refunded but the item was never returned to the store (buyer kept it, lost in shipping).
+                  ${j.canDecide ? 'This closes it.' : 'The DM confirms it before it comes off the email.'}</div>
+                ${denied}
+                <textarea id="restockNbReason" class="form-input-lg rsk-nb-note" rows="2" placeholder="What happened to it?">${escapeHtml(st.reason || '')}</textarea>
+                ${st.nbMsg ? `<p class="rsk-bad">${escapeHtml(st.nbMsg)}</p>` : ''}
+                <button id="restockNbBtn" class="btn-secondary rsk-btn" onclick="_restockNeverBack()">${j.canDecide ? 'Close As Never Came Back' : 'Send To DM To Confirm'}</button>
+              </div>`;
+    }
+    const tries = c.attempts || [];
+    if (tries.length) {
+        h += `<div class="rsk-tries"><div class="form-label-caps">Tried Before</div>${tries.slice(-3).reverse().map(a => `
+              <div class="rsk-muted">${escapeHtml(a.sku || '(blank)')} — ${escapeHtml(a.by || '')},
+              ${escapeHtml(new Date(a.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))}: ${escapeHtml(a.why || '')}</div>`).join('')}</div>`;
+    }
+    body.innerHTML = h;
+    window._restockLast = j;
+}
+
+async function _restockNeverBack() {
+    const last = window._restockLast || {};
+    const reason = (document.getElementById('restockNbReason')?.value || '').trim();
+    if (reason.length < 5) { _restockRender(last, { nbMsg: 'Say what happened to it first.', reason }); return; }
+    const btn = document.getElementById('restockNbBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+        const j = await _restockPost({ action: 'never_back', reason });
+        if (j.ok && j.card && j.card.closed) { _restockRender(j, { justClosed: !j.already }); return; }
+        _restockRender(Object.assign({}, last, { card: j.card || last.card }), j.ok ? {} : { nbMsg: j.why || j.error, reason });
+    } catch (e) {
+        _restockRender(last, { nbMsg: e.message || 'Could not reach the server. Try again.', reason });
+    }
+}
+
+async function _restockNbDecide(action) {
+    const last = window._restockLast || {};
+    const note = (document.getElementById('restockNbNote')?.value || '').trim();
+    ['restockNbYes', 'restockNbNo'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
+    try {
+        const j = await _restockPost({ action, note });
+        if (j.ok && j.card && j.card.closed) { _restockRender(j, { justClosed: !j.already }); return; }
+        _restockRender(Object.assign({}, last, { card: j.card || last.card }), j.ok ? {} : { nbMsg: j.why || j.error, note });
+    } catch (e) {
+        _restockRender(last, { nbMsg: e.message || 'Could not reach the server. Try again.', note });
+    }
+}
+
+function _restockPick(sku) {
+    const inp = document.getElementById('restockSkuInput');
+    if (inp) inp.value = sku;
+    _restockSubmit();
+}
+
+async function _restockSubmit() {
+    const inp = document.getElementById('restockSkuInput');
+    const btn = document.getElementById('restockSkuBtn');
+    const sku = (inp && inp.value || '').trim().toUpperCase();
+    const last = window._restockLast || {};
+    if (!sku) { _restockRender(last, { msg: 'Type the SKU it went back in under, or tap one above.' }); return; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    try {
+        const j = await _restockPost({ action: 'close', sku });
+        if (j.ok) {
+            _restockRender(j, { justClosed: !j.already });
+        } else {
+            // Keep the picks from the first load; only the card's tries changed.
+            _restockRender(Object.assign({}, last, { card: j.card || last.card }), { msg: j.why || j.error, typed: sku });
+        }
+    } catch (e) {
+        _restockRender(last, { msg: e.message || 'Could not reach the server. Try again.', typed: sku });
+    }
 }
 
 function _jumpBuildIndex() {
@@ -53564,8 +54213,8 @@ const _QP_WSPEC = {
         },
     },
     // CUSTOMER CALL BACKS — In Stock is the feed card's own rule: a call back
-    // (any store's) with a SUGGESTED match at a store you hold, not completed or
-    // archived (checkCallbackMatchReminders). Open and Contacted are your own
+    // (any store's) with a SUGGESTED match at a store you hold, not contacted,
+    // completed or archived (checkCallbackMatchReminders). Open and Contacted are your own
     // store's list by status. The tool's GET; refreshed by its realtime ping.
     callbacks: {
         when: 'Right Now',
@@ -53577,7 +54226,8 @@ const _QP_WSPEC = {
             const live = (rows || []).filter(e => !e.archived_at && e.status !== 'completed');
             const link = ['Open Call Backs', "window.location.href='operations.html#callbacks'"];
             if (tab === 'instock') {
-                const hits = live.map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
+                // Contacted is answered — same rule as the feed card since 2026-11-06.
+                const hits = live.filter(e => e.status !== 'contacted').map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
                     .filter(h => h.m.length).sort((a, b) => String(a.e.date_of_call).localeCompare(String(b.e.date_of_call)));
                 return {
                     ...(hits.length ? {} : { clear: ['Nothing To Call About', 'Nothing a customer asked for is on your shelf yet'] }),
@@ -55193,7 +55843,8 @@ function _qpClaimsSplit(d) {
     const cases = (d.cases || []);
     const by = {
         mismatch: (d.mismatches || []).map(x => ({ x, type: 'mismatch' })),
-        returns: cases.filter(_holdIsReturn).map(x => ({ x, type: 'return' })),
+        // Returns waiting on the buyer are not counted as due (_holdReturnNeedsUs).
+        returns: cases.filter(c => _holdIsReturn(c) && (!need(c) || _holdReturnNeedsUs(c))).map(x => ({ x, type: 'return' })),
         cases: cases.filter(c => !_holdIsReturn(c)).map(x => ({ x, type: _holdIsInr(x) ? 'inr' : 'case' }))
             .concat((d.disputes || []).map(x => ({ x, type: x.source === 'shopify' ? 'chargeback' : 'dispute' }))),
         payments: (d.payments || []).map(x => ({ x, type: 'payment' })),
@@ -57496,6 +58147,11 @@ function _samReminderCfg() {
     // as its summary. The tab is one of a fixed four, never free text.
     const _cdT = document.getElementById('claimsDueAlertBubbleText');
     const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
+    // "Due Today" only when the earliest item really is due today (or has no
+    // date); a card whose soonest deadline is Dec 3 is just "Due" — the badge
+    // beside it carries the date (2026-11-06).
+    const _cdDueOn = (_cdT && _cdT.dataset && _cdT.dataset.dueOn) || '';
+    const _cdIsToday = !_cdDueOn || _b2bDayDiff(_kpiCentralToday(), _cdDueOn) <= 0;
     const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
         ? _cdT.dataset.tab : 'cases';
     // kind: 'due' marks a card that answers to a DEADLINE, which is what puts it
@@ -57526,8 +58182,14 @@ function _samReminderCfg() {
         // resolved in the tool, and only then. Overdue once a deadline on it
         // has passed — it stays after that too, until somebody records what
         // happened.
+        // 0164: resolutions the sites don't back up, waiting on the DM
+        // (checkClaimsConfirmAlerts). State-based: no snooze, gone when the
+        // queue is.
+        { key: 'claimsConfirm', id: 'claimsConfirmAlertBubble', text: 'claimsConfirmAlertBubbleText',
+          title: 'Resolutions to Confirm', urgency: 2, due: 'Confirm', cls: 'sam-due-amber', noSnooze: true,
+          action: "openClaimsTool('confirm')" },
         { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
-          title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
+          title: _cdOver ? 'Claims & Disputes Overdue' : _cdIsToday ? 'Claims & Disputes Due Today' : 'Claims & Disputes Due',
           urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true, kind: 'due',
           action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
@@ -58012,7 +58674,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', '_qpClaimsReload'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', 'checkClaimsConfirmAlerts', '_qpClaimsReload'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders', '_qpWReloadVariance'],
     comments:      ['fetchAndDisplayStoreComment'],
@@ -62401,12 +63063,20 @@ function _expControlsHtml() {
         + '<label class="exp-ctl"><span>Month</span><select class="kpi-select" onchange="expSetMonth(this.value)">' + monthOpts + '</select></label>'
         + personSel + rateCtl
         + '<span class="exp-controls-sp"></span>' + cats
+        // Export and Email are one group so a narrow row wraps them together and
+        // they stay on the right, rather than Email Report dropping alone to the
+        // left edge of a second line.
+        + '<span class="exp-actions">'
+        // Export works from "All" too — one workbook of everyone's lines for the
+        // month, which is what a reviewer files when the whole month is approved.
+        + '<button type="button" class="btn-secondary exp-btn-mail exp-btn-xls" onclick="expExportExcel(this)">'
+            + 'Export Excel<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><polyline points="7 10 12 15 17 10"/><line x1="5" y1="20" x2="19" y2="20"/></svg></button>'
         // A report is filed by one person for one month, so there is nothing to
         // email from the "All" overview.
         + (_expIsAll() ? ''
             : '<button type="button" class="btn-primary exp-btn-mail" onclick="expShowPreview()">'
               + 'Email Report<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>')
-        + '</div>';
+        + '</span></div>';
 }
 
 // A DM/MSM may only edit their own report; the CEO may edit anyone's.
@@ -62830,6 +63500,132 @@ function expCopyReport(button) {
     }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
 }
 window.expCopyReport = expCopyReport;
+
+// ---- Excel export -------------------------------------------------------------
+// The email is still how a report is filed. This is for AFTER Paul approves it:
+// he wants the approved months kept as files in a Drive folder (Ethan,
+// 2026-11-02), so the same lines the email carries come out as a workbook the
+// person drops in there. It reads _expRows like the email does, so the file can
+// never disagree with what was sent.
+//
+// One sheet laid out like the email — Mileage, then Expenses, then Total Due —
+// rather than a sheet per kind, because the file stands in for the email in the
+// folder and should read the same way. Dates are real dates and money is real
+// numbers (with SUM formulas on the totals), so the file can be added up in a
+// spreadsheet instead of retyped. In "All" every line gets a Person column and
+// the file is named for the month alone.
+//
+// SheetJS is only on the Workspace page, so this borrows the Variance tool's
+// on-demand loader rather than adding a 900 KB script to every page.
+const _expXlsDate = s => {
+    const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000;
+};
+
+function _expWorkbook() {
+    const all = _expIsAll();
+    const who = all ? 'Everyone' : _expPerson;
+    const monthLabel = _expMonthLabel(_expMonth);
+    const mileageRows = _expRows('mileage');
+    const expenseRows = _expRows('expense');
+    const enc = (r, c) => XLSX.utils.encode_cell({ r, c });
+
+    const aoa = [];
+    const money = [], dates = [], sums = [];   // [row, col] cells to format after the sheet exists
+    const push = row => { aoa.push(row); return aoa.length - 1; };
+    const p = all ? 1 : 0;                     // the Person column shifts everything right by one
+
+    push(['Expense Report — ' + who + ' — ' + monthLabel]);
+    push([]);
+
+    let mileageTotalRow = null, expenseTotalRow = null;
+    if (mileageRows.length) {
+        push(['MILEAGE']);
+        push(['Date'].concat(all ? ['Person'] : [], ['From', 'To', 'Purpose', 'Miles', 'Rate', 'Amount']));
+        const first = aoa.length;
+        mileageRows.forEach(e => {
+            const r = push([_expXlsDate(e.entry_date)].concat(all ? [e.person || ''] : [],
+                [e.from_loc || '', e.to_loc || '', e.description || '',
+                 Number(e.miles) || 0, Number(e.rate) || 0, Number(e.amount) || 0]));
+            dates.push([r, 0]); money.push([r, 5 + p], [r, 6 + p]);
+        });
+        const last = aoa.length - 1;
+        const miles = mileageRows.reduce((a, e) => a + (Number(e.miles) || 0), 0);
+        mileageTotalRow = push(['Total'].concat(all ? [''] : [], ['', '', '', Math.round(miles * 10) / 10, '', _expTotal('mileage')]));
+        sums.push([mileageTotalRow, 4 + p, first, last], [mileageTotalRow, 6 + p, first, last]);
+        money.push([mileageTotalRow, 6 + p]);
+        push([]);
+    }
+
+    if (expenseRows.length) {
+        push(['EXPENSES']);
+        push(['Date'].concat(all ? ['Person'] : [], ['Category', 'Description', 'Amount']));
+        const first = aoa.length;
+        expenseRows.forEach(e => {
+            const r = push([_expXlsDate(e.entry_date)].concat(all ? [e.person || ''] : [],
+                [e.category || '', e.description || '', Number(e.amount) || 0]));
+            dates.push([r, 0]); money.push([r, 3 + p]);
+        });
+        const last = aoa.length - 1;
+        expenseTotalRow = push(['Total'].concat(all ? [''] : [], ['', '', _expTotal('expense')]));
+        sums.push([expenseTotalRow, 3 + p, first, last]);
+        money.push([expenseTotalRow, 3 + p]);
+        push([]);
+    }
+
+    if (!mileageRows.length && !expenseRows.length) {
+        push(['No expenses or mileage were logged for this month.']);
+        push([]);
+    }
+
+    const dueRow = push(['TOTAL DUE', _expTotal('mileage') + _expTotal('expense')]);
+    money.push([dueRow, 1]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    dates.forEach(([r, c]) => { const cell = ws[enc(r, c)]; if (cell && cell.t === 'n') cell.z = 'mm/dd/yyyy'; });
+    money.forEach(([r, c]) => { const cell = ws[enc(r, c)]; if (cell) cell.z = '$#,##0.00'; });
+    // The cached value stays in each cell, so a viewer that ignores formulas
+    // (Drive's preview) still shows the right total.
+    sums.forEach(([r, c, a, b]) => {
+        const cell = ws[enc(r, c)];
+        if (cell) cell.f = 'SUM(' + enc(a, c) + ':' + enc(b, c) + ')';
+    });
+    const due = [mileageTotalRow != null ? enc(mileageTotalRow, 6 + p) : null,
+                 expenseTotalRow != null ? enc(expenseTotalRow, 3 + p) : null].filter(Boolean);
+    if (due.length) ws[enc(dueRow, 1)].f = due.join('+');
+
+    // Widths from the content, because Mileage and Expenses share columns with
+    // different things in them. Row 0 (the title) is skipped — it is meant to
+    // run across the top, not to widen the Date column.
+    const widths = [];
+    aoa.slice(1).forEach(row => row.forEach((v, c) => {
+        const len = typeof v === 'number' ? 12 : String(v == null ? '' : v).length + 2;
+        widths[c] = Math.min(Math.max(widths[c] || 10, len), 50);
+    }));
+    ws['!cols'] = widths.map(w => ({ wch: w }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Expense Report');
+    // Plain hyphens: an em dash in a filename survives Windows but not every
+    // Drive sync client.
+    const name = 'Expense Report - ' + (all ? '' : who.replace(/[\\/:*?"<>|]/g, '') + ' - ') + monthLabel + '.xlsx';
+    return { wb, name };
+}
+
+async function expExportExcel(btn) {
+    if (btn) btn.disabled = true;
+    try {
+        await _vrEnsureXlsx();
+        const { wb, name } = _expWorkbook();
+        XLSX.writeFile(wb, name);
+    } catch (e) {
+        alert('Could not build the Excel file — check your connection and try again.');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+window.expExportExcel = expExportExcel;
 
 // ---- monthly "file your expense report" reminder ------------------------------
 // DM and MSM only (the CEO receives the reports, they don't file one). Unlike the

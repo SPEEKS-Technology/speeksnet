@@ -68,6 +68,7 @@ const corsHeaders = {
 const CATEGORIES = [
   "announcements", "store_messages", "requests", "b2b",
   "claims", "variance_aging", "deadlines", "scores", "categories", "listing_photos",
+  "callbacks",
 ] as const;
 type Category = typeof CATEGORIES[number];
 
@@ -94,7 +95,7 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // Monday's unlisted-value report. The two reminders are due-date slugs from
   // collectDue; the stage events are queued rows. Same switch either way.
   b2b:            { label: "B2B Deals",                  blurb: "Deals waiting on you, a daily pricing reminder, and Monday's unlisted value." },
-  claims:         { label: "Insurance Claims",           blurb: "A claim that has gone unresolved past a week." },
+  claims:         { label: "Insurance Claims",           blurb: "Claims left without an update past a week, and the DM's review reminders." },
   // While Aging Inventory is paused the category is Variance alone. The KEY stays
   // variance_aging so every saved preference still lines up when aging returns.
   variance_aging: AGING_PAUSED
@@ -104,7 +105,10 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   scores:         { label: "Scores & Audits"  ,            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
   // Named for the queue, not the mechanism: a manager knows what "a listing
   // with no category" is and has never heard of the `other` collection.
-  categories:     { label: "Listing Categories",         blurb: "Online-store listings with no category, or on a shelf that looks wrong." },
+  // "Listing Health" since 2026-11-03, named for the tool both of its alerts
+  // live in: the category queue, and a title the DM sent back with a note.
+  // The KEY stays `categories` so every saved cat_categories still lines up.
+  categories:     { label: "Listing Health",             blurb: "Listings with no category or on the wrong shelf, and titles the DM sent back." },
   // ITS OWN SWITCH, NOT PART OF "categories", even though both queues live on
   // the same page. Two reasons, and either alone would be enough: the audience
   // differs (this one includes ASMs, who are absent from the categories set),
@@ -112,6 +116,8 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // no photo cannot be bought. Folding them together would mean muting the
   // storefront-tidiness nag also silences the one that costs a sale.
   listing_photos: { label: "Listings With No Pictures",  blurb: "A listing live on the online store with no photo at all. This should always be none." },
+  // callback-match, one mail per sweep that finds a NEW pair (migration 0163).
+  callbacks:      { label: "Customer Call Backs",        blurb: "A customer on the call back list wants something your store has in stock." },
 };
 
 // PER-ROLE LABEL OVERRIDES.
@@ -120,9 +126,11 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
 // the override has to exist: a label naming somebody else's half of the tool is
 // worse than a generic one, because it promises things that can never arrive and
 // the silence then reads as a bug.
+// "My Requests", not "My Recycle Requests", since purchase verdicts started
+// coming back too (2026-11-03): managers and ASMs both file purchase requests.
 const STORE_REQUESTS = {
-  label: "My Recycle Requests",
-  blurb: "The DM's verdict, notes and replies on recycle requests you sent up.",
+  label: "My Requests",
+  blurb: "The answer on purchase and recycle requests you sent up, and the DM's notes.",
 };
 
 const STORE_SCORES = {
@@ -159,6 +167,11 @@ const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { lab
         blurb: "Setting the day's buying and listing roles.",
       },
       scores: STORE_SCORES,
+      // The category queue is the manager's; an ASM gets the title half only.
+      categories: {
+        label: "Titles Sent Back",
+        blurb: "A listing title the DM sent back to your store with a note.",
+      },
     },
   },
   {
@@ -172,6 +185,17 @@ const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { lab
   {
     roles: new Set(["owner (manager)", "owner manager"]),
     meta: { requests: OWNER_REQUESTS, scores: STORE_SCORES },
+  },
+  {
+    // Corp receives the scorecard only -- PayMore audits go to the store.
+    roles: new Set(["district manager", "ceo"]),
+    meta: { scores: { label: "SPEEKS Scorecard", blurb: "The Online & Marketing categories being scored." } },
+  },
+  {
+    // The DM SENDS the review reminders, so their claims row is the weekly
+    // unresolved sweep alone.
+    roles: new Set(["district manager"]),
+    meta: { claims: { label: "Insurance Claims", blurb: "A store's claims left without an update past a week." } },
   },
 ];
 
@@ -230,8 +254,11 @@ const SUBS: Record<Category, Sub[]> = {
     { key: "req_in",  label: "Requests Coming In", blurb: "Purchase and recycle requests, and delete requests, waiting on a verdict.",
       kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request"],
       roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
-    { key: "req_out", label: "Verdicts And Replies", blurb: "The DM's answer on something you sent up.",
-      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
+    // Neutral wording: this sub reaches BOTH ends -- the store hears the DM's
+    // verdict, the DM hears the store's reply -- so "the DM's answer" was wrong
+    // for the one person most likely to read it.
+    { key: "req_out", label: "Verdicts And Replies", blurb: "Verdicts, notes and replies on purchase and recycle requests already sent.",
+      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply", "purchase_verdict"] },
   ],
   b2b: [
     // The stage events, moved here from `requests` with the same key, so a
@@ -259,7 +286,14 @@ const SUBS: Record<Category, Sub[]> = {
       blurb: "Monday's total of B2B value still waiting to be listed. Corp sees every store.",
       kinds: ["b2bUnlistedWeekly"], roles: B2B_REMINDER_ROLES },
   ],
-  claims: [],
+  // Split 2026-11-03 when the DM's pushed reminder started mailing: a weekly
+  // sweep and a person asking you directly are different enough to mute apart.
+  claims: [
+    { key: "claims_aging", label: "Unresolved Past A Week", blurb: "Claims that have gone a week with no update.",
+      kinds: ["claimsAging"] },
+    { key: "claims_nudge", label: "Review Reminders From The DM", blurb: "When the DM asks you to review your store's claims.",
+      kinds: ["claim_review_reminder"], roles: new Set(STORE_SIDE_ROLES) },
+  ],
   variance_aging: [
     // The per-note kinds (variance_dm_note / variance_mgr_reply / aging_dm_note /
     // aging_store_reply) were retired 2026-08-14 in favour of the *Review slugs
@@ -280,21 +314,31 @@ const SUBS: Record<Category, Sub[]> = {
       kinds: ["kpiWeekly", "kpiMonthly"], roles: new Set(STORE_SIDE_ROLES) },
     { key: "listing",  label: "Listing Goals", blurb: "The day's buying and listing roles, and the weekly totals.",
       kinds: ["listingGoalsDaily", "listingGoalsWeek"] },
-    { key: "goals",    label: "Store Goals", blurb: "The month's gross-profit target.",
+    { key: "goals",    label: "Store Goals", blurb: "The month's net-profit target.",
       kinds: ["gpGoals"], roles: new Set(["district manager"]) },
     { key: "expenses", label: "Expense Report", blurb: "Filing the month that just closed.",
       kinds: ["expenseFile"], roles: new Set(["district manager"]) },
   ],
   scores: [
+    // Store side only: scorecard queues both audit kinds to the walked store's
+    // manager / owner / ASM, never up to corp.
     { key: "audits",    label: "PayMore Audits", blurb: "Practice walkthroughs and the official corporate audit.",
-      kinds: ["audit_practice_submitted", "audit_official_submitted"] },
+      kinds: ["audit_practice_submitted", "audit_official_submitted"],
+      roles: new Set([...STORE_SIDE_ROLES, "assistant manager"]) },
     { key: "scorecard", label: "SPEEKS Scorecard", blurb: "The Online & Marketing categories being scored.",
-      kinds: ["scorecard_submitted"], roles: new Set(["district manager", "ceo", "mocd"]) },
+      kinds: ["scorecard_submitted"], roles: new Set(["district manager", "ceo"]) },
   ],
-  // One reminder, one toggle. Splitting "no category" from "wrong shelf" would
-  // be two switches over one weekly email — subsFor hides a single-sub split
-  // for that reason.
-  categories: [],
+  // "No category" and "wrong shelf" stay ONE sub: two switches over one weekly
+  // email would be noise. Titles sent back are a separate thing a person acts
+  // on, and reach ASMs, who get no category queue — so they get their own.
+  categories: [
+    { key: "recat",  label: "Listings To Categorize", blurb: "Weekly: listings with no category, or on a shelf that looks wrong.",
+      kinds: ["recatQueue"], roles: new Set(STORE_SIDE_ROLES) },
+    { key: "titles", label: "Titles Sent Back", blurb: "A listing title the DM sent back to your store with a note.",
+      kinds: ["title_sent_back"] },
+  ],
+  listing_photos: [],
+  callbacks: [],
 };
 
 // The subs worth showing this role. Fewer than two is not a split worth drawing.
@@ -334,6 +378,8 @@ const KIND_LABEL: Record<string, string> = {
   b2b_pricing_location: "B2B Deal", b2b_pricing: "B2B Deal", b2b_quote_ready: "B2B Deal",
   b2b_sendback: "B2B Deal", b2b_listing_location: "B2B Deal", b2b_listing: "B2B Deal",
   b2b_delete_request: "B2B Delete Request",
+  purchase_verdict: "Purchase Request", claim_review_reminder: "Claims Review",
+  title_sent_back: "Title Sent Back", callback_match: "Call Back",
 };
 
 // WHICH ROLES CAN ACTUALLY RECEIVE EACH CATEGORY.
@@ -404,6 +450,10 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // Two directions, like requests. The SPEEKS scorecard reports UP to corp; both
   // PayMore audits report DOWN to the store that was walked, because the store is
   // who acts on a score. So the store roles are in, under their own label.
+  //
+  // MOCD stays out: scorecard used to queue scorecard_submitted to "mocd" by
+  // name, mailing them with no switch to stop it. Ethan (2026-11-03): they
+  // don't need it, so the audience dropped them rather than this set gaining them.
   scores: new Set([
     "district manager", "ceo",
     "manager", "owner (manager)", "owner manager", "assistant manager",
@@ -411,7 +461,10 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // The store roles that own their own storefront tidiness. Corp is out on
   // purpose: the DM lives in this panel and their queue is a standing backlog
   // across five stores, which is not news once a week.
-  categories: new Set(["manager", "owner (manager)", "owner manager"]),
+  //
+  // ASMs joined 2026-11-03 for "Titles Sent Back" only (the recat sub stays
+  // store-side), relabelled for them in META_OVERRIDES.
+  categories: new Set(["manager", "owner (manager)", "owner manager", "assistant manager"]),
   // ASMs ARE IN, unlike categories above: they already hold the tool (the
   // ec-view-categories role override grants Listing Health to assistant
   // manager), and photographing an item is squarely their work.
@@ -424,6 +477,13 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   listing_photos: new Set([
     "manager", "owner (manager)", "owner manager", "multi-store manager",
     "assistant manager",
+  ]),
+  // Every store role, Employees and Training included: the Call Backs tab
+  // defaults to `all`, and anyone on the floor can ring the customer. Corp is
+  // out by construction — the queue row is store-scoped and corp holds no store.
+  callbacks: new Set([
+    "manager", "owner (manager)", "owner manager", "assistant manager",
+    "employee", "training",
   ]),
 };
 

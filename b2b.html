@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261031a">
+  <link rel="stylesheet" href="styles.css?v=20261106a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261031a" defer></script>
+  <script src="speeks.js?v=20261106f" defer></script>
 </head>
 <body class="preload">
 
@@ -480,27 +480,32 @@
        #ops-pane-b2b.active, and keeping it means neither had to learn about a
        second page. operations.html#b2b links still work -- initOperations
        forwards them here. -->
+  <!-- Page header + underline tabs (2026-10-31, Ethan: "match the other ones,
+       so the site is standardized"). Same .page-header.dp-header hero and
+       .ws-subtabs row as Operations and Workspace. The four view buttons kept
+       their ids, onclick and role classes -- only the strip moved out of the
+       card head -- and b2bRender finds them by .b2b-view-tabs .ws-tab now. -->
   <div class="b2b-wrap">
+    <div class="page-header dp-header b2b-header">
+      <div class="w-full-max-500">
+        <div class="dp-eyebrow">SPEEKS B2B</div>
+        <h2>Business-to-Business</h2>
+        <p id="b2bSubtitle">Track bulk business deals from pickup through listing.</p>
+      </div>
+    </div>
+    <div class="ws-subtabs b2b-view-tabs" role="tablist" aria-label="B2B views">
+        <button id="b2bViewPipelineBtn" class="ws-tab active" role="tab" aria-selected="false" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
+        <button id="b2bViewFinishedBtn" class="ws-tab" role="tab" aria-selected="false" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
+        <!-- Evaluations: pricing a client's list before we collect it.
+             Same audience as raising a deal, since the enquiry lands on
+             whoever picks up the phone -- _b2bCanPreval() is the real gate. -->
+        <button id="b2bViewPrevalsBtn" class="ws-tab dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('prevals')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Evaluations<span class="b2b-pip" id="b2bPrevalPip" style="display:none;">0</span></button>
+        <button id="b2bViewClientsBtn" class="ws-tab dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-multistore-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
+    </div>
     <section class="ws-pane active" id="ops-pane-b2b">
       <div class="card cb-panel ws-panel b2b-panel">
           <div class="cb-head">
-              <div class="cb-head-main">
-                  <span class="cb-head-ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
-                  <div class="cb-head-titles">
-                      <span class="cb-head-title">Business-to-Business</span>
-                      <span id="b2bSubtitle" class="cb-head-sub">Track bulk business deals from pickup through listing.</span>
-                  </div>
-              </div>
               <div class="cb-head-controls">
-                  <div class="mb-view-toggle b2b-view-toggle" role="tablist" aria-label="B2B views">
-                      <button id="b2bViewPipelineBtn" class="mb-view-btn active" role="tab" aria-selected="false" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
-                      <button id="b2bViewFinishedBtn" class="mb-view-btn" role="tab" aria-selected="false" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
-                      <!-- Evaluations: pricing a client's list before we collect it.
-                           Same audience as raising a deal, since the enquiry lands on
-                           whoever picks up the phone -- _b2bCanPreval() is the real gate. -->
-                      <button id="b2bViewPrevalsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('prevals')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Evaluations<span class="b2b-pip" id="b2bPrevalPip" style="display:none;">0</span></button>
-                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-multistore-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
-                  </div>
                   <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
                   <!-- Deals a store has asked to delete. CORP-only; the red-dot
                        badge lights when any are pending (wired in b2bRender). -->
@@ -936,8 +941,6 @@
         <div class="box-order-disclaimer">
             If a box or item you need is not on this page, please reach out to your District Manager for approval.
         </div>
-        <!-- Live "receipt" of what's selected — sticky to the bottom of the list -->
-        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
     </div>
 
     <!-- PAGE 2: Email Preview + Notes -->
@@ -1016,6 +1019,9 @@
 
     <!-- FOOTER PAGE 1 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter1">
+        <!-- Live "receipt" of what's selected — its own row above the buttons, outside the scrolling list
+             so items never slide under it. Shows/hides with this footer (page 1 only). -->
+        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
         <button class="btn-primary" onclick="boxOrderNextPage()">Next<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
