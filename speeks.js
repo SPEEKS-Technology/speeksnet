@@ -39092,9 +39092,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on ${ebay ? 'eBay' : 'Shopify'} ↗</a>` : '',
         ];
         if (st === 'needs_reply' && it.missed_window) {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and no longer takes one, so this is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and won't take one now. That doesn't mean we lose: it still decides on what it has, and this clears itself when it closes. If you hear the outcome first, mark it resolved and say what happened.</div>`;
         } else if (st === 'needs_reply') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Without our evidence, it is decided on the buyer's side alone.</div>`;
         } else if (st === 'answered') {
             extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We responded${it.responded_at ? ` ${_holdDate(it.responded_at)}` : ''} — the ${ebay ? 'eBay' : 'card'} decision can take weeks. Nothing to do until it lands.</div>`;
         } else if (st === 'settled') {
@@ -39306,7 +39306,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // gone changes what this card should ask for: a record, not an argument.
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>We missed the window to reply${it.respond_by ? ` — eBay wanted an answer by ${_holdEbayDay(it.respond_by)}` : ''}.</b>
-            eBay does not take a late reply, so this is very likely decided against us. Mark it resolved and say what happened, so there is a record of it.</div>`;
+            eBay won't take a late reply, but that doesn't mean we lose the case — eBay still decides it on what it has, and this clears itself when eBay closes it. If you learn the outcome first, mark it resolved and say what happened.</div>`;
     } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
     }
@@ -40476,7 +40476,14 @@ async function checkClaimsDueAlerts() {
         const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const j = await res.json();
         if (!j || !j.success) return;           // a failed read leaves the card as it was
-        const items = j.dueAlerts || [];
+        // ONLY WHAT IS DUE NOW (Ethan, 2026-11-06: "we shouldn't show a feed
+        // notification unless something is due tomorrow or due today"). Overdue,
+        // due today, due tomorrow, or with no date of its own (it was mailed
+        // today and is due as of now). Something due Dec 3 stays on the tab and
+        // in the morning mail, and reaches this card the day before.
+        const _cdNow = j.today || _kpiCentralToday();
+        const items = (j.dueAlerts || []).filter(it => it.overdue || !it.due
+            || _b2bDayDiff(_cdNow, String(it.due).slice(0, 10)) <= 1);
         if (!items.length) { hide(); return; }
         const b = _claimsDueBubbleEl();
         const t = document.getElementById('claimsDueAlertBubbleText');
@@ -40486,7 +40493,13 @@ async function checkClaimsDueAlerts() {
         const line = it => {
             const what = _holdKindChip(it.type, it) || (it.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
             const amt = Number(it.amount) > 0 ? ' $' + Number(it.amount).toFixed(2) : '';
-            const when = it.overdue ? 'overdue' : it.due === today ? 'due today' : it.due ? 'due tomorrow' : '';
+            // Named by its real date: until 2026-11-06 anything not due today
+            // read "due tomorrow", so a BAL case eBay wanted answered by Dec 3
+            // said "due tomorrow" under a "Due Dec 3" badge.
+            const left = it.due && today ? _b2bDayDiff(today, String(it.due).slice(0, 10)) : null;
+            const when = it.overdue ? 'overdue' : !it.due ? ''
+                : left <= 0 ? 'due today' : left === 1 ? 'due tomorrow'
+                : 'due ' + new Date(String(it.due).slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
             return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
         };
         const overdue = items.some(it => it.overdue);
@@ -58134,6 +58147,11 @@ function _samReminderCfg() {
     // as its summary. The tab is one of a fixed four, never free text.
     const _cdT = document.getElementById('claimsDueAlertBubbleText');
     const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
+    // "Due Today" only when the earliest item really is due today (or has no
+    // date); a card whose soonest deadline is Dec 3 is just "Due" — the badge
+    // beside it carries the date (2026-11-06).
+    const _cdDueOn = (_cdT && _cdT.dataset && _cdT.dataset.dueOn) || '';
+    const _cdIsToday = !_cdDueOn || _b2bDayDiff(_kpiCentralToday(), _cdDueOn) <= 0;
     const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
         ? _cdT.dataset.tab : 'cases';
     // kind: 'due' marks a card that answers to a DEADLINE, which is what puts it
@@ -58171,7 +58189,7 @@ function _samReminderCfg() {
           title: 'Resolutions to Confirm', urgency: 2, due: 'Confirm', cls: 'sam-due-amber', noSnooze: true,
           action: "openClaimsTool('confirm')" },
         { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
-          title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
+          title: _cdOver ? 'Claims & Disputes Overdue' : _cdIsToday ? 'Claims & Disputes Due Today' : 'Claims & Disputes Due',
           urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true, kind: 'due',
           action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's

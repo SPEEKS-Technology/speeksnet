@@ -534,7 +534,7 @@ function noteBase(r: Row): string {
   if (r.note === "resolution_disputed")
     return "Someone marked this resolved and the site still shows no response.";
   if (r.note === "missed_window")
-    return "No response was recorded before the deadline, and no late one is accepted.";
+    return "No response was recorded before the deadline, and no late one is accepted — but that doesn't mean we lose. This clears when the site closes it; if you hear the outcome first, mark it resolved.";
   if (r.state === "needs_claim")
     return "The buyer was refunded and the parcel is lost in transit — open or link a carrier claim.";
   return "";

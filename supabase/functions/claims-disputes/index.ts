@@ -566,6 +566,19 @@ function readTracking(kind: string, d: any) {
 }
 const isDelivered = (it: any) => /DELIVERED/i.test(String(it.tracking_status || ""));
 
+// EBAY INTERNATIONAL SHIPPING ORDERS ARE EBAY'S (Ethan, 2026-11-06: BAL case
+// 5389732731, $149.99 — "This is an ebay international return, so ebay said
+// they would handle this for us"). The parcel went to eBay's US export hub, not
+// to the buyer, and eBay runs the return and the case from there. The tell is
+// the outbound tracking: carrier "eBayEXPORTS", number "HUB…". Two earlier ones
+// (MPL 5387769048, LEE 5381961515) both closed with no refund taken from us.
+// Such a case asks nothing of the store — no reply, no claim — so it settles
+// with note ebay_international, off the list and out of every mail and card,
+// and a resolution on it is never disputed (factCheckRaw). Tracking is only
+// read on inquiries and cases (readTracking), so a plain return never matches.
+const isEbayIntl = (it: any) =>
+  /EBAY\s*EXPORT/i.test(String(it.tracking_carrier || "")) || /^HUB\d/i.test(String(it.tracking_number || ""));
+
 // WHAT A REFUNDED INR ASKS FOR DEPENDS ON WHAT THE CARRIER SAYS (Ethan,
 // 2026-11-03). Until this every refunded INR said "open a claim", and on Nov 3
 // 23 of them sat unworked for up to three months — partly because for most of
@@ -651,7 +664,10 @@ const awaitingReply = (it: any) =>
 // replies. so when this happens, maybe move the pull to say Missed Reply
 // Window?"). Once it has, "answer it on eBay and this clears itself" is false,
 // and sending someone to argue a case eBay has stopped listening to wastes an
-// afternoon. The money is already gone; what is left is recording why.
+// afternoon. (A missed reply is NOT a lost case, though — Ethan, 2026-11-06:
+// "just cause we didn't reply doesn't mean we will lose the case". eBay still
+// decides on what it has, and the item clears itself when eBay closes it. The
+// wording on the card and in the mails says so; it no longer calls it lost.)
 //
 // SHOPIFY IS DELIBERATELY NOT INCLUDED. Shopify has been seen to take evidence
 // after evidenceDueBy, and telling a manager not to bother on a chargeback that
@@ -1637,6 +1653,7 @@ function factCheckRaw(type: string, it: any, review: any): { ok: boolean; why: s
       why: `The system can't re-read this order any more to check it — it last saw eBay and Shopify not matching on ${seen ? usDay(it.last_seen) : "an earlier day"}, before it was marked resolved` };
   }
   if (type === "ebay_case") {
+    if (isEbayIntl(it)) return ok;   // eBay's to handle (isEbayIntl)
     if (it.is_open && awaitingReply(it)) return { ok: false, why: "eBay still shows no reply from us" };
     if (it.is_open) return { ok: false, why: "eBay still has this open" };
     if (isInr(it) && it.outcome === "refunded") {
@@ -1787,6 +1804,7 @@ function baseState(type: string, it: any, review: any, ctx: any): StateOut {
     }
     return { state: "due", due_on: today, note: "missed_window" };
   }
+  if (type === "ebay_case" && isEbayIntl(it)) return { state: "settled", due_on: null, note: "ebay_international" };
   const claim = ctx.claimFor(type, it);
   if (type === "ebay_case" && isInr(it)) {
     // IT ARRIVED BEFORE WE EVER HAD TO REFUND, so there is nothing to do and
