@@ -53945,7 +53945,9 @@ Object.assign(QP_WIDGETS, {
         icon: '<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6M9 13h7M9 17h5"/></svg>',
         tone: 'g', avail: () => {
             const ok = k => typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible(k);
-            return ok('tool-expenses');
+            // Either of the tool's two Tools-panel keys (DM / Manager) — Zach and
+            // Colin hold the Manager one.
+            return ok('tool-expenses') || ok('tool-expenses-mgr');
         },
     },
 });
@@ -64238,7 +64240,8 @@ let _expRemindStarted = false;
 function _expRemindApplies() {
     const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (r === 'ceo') return false;
-    return typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible('tool-expenses');
+    return typeof _jumpFeatureVisible !== 'function'
+        || _jumpFeatureVisible('tool-expenses') || _jumpFeatureVisible('tool-expenses-mgr');
 }
 
 // The month being chased is the one that just CLOSED — you file August in
