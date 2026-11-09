@@ -51,8 +51,6 @@ const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
 const SITE = "https://speeksnet.com";
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
-// Kept in step with MULTISTORE_MANAGER_STORES in speeks.js.
-const MSM_STORES = ["BAL", "MPL"];
 
 const STORE_NAME: Record<string, string> = {
   OVL: "Overland Park", LEE: "Lee's Summit", WSP: "Westport",
@@ -469,13 +467,10 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // ec-view-categories role override grants Listing Health to assistant
   // manager), and photographing an item is squarely their work.
   //
-  // ⚠️ MULTI-STORE MANAGER IS IN, AND HAS TO BE. MPL has no Manager row at all
-  // and BAL's manager IS the MSM, so a set that omits the role leaves two of the
-  // five stores with no manager-level recipient — the mail simply never arrives
-  // and nothing says so. `categories` above has that gap today; left alone here
-  // rather than widened silently, because that is a different tool's audience.
+  // (Multi-Store Manager was in this set while it was a real role; the role was
+  // retired 2026-11-08 and every store now has its own Manager row.)
   listing_photos: new Set([
-    "manager", "owner (manager)", "owner manager", "multi-store manager",
+    "manager", "owner (manager)", "owner manager",
     "assistant manager",
   ]),
   // Every store role, Employees and Training included: the Call Backs tab
@@ -574,14 +569,10 @@ function weekStamp(s: string) {
 // ============================================================================
 // PEOPLE
 // ----------------------------------------------------------------------------
-// ROLE NOTES — the login rewrites two roles on its way into the session, and
+// ROLE NOTES — the login rewrites a role on its way into the session, and
 // every role gate on the site therefore tests the REWRITTEN value. Resolving
 // audiences against the raw users.role would quietly disagree with the site:
 //
-//   Multi-Store Manager -> effective role 'manager', covering BOTH BAL and MPL.
-//     (speeks.js stores 'manager' in speeksUserRole and flags speeksMultiStore
-//     separately, so an MSM passes every 'manager' check there is. That is why
-//     they get the manager reminders for two stores rather than none.)
 //   TOM -> 'mocd', homed at OVL rather than CORP.
 //
 // 'Store' accounts are the unattended shop-floor TVs (tv.html). They are dropped
@@ -592,8 +583,7 @@ type Person = {
   role: string;            // effective, lowercased
   rawRole: string;
   store: string;           // home store
-  stores: string[];        // every store they answer for (MSM: two)
-  isMsm: boolean;
+  stores: string[];        // every store they answer for (one, or none for corp)
 };
 
 async function loadPeople(sb: any): Promise<Person[]> {
@@ -604,15 +594,12 @@ async function loadPeople(sb: any): Promise<Person[]> {
     if (raw === "store") continue;                       // TV boards
     let role = raw;
     let store = String(u.store || "").toUpperCase();
-    let isMsm = false;
-    if (role === "multi-store manager") { role = "manager"; isMsm = true; store = MSM_STORES[0]; }
     if (role === "tom") role = "mocd";
     if (role === "mocd") store = "OVL";
     out.push({
       name: String(u.name || ""), key: nameKey(u.name),
       role, rawRole: raw, store,
-      stores: isMsm ? MSM_STORES.slice() : (store && store !== "ALL" && store !== "CORP" ? [store] : []),
-      isMsm,
+      stores: store && store !== "ALL" && store !== "CORP" ? [store] : [],
     });
   }
   return out;
@@ -645,11 +632,10 @@ async function loadFeatureOverrides(sb: any, keys: string[]): Promise<Map<string
 }
 
 // ⚠️ Matches the role on rawRole, NOT role. `role` is the EFFECTIVE role —
-// loadPeople flattens a Multi-Store Manager to "manager" and TOM to "mocd" so
+// loadPeople flattens TOM to "mocd" so
 // the rest of this file can reason about them uniformly — while the Feature
 // Access tool writes the slug of whatever is literally in users.role. Matching
-// the flattened one would silently apply every manager's override to the MSM,
-// and never match a TOM's own row at all.
+// the flattened one would never match a TOM's own row.
 function featureAllows(rows: any[], person: Person, byRole: boolean): boolean {
   if (!rows.length) return byRole;
   const lc = (v: unknown) => String(v || "").toLowerCase().trim();
@@ -797,8 +783,8 @@ function itemCard(title: string, body: string, link: string, tone: "red" | "ambe
 //
 // Everything they are mailed is about the store they work at, so "— WSP" in the
 // headline and "WESTPORT" under it are the same fact they already knew, twice.
-// Multi-store people are the opposite case: for the DM, the CEO and the
-// multi-store manager, the store is the most useful word in the line, and an
+// Multi-store people are the opposite case: for the DM and the CEO, the store
+// is the most useful word in the line, and an
 // email that dropped it would be unreadable. So the test is coverage, not role.
 const oneStore = (p: Person | null | undefined) => !!p && p.stores.length === 1;
 
@@ -1095,8 +1081,7 @@ type Due = {
   store?: string;
   // The feature_overrides key of the surface this chases, so somebody the tool
   // has been hidden from stops being nagged about it. A function where the
-  // answer depends on the reader: an expense reminder is tool-expenses for the
-  // DM and tool-expenses-mgr for the MSM, and a claim is the oversight tool for
+  // answer depends on the reader: a claim is the oversight tool for
   // one and the store tool for the other.
   //
   // REVOKE-ONLY, unlike the queue path. The `for` predicate above has already
@@ -1125,8 +1110,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // ---- Store KPIs, weekly + monthly -------------------------------------
   // Gate: _KPI_DUE_ROLES = manager / owner (manager) / owner manager. Assistant
   // Managers are deliberately NOT included (ASM KPI entry is switched off; the
-  // comment at speeks.js:5513 says to add them here when it comes back). An MSM
-  // reaches this as 'manager' and therefore owes both stores.
+  // comment at speeks.js:5513 says to add them here when it comes back).
   const KPI_ROLES = new Set(["manager", "owner (manager)", "owner manager"]);
   const wkEnd = lastSunday(t.date);
   const { data: wkRows } = await sb.from("kpi_entries")
@@ -1198,7 +1182,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
 
   // ---- Listing goals: today's roles, per store ---------------------------
   // Gate: _LG_DAILY_ROLES = manager / owner (manager) / owner manager /
-  // assistant manager / multi-store manager. Stores are closed Sunday, and the
+  // assistant manager. Stores are closed Sunday, and the
   // card only appears from 8:30am — so neither does this.
   if (t.dow !== 0 && t.minutes >= 8 * 60 + 30) {
     const LG_ROLES = new Set(["manager", "owner (manager)", "owner manager", "assistant manager"]);
@@ -1248,7 +1232,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   }
 
   // ---- Expense report ----------------------------------------------------
-  // Gate: _EXP_REMIND_ROLES plus any MSM. The month being chased is the one that
+  // Gate: _EXP_REMIND_ROLES (the DM). The month being chased is the one that
   // just CLOSED — you file August in September (_expRemindMonth).
   {
     const filedMonth = fmtDate(new Date(Date.UTC(t.year, t.month - 2, 1)));
@@ -1260,8 +1244,8 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       title: "File your expense report",
       body: `${label} has closed and your expense report hasn't been marked filed.`,
       link: "index.html", tone: "amber",
-      for: (p) => (p.role === "district manager" || p.isMsm) && !done.has(p.key),
-      feature: (p: Person) => p.isMsm ? "tool-expenses-mgr" : "tool-expenses",
+      for: (p) => p.role === "district manager" && !done.has(p.key),
+      feature: "tool-expenses",
     });
   }
 
@@ -1656,7 +1640,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // can alarm on. See migration 0065.
   {
     const PHOTO_ROLES = new Set([
-      "manager", "owner (manager)", "owner manager", "multi-store manager",
+      "manager", "owner (manager)", "owner manager",
       "assistant manager",
     ]);
     const { data: noPhoto } = await sb
@@ -1935,11 +1919,8 @@ async function whoAmI(sb: any, pin: string, reading = false) {
   if (!data) return null;
   const raw = String(data.role || "").toLowerCase().trim();
   if (raw === "store") return null;             // TV board: no settings, no mail
-  // Normalised the same way loadPeople does it, and for the same reason: a
-  // Multi-Store Manager signs in AS a manager, so the categories they can receive
-  // are a manager's. Filtering on the raw role would show them the wrong list.
+  // Normalised the same way loadPeople does it (TOM signs in as MOCD).
   let role = raw;
-  if (role === "multi-store manager") role = "manager";
   if (role === "tom") role = "mocd";
   return { name: String(data.name || ""), key: nameKey(data.name), role, rawRole: raw };
 }
@@ -2049,7 +2030,7 @@ Deno.serve(async (req: Request) => {
     // hands it back per person. Somebody without the tab gets no B2B mail (the
     // digest checks widget-ops-b2b), so they get no B2B switches either.
     const b2bRows = (await loadFeatureOverrides(sb, ["widget-ops-b2b"])).get("widget-ops-b2b") || [];
-    const hasB2b = featureAllows(b2bRows, { ...me, store: "", stores: [], isMsm: false } as Person,
+    const hasB2b = featureAllows(b2bRows, { ...me, store: "", stores: [] } as Person,
       !!CATEGORY_ROLES.b2b?.has(me.role));
     const isCorp = FEED_ROLES.has(me.role);
     return json({

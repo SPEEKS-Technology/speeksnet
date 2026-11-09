@@ -183,7 +183,6 @@ async function scopeFor(pin: string): Promise<Scope | null> {
   if (!allowed) return null;
   const corp = ["district manager", "ceo", "mocd"].includes(role);
   const stores = corp ? STORES
-    : role === "multi-store manager" ? ["BAL", "MPL"]
     : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
   return stores.length ? { name, role, stores, corp } : null;
 }

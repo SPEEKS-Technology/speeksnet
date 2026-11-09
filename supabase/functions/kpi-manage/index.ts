@@ -8,11 +8,6 @@ const corsHeaders = {
 const MONTH_NAMES  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const FULL_MONTHS  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
-// Stores overseen by a Multi-Store Manager. Mirrors MULTISTORE_MANAGER_STORES in speeks.js.
-// A Multi-Store Manager's DB `store` is only their default home store, so the home-store
-// check used for plain managers can't authorize their other store — gate on this list instead.
-const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
-
 const json = (data: any, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
@@ -97,11 +92,11 @@ function isEditablePeriod(type: string, date: string): boolean {
 }
 
 // Roles allowed to enter KPIs. Must stay in sync with the canEditRole gate in speeks.js
-// (the frontend that shows the Edit/Save button). 'assistant manager' and 'multi-store
-// manager' are included here; store-level scoping for them is enforced separately below.
+// (the frontend that shows the Edit/Save button). 'assistant manager' is included
+// here; store-level scoping for it is enforced separately below.
 function canEnterKPIs(role: string): boolean {
   const r = (role || '').toLowerCase().trim();
-  return r === 'manager' || r === 'assistant manager' || r === 'multi-store manager'
+  return r === 'manager' || r === 'assistant manager'
     || r.startsWith('owner') || r === 'ceo' || r === 'district manager';
 }
 
@@ -125,8 +120,7 @@ function canEnterKPIs(role: string): boolean {
 // r.startsWith('owner') that canEnterKPIs allows.
 function canEditNotes(role: string): boolean {
   const r = (role || '').toLowerCase().trim();
-  return r === 'manager' || r === 'owner (manager)' || r === 'owner manager'
-    || r === 'multi-store manager';
+  return r === 'manager' || r === 'owner (manager)' || r === 'owner manager';
 }
 
 function computeFields(entry: any) {
@@ -231,16 +225,6 @@ Deno.serve(async (req) => {
       .from('users').select('name, role').eq('store', store).order('name');
     const roster = homeUsers || [];
 
-    // A Multi-Store Manager's DB `store` is only their home store, but they belong to
-    // every store in MULTISTORE_MANAGER_STORES — include them on each of those stores'
-    // rosters so their KPI stats show up on both (e.g. Joseph on BAL *and* MPL).
-    if (MULTISTORE_MANAGER_STORES.includes(store)) {
-      const { data: msms } = await supabase
-        .from('users').select('name, role').ilike('role', 'multi-store manager');
-      const have = new Set(roster.map((u: any) => u.name));
-      for (const m of (msms || [])) if (!have.has(m.name)) roster.push(m);
-    }
-
     // 'store' is the shop-floor board account (one per store, signed in on a TV).
     // It has a store like everyone else, so without this it would show up as an
     // employee row in that store's Weekly and Monthly KPI grids.
@@ -293,8 +277,7 @@ Deno.serve(async (req) => {
       const savedNames = Object.keys(byDate[date] || {}).sort();
       const editable = isEditablePeriod(periodType, date);
       // The editable (current) period always shows the full current roster — unioned
-      // with anyone already saved — so a current team member (e.g. an MSM who also
-      // covers this store) appears to be filled in even when others already have data.
+      // with anyone already saved — so a current team member appears to be filled in even when others already have data.
       // Past periods stay a historical snapshot: exactly who had entries.
       const namesForDate = editable
         ? [...new Set([...currentEmpNames, ...savedNames])].sort()
@@ -350,9 +333,7 @@ Deno.serve(async (req) => {
       return json({ error: 'Missing required fields' }, 400);
 
     // Store-level scoping. Global roles (CEO / District Manager / Owner) may submit for
-    // any store. A plain Manager or Assistant Manager is limited to their home store. A
-    // Multi-Store Manager is limited to the stores they oversee (their DB `store` is only
-    // their default home store, so check the managed-stores list instead).
+    // any store. A plain Manager or Assistant Manager is limited to their home store.
     // This is the gate for the NUMBERS. Coaching notes are stricter on both role
     // and store and re-check for themselves in the save_note branch below — don't
     // read this block as covering them.
@@ -360,9 +341,6 @@ Deno.serve(async (req) => {
     if (roleLower === 'manager' || roleLower === 'assistant manager') {
       if (user.store !== storeUpper)
         return json({ error: 'Cannot submit for another store' }, 403);
-    } else if (roleLower === 'multi-store manager') {
-      if (!MULTISTORE_MANAGER_STORES.includes(storeUpper))
-        return json({ error: 'Cannot submit for a store you do not manage' }, 403);
     }
 
     // ── Coaching note ────────────────────────────────────────────────────────
@@ -377,12 +355,8 @@ Deno.serve(async (req) => {
       // both the role and the store here rather than inheriting that.
       if (!canEditNotes(user.role))
         return json({ error: 'Only a store manager can edit coaching notes.' }, 403);
-      // Every role that gets this far is tied to a store, so bind them to it. A
-      // multi-store manager is the manager of each store they oversee; everyone
-      // else is limited to their own.
-      const managedOk = roleLower === 'multi-store manager'
-        ? MULTISTORE_MANAGER_STORES.includes(storeUpper)
-        : (user.store || '').toUpperCase() === storeUpper;
+      // Every role that gets this far is tied to a store, so bind them to it.
+      const managedOk = (user.store || '').toUpperCase() === storeUpper;
       if (!managedOk)
         return json({ error: 'Cannot edit coaching notes for another store.' }, 403);
 

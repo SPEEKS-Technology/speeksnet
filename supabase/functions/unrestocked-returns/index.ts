@@ -726,7 +726,6 @@ const PRODUCTS_LIKE_Q = `query($q: String!) {
     title updatedAt createdAt
     variants(first: 3) { nodes { sku inventoryQuantity } } } }
 }`;
-const MULTI_STORE = ["BAL", "MPL"];
 // Roles as users.role spells them, lowercased: "District Manager", not "dm".
 // The 11-04 build had only "dm" here, so the real DM was refused as "not a
 // manager" and LEE's "Owner (Manager)" likewise (found 2026-11-06).
@@ -739,7 +738,6 @@ function mayClose(row: any, who: any): string | null {
   if (MANAGER_ROLES.includes(role)) {
     const mine = String(who?.store || "").toUpperCase();
     if (row.store_code === mine) return null;
-    if (who?.multiStore && MULTI_STORE.includes(row.store_code)) return null;
     return `Only ${row.store_code}'s manager or the DM can close this one.`;
   }
   return "Only a store manager or the DM can close these.";

@@ -295,7 +295,7 @@ Deno.serve(async (req: Request) => {
           const raw = String(sender.role || "").toLowerCase().trim();
           senderRole = raw === "district manager" ? "District Manager"
             : raw === "ceo" ? "CEO"
-            : (raw === "manager" || raw === "owner (manager)" || raw === "multi-store manager") ? "Manager"
+            : (raw === "manager" || raw === "owner (manager)") ? "Manager"
             : "";
         }
       }

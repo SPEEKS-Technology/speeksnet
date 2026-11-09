@@ -10,7 +10,7 @@ const corsHeaders = {
 // Who may use the tool at all. Unlike most functions here the GET is pin-gated
 // too — these are people's reimbursement claims, not store operating data, so
 // they should not be readable by an unauthenticated request.
-const TOOL_ROLES = new Set(["ceo", "district manager", "multi-store manager"]);
+const TOOL_ROLES = new Set(["ceo", "district manager"]);
 // Reviewers can LOOK AT other people's reports. The CEO reviews everyone; the DM
 // reviews everyone EXCEPT the CEO, whose own claims stay private from them. That
 // exclusion is enforced on every path below (list, read, write, delete), not just
@@ -113,7 +113,7 @@ Deno.serve(async (req: Request) => {
     if (!isReviewer) return (_visible = [me]);
     const { data: staff } = await supabase
       .from("users").select("name, role")
-      .in("role", ["CEO", "District Manager", "Multi-Store Manager"]);
+      .in("role", ["CEO", "District Manager"]);
     const hideCeo = EXCLUDES_CEO.has(role);
     _visible = (staff || [])
       // never hide the viewer from themselves, whatever their role

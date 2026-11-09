@@ -21,7 +21,7 @@ const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const LIST_KEYS = new Set([
   "recycle_report",
   "weekly_leadership",
-  // expense_report: where a DM/MSM monthly expense report is emailed (the CEO).
+  // expense_report: where a DM monthly expense report is emailed (the CEO).
   "expense_report",
   // Keep every list a report reads from IN this set. sales_import_alert was
   // inserted straight into the table and is therefore invisible to the DM's

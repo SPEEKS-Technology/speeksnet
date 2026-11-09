@@ -117,9 +117,8 @@ const EBAY_TITLE_MAX = 80;
 // reason ec-view-photos excludes them: their Listing Health access was revoked
 // by hand, and a new key defaulting on would re-open the page under a new name.
 const CORP_ROLES = ["district manager", "ceo", "mocd"];
-const STORE_ROLES = ["manager", "owner (manager)", "owner manager", "multi-store manager"];
+const STORE_ROLES = ["manager", "owner (manager)", "owner manager"];
 const EXTRA_ROLES = ["assistant manager"];
-const MSM_STORES = ["BAL", "MPL"];
 const TITLES_KEY = "ec-view-titles";
 
 const corsHeaders = {
@@ -206,7 +205,6 @@ async function scopeFor(pin: string, reading = false): Promise<Scope | null> {
   // this person review titles", never "whose catalogue" — that stays the store
   // on their user row, and corp is the only thing that means all five.
   const stores = corp ? STORES
-    : role === "multi-store manager" ? MSM_STORES
     : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
   if (!stores.length) return null;
   return { name: String(user.name || ""), role, stores, corp };
@@ -5636,8 +5634,7 @@ async function handlePost(req: Request, scope: Scope) {
     })).json().catch(() => []);
     // The row went back into the store's queue silently until 2026-11-03 — no
     // card, no mail — so a store only found it by opening Listing Health. Mailed
-    // to the store side of ec-view-titles (STORE_ROLES + EXTRA_ROLES above; MSM
-    // is "manager" by then in notify). Best-effort: the send-back already landed.
+    // to the store side of ec-view-titles (STORE_ROLES + EXTRA_ROLES above). Best-effort: the send-back already landed.
     if (Array.isArray(back) && back.length) {
       try {
         await sb("notify_queue", {

@@ -9,9 +9,6 @@ const corsHeaders = {
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 
-// Stores overseen by a Multi-Store Manager. Mirrors MULTISTORE_MANAGER_STORES in speeks.js.
-const MULTISTORE_MANAGER_STORES = ["BAL", "MPL"];
-
 // A floater belongs to a MARKET, not a store — he can be claimed by any store in
 // his home store's market on any given day.
 const MARKETS: Record<string, string[]> = {
@@ -106,27 +103,6 @@ function daysPerWeekFor(u: any, cfg: Cfg): number {
   const own = Number(u.days_per_week);
   if (Number.isFinite(own) && own > 0) return Math.min(own, cfg.open_days);
   if (u.can_float) return cfg.days_floater;
-
-  // A Multi-Store Manager's WEEK is split between two stores. Their DAY is not.
-  //
-  // They are stored as part_time because that is how the split is counted —
-  // hours_part_time at each of the two stores, 40 across the pair (see
-  // rosterFor). Reading that flag as "works short days" is a different claim
-  // entirely, and the board says it is false: Joseph Ortega is marked OFF at one
-  // store and given a full seat at the other, in runs of days, at a full day's
-  // goal. Where he is varies week to week with what each store needs (user,
-  // 2026-09-17) — which is exactly why a fixed day count for him is the wrong
-  // shape, and why his real schedule is already recorded in the role board
-  // rather than in a column.
-  //
-  // So: derive the day count from a FULL day. 20h ÷ 8h = 2.5 days at each store,
-  // which lands the shift back on 8 and leaves their daily goal untouched.
-  // Deliberately derived rather than stored as 2.5 — days_per_week is an integer
-  // column, and the fact worth keeping is "a normal day", not the fraction.
-  if (String(u.role || "").toLowerCase().trim() === "multi-store manager") {
-    const fullShift = cfg.hours_full_time / cfg.days_full_time;
-    return fullShift > 0 ? weeklyHoursFor(u, cfg) / fullShift : cfg.days_full_time;
-  }
 
   return String(u.employment_type || "full_time") === "part_time"
     ? cfg.days_part_time
@@ -302,9 +278,7 @@ Deno.serve(async (req: Request) => {
 
   // Everyone whose hours belong to this store's week.
   //
-  // A Multi-Store Manager appears in BOTH of the stores they cover, at part-time
-  // hours each — which is the literal truth of how their week is split, and is
-  // what retired the old MSM_TARGET_BOOST special case. A floater is counted at
+  // A floater is counted at
   // his HOME store here: Monday's goal has to be frozen before anyone knows where
   // he will actually be, and the end-of-week adjusted goal corrects for it.
   async function rosterFor(store: string) {
@@ -314,7 +288,6 @@ Deno.serve(async (req: Request) => {
     return (data || []).filter((u: any) => {
       const role = String(u.role || "").toLowerCase().trim();
       if (NON_STAFF_ROLES.has(role)) return false;
-      if (role === "multi-store manager") return MULTISTORE_MANAGER_STORES.includes(store);
       return String(u.store || "").toUpperCase() === store;
     });
   }

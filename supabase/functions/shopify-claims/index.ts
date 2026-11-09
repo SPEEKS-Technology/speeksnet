@@ -8,7 +8,7 @@ const corsHeaders = {
 
 // Shopify Insurance Claims / Item-Not-Received refund cases that store managers
 // open. Stored in `shopify_claims`; scoped by store so a manager only sees their
-// own store's cases and a Multi-Store Manager sees every store they manage.
+// own store's cases (?stores= still takes a comma list).
 const STATUSES = ["in_progress", "recovered", "denied"];
 
 function parseMoney(v: unknown): number | null {
