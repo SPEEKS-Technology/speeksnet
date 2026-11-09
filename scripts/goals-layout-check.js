@@ -17,7 +17,8 @@
 //   - "for manager version of goals and initiatives, can you make this look
 //      better"
 //   - "for MSM listing goals, there is a huge amount of white space at the
-//      bottom of the widget ... on both today and past weeks"
+//      bottom of the widget ... on both today and past weeks" (the MSM role is
+//      gone since 2026-11-08; the same dead band applies to one store's roster)
 // ===========================================================================
 
 // The login gate hides .main-content, and applyRoleBasedUI cuts the side panel
@@ -41,36 +42,28 @@ function _glRow(store, i) {
         '<div class="goals-mgr-week">27</div></div>';
 }
 
-// The two-store stack renderManagerGoalsMS writes. Built here rather than called
-// because the real one needs the roster and goals endpoints, and the shape is
-// what these assertions are about.
-function _glMsSection(store, n) {
-    var rows = '';
-    for (var i = 0; i < n; i++) rows += _glRow(store, i);
-    return '<div class="ms-store-section" data-goals-scope="' + store + '">' +
-        '<div class="ms-store-head"><span class="ms-store-name">' + store + '</span>' +
-        '<span class="ms-store-prog">Goal: 146 Listings</span></div>' + rows +
-        '<div class="goals-total-row"><span class="goals-total-lbl">Total</span>' +
-        '<span class="goals-total-val target">20</span>' +
-        '<span class="goals-total-val actual">142</span></div>' +
-        '<div class="goals-levelup"><div class="lu-head"><span class="lu-title">Last 4 weeks</span></div>' +
-        '<div class="lu-weeks"><div class="lu-week green"><span class="lu-week-num">102</span></div>' +
-        '<div class="lu-week green"><span class="lu-week-num">244</span></div>' +
-        '<div class="lu-week green"><span class="lu-week-num">147</span></div>' +
-        '<div class="lu-week green"><span class="lu-week-num">149</span></div></div></div></div>';
-}
-
-function _glOpenModal(stores, rowsEach) {
+// The one-store roster renderManagerGoals writes into #goals-manager-body, with
+// the page's own Total row and Last-4-weeks strip below it. Built here rather
+// than called because the real one needs the roster and goals endpoints, and
+// the shape is what these assertions are about. (The two-store MSM stack these
+// used to build went with the MSM role, 2026-11-08.)
+function _glOpenModal(store, n) {
     var m = document.getElementById('listingGoalsModal');
     var body = document.getElementById('goals-manager-body');
-    var html = '';
-    stores.forEach(function (s) { html += _glMsSection(s, rowsEach); });
-    body.innerHTML = html;
-    // MSM mode hides the single-store footer — _setMSGoalsChrome does this.
+    var rows = '';
+    for (var i = 0; i < n; i++) rows += _glRow(store, i);
+    body.innerHTML = rows;
     var tr = document.querySelector('#goals-manager-body ~ .goals-total-row');
-    if (tr) tr.style.display = stores.length > 1 ? 'none' : '';
+    if (tr) tr.style.display = '';
     var lu = document.getElementById('goals-levelup');
-    if (lu) lu.style.display = stores.length > 1 ? 'none' : '';
+    if (lu) {
+        lu.style.display = '';
+        lu.innerHTML = '<div class="lu-head"><span class="lu-title">Last 4 weeks</span></div>' +
+            '<div class="lu-weeks"><div class="lu-week green"><span class="lu-week-num">102</span></div>' +
+            '<div class="lu-week green"><span class="lu-week-num">244</span></div>' +
+            '<div class="lu-week green"><span class="lu-week-num">147</span></div>' +
+            '<div class="lu-week green"><span class="lu-week-num">149</span></div></div>';
+    }
     m.classList.add('show');
     m.style.opacity = '1';
     m.style.visibility = 'visible';
@@ -90,7 +83,7 @@ function _glDeadBand(m) {
 // ---------------------------------------------------------------------------
 
 t('the roster scroller reaches the bottom of its card (Today)', function () {
-    var m = _glOpenModal(['BAL', 'MPL'], 4);
+    var m = _glOpenModal('BAL', 8);
     var dead = _glDeadBand(m);
     // It was ~40px here and grew with the screen: the scroller stopped at a flat
     // 62vh inside a modal that is 84vh.
@@ -120,7 +113,7 @@ t('...and with the banner gone in Past weeks, where it was worst', function () {
 });
 
 t('a long roster still scrolls rather than pushing the modal open', function () {
-    var m = _glOpenModal(['BAL', 'MPL'], 9);
+    var m = _glOpenModal('BAL', 18);
     var kb = m.querySelector('.employee-kpi-body');
     if (kb.scrollHeight <= kb.clientHeight + 2) {
         return 'the roster is not scrolling at all — min-height: 0 is missing, so ' +
@@ -136,7 +129,7 @@ t('a long roster still scrolls rather than pushing the modal open', function () 
 t('a short roster gets a short modal, not an 84vh slab', function () {
     // The other half of the same complaint: three people on a tall display drew
     // the same full-height modal and padded the difference with white.
-    var m = _glOpenModal(['OVL'], 2);
+    var m = _glOpenModal('OVL', 2);
     var h = m.getBoundingClientRect().height;
     var full = window.innerHeight * 0.84;
     return h < full - 40 ||

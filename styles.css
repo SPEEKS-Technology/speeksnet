@@ -5470,10 +5470,6 @@ button.dc-audit:hover { background: #fff; }
     transition: opacity 0.3s;
 }
 .cl-progress-chip:empty { display: none; }
-/* Multi-Store Manager: per-store colored pills inside the nav chip (BAL/MPL accents) */
-.cl-progress-chip.ms-chip { background: transparent; padding: 0; display: inline-flex; gap: 4px; align-items: center; }
-.ms-chip-seg { font-size: 10px; font-weight: 800; color: #fff; padding: 2px 7px; border-radius: 20px; letter-spacing: 0.2px; white-space: nowrap; }
-
 /* --- Checklist nudge: soft gold glow on button --- */
 @keyframes cl-glow-pulse {
     0%, 100% { box-shadow: 0 0 0px rgba(255, 200, 60, 0); }
@@ -5633,40 +5629,6 @@ button.dc-audit:hover { background: #fff; }
 .cl-text { font-size: 13px; font-weight: 700; color: var(--slate-charcoal); transition: color 0.2s; line-height: 1.4; }
 .cl-delete-btn { background: transparent; border: none; color: #cbd5e1; cursor: pointer; font-size: 14px; padding: 4px; transition: 0.2s; }
 .cl-delete-btn:hover { color: var(--red-alert); }
-
-/* --- Multi-Store Manager: stacked per-store sections (BAL / MPL in one panel) --- */
-.ms-store-section {
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 16px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
-.ms-store-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 2px 10px; margin-bottom: 6px;
-    border-bottom: 2px solid #f1f5f9;
-}
-.ms-store-name {
-    font-size: 14px; font-weight: 800; letter-spacing: 0.5px;
-    color: var(--slate-charcoal); text-transform: uppercase;
-}
-.ms-store-prog {
-    font-size: 11px; font-weight: 800; color: #64748b;
-    background: #f1f5f9; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
-}
-.ms-store-prog.all-done { color: #fff; background: var(--sage-professional); }
-.ms-empty { text-align: center; padding: 14px; color: #94a3b8; font-weight: 600; font-size: 12px; }
-.ms-add-row {
-    display: flex; gap: 10px; align-items: center;
-    margin-top: 10px;
-    background: #f8fafc; padding: 8px; border-radius: 8px; border: 1px solid #eef2f7;
-}
-.ms-add-row input {
-    flex-grow: 1; border: none; outline: none; font-size: 13px;
-    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; background: transparent; color: var(--slate-charcoal);
-}
 
 /* Version Number Styling */
 .sidebar-footer {
@@ -9279,36 +9241,6 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .mcl-edit-btn:hover { background: #e2e8f0; }
 .mcl-del-btn:hover { background: #fee2e2; }
 
-/* ===== Multi-Store Manager: nav store switcher (matches site dropdowns) ===== */
-.msm-store-switch { display: none; align-items: center; gap: 7px; margin-right: 10px; }
-.msm-store-label { font-size: 14px; line-height: 1; opacity: 0.9; }
-.msm-store-select {
-    appearance: none;
-    -webkit-appearance: none;
-    background-color: #ffffff;
-    background-image: url('data:image/svg+xml;utf8,<svg fill="%23111827" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6"/></svg>');
-    background-repeat: no-repeat;
-    background-position: right 10px center;
-    background-size: 14px;
-    color: var(--slate-charcoal);
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    padding: 0 32px 0 12px;
-    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    outline: none;
-    cursor: pointer;
-    height: 34px;
-    min-width: 84px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-.msm-store-select:hover { border-color: #cbd5e1; }
-.msm-store-select:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
-.msm-store-select option { color: #1a1c1e; background: #fff; font-weight: 700; }
-
 /* =========================================================
    SPEEKS ACTION MENU  (Priority-Hero briefing deck)
    Replaces the info-ticker + nav bell. Sits at the top of
@@ -10006,28 +9938,6 @@ body.sam-active .hotbar-btn:hover {
 }
 .checklist-side-panel .cl-add-btn:hover { background: #178048 !important; }
 
-/* The Multi-Store Manager's per-store add rows. Same control as the footer above,
-   different markup: renderChecklistMS writes one .ms-add-row inside each store
-   section instead of the single .cl-input-area at the foot of the panel, so none
-   of the rules above reach it. It was drawn the other way round — a grey pill
-   AROUND a borderless input — which beside a manager's boxed field read as a
-   different control rather than the same one twice. Matched here (20 Aug).
-
-   The row itself keeps no box of its own: .cl-input-area gets one because it is a
-   panel footer with a border-top above it, and this one sits INSIDE a store card
-   that already draws the edges. Only the field and the button carry chrome. */
-.checklist-side-panel .ms-add-row {
-    background: transparent; border: 0; border-radius: 0;
-    padding: 12px 0 2px; gap: 8px; margin-top: 0;
-}
-.checklist-side-panel .ms-add-row input {
-    flex: 1; border: 1px solid #e3e8ee; background: #f6f8fa; border-radius: 8px;
-    padding: 9px 12px; font-family: inherit; font-size: 13px; color: #1c1f23;
-}
-.checklist-side-panel .ms-add-row input:focus {
-    outline: none; border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(90,141,59,.12);
-}
-
 /* ---------- Goals & Initiatives ---------- */
 .goals-side-panel { background: #ffffff; }
 .goals-side-panel .gi-panel-header {
@@ -10367,12 +10277,6 @@ body.sam-active .hotbar-btn:hover {
 .top-nav .tools-nav-btn.panel-open { background: rgba(31,157,87,.24); border-color: rgba(31,157,87,.6); box-shadow: none; }
 .top-nav .tools-nav-btn .tools-icon { width: 15px; height: 15px; }
 .top-nav .tools-nav-label { font-size: 12.5px; font-weight: 700; text-transform: none; letter-spacing: .01em; }
-
-/* --- MSM store switcher (chip to match) --- */
-.top-nav .msm-store-select {
-    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); color: #e6eaee;
-    border-radius: 10px; height: 40px; padding: 0 12px; font-weight: 650; font-size: 12.5px;
-}
 
 /* --- greeting / sign out --- */
 .top-nav #userGreeting { font-size: 13.5px; font-weight: 700; letter-spacing: -.01em; }
@@ -10791,75 +10695,6 @@ body.sam-active .hotbar-btn:hover {
     opacity: 0 !important;
     pointer-events: none !important;
 }
-
-/* --- MSM store switcher (BAL / MPL) in the dark nav ----------------------
-   The nav restyle used the `background` shorthand, which wiped the select's
-   background-image — so the chevron vanished and the dark base arrow would
-   have been invisible anyway. Use background-color + a light chevron, and
-   put the right padding back so the arrow has room. */
-.top-nav .msm-store-select {
-    background-color: rgba(255,255,255,.05);
-    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23c4cbd3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>');
-    background-repeat: no-repeat;
-    background-position: right 11px center;
-    background-size: 13px;
-    border: 1px solid rgba(255,255,255,.08);
-    color: #e6eaee;
-    border-radius: 10px;
-    height: 40px;
-    min-width: 92px;
-    padding: 0 32px 0 13px;
-    font-size: 12.5px;
-    font-weight: 700;
-    letter-spacing: .02em;
-    box-shadow: none;
-}
-.top-nav .msm-store-select:hover {
-    background-color: rgba(90,141,59,.16);
-    border-color: rgba(90,141,59,.55);
-}
-.top-nav .msm-store-select:focus {
-    border-color: var(--sage-professional);
-    box-shadow: 0 0 0 3px rgba(90,141,59,.20);
-}
-/* the open list renders on the OS surface — keep it dark-on-white, readable */
-.top-nav .msm-store-select option { color: #1c1f23; background: #ffffff; font-weight: 700; }
-
-/* --- MSM store switcher: segmented toggle (BAL | MPL) --------------------
-   Replaces the native <select>. A browser draws the option list with OS
-   chrome (that blue highlight) which CSS can't reach — with two stores a
-   segmented control is both better looking and one click instead of two. */
-.top-nav .msm-store-switch {
-    background: rgba(255,255,255,.05);
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 10px;
-    padding: 3px;
-    gap: 3px;
-    height: 40px;
-    margin-right: 10px;
-    box-sizing: border-box;
-}
-.top-nav .msm-seg {
-    font-family: inherit;
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: .04em;
-    color: #98a2ad;
-    background: transparent;
-    border: 0;
-    border-radius: 8px;
-    padding: 0 13px;
-    height: 100%;
-    cursor: pointer;
-    transition: background .14s ease, color .14s ease;
-}
-.top-nav .msm-seg:hover { color: #fff; background: rgba(255,255,255,.06); }
-.top-nav .msm-seg.active {
-    background: var(--sage-professional);
-    color: #fff;
-    box-shadow: 0 1px 3px rgba(90,141,59,.35);
-}
-.top-nav .msm-seg.active:hover { background: var(--sage-professional); }
 
 /* --- Action Menu with no applicable action items (CEO / MOCD) ------------- */
 .speeks-action-menu.sam-norail .sam-rail { display: none !important; }
@@ -17848,7 +17683,6 @@ input[type="date"].exp-input { height: 36px; padding-top: 0; padding-bottom: 0; 
 body.is-store-board .nav-bar a.nav-link,
 body.is-store-board .nav-right .action-btn,
 body.is-store-board #toolsNavBtn,
-body.is-store-board .msm-store-switch,
 body.is-store-board #dailyMessageBubble,
 body.is-store-board #claimAlertBubble,
 /* ...and the two blocks on the QuickPortal that carry no data-feature either.
@@ -20631,7 +20465,7 @@ select.dd-native {
 }
 
 /* Looks, at ZERO specificity. :where() is the point of this rule: every class the
-   select carried — .form-input, .idea-input, .kpi-select, .msm-store-select — is
+   select carried — .form-input, .idea-input, .kpi-select — is
    (0,1,0) and beats it, so a styled control still looks exactly like itself, while
    a select with no class at all gets a proper face instead of browser button
    chrome. A plain .dd-btn rule could not do both: it would either be outranked by
@@ -20984,7 +20818,6 @@ select.dd-native {
     .nav-right { gap: clamp(4px, 2vw, 8px); }
 
     .tools-nav-label { display: none; }
-    .msm-store-select { max-width: 120px; }
 
     /* Four icons + tools + sign-out is already at the limit of a 390px bar, so
        the row must be allowed to give ground rather than push past the edge.
@@ -21338,16 +21171,6 @@ select.dd-native {
     }
     .checklist-side-panel .cl-add-btn {
         min-height: 32px; padding: 4px 14px !important; font-size: 11.5px !important;
-    }
-    /* The Multi-Store Manager gets a DIFFERENT add row: renderChecklistMS writes
-       one .ms-add-row under each store section instead of the single
-       .cl-input-area footer, so none of the rules above reach it and its input
-       fell back to the blanket 44px tap floor — a 62px row where every other
-       role has a 50px one. The pair is kept identical on purpose: whatever the
-       single-store field and button are given here, this one is given too. */
-    .checklist-side-panel .ms-add-row { padding: 8px 0 2px !important; gap: 8px; }
-    .checklist-side-panel .ms-add-row input {
-        min-height: 32px; padding: 4px 11px !important;
     }
 }
 
@@ -22371,27 +22194,6 @@ select.dd-native {
     .qm-sop-cta {
         display: block !important; width: 100%; text-align: center;
         font-size: 11.5px !important; padding: 8px 10px !important; min-height: 0;
-    }
-
-    /* ---- Multi-Store Manager store toggle ---------------------------------
-       A 40px slab beside 29-34px nav buttons — it was sized for the desktop bar
-       and never revisited. Same clamp as the action buttons so the whole row is
-       one height, and the desktop's 10px right margin goes: the row's own gap is
-       what spaces it now (round 14). */
-    .top-nav .msm-store-switch {
-        height: clamp(29px, 8.8vw, 34px);
-        margin-right: 0;
-        padding: 2px;
-        gap: 2px;
-        border-radius: 9px;
-        flex: 0 0 auto;
-    }
-    .top-nav .msm-seg {
-        font-size: clamp(9.5px, 2.9vw, 11px);
-        padding: 0 clamp(6px, 2.4vw, 10px);
-        min-height: 0;
-        border-radius: 7px;
-        letter-spacing: .03em;
     }
 
     /* ---- Employee Listing Goals, sized for a phone ------------------------
@@ -27607,6 +27409,69 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .qpt-ssplit > .qpt-sec + .qpt-sec { border-left: 0; border-top: 1px solid #edf1f5; }
 }
 .qpt-z { color: #b4bcc6; }
+
+/* INVENTORY AS ONE CARD (Ethan, 2026-11-08 — _qptRenderInv). The DM's Pace
+   Board (a row a store) and a store's Person Tiles (a tile a person). Bars are
+   a Day End day each, the latest in full colour. */
+.qpt-bars { display: flex; align-items: flex-end; gap: 3px; height: 30px; min-width: 0; }
+.qpt-bars i { flex: 1; border-radius: 3px 3px 1px 1px; }
+.qpt-pb { display: grid; grid-template-columns: 72px minmax(0, 1.1fr) minmax(0, 1.3fr) 110px minmax(0, 1.5fr); gap: 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid #f0f3f6; font-size: 13.5px; color: #1d2530; }
+.qpt-pb:last-of-type { border-bottom: 0; }
+.qpt-pb-h { font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #8a94a3; border-bottom: 1px solid #e6ebf1; padding: 6px 0; }
+.qpt-pb .c { text-align: center; }
+.qpt-pb b { font-weight: 800; font-variant-numeric: tabular-nums; }
+.qpt-pb-q { display: grid; gap: 10px; align-items: center; }
+/* In stock against the store with the most, in the store's own colour. */
+.qpt-sbar { position: relative; height: 7px; border-radius: 99px; background: #eef1f4; overflow: hidden; }
+.qpt-sbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; opacity: .75; }
+/* Bar, then the count and the value in their own right-aligned slots, so the
+   figures line up down the column (Ethan, 2026-11-08). */
+.qpt-pb-q { grid-template-columns: minmax(0, 1fr) 48px 56px; }
+.qpt-pb-n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qpt-pb-a { font-size: 12.5px; color: #5b6675; }
+.qpt-who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.qpt-who-n { min-width: 0; line-height: 1.25; }
+.qpt-who-n b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qpt-who-n small { font-size: 11.5px; color: #5b6675; }
+.qpt-av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 800; flex: none; }
+.qpt-pts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.qpt-pt { border: 1px solid #e6ebf1; border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; position: relative; overflow: hidden; background: #fff; }
+.qpt-pt::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--c); }
+.qpt-pt-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
+.qpt-pt-top .qpt-cnt { white-space: nowrap; }
+.qpt-pt-n { display: flex; align-items: baseline; gap: 6px; }
+.qpt-pt-n b { font-size: 26px; font-weight: 800; line-height: 1; color: #1d2530; font-variant-numeric: tabular-nums; }
+.qpt-pt-n.warn b { color: var(--qs-warn-fg, #a5660f); }
+.qpt-pt-n span { font-size: 12px; color: #5b6675; font-weight: 600; }
+.qpt-pt .qp-hl-cap { margin: 0; }
+.qpt-pt-kv { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: #5b6675; }
+.qpt-pt-kv b { color: #1d2530; font-variant-numeric: tabular-nums; }
+
+/* FOLLOW-UPS AS ONE WORK LIST (Ethan, 2026-11-08, design B of artifact
+   9jz7JGawrggijNciHztmKu — _qptRenderWork). B2B, Variance and SPEEKS Connect as
+   one to-do list, soonest first, a tag a tool. */
+.qpt-wgrp { font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; margin: 14px 0 2px; }
+.qpt-wgrp:first-child { margin-top: 0; }
+.qpt-wl { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 4px; border-bottom: 1px solid #f2f5f8; font-size: 13.5px; color: #1d2530; border-radius: 6px; cursor: pointer; }
+.qpt-wl:hover { background: #f7f9fb; }
+.qpt-wl:last-child { border-bottom: 0; }
+.qpt-wl-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qpt-wl-t small { color: #5b6675; font-size: 12px; }
+.qpt-src { display: inline-block; text-align: center; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: 6px; padding: 3px 6px; }
+.qpt-src.b2b { background: #eaf2fd; color: #2563b8; }
+.qpt-src.var { background: #fdeeee; color: #c43d3d; }
+.qpt-src.con { background: #f1ecfd; color: #6a4fc9; }
+.qpt-when { font-size: 12px; font-weight: 750; border-radius: 999px; padding: 2px 9px; white-space: nowrap; background: #f1f4f7; color: #5b6675; }
+.qpt .qpt-when.warn { background: var(--qs-warn-bg, #fdf3e1); color: var(--qs-warn-fg, #a5660f); }
+.qpt .qpt-when.bad { background: var(--qs-bad-bg, #fdeeee); color: var(--qs-bad-fg, #c43d3d); }
+.qpt-wl-t b { font-weight: 800; margin-right: 2px; }
+.qpt-wl-t .qp-dot { margin-right: 6px; }
+.qpt-wclear { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; font-weight: 650; }
+@media (max-width: 1100px) {
+    .qpt-pb { grid-template-columns: 60px minmax(0, 1fr) minmax(0, 1fr) 90px; }
+    .qpt-pb > :nth-child(5) { display: none; }
+}
+
 
 /* ============================================================================
    ONE PALETTE ON THE TABS PAGE (Ethan, 2026-11-08: "can we make the color

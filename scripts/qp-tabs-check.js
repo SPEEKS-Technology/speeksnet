@@ -18,16 +18,19 @@ t('a tab of 1–3 cards is one row; more are cut as evenly as they go', function
     return got === '1 2 3 2·2 3·2 3·3 3·2·2 3·3·3' ? true : got;
 });
 
-t('nothing saved: every tab in order, Company & Tools hidden', function () {
+// Since 2026-11-08 nothing is hidden by default: Listings & Deals replaced the
+// hidden Company & Tools tab and starts shown for everyone.
+t('nothing saved: every tab in order, nothing hidden', function () {
     _saved = null;
     var s = _qptRead();
     if (s.order.join(',') !== QPT_TABS.map(function (t) { return t.k; }).join(',')) return 'order ' + s.order;
-    if (s.hidden.join(',') !== 'company') return 'hidden ' + s.hidden;
+    if (s.hidden.length) return 'hidden ' + s.hidden;
+    if (QPT_HIDDEN_DEFAULT.length) return 'QPT_HIDDEN_DEFAULT is ' + JSON.stringify(QPT_HIDDEN_DEFAULT);
     return s.minis === null ? true : 'minis ' + s.minis;
 });
 
 t('the state saves as rows qp-layout accepts, and reads back the same', function () {
-    var st = { order: ['company', 'live', 'perf', 'claims', 'health', 'sales', 'customers', 'inventory'], hidden: ['customers', 'perf'], minis: ['mpace~2', 'mreviews', 'mtop', 'mcal', 'mdue', 'mcash', 'mnews'] };
+    var st = { order: ['deals', 'live', 'perf', 'claims', 'health', 'sales', 'customers', 'inventory'], hidden: ['customers', 'perf'], minis: ['mpace~2', 'mreviews', 'mtop', 'mcal', 'mdue', 'mcash', 'mnews'] };
     var rows = _qptEncode(st);
     var KEY = /^[a-z0-9:_,.-]{1,80}$/i;
     for (var i = 0; i < rows.length; i++) {
@@ -60,7 +63,7 @@ t('a tab a release adds after a save shows up at the end; unknown keys are dropp
 t('an old row layout is not read as tabs, and a tabs layout is not read as rows', function () {
     _saved = [{ items: ['feed', 'actions'], w: null }, { items: ['chart', 'leaderboard'], w: null }];
     var s = _qptRead();
-    if (s.hidden.join() !== 'company') return 'old rows changed the tabs: ' + JSON.stringify(s);
+    if (s.hidden.length || s.order.join() !== _qptDefaults().order.join()) return 'old rows changed the tabs: ' + JSON.stringify(s);
     // _qpLayout drops a qpt: layout to the default stack (phones and tablets).
     var src = String(_qpLayout);
     return /qpt:v1/.test(src) ? true : '_qpLayout does not check for a tabs layout';
@@ -222,4 +225,121 @@ t('Customers is one frame: cards stay visible inside one header', function () {
     if (!pane.hasAttribute('data-qpt-dist')) return 'DM pane not marked district';
     if (pane.querySelector('.qpt-mt').textContent !== 'Customers') return 'title ' + pane.querySelector('.qpt-mt').textContent;
     return pane.querySelector('.qp-row') ? true : 'cards gone';
+});
+
+// INVENTORY AS ONE CARD (Ethan, 2026-11-08): the DM's Pace Board, a store's
+// Person Tiles, both off the store snapshot, and every figure in DAYS.
+function _invSnap() {
+    var facts = [];
+    var day = function (i) { return '2026-11-0' + i; };
+    for (var i = 1; i <= 7; i++) {
+        facts.push({ store: 'OVL', date: day(i), devices_processed: 20, queue_count: 100, available_count: 900, available_cost: 30000, available_value: 70000, live_count: 400,
+            team_production: [{ name: 'Rorie Moore', processed: 12, value: 900, top: true }].concat(i === 7 ? [] : [{ name: 'Ava Lin', processed: 8, value: 500 }]) });
+        facts.push({ store: 'LEE', date: day(i), devices_processed: i === 7 ? 4 : 20, queue_count: 285, available_count: 1600, available_cost: 50000, available_value: 120000, live_count: 500,
+            team_production: [{ name: 'Caleb Starr', processed: i === 7 ? 4 : 20, value: 1200, top: true }] });
+    }
+    return { today: '2026-11-08', facts: facts, np: [] };
+}
+function _invPane(keys) {
+    var main = document.createElement('main');
+    var pane = document.createElement('section');
+    pane.className = 'qpt-pane'; pane.setAttribute('data-tab', 'inventory');
+    pane.innerHTML = '<div class="qp-row">' + keys.map(function (k) { return '<div class="qp-cell"><div data-qp-block="' + k + '"></div></div>'; }).join('') + '</div>';
+    main.appendChild(pane);
+    _qptMerge(pane, 'inv');
+    return main;
+}
+t('Inventory is just the pipeline and the team, as one card', function () {
+    var c = QPT_TABS.filter(function (t) { return t.k === 'inventory'; })[0];
+    if (!c || c.merge !== 'inv' || c.l !== 'Inventory') return 'tab ' + JSON.stringify(c);
+    if (c.keys.sort().join() !== 'dpipeline,dteam,pipeline,team') return 'keys ' + c.keys;
+    var de = QPT_TABS.filter(function (t) { return t.k === 'deals'; })[0];
+    if (!de) return 'no Listings & Deals tab';
+    var moved = ['connect', 'dconnect', 'b2b', 'variance', 'dvariance'].filter(function (k) { return de.keys.indexOf(k) === -1; });
+    return moved.length ? 'not in Listings & Deals: ' + moved : true;
+});
+// LISTINGS & DEALS replaced Company & Tools (Ethan, 2026-11-08): only the
+// three tools that are work waiting on someone, as one work list; the rest are
+// off the tabs page entirely.
+t('Listings & Deals is the work tab; the old Company & Tools cards are in no tab', function () {
+    if (QPT_TABS.some(function (t) { return t.k === 'company'; })) return 'Company & Tools is still a tab';
+    var de = QPT_TABS.filter(function (t) { return t.k === 'deals'; })[0];
+    if (!de) return 'no deals tab';
+    if (de.l !== 'Listings & Deals') return 'labelled ' + de.l;
+    if (de.merge !== 'work') return 'merge ' + de.merge;
+    var keys = (de.keys || []).slice().sort().join();
+    if (keys !== 'b2b,connect,dconnect,dvariance,variance') return 'keys ' + de.keys;
+    if (typeof _qptRenderWork !== 'function') return 'no _qptRenderWork';
+    var gone = ['stats', 'docs', 'calendar', 'hotkeys', 'qmsgs', 'exp'];
+    var found = [];
+    QPT_TABS.forEach(function (t) {
+        (t.keys || []).forEach(function (k) {
+            if (gone.indexOf(k) !== -1 || gone.indexOf(String(k).split(':')[0]) !== -1) found.push(t.k + ':' + k);
+        });
+    });
+    return found.length ? 'still in a tab: ' + found.join(' ') : true;
+});
+t('DM Pace Board: in stock (the Available card) not the queue, most first, a slow latest day in amber, said in days', function () {
+    var was = _qpSnap.data; _qpSnap.data = _invSnap();
+    try {
+        var main = _invPane(['dpipeline', 'dteam']);
+        _qptRenderInv(main);
+        var rows = main.querySelectorAll('.qpt-pb:not(.qpt-pb-h)');
+        var first = rows[0] && rows[0].textContent;
+        if (!first || first.indexOf('LEE') === -1) return 'first row ' + first;
+        if (!rows[0].querySelector('.c b.warn')) return 'LEE 4 vs avg ~17 not amber';
+        var txt = main.textContent;
+        if (!/1,600/.test(first)) return 'LEE in stock not 1,600: ' + first;
+        if (!/\$120\.0k/.test(first) || /\$50\.0k/.test(first)) return 'LEE should show its value, not its cost: ' + first;
+        if (/285|Days to Clear|In Queue/.test(txt)) return 'still shows the queue';
+        if (/report/i.test(txt.replace(/Day End Report.s Available Card/, ''))) return 'says report: ' + txt.match(/.{20}report.{20}/i);
+        return /Last 7 Days/.test(txt) ? true : 'no Last 7 Days';
+    } finally { _qpSnap.data = was; }
+});
+t('Store Person Tiles: a tile a person over the 7 days, days worked counted', function () {
+    var was = _qpSnap.data, role = sessionStorage.getItem('speeksUserRole'), st = sessionStorage.getItem('speeksUserStore');
+    _qpSnap.data = _invSnap(); sessionStorage.setItem('speeksUserRole', 'Manager'); sessionStorage.setItem('speeksUserStore', 'OVL');
+    try {
+        var main = _invPane(['pipeline', 'team']);
+        _qptRenderInv(main);
+        var tiles = main.querySelectorAll('.qpt-pt');
+        if (tiles.length !== 2) return tiles.length + ' tiles';
+        if (main.querySelectorAll('.qpt-cell').length !== 3) return 'band ' + main.querySelectorAll('.qpt-cell').length;
+        var ava = Array.prototype.filter.call(tiles, function (x) { return /Ava/.test(x.textContent); })[0];
+        if (!ava || !/6 Days Worked/i.test(ava.textContent)) return 'Ava ' + (ava && ava.textContent);
+        if (!/In Stock/.test(main.textContent) || /In Queue/.test(main.textContent)) return 'band not in stock';
+        var band = Array.prototype.map.call(main.querySelectorAll('.qpt-cell .qpt-ck'), function (x) { return x.textContent; }).join(' | ');
+        if (band !== 'Available Devices | Available Value | Processed · Latest Day') return 'band ' + band;
+        if (!/Daily Average/.test(main.textContent) || /Avg a Day Worked/.test(main.textContent)) return 'tile average wording';
+        return /report/i.test(main.textContent) ? 'says report' : true;
+    } finally { _qpSnap.data = was; sessionStorage.setItem('speeksUserRole', role || ''); sessionStorage.setItem('speeksUserStore', st || ''); }
+});
+
+// FOLLOWS THE PERSON, OPENS ON THEIR FIRST TAB (Ethan, 2026-11-08). The layout
+// a new device gets is the qp-layout row; this is Ethan's real row from that
+// day (Sales moved ahead of Store Health, Company & Tools hidden). Company &
+// Tools is gone since: its key drops out, and Listings & Deals, a tab this row
+// never knew, goes on the end, shown.
+t('a layout from the server reads back as the person saved it, first tab first', function () {
+    _saved = [
+        { items: ['qpt:v1'], w: null },
+        { items: ['qpt:order', 'live', 'perf', 'claims', 'sales', 'health'], w: null },
+        { items: ['qpt:order', 'customers', 'inventory', 'company'], w: null },
+        { items: ['qpt:hidden', 'company'], w: null },
+        { items: ['qpt:minis', 'mpace.2', 'mtop'], w: null },
+    ];
+    var s = _qptRead();
+    if (s.order.join(',') !== 'live,perf,claims,sales,health,customers,inventory,deals') return 'order ' + s.order;
+    if (s.hidden.length) return 'hidden ' + s.hidden;
+    if ((s.minis || []).join(',') !== 'mpace~2,mtop') return 'minis ' + s.minis;
+    _saved = null;
+    return true;
+});
+t('the open tab is remembered per sign-in, and a sign-in clears it', function () {
+    if (typeof checkPIN !== 'function') return 'no checkPIN';
+    var src = checkPIN.toString();
+    if (src.indexOf("sessionStorage.removeItem('speeksQptTab')") === -1) return 'sign-in does not reset the open tab';
+    var apply = _qptApply.toString();
+    if (apply.indexOf('localStorage.getItem(QPT_TAB_KEY)') !== -1) return 'still reads the browser-wide tab';
+    return apply.indexOf('sessionStorage.getItem(QPT_TAB_KEY)') !== -1 ? true : 'open tab not read from the session';
 });

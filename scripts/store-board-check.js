@@ -556,7 +556,7 @@ t('...and the action buttons are gone with the rest', function () {
     // until now -- so they are the half the allow-list cannot reach.
     return _sbSweep('Store', function () {
         var on = [];
-        ['.nav-right .action-btn', '.msm-store-switch'].forEach(function (sel) {
+        ['.nav-right .action-btn'].forEach(function (sel) {
             Array.prototype.forEach.call(document.querySelectorAll(sel), function (el) {
                 if (_sbShown(el)) on.push(el.id || String(el.className).split(' ')[0]);
             });

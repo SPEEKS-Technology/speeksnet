@@ -228,7 +228,7 @@ const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 // --- SHARED STORE ROSTER ---
 // Every store code in the district, plus the colour dot each is shown with.
 // These used to live inside the B2B module as B2B_STORE_LIST / B2B_STORE_ICONS,
-// but Call Backs and the MSM alert router read them too, so they belong here
+// but Call Backs and the alert router read them too, so they belong here
 // rather than inside a feature that can be rebuilt out from under them.
 const STORE_CODES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const STORE_DOTS  = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
@@ -1161,8 +1161,7 @@ function toggleNotifs() {
 //
 // Two kinds of event, and the look keeps them apart at a glance:
 //   * store events    — green. Belong to one store; that store's manager
-//                       adds, edits and deletes them. An MSM does both BAL and MPL
-//                       and switches between them with the store chips.
+//                       adds, edits and deletes them.
 //   * company events  — dark slate with a lock. Posted from the Company events
 //                       tab by the district roles (DM, CEO, MOCD) to any set of
 //                       stores; read-only on a store's calendar.
@@ -1253,7 +1252,6 @@ function _scalIsDistrict() { return _SCAL_DISTRICT_ROLES.includes(_scalRole()); 
 // The stores this person may add store events to. Drawing only — see the banner.
 function _scalWritableStores() {
     if (_scalIsDistrict()) return [];
-    if (isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.slice();
     if (_SCAL_MANAGER_ROLES.includes(_scalRole())) {
         const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
         return STORE_CODES.includes(s) ? [s] : [];
@@ -1261,12 +1259,10 @@ function _scalWritableStores() {
     return [];
 }
 function _scalCanWriteStore(store) { return _scalWritableStores().includes(String(store || '').toUpperCase()); }
-// The stores the filter chips offer — every store for corporate, and for an
-// MSM just their two, as the same All / BAL / MPL row (Ethan, 2026-10-05: "be
-// like DM, just with only All, BAL, and MPL"). Empty = no chips.
-function _scalFilterStores() { return _scalIsDistrict() ? STORE_CODES : isMultiStoreManager() ? MULTISTORE_MANAGER_STORES : []; }
-// "All" for an MSM is both their stores; they can add from it and pick which
-// store in the form. For corporate "All" stays read-only for store events.
+// The stores the filter chips offer — every store for corporate. Empty = no chips.
+function _scalFilterStores() { return _scalIsDistrict() ? STORE_CODES : []; }
+// "All" is addable only by someone who can write to more than one store, which
+// nobody can today; for corporate "All" stays read-only for store events.
 function _scalCanAddHere(store) { return store === 'ALL' ? _scalWritableStores().length > 1 : _scalCanWriteStore(store); }
 // A PAST event can't be edited (Ethan, 2026-10-05) — only deleted. Past = its
 // last day is before today and it doesn't repeat. The edge function enforces it.
@@ -1725,7 +1721,7 @@ function _scalReadForm(p) {
 // company write from them regardless.
 function _scalCompanyHTML(readOnly) {
     const today = _scalTodayISO();
-    const mine = isMultiStoreManager() ? 'ALL' : _scal.store;
+    const mine = _scal.store;
     const company = _scal.events.filter(e => e.scope === 'company' && (!readOnly || _scalShowsOn(e, mine)));
     // "Upcoming" means not over yet — a multi-day event in progress still counts.
     const isPast = e => (e.end_date || e.event_date) < today && _scalRepeatOf(e) === 'none';
@@ -1962,8 +1958,8 @@ function _scalOpenDetail(id) { _scal.panel = { kind: 'detail', id }; _scalRender
 function _scalOpenDay(day) { _scal.panel = { kind: 'day', day }; _scalRender(); }
 function _scalClosePanel() { _scal.panel = null; _scal.saving = false; _scalRender(); }
 function _scalOpenEdit(id, day) {
-    // An MSM adding an event gets the DM's "Show on" picker — All stores / BAL
-    // / MPL (Ethan, 2026-10-05) — ticked to whichever view they added from.
+    // Someone who can write to more than one store gets the DM's "Show on"
+    // picker, ticked to whichever view they added from. Nobody can today.
     const mine = _scalWritableStores();
     const pickStore = !id && mine.length > 1;
     const stores = pickStore ? (_scal.store === 'ALL' ? mine.slice() : [_scal.store]) : null;
@@ -2044,8 +2040,8 @@ function _scalUpsertLocal(ev) {
 async function _scalSaveStore() {
     const p = _scal.panel;
     if (!p || p.kind !== 'edit' || _scal.saving) return;
-    // A store event belongs to ONE store (0125's shape check), so picking both
-    // of an MSM's stores saves one copy each, in turn. Each copy is then that
+    // A store event belongs to ONE store (0125's shape check), so picking more
+    // than one store saves one copy each, in turn. Each copy is then that
     // store's own: edited or deleted there without touching the other.
     const stores = p.pickStore ? _scalPickedMine() : [p.ev.store];
     const ev = Object.assign(_scalReadForm('scalE'), { scope: 'store', store: stores[0] });
@@ -2143,10 +2139,10 @@ function toggleCalendar() {
         _scal.panel = null; _scal.saving = false;
         _scal.tab = 'calendar'; _scal.companyList = 'upcoming'; _scal.pastMonth = null; _scal.upMonth = null;
         _scal.typeEdit = null; _scal.typeColor = null;
-        if (_scalIsDistrict() || isMultiStoreManager()) _scal.store = 'ALL';
+        if (_scalIsDistrict()) _scal.store = 'ALL';
         else {
             const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-            _scal.store = STORE_CODES.includes(s) ? s : (isMultiStoreManager() ? MULTISTORE_MANAGER_STORES[0] : STORE_CODES[0]);
+            _scal.store = STORE_CODES.includes(s) ? s : STORE_CODES[0];
         }
         if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the calendar…</div>');
         else _scalRender();
@@ -3278,7 +3274,7 @@ function populateUsersModal() {
     // Store LAST, and deliberately so: the list above it is people in seniority
     // order, and a Store account is a screen on a sales floor — one per store,
     // never a person. Grouping it at the bottom keeps the staff list readable.
-    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
     const groups = {};
     const order = [];
     globalUsersData.forEach(u => {
@@ -3337,7 +3333,7 @@ function _muRenderTestAccounts(rows) {
         + `</div>`;
     rows.appendChild(group);
 }
-// "multi-store manager" → "Multi-Store Manager", as the role dropdown spells it.
+// "owner (manager)" → "Owner (Manager)", as the role dropdown spells it.
 function _muTestRole(r) {
     const s = String(r || '').toLowerCase();
     if (s === 'ceo' || s === 'mocd') return s.toUpperCase();
@@ -3488,7 +3484,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     // Must match ROLE_ORDER in populateManageUsers, including the trailing Store:
     // a role that can be assigned but not grouped lands in the unrecognised
     // bucket, and one that can be grouped but not assigned cannot be created.
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     // A row still stored as TOM selects MOCD, so the dropdown never renders with
@@ -4364,6 +4360,9 @@ async function checkPIN() {
         if (matched) {
             sessionStorage.setItem('speeksUnlocked', 'true');
             sessionStorage.setItem('speeksUserName', matched.name);
+            // A sign-in opens the QuickPortal on the person's first tab (QPT_TAB_KEY);
+            // the localStorage copy is the old browser-wide memory, gone too.
+            try { sessionStorage.removeItem('speeksQptTab'); localStorage.removeItem('speeksQptTab'); } catch (e) { /* private mode */ }
 
             let _loginRole = matched.role ? matched.role.toLowerCase() : 'employee';
             // TOM was renamed MOCD (Manager of Corporate Development). Normalising
@@ -4373,21 +4372,10 @@ async function checkPIN() {
             // when this code ships, instead of the two having to land together.
             if (_loginRole === 'tom') _loginRole = 'mocd';
             let _loginStore = matched.store ? matched.store.toUpperCase() : 'ALL';
-            // A Multi-Store Manager behaves EXACTLY like a store manager everywhere — so we
-            // store their effective role as 'manager' (covers every role check, current and
-            // future) and flag the multi-store capability separately to drive the store
-            // switcher. Default to their first managed store.
-            if (_loginRole === 'multi-store manager') {
-                sessionStorage.setItem('speeksMultiStore', 'true');
-                _loginRole = 'manager';
-                _loginStore = MULTISTORE_MANAGER_STORES[0];
-            } else {
-                sessionStorage.removeItem('speeksMultiStore');
-                // MOCD is homed at OVL rather than CORP (Ethan 2026-07-17). Their
-                // corp-wide powers are role-gated, not store-gated, so this only
-                // changes their default store, not their access.
-                if (_loginRole === 'mocd') _loginStore = 'OVL';
-            }
+            // MOCD is homed at OVL rather than CORP (Ethan 2026-07-17). Their
+            // corp-wide powers are role-gated, not store-gated, so this only
+            // changes their default store, not their access.
+            if (_loginRole === 'mocd') _loginStore = 'OVL';
             sessionStorage.setItem('speeksUserRole', _loginRole);
             sessionStorage.setItem('speeksUserStore', _loginStore);
             sessionStorage.setItem('speeksUserPin', matched.pin);
@@ -5525,19 +5513,15 @@ const _kpiNotesOpen = new Set();
 // Narrower than KPI editing on purpose: a coaching note is the store manager's
 // prep for a conversation with their own team, so nobody above them edits it.
 // DM, CEO and corp read only; assistant managers read only.
-const _KPI_NOTE_EDIT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
+const _KPI_NOTE_EDIT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 
 // Editing also requires that the store on screen is actually theirs — a DM's
-// store picker and an MSM's routing both mean the grid can be showing a store
-// the viewer doesn't manage.
+// store picker means the grid can be showing a store the viewer doesn't manage.
 function _kpiCanEditNotes() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (!_KPI_NOTE_EDIT_ROLES.has(role)) return false;
     const onScreen = (_kpiResolveStore() || '').toUpperCase();
     if (!onScreen) return false;
-    // An MSM manages every store in the list, not just the one whose dashboard
-    // they're currently on — _kpiResolveStore can legitimately show them either.
-    if (role === 'multi-store manager') return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
     return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
 }
 
@@ -7355,12 +7339,6 @@ function _kpiRenderMonthly(periods) {
 // Global roles (DM / CEO / owner-manager) may submit anywhere — that is the
 // backend's rule, not a guess.
 //
-// An MSM signs in as 'manager' with speeksMultiStore set (see the login block),
-// so the multi-store case is asked with isMultiStoreManager(), NOT a role string
-// — sessionStorage never holds 'multi-store manager'. The backend sees their real
-// users.role and scopes them to MULTISTORE_MANAGER_STORES, which is the same
-// answer.
-//
 // ⚠️ Paired with `canEnterKPIs` and the roleLower block in
 // supabase/functions/kpi-manage/index.ts. Change one, change the other — a
 // frontend that says yes while the backend says no is a button that 403s, which
@@ -7372,9 +7350,6 @@ function _kpiCanEditNumbers() {
     if (role !== 'manager' && role !== 'assistant manager') return false;
     const onScreen = (_kpiResolveStore() || '').toUpperCase();
     if (!onScreen) return false;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
-    }
     return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
 }
 
@@ -7477,9 +7452,7 @@ function applyKpiReminder() {
 //   • Monthly: due from the FIRST SUNDAY of the month AFTER the reporting month
 //              (so a month that ends mid-week is reported the first Sunday — e.g.
 //              the 4th); "Overdue" after that Sunday; persists until filled.
-//   Roles: manager / owner-manager / MSM. (MSM is scoped to their HOME store —
-//   the Store KPIs pane's store picker is DM/CEO-only, so an MSM can only enter
-//   their home store here today.)
+//   Roles: manager / owner-manager.
 // ============================================================================
 const _KPI_DUE_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 // NOTE: Assistant Managers are intentionally excluded. ASM KPI entry is disabled
@@ -7492,28 +7465,17 @@ let _kpiDueStarted = false;
 function _kpiDueEligible() {
     return _KPI_DUE_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 }
-// The store(s) whose KPIs THIS user is responsible for. A Multi-Store Manager
-// covers BOTH managed stores (they fill each by switching the active store, or
-// by clicking the store-specific feed card which routes the pane to that store —
-// see _kpiResolveStore); everyone else is their one home store.
+// The store whose KPIs THIS user is responsible for (as a list): their home store.
 function _kpiMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-// Which store the Store KPIs pane is currently showing/saving. Preserves the
-// existing behaviour for everyone (DM/CEO picker wins; managers = their store),
-// and adds one thing: an MSM who arrived via a store-specific KPI feed card is
-// routed to THAT store (set on pane-open in switchWorkspaceTab), without
-// switching their whole dashboard — mirrors the aging pane's _agViewStore.
-let _kpiViewStore = null;
+// Which store the Store KPIs pane is currently showing/saving: the DM/CEO
+// picker wins; managers get their store.
 function _kpiResolveStore() {
     const sel = document.getElementById('kpiModalStoreSelect');
     if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / MOCD picker
-    if (_kpiViewStore) return _kpiViewStore;                               // MSM routed store
     return sessionStorage.getItem('speeksUserStore') || '';               // manager default
 }
 // Today's date in Central time as YYYY-MM-DD — string-comparable with the
@@ -7597,11 +7559,9 @@ function _kpiRenderDueBubble(which, show, opts) {
     const when = monthly ? "Last month's" : (overdue ? "Last week's" : "This week's");
     const tab = monthly ? 'monthly' : 'weekly';
     const title = (monthly ? 'Monthly KPIs' : 'Weekly KPIs') + (overdue ? ' Overdue' : ' Due');
-    // Name the outstanding store(s) when the card can cover more than one — an MSM
-    // (either store, even when only one is left) or any multi-store list. A plain
-    // manager has one store, so naming it is just noise.
-    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
-    const storeP = ((isMSM || stores.length > 1) && stores.length) ? (' (' + stores.join(' & ') + ')') : '';
+    // Name the outstanding stores only when there is more than one. A manager has
+    // one store, so naming it is just noise.
+    const storeP = (stores.length > 1) ? (' (' + stores.join(' & ') + ')') : '';
     const tail = overdue ? ' are overdue' : ' are due Monday by 8:30am';
     const summary = overdue
         ? (when + ' KPIs' + storeP + ' are overdue — enter them now.')
@@ -7746,13 +7706,11 @@ async function openKpiEntryPanelForStore(store, tab) {
 //
 // So it asks the honest question instead: do I have a store that is actually in
 // this list? A DM or CEO is 'ALL', which matches no option, so they keep
-// whatever was selected exactly as before. An MSM routed here by a store-specific
-// feed card opens on THAT store (_kpiViewStore), same as when the picker is
-// hidden from them.
+// whatever was selected exactly as before.
 function _kpiSeedStorePicker() {
     const sel = document.getElementById('kpiModalStoreSelect');
     if (!sel) return;
-    const want = (_kpiViewStore || sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    const want = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (!want) return;
     if (Array.from(sel.options).some(o => o.value === want)) sel.value = want;
 }
@@ -7823,30 +7781,21 @@ function switchWorkspaceTab(name) {
     } else if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
-        // MSM only: a store-specific KPI feed card routes the pane to that store
-        // (consumed once, cleared after), without switching the whole dashboard.
-        // No override → their active store. Non-MSM → null (falls back normally).
-        _kpiViewStore = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
-            ? (_consumeMsmAlertStore() || null) : null;
         loadWorkspaceKpis();
     } else if (name === 'vreplies') {
         loadVarianceReplies();
     } else if (name === 'aging') {
-        // Resolve which store the aging view shows ONCE per open (a single-store /
-        // DM-routed alert override wins, else the active dashboard store), so the
-        // repeated re-renders after adding items/notes don't re-consume it.
-        const agOverride = _consumeMsmAlertStore();
+        // Consume a DM-routed alert override ONCE per open, so the repeated
+        // re-renders after adding items/notes don't re-consume it.
+        const agOverride = _consumeAlertToolStore();
         if (_agIsDM()) {
-            // The DM's aging view is driven by the store dropdown, not _agViewStore.
-            // Point the dropdown at the routed store so clicking the "replies to
-            // review" alert lands on a store that actually replied.
-            _agViewStore = null;
+            // The DM's aging view is driven by the store dropdown. Point it at the
+            // routed store so clicking the "replies to review" alert lands on a
+            // store that actually replied.
             const sel = document.getElementById('ag-store-select');
             if (agOverride && sel && [...sel.options].some(o => o.value.toUpperCase() === agOverride)) {
                 sel.value = agOverride;
             }
-        } else {
-            _agViewStore = agOverride || _msmDefaultStore();
         }
         loadAgingInventory();
     }
@@ -10782,8 +10731,8 @@ function _kpiCancelEdit() {
 }
 
 async function _kpiSavePeriod(periodDate) {
-    // Mirror the load/render store resolution (DM/CEO picker → MSM routed store →
-    // manager's own store) so the save always targets the store on screen.
+    // Mirror the load/render store resolution (DM/CEO picker → manager's own
+    // store) so the save always targets the store on screen.
     const store = _kpiResolveStore();
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!store || !pin) return;
@@ -12478,7 +12427,7 @@ function handleSignOut() {
     // the credential on several writes (kpi-manage among them), so the outgoing
     // user's PIN stayed readable in the tab until the next login overwrote it.
     ['speeksUnlocked', 'speeksUserName', 'speeksUserRole', 'speeksUserStore',
-     'speeksMultiStore', 'speeksUserPin', 'speeksUserOnboardedAt',
+     'speeksUserPin', 'speeksUserOnboardedAt',
      'speeksSeenCommentKeys', 'speeksConnectFeed'].forEach(function (k) { sessionStorage.removeItem(k); });
     // The SPEEKS Connect feed is held in memory as well as in storage, and
     // sign-out does not always end in a reload.
@@ -13488,8 +13437,8 @@ function _ccStampStore(store) {
 // SCOPING IS THE EDGE FUNCTION'S JOB, not this file's. It resolves the caller's
 // role from their PIN and strips out every store they may not see before
 // responding — DM/CEO get the district roll-up, a manager/ASM/employee get their
-// own store, the MSM gets both of theirs. So there is no filtering below: what
-// arrives here is already only what this user is allowed to read.
+// own store. So there is no filtering below: what arrives here is already only
+// what this user is allowed to read.
 //
 // Managers, ASMs and employees deliberately see the SAME figures, cost and margin
 // included.
@@ -13814,7 +13763,7 @@ function _lvPaceCls(idx) {
     if (idx === null || idx === undefined) return 'flat';
     return idx >= 100 ? 'good' : 'bad';
 }
-// Per-store paceIndex is computed server-side; the district and MSM roll-ups carry
+// Per-store paceIndex is computed server-side; the district roll-up carries
 // pctOfGoal but no index of their own, so derive it the same way rather than
 // leaving the column blank on the one row that summarises all the others.
 function _lvPace(pctOfGoal, elapsedPct) {
@@ -13846,9 +13795,9 @@ function _lvPaceThruStore(m, d) {
     return v && v.paceIndex !== undefined ? v.paceIndex : null;
 }
 // A roll-up's pace is derived from its pctOfGoal, the way the table and the card
-// deck derive it on every tab. The district payload carries its own `prev`; the
-// MSM's "Both" is a sum built on the page, so it is re-summed from the same
-// healthy stores at yesterday's close.
+// deck derive it on every tab. The district payload carries its own `prev`; a
+// combined line built on the page is re-summed from the same healthy stores at
+// yesterday's close.
 function _lvPaceThruRoll(rollup, stores, d) {
     if (!(d && d.prev && d.prev.inMonth)) return null;
     const pv = _lvAsPrev(() => (rollup && rollup.prev)
@@ -13914,11 +13863,6 @@ function _lvOrderKey(code, at) {
 function _lvMyCodes(d) {
     const scope = d && d.scope;
     if (!scope) return null;
-    // An MSM's `store` is only their home store, but they run both — same reason
-    // userInStore has a branch for them.
-    if (String(scope.role || '').toLowerCase().trim() === 'multi-store manager') {
-        return new Set(MULTISTORE_MANAGER_STORES);
-    }
     const own = String(scope.store || '').toUpperCase();
     if (!own) return null;
     const codes = (d.stores || []).map(m => String(m.code).toUpperCase());
@@ -14617,7 +14561,7 @@ const _bdCache = {};
 
 function _bdEl() { return document.getElementById('bdDaily'); }
 
-// Which store the popout should open on. Their own, or an MSM's home store.
+// Which store the popout should open on: their own.
 // Anyone without one — a DM or the CEO — opens on the COMPANY rather than on
 // whichever store happens to sort first, which was only ever a way of not being
 // blank; the district is the view they came for, and the five stores are one
@@ -16820,8 +16764,6 @@ function _lvStoreError(m) {
         + ' Every other store is unaffected.</div>';
 }
 
-// The MSM sees both of their stores at once and has no district roll-up, so the
-// tiles above the table are summed here rather than server-side.
 // The signed-in user's OWN store row, out of a district payload.
 //
 // The Live tab shows the district table, but the tiles above it and the
@@ -16837,11 +16779,9 @@ function _lvStoreError(m) {
 //
 // The DASHBOARD's store wins over the payload's scope, and that ordering is the
 // whole point: `d.scope.store` is decided server-side from the pin (scopeFor in
-// shopify-live), so for a Multi-Store Manager it is a single fixed home store
-// and never moves when they switch between BAL and MPL. Every other tile on the
-// card — Scorecard, eBay, Audit — is keyed off `speeksUserStore`, so reading a
-// different source here is what let one card show MPL's heading above BAL's
-// $915.49 with BAL's row visible in the table underneath it.
+// shopify-live), while every other tile on the card — Scorecard, eBay, Audit —
+// is keyed off `speeksUserStore`; reading a different source here once let one
+// card show one store's heading above another store's figures.
 //
 // Only accepted when it is actually a healthy row in this payload, which is what
 // keeps the other roles on their existing behaviour: a DM/CEO carries 'ALL' or
@@ -16878,8 +16818,8 @@ function _lvCombine(stores) {
         mtdNet, mtdGp, mtdOrders: stores.reduce((a, m) => a + m.mtdOrders, 0),
         mtdMargin: mtdNet > 0 ? mtdGp / mtdNet * 100 : null,
         goal, pctOfGoal: goal > 0 ? mtdGp / goal * 100 : null,
-        // An NP pair (the MSM's "Both") is the two stores' NP added up, against
-        // the two NP goals — the same as the district, never re-estimated.
+        // A combined NP line is the stores' NP added up, against their NP
+        // goals — the same as the district, never re-estimated.
         ..._lvCombineNp(stores),
     };
 }
@@ -17113,32 +17053,9 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     _lvCardArgs = { stores, d, rollup, rollupLabel };
     const role = (sessionStorage.getItem("speeksUserRole") || "").toLowerCase().trim();
     const company = _LV_COMPANY_ROLES.has(role);
-    // A Multi-Store Manager runs two stores, so "their store" is both of them plus
-    // the combined line — not one of the pair. They are no longer HANDED just those
-    // two (the payload is district-wide for everyone), so the pair is filtered out
-    // of it below.
-    const msm = sessionStorage.getItem("speeksMultiStore") === "true";
 
     let list, roll, rollLabel = rollupLabel;
-    if (msm) {
-        // The payload is the whole district for EVERYBODY now (see scopeFor in
-        // shopify-live), so "their stores" has to be applied here rather than
-        // trusted from the server: the picker offers BAL, MPL and the pair, not
-        // the five-store district deck a DM gets (user's call, 19 Aug). Only the
-        // deck is narrowed — the desktop table underneath still shows all five,
-        // which is the same district-for-context decision every store gets.
-        list = stores.filter(m => m && MULTISTORE_MANAGER_STORES.includes(String(m.code || '').toUpperCase()));
-        // A payload that somehow carries neither of their stores falls back to
-        // what it does carry rather than to the empty state.
-        if (!list.length) list = stores;
-        // Built here, not taken from `rollup`: the caller is the district branch,
-        // whose roll-up is the five-store total. The pair line has to be summed
-        // out of exactly the two rows the picker can reach or it means something
-        // wider than its label says.
-        const healthy = list.filter(m => !m.error);
-        roll = list.length > 1 ? _lvCombine((healthy.length ? healthy : list).map(m => _lvView(m))) : null;
-        rollLabel = 'Both';
-    } else if (company) {
+    if (company) {
         list = stores;
         roll = rollup;
     } else {
@@ -17234,7 +17151,7 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     // meaning there and the row would just be chrome.
     const deck = [];
     if (roll) {
-        // paceIndex is computed server-side per store; a district or MSM roll-up
+        // paceIndex is computed server-side per store; a district roll-up
         // has none, so it is derived here the same way _lvTable derives it for its
         // own total row — otherwise the District card would be the one card on the
         // phone with a blank percentage.
@@ -17258,9 +17175,6 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     // A pick that is no longer in the deck — a role change, a store that dropped
     // out of the payload — falls back to the first card rather than rendering an
     // empty list under a lit pill.
-    // An MSM opens on Both, not on the store whose dashboard they are on (asked for
-    // on 19 Aug, reversed on 20 Aug): the pair total is the glance, and the two
-    // stores are one tap away in the list either way. Same as every other role —
     // deck[0] is the roll-up wherever there is one.
     let picked = deck.find(c => c.key === _lvCardPick);
     if (!picked) { picked = deck[0]; _lvCardPick = picked.key; }
@@ -17386,7 +17300,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // Named, the same way Buying below it is. Unlabelled, the table read as "the
     // dashboard" and Buying as an appendix to it; they are two halves of the same
     // question, so both get a header. Lives here so every surface that draws this
-    // table gets it — district and Multi-Store Manager, on all three days.
+    // table gets it, on all three days.
     //
     // Google reviews are NOT here. They sat in this table first, on the reasoning
     // that it is the main one — but a review is left by somebody who came in to
@@ -17738,7 +17652,7 @@ function renderLiveDashboard() {
         // Whether the district arrives at all is the SERVER's decision — see
         // scopeFor in shopify-live. This branch renders what it was given and
         // grants nothing; a payload with no district still falls through to the
-        // single-store and Multi-Store Manager branches below exactly as before.
+        // one-store and several-store branches below exactly as before.
         const views = stores.filter(m => !m.error).map(_lvView);
         // TILES AND TRACKING BAND: this person's own store. TABLES: the district.
         // You open your own Command Center to see how your store is doing and read
@@ -17764,9 +17678,10 @@ function renderLiveDashboard() {
         detail = m.error ? _lvStoreError(m)
             : _lvCards(stores, d, null, null) + _lvStoreDetail(d, _lvView(m));
     } else {
-        // Multi-Store Manager: both stores stacked, exactly as their checklist and
-        // Listing Goals already do — no dashboard switch to see the other one.
-        // Combine the VIEWS, so the pair total follows the selected day too.
+        // More than one store and no district: stack them under a combined line.
+        // Unreached today — scopeFor sends everyone the district — but it keeps
+        // a narrowed payload from rendering nothing. Combine the VIEWS, so the
+        // total follows the selected day too.
         const healthy = stores.filter(m => !m.error);
         const views = (healthy.length ? healthy : stores).map(_lvView);
         const roll = _lvCombine(views);
@@ -18296,8 +18211,8 @@ function _goalsTempCountOf(r) {
     const n = Math.round((parseInt(r.goal, 10) || 0) / GOALS_TEMP_GOAL);
     return Math.max(0, Math.min(GOALS_TEMP_MAX, n));
 }
-// sfx is '' for the single-store widget and '-<STORE>' for a MSM section,
-// matching how the roster rows' ids are scoped.
+// sfx is '' for the store widget, or a '-<STORE>' suffix when ids are
+// store-scoped, matching how the roster rows' ids are scoped.
 function _goalsTempCount(sfx) {
     const el = document.getElementById('temp-count' + (sfx || ''));
     return el ? (parseInt(el.dataset.count, 10) || 0) : 0;
@@ -18480,8 +18395,8 @@ function _goalsTempPayload(sfx) {
 }
 
 // The dots for one person: the store's role ladder plus the Off chip. Shared by
-// all three renderers (flip-card form, manager widget, MSM stacked widget) so
-// the Off chip can't be added to one and forgotten in the others.
+// both renderers (flip-card form, manager widget) so the Off chip can't be added
+// to one and forgotten in the other.
 // `emp` lands inside a single-quoted JS string in an onclick, so escape it.
 function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     const cur = String(activeRole || '').trim().toUpperCase();
@@ -18535,9 +18450,8 @@ function _goalsIsFloater(store, emp) {
     return (_goalsFloaters[store] || []).some(x => _goalsSameName(x.name, emp));
 }
 
-// Which store a role dot belongs to. The MSM's stacked widget already marks each
-// store section with data-goals-scope (updateRoleLocks uses it so BAL's B1
-// doesn't lock MPL's B1); everywhere else the page is one store.
+// Which store a role dot belongs to: a section marked data-goals-scope names
+// it; otherwise the page is one store.
 function _goalsRoleScopeStore(btn) {
     const sec = btn && btn.closest ? btn.closest('[data-goals-scope]') : null;
     return (sec && sec.getAttribute('data-goals-scope')) || goalsTargetStore;
@@ -18628,8 +18542,7 @@ function _goalsSameName(a, b) {
 // store-targets edge function.
 //
 // ONE definition, used by both the roster and the size count — they disagreed
-// before, storeRosterSize dropping the Multi-Store Manager while goalsRosterFor
-// kept them.
+// before.
 //
 // 'store' (the shop-floor BOARD account — a TV, not a person) is belt-and-braces
 // here: userInStore already rejects it, as of bf262cd on 2026-08-08. Managers
@@ -18863,8 +18776,7 @@ function normalizeGoalDate(s) {
 // Role dots offered in the goal widgets. Small teams get one lister, normal
 // teams two; past 4 people the lister lane keeps extending (L3, L4, …) so a
 // fully-staffed day can give everyone a role. Extra listers score like L1.
-// Pass a roster size for a specific store (MSM stacked widget); defaults to
-// the single-store global roster.
+// Pass a roster size for a specific store; defaults to the global roster.
 function goalsAvailableRoles(count) {
     const n = (count == null) ? goalsRoster.length : count;
     if (n <= 2) return ['B1', 'B2', 'L1'];
@@ -18903,7 +18815,6 @@ async function initListingGoals() {
 async function fetchLiveGoalsData() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
-    if (isMultiStoreManager()) return fetchLiveGoalsDataMS();
     // Only show the loading state on a COLD load. A refresh of an already-rendered
     // roster repaints in place — blanking it out mid-edit is what made picking a
     // role look like the data had been lost.
@@ -19196,10 +19107,8 @@ window.scheduleGoalsAutosave = function() {
         // Bounded, and it saves anyway at the end of it. A manager's roles are
         // the thing that must not be lost; a goal computed on defaults is wrong
         // but self-heals on the next render (_goalsResaveIfStale), whereas a
-        // roster nobody wrote is gone. The MSM widget keeps its own per-store
-        // state and saves through saveGoalsDataMS, so this single-store readiness
-        // check does not apply to it.
-        const waiting = !_msGoalsActive() && !ListingGoalsEngine.isReady(goalsTargetStore);
+        // roster nobody wrote is gone.
+        const waiting = !ListingGoalsEngine.isReady(goalsTargetStore);
         if (waiting && ++_goalsSaveWaits <= GOALS_SAVE_MAX_WAITS) return scheduleGoalsAutosave();
         _goalsSaveWaits = 0;
         saveGoalsData(true);
@@ -19209,7 +19118,6 @@ let _goalsSaveWaits = 0;
 const GOALS_SAVE_MAX_WAITS = 10;   // ~9s, then write what we have rather than lose it
 
 async function saveGoalsData(silent = false) {
-    if (_msGoalsActive()) return saveGoalsDataMS(silent);
     const status = document.getElementById('goals-save-status');
     if (status && !silent) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
 
@@ -19290,8 +19198,7 @@ async function saveGoalsData(silent = false) {
 }
 
 // Flip the manager's "Set Listing Goals" daily checklist task to done.
-// `storeArg` lets the MSM dual-store widget tick the right store's copy;
-// everyone else defaults to their session store.
+// `storeArg` picks a store's copy; it defaults to the session store.
 async function markListingGoalsChecklistComplete(storeArg) {
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
     const store = storeArg || sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -19302,16 +19209,6 @@ async function markListingGoalsChecklistComplete(storeArg) {
         if (task) {
             targetTaskId = task.id;
             if (!task.checked) { task.checked = true; if (typeof renderChecklist === 'function') renderChecklist(); }
-        }
-    }
-
-    // Multi-Store Manager: the single-store cache is empty; tick the active store's copy.
-    if (_isMSMChecklist()) {
-        const msDaily = (checklistDataCacheMS[store] || {}).daily || [];
-        const msTask = msDaily.find(t => t.text.toLowerCase().includes('listing goals'));
-        if (msTask) {
-            targetTaskId = msTask.id;
-            if (!msTask.checked) { msTask.checked = true; renderChecklistMS(); }
         }
     }
 
@@ -19353,7 +19250,6 @@ function getWeeklyResultFor(emp) {
 function renderManagerGoals() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
-    if (isMultiStoreManager()) return renderManagerGoalsMS();
 
     const now = new Date();
     const dateDisplay = document.getElementById('goals-date-display');
@@ -19405,7 +19301,7 @@ function renderManagerGoals() {
 }
 
 // Sum of an employee's saved daily goals this week, excluding today (last record per day wins).
-// `data` defaults to the single-store cache; the MSM widget passes each store's own cache.
+// `data` defaults to the store's cache.
 function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
     const target = String(emp).trim().toLowerCase();
     const tFirst = target.split(' ')[0];
@@ -19420,257 +19316,6 @@ function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
         if (goalDateObj(r.date) >= startOfWeek) byDay[dStr] = parseInt(r.goal) || 0;
     });
     return Object.values(byDay).reduce((s, g) => s + g, 0);
-}
-
-// ============================================================================
-// MULTI-STORE MANAGER — dual-store listing goals (both stores in one widget)
-// Mirrors the MSM checklist: instead of toggling the dashboard between stores,
-// the MSM's Listing Goals widget stacks a full per-store section (roster, role
-// dots, totals, level-up bars) for every store they run. Role locks, goal math
-// and autosave are all scoped per store, so BAL's B1 doesn't lock MPL's B1.
-// Single-store managers never reach this path.
-// ============================================================================
-let _goalsMS = {};             // store -> { roster: [], live: [], priorWeek: {idx: n}, history: [] }
-let _goalsChecklistDoneMS = {}; // store -> true once the "set listing goals" task was ticked
-
-// True while the stacked dual-store widget is on screen (its sections carry
-// data-goals-scope). Gates the shared save/recompute entry points.
-function _msGoalsActive() {
-    return isMultiStoreManager() && !!document.querySelector('#goals-manager-body [data-goals-scope]');
-}
-
-// Hide the widget's single-store footer (Total row + level-up bars) in MSM
-// mode — each store section renders its own copies.
-function _setMSGoalsChrome(isMS) {
-    const totalRow = document.querySelector('#goals-manager-body ~ .goals-total-row');
-    if (totalRow) totalRow.style.display = isMS ? 'none' : '';
-    const lu = document.getElementById('goals-levelup');
-    if (lu) lu.style.display = isMS ? 'none' : '';
-}
-
-async function fetchLiveGoalsDataMS() {
-    const list = document.getElementById('goals-manager-body');
-    if (!list) return;
-    // Cold load only — see fetchLiveGoalsData.
-    if (!list.querySelector('.role-dot')) {
-        list.innerHTML = '<div class="status-message">Syncing Data...</div>';
-    }
-    _setMSGoalsChrome(true);
-
-    try {
-        _goalsMS = {};
-        // Floaters first — one of them may be a name in the roster below.
-        await Promise.all(MULTISTORE_MANAGER_STORES.map(s => refreshGoalsFloaters(s)));
-        MULTISTORE_MANAGER_STORES.forEach(s => {
-            const emps = _goalsWithFloaters(s, goalsRosterFor(s));
-            _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
-        });
-
-        const [goalsResults] = await Promise.all([
-            Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()).catch(() => [])
-            )),
-            Promise.all(MULTISTORE_MANAGER_STORES.map(s => fetchStoreTarget(s))),
-        ]);
-        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-            _goalsMS[s].live = Array.isArray(goalsResults[i]) ? goalsResults[i] : [];
-            _goalsMS[s].history = weeksFor(s);
-        });
-
-        renderManagerGoalsMS();
-    } catch (e) {
-        list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
-    }
-}
-
-function renderManagerGoalsMS() {
-    const list = document.getElementById('goals-manager-body');
-    if (!list) return;
-    _setMSGoalsChrome(true);
-
-    const now = new Date();
-    const dateDisplay = document.getElementById('goals-date-display');
-    if (dateDisplay) dateDisplay.innerText = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-
-    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    // Top-right chip shows both stores' weekly goals at a glance.
-    const storeTargetEl = document.getElementById('goals-store-target');
-    if (storeTargetEl) storeTargetEl.innerText = 'Goal: ' + MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetFor(s)}`).join(' · ');
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const st = _goalsMS[store] || { roster: [], live: [], priorWeek: {}, history: [] };
-        const ac = _msStoreAccent(store);
-        const availableRoles = goalsAvailableRoles(st.roster.length);
-        st.priorWeek = {};
-
-        let rows = '';
-        const dr = _goalsDayRows(st.live, todayStr, startOfWeek);
-        st.roster.forEach((emp, idx) => {
-            const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
-
-            const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp, '', store);
-
-            st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
-
-            rows += `
-            <div class="goals-mgr-row">
-                <div class="goals-mgr-emp">
-                    <span class="goals-roster-name">${emp}</span>
-                    <div class="goals-edit-roles" id="roles-${store}-${idx}">${rolesHtml}</div>
-                    ${_goalsResultLine(emp, dr)}
-                </div>
-                <div class="goal-auto-display" id="goal-display-${store}-${idx}">–</div>
-                <div class="goals-mgr-week" id="week-display-${store}-${idx}">–</div>
-            </div>`;
-        });
-        const tempToday = _goalsTempCountOf(st.live.find(r => _goalsIsTempRow(r) && normalizeGoalDate(r.date) === todayStr));
-        rows += _goalsTempRowHtml('-' + store, tempToday, priorWeekGoal(GOALS_TEMP_NAME, todayStr, startOfWeek, st.live), dr);
-        rows = _goalsStoreResultHtml(dr) + rows;
-
-        html += `
-        <div class="ms-store-section" data-goals-scope="${store}" style="border-left: 4px solid ${ac.solid};">
-            <div class="ms-store-head" style="border-bottom-color: ${ac.soft};">
-                <span class="ms-store-name" style="color: ${ac.solid};">${store}</span>
-                <span class="ms-store-prog" style="background: ${ac.soft}; color: ${ac.solid};">Goal: ${targetFor(store)} Listings</span>
-            </div>
-            ${rows}
-            <div class="goals-total-row">
-                <span class="goals-total-lbl">Total<small class="goals-total-listed">${_goalsTotalListedHtml(dr)}</small></span>
-                <span id="goals-total-target-${store}" class="goals-total-val target">0</span>
-                <span id="goals-total-actual-${store}" class="goals-total-val actual">0</span>
-            </div>
-            <div class="goals-levelup">${levelUpHtml(st.history, targetFor(store))}</div>
-        </div>`;
-    });
-
-    list.innerHTML = html;
-    setTimeout(() => { updateRoleLocks(); recomputeGoalDisplaysMS(); }, 30);
-}
-
-// MS twin of recomputeGoalDisplays: same math, run per store section.
-function recomputeGoalDisplaysMS() {
-    const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const st = _goalsMS[store];
-        if (!st) return;
-
-        let staffedCount = 0;
-        st.roster.forEach((emp, idx) => {
-            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
-        });
-        const rosterSize = effectiveTeamSize(store);
-
-        let todayTotal = 0;
-        let weekTotal = 0;
-        st.roster.forEach((emp, idx) => {
-            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
-            const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, { employee: emp, store }) : 0;
-
-            const disp = document.getElementById(`goal-display-${store}-${idx}`);
-            if (disp) {
-                disp.innerText = _isOffRole(role) ? 'Off' : (role === '-' ? '–' : todayGoal);
-                disp.classList.toggle('goal-auto-set', _isWorkingRole(role));
-                disp.classList.toggle('goal-off-set', _isOffRole(role));
-            }
-            todayTotal += todayGoal;
-
-            const weekVal = (st.priorWeek[idx] || 0) + todayGoal;
-            const wkEl = document.getElementById(`week-display-${store}-${idx}`);
-            if (wkEl) wkEl.innerText = weekVal || '–';
-            weekTotal += weekVal;
-        });
-
-        const tp = _goalsPaintTemp('-' + store);
-        todayTotal += tp.today;
-        weekTotal += tp.week;
-
-        const tEl = document.getElementById(`goals-total-target-${store}`);
-        if (tEl) tEl.innerText = todayTotal;
-        const wEl = document.getElementById(`goals-total-actual-${store}`);
-        if (wEl) wEl.innerText = weekTotal;
-    });
-}
-
-// MS twin of saveGoalsData: each store section re-saves its full day state
-// (same semantics as the single-store autosave — payload is what's on screen).
-async function saveGoalsDataMS(silent = false) {
-    const status = document.getElementById('goals-save-status');
-    if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
-
-    const now = new Date();
-    const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-
-    const posts = MULTISTORE_MANAGER_STORES.map(async store => {
-        const st = _goalsMS[store];
-        if (!st) return true;
-
-        let staffedCount = 0;
-        st.roster.forEach((emp, idx) => {
-            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
-        });
-        const rosterSize = effectiveTeamSize(store);
-
-        const payloadEmployees = [];
-        st.roster.forEach((emp, idx) => {
-            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
-            const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store })) : '';
-            const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
-            const result = existing && existing.result != null ? String(existing.result) : '';
-            if (role !== '-' || goal !== '' || result !== '') {
-                payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
-            }
-        });
-        const tempRow = _goalsTempPayload('-' + store);
-        if (tempRow) payloadEmployees.push(tempRow);
-
-        try {
-            // See saveGoalsData — don't let our own broadcast bounce back.
-            if (typeof _rtMute === 'function') _rtMute('goals');
-            const response = await fetch(GOALS_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ store: store, date: targetDateStr, employees: payloadEmployees })
-            });
-            if (!response.ok) return false;
-
-            // Update this store's local cache so the UI reflects it instantly.
-            st.live = st.live.filter(r => !(normalizeGoalDate(r.date) === targetDateStr));
-            payloadEmployees.forEach(p => {
-                st.live.push({ date: targetDateStr, store: store, employee: p.employee, role: p.role, goal: p.goal, result: p.result });
-            });
-
-            // Tick THIS store's "set listing goals" checklist task — once per store per session.
-            if (payloadEmployees.length && !_goalsChecklistDoneMS[store]) {
-                _goalsChecklistDoneMS[store] = true;
-                markListingGoalsChecklistComplete(store);
-            }
-            return true;
-        } catch (e) { return false; }
-    });
-
-    const allOk = (await Promise.all(posts)).every(Boolean);
-    if (allOk) {
-        const pulse = document.getElementById('goals-pulse-dot');
-        if (pulse) pulse.style.display = 'none';
-        if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
-        // We muted our own broadcast (see above), so nothing else will tell this
-        // tab the day is now covered — clear the daily reminder ourselves. The
-        // single-store save has always done this; the MSM path never did, so an
-        // MSM who set both stores kept the card until the 10-minute poll.
-        if (typeof checkListingGoalsDailyReminder === 'function') {
-            checkListingGoalsDailyReminder().then(() => {
-                if (typeof renderActionFeed === 'function') renderActionFeed();
-            });
-        }
-    } else {
-        if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
-        else if (!silent) alert("Error saving goals to server.");
-    }
 }
 
 // ============================================================================
@@ -19705,7 +19350,7 @@ const LGPW_TTL_MS = 5 * 60 * 1000;
 let _lgpw = { past: false, week: 0, data: {}, failed: {} };   // data: store -> { at, payload }
 
 function _lgpwStores() {
-    return isMultiStoreManager() ? MULTISTORE_MANAGER_STORES.slice() : [goalsTargetStore];
+    return [goalsTargetStore];
 }
 function _lgpwKey(name) { return String(name || '').trim().toLowerCase(); }
 function _lgpwAddDays(ds, n) {
@@ -19733,7 +19378,7 @@ function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad
 // somebody actually opens this on a phone to do.
 //
 // SCOPED TO THE STORE-FLOOR MANAGERS, who are the ones doing it from a phone:
-// Manager, Assistant Manager and Multi-Store Manager. District Manager, CEO,
+// Manager and Assistant Manager. District Manager, CEO,
 // MOCD and Owner (Manager) keep the tab everywhere, on the reading that a
 // leadership role looking back over four weeks is at a desk. One list, one line
 // to change if that reading is wrong.
@@ -19741,7 +19386,7 @@ function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad
 // Phone only, not the whole compact band: a tablet has the width for all seven
 // columns, which is the entire reason the band and the tablet exception are
 // separate questions.
-const LGPW_PAST_CUT_ROLES = ['role-manager', 'role-assistant-manager', 'role-multistore-manager'];
+const LGPW_PAST_CUT_ROLES = ['role-manager', 'role-assistant-manager'];
 
 function _lgpwPastAllowed() {
     if (!_panelIsFullBleed()) return true;          // desktop or tablet: room for it
@@ -19950,14 +19595,8 @@ function _lgpwSumHtml(got, goal) {
 }
 
 // Roster size for a store (from auth cache). Only feeds the placeholder weekly
-// figure shown before the server's capacity number arrives.
-//
-// The Multi-Store Manager is now COUNTED here. Under the old ladder they were
-// excluded and each of their stores got a flat +15 instead, because a person
-// splitting their week across two stores isn't worth a full ±20 to either. The
-// capacity model needs no such fudge: the MSM appears in both stores at
-// part-time hours, which is the literal truth of how the week is split. Mirrors
-// rosterFor() in the store-targets edge function.
+// figure shown before the server's capacity number arrives. Mirrors rosterFor()
+// in the store-targets edge function.
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
@@ -19966,8 +19605,6 @@ function storeRosterSize(store) {
         ).length || 4;
     } catch (e) { return 4; }
 }
-// NOTE: _msmTargetBoost() lived here — the flat +15 for a store covered by a
-// Multi-Store Manager. Retired with the ladder; see storeRosterSize above.
 
 // Persisted per-store target + flag + last-4-week totals (server-side ratchet).
 let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
@@ -20128,14 +19765,11 @@ window.checkListingGoalReminders = checkListingGoalReminders;
 // construction: when the ASM sets them the manager's card clears too (instantly —
 // the goals broadcast re-runs this — and on the 10-minute poll as a backstop).
 const _LG_DAILY_ROLES = new Set([
-    'manager', 'owner (manager)', 'owner manager', 'assistant manager', 'multi-store manager'
+    'manager', 'owner (manager)', 'owner manager', 'assistant manager'
 ]);
 let _lgDailyStarted = false;
 
 function _lgDailyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return MULTISTORE_MANAGER_STORES.slice();
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -20223,7 +19857,7 @@ async function checkListingGoalsDailyReminder() {
     if (!el) return;
     const t = document.getElementById('listingGoalsDailyAlertBubbleText');
     if (t) {
-        // An MSM covers two stores, so name whichever is outstanding; a single-store
+        // Name the store only when more than one is in scope; a single-store
         // manager already knows which store is theirs.
         const which = (stores.length > 1) ? (' for ' + pending.map(p => p.store).join(' & ')) : '';
         // Naming who is still unaccounted for is what makes the card actionable —
@@ -21068,11 +20702,8 @@ function _b2bPrevalStore() {
 // no listing/complete, no accept. Pricing-edit only.
 function _b2bIsEmployee(){ return _b2bRole() === 'employee'; }
 
-// The stores this user acts for. An MSM covers both of theirs.
+// The stores this user acts for: their own (a list, so callers stay general).
 function _b2bMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = _b2bStore();
     return STORE_CODES.includes(s) ? [s] : [];
 }
@@ -21114,10 +20745,9 @@ function _b2bItemScope() {
 // cannot drift apart -- one scoped and the other not would mean a store seeing
 // the whole deal on a background refresh but not on open, which is the worst
 // kind of leak: intermittent.
-// A multi-store manager asks for both their stores as a list, so they are sent
-// their own lines and not the other store's on a split deal. _b2bItemScope
-// itself stays single-valued: it is also the caller_store on a complete, which
-// names exactly one store.
+// The stores go as a list, so a caller is sent their own lines and not another
+// store's on a split deal. _b2bItemScope itself stays single-valued: it is also
+// the caller_store on a complete, which names exactly one store.
 const _b2bScopeQs = () => {
     if (_b2bIsCorp()) return '';
     const mine = _b2bMyStores();
@@ -21605,12 +21235,9 @@ function b2bCloseDeal() {
     if (_b2bDirty) { _b2bDirty = false; b2bRefresh(); }
 }
 
-// A single-store user only pulls their own store; corp and MSMs pull the lot
-// and filter in _b2bInScope (the MSM covers two stores, which the API's
-// single-store filter can't express).
-// The board's ?store=. A multi-store manager used to get ALL -- every store's
-// deals and every client's contact details -- because the server took one code
-// or none. It takes a list now.
+// A store user only pulls their own store; corp pulls the lot and filters in
+// _b2bInScope.
+// The board's ?store=. The server takes a list of codes, or none for ALL.
 function _b2bFetchScope() {
     if (_b2bIsCorp()) return 'ALL';
     const mine = _b2bMyStores();
@@ -22867,9 +22494,7 @@ function _b2bIsTerminal(d) {
 // at), else from the board's listing_parts (the card has no lines).
 //
 // Every complete call used to send no store at all, which the server can only
-// resolve for a one-store deal. So corp could never finish a split deal, and a
-// multi-store manager -- who has no single caller_store -- could never finish
-// their part of one.
+// resolve for a one-store deal. So corp could never finish a split deal.
 function _b2bClosableParts(deal, items) {
     const stores = (deal && deal.listing_stores) || [];
     if (stores.length < 2) return null;
@@ -22991,9 +22616,8 @@ function _b2bRenderFinished(scoped) {
         </div>`;
 
     // The meta counts come from the server, which scopes to one store at most --
-    // an MSM covering two pulls ALL and narrows in _b2bInScope, so quoting those
-    // numbers at them would count stores they can't see. They get the offer
-    // without the arithmetic.
+    // a user covering several would be quoted stores they can't see, so they get
+    // the offer without the arithmetic.
     const exact  = _b2bIsCorp() || _b2bMyStores().length === 1;
     // Counted from what is actually on screen, not from meta.archive_shown.
     // That figure comes off the server and rendered as "Showing the 0 most
@@ -23530,7 +23154,7 @@ function b2bOpenCreate(kind) {
     _b2bCreateClientId = null;
     // Corp routes its pickups at pricing_location, so it picks nothing here. A
     // store is raising the deal for itself: one store means there is nothing to
-    // decide, two (an MSM covers both of theirs) means there is.
+    // decide.
     const mine = _b2bIsCorp() ? [] : _b2bMyStores();
     _b2bCreateStore = mine.length === 1 ? mine[0] : null;
     // A collection run is still the common case, and it is the one that asks for
@@ -30077,10 +29701,9 @@ function _b2bDone(it)      { return (Number(it.listed_qty) || 0) + (Number(it.re
 function _b2bSatisfied(it) { return _b2bDone(it) >= (Number(it.quantity) || 1); }
 // The lines this user answers for. Corp answers for all of them; a store for its
 // own, plus any line not yet given a store. A single-store user's fetch is
-// already scoped on the server, so this is a no-op for them -- it is here for
-// the multi-store manager, whose fetch is unscoped and so carries the other
-// stores' lines on a split deal. Without it their Complete button waited on
-// work at a store they do not run.
+// already scoped on the server, so this is a no-op for them -- it guards any
+// fetch that comes back unscoped and so carries the other stores' lines on a
+// split deal, where the Complete button would wait on work at another store.
 function _b2bMyLines() {
     if (_b2bIsCorp()) return _b2bModalItems;
     const mine = _b2bMyStores();
@@ -30284,8 +29907,8 @@ function _b2bListProgress() {
     // is sent one part of a split deal and would otherwise never know it was one.
     const split = ((deal && deal.listing_stores) || []).length > 1 || live.length > 1;
 
-    // The first of MY stores, not the first row: a multi-store manager's fetch is
-    // unscoped, so live[0] can be another store's part.
+    // The first of MY stores, not the first row: an unscoped fetch can put
+    // another store's part at live[0].
     const mine = (split && !_b2bIsCorp())
         ? (live.find(p => _b2bMyStores().includes(p.store)) || live[0]) : null;
     const total = mine ? mine.total_units : live.reduce((n, p) => n + p.total_units, 0);
@@ -31897,7 +31520,7 @@ async function checkB2BReminders() {
 // 90 more days before purge — nightly `callbacks-daily-maintenance` pg_cron job).
 // Backed by the `customer-callbacks` edge function / customer_callbacks table.
 // Status changes are open to every store (the cross-store "we have this" signal);
-// add/edit/delete/restore are store-scoped (MSM covers BAL+MPL, corp covers all).
+// add/edit/delete/restore are store-scoped (corp covers all).
 // ============================================================================
 const CB_CORP_ROLES = ['district manager', 'ceo', 'mocd'];   // may create/edit entries for any store
 const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
@@ -31969,7 +31592,7 @@ const CB_SHOP_DOMAINS = {
 // edge function — an employee can see the green row and ring the customer, but
 // "That's It" / "Not It" permanently changes what the sweep offers, so it needs
 // a manager. Corp roles pass through cbCanDecide separately.
-const CB_DECIDER_ROLES = ['manager', 'assistant manager', 'multi-store manager', 'owner (manager)'];
+const CB_DECIDER_ROLES = ['manager', 'assistant manager', 'owner (manager)'];
 
 // 62 categories and ~193 types is one small payload that changes when somebody
 // seeds a new type, not while a manager is typing — so it is fetched once per
@@ -32005,7 +31628,6 @@ function _cbMatchScope() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (CB_CORP_ROLES.includes(role) || store === 'ALL') return null;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
     return STORE_CODES.includes(store) ? [store] : [];
 }
 
@@ -32046,9 +31668,7 @@ function cbCanDecide(match, entry) {
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
     if (!CB_DECIDER_ROLES.includes(role)) return false;
-    const mine = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
-        ? MULTISTORE_MANAGER_STORES : [store];
-    return mine.includes(match.store_code) || (!!entry && mine.includes(entry.store));
+    return match.store_code === store || (!!entry && entry.store === store);
 }
 
 // A link only when there is genuinely something to open. 114 of the in-stock
@@ -32097,8 +31717,7 @@ async function cbPost(payload) {
             ...payload,
             user:  sessionStorage.getItem('speeksUserName')  || '',
             role:  (sessionStorage.getItem('speeksUserRole') || '').toLowerCase(),
-            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
-            multi: (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
+            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()
         })
     });
     const out = await res.json().catch(() => ({}));
@@ -32107,7 +31726,7 @@ async function cbPost(payload) {
 }
 
 // --- Helpers
-// Edit/delete/restore: own store only (MSM covers both of theirs, corp covers all).
+// Edit/delete/restore: own store only (corp covers all).
 // Status changes are deliberately NOT gated — any store marking an entry Contacted
 // is the cross-store "we've got this" signal, and the change is attributed below.
 // WHO MAY DELETE. Management and above; an ASM or below asks instead. A delete
@@ -32117,7 +31736,7 @@ async function cbPost(payload) {
 // Mirrored by DELETE_ROLES in the customer-callbacks function, which is what
 // actually enforces it.
 const CB_DELETE_ROLES = ['manager', 'owner (manager)', 'owner manager',
-    'multi-store manager', 'district manager', 'ceo', 'mocd'];
+    'district manager', 'ceo', 'mocd'];
 
 function cbCanDelete(entry) {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
@@ -32129,16 +31748,14 @@ function cbCanModify(entry) {
     const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.includes(entry.store);
     return entry.store === store;
 }
 
-// Stores this user may CREATE entries for: corp roles get all stores, the MSM
-// gets both of their stores, everyone else is locked to their own (no picker).
+// Stores this user may CREATE entries for: corp roles get all stores, everyone
+// else is locked to their own (no picker).
 function _cbAddStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (CB_CORP_ROLES.includes(role)) return STORE_CODES;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
     return null;
 }
 
@@ -33243,8 +32860,7 @@ async function checkCallbackMatchReminders() {
             // breaking through a snooze is the point — the old ones staying quiet
             // for the day is too.
             t.dataset.sig = hits.map(h => h.entry.id + ':' + h.count).sort().join('|');
-            // MSM routing: if every hit is at one of their stores only, the card
-            // opens that store's tool without switching dashboards.
+            // The stores the hits are at, for the feed's DM routing.
             const stores = [...new Set(hits.flatMap(h =>
                 (h.entry.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code))
                     .map(m => m.store_code)))];
@@ -33597,8 +33213,6 @@ function applyRoleBasedUI() {
         });
     }
 
-    initMultiStoreSwitcher();
-
     // The nav and the action buttons carry no data-feature, so the allow-list
     // cannot see them. This is the other half.
     _applyBoardChrome();
@@ -33639,17 +33253,11 @@ function _applyBoardChrome() {
     document.body.classList.toggle('is-store-board', _tvIsBoardRole());
 }
 
-// ===== MULTI-STORE MANAGER: global store switcher =====
-// A Multi-Store Manager (e.g. Joseph Ortega) oversees more than one store and toggles
-// which one the whole dashboard is scoped to. The first entry is the default (and is
-// set as their `store` at login). Toggling re-points the session store and reloads, so
-// every widget re-scopes through the normal load path. Single-store users never reach
-// this code, so their dashboards/feeds are unaffected.
-const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
+// No Multi-Store Manager since 2026-11-08 (Ethan: "we have gone away from MSM
+// entirely"): one store per manager, so the BAL/MPL store switcher, its store list
+// and the dual-store widgets are gone, markup and styles with them.
 
-// True if a directory user belongs to a given store's roster. A Multi-Store Manager
-// belongs to EVERY store they manage (not just their home store), so they're included
-// anywhere a regular store manager would be — variance, listing-goals roster, etc.
+// True if a directory user belongs to a given store's roster.
 // "Is this person part of this store's team?" — every caller is building a staff
 // roster (listing goals, the target ladder, the variance employee list), which is
 // why the Store role is turned away here rather than in each of them. A Store
@@ -33659,71 +33267,19 @@ const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 function userInStore(user, storeCode) {
     if (String(user.role || '').toLowerCase().trim() === 'store') return false;
     const store = String(storeCode || '').toUpperCase();
-    if (String(user.store || '').toUpperCase() === store) return true;
-    return String(user.role || '').toLowerCase() === 'multi-store manager'
-        && MULTISTORE_MANAGER_STORES.includes(store);
+    return String(user.store || '').toUpperCase() === store;
 }
 
-// Effective role is 'manager', so multi-store status is tracked via this flag (set at login).
-function isMultiStoreManager() {
-    return sessionStorage.getItem('speeksMultiStore') === 'true';
-}
-
-// The store a freshly-opened store-specific TOOL should default to for a
-// Multi-Store Manager: the store whose dashboard they're currently on
-// (speeksUserStore). Store tools used to default to the first store in the list
-// (always BAL), so on the MPL dashboard they'd wrongly populate BAL. Callers keep
-// the dropdown switchable — this only sets the INITIAL selection. Returns '' for
-// everyone else, whose single store already wins, so callers can `|| fallback`.
-function _msmDefaultStore() {
-    if (!isMultiStoreManager()) return '';
-    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-    return MULTISTORE_MANAGER_STORES.includes(s) ? s : '';
-}
-
-// One-time store override set by clicking a SINGLE-store MSM alert (e.g. an MPL-only
-// variance row while on the BAL dashboard): the tool opens on that store instead of
-// the active dashboard, WITHOUT switching the dashboard. Stored in sessionStorage so
-// it survives the navigation to workspace.html, and consumed (cleared) on read so
-// the next normal open reverts to the active-store default. A both-store alert sets
-// nothing, so the active-store default applies. Returns '' for non-MSM users.
-function _consumeMsmAlertStore() {
-    const s = sessionStorage.getItem('speeksMsmToolStore');
-    if (s) sessionStorage.removeItem('speeksMsmToolStore');
-    // Validated against every store (not just the MSM's two) so a DM alert can also
-    // route to a specific store that needs review, using the same override.
+// One-time store override set by clicking a store-specific alert (the DM's feed
+// lands on the first store that needs review): the tool opens on that store.
+// Stored in sessionStorage so it survives the navigation to workspace.html, and
+// consumed (cleared) on read so the next normal open reverts to the default.
+// Returns '' when nothing is pending.
+function _consumeAlertToolStore() {
+    const s = sessionStorage.getItem('speeksAlertToolStore');
+    if (s) sessionStorage.removeItem('speeksAlertToolStore');
     const up = (s || '').toUpperCase();
     return STORE_CODES.includes(up) ? up : '';
-}
-// The store a store-specific tool should OPEN on for an MSM: a pending single-store
-// alert override wins (cleared after use), else the active dashboard store.
-function _msmToolStore() {
-    return _consumeMsmAlertStore() || _msmDefaultStore();
-}
-
-function setMultiStore(store) {
-    const next = String(store || '').toUpperCase();
-    if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
-    if (next === (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()) return;
-    // A QuickPortal layout change still waiting to be saved goes now, as the
-    // store it was made on — not after the switch, as the next one.
-    if (typeof _qpFlushSave === 'function') _qpFlushSave();
-    sessionStorage.setItem('speeksUserStore', next);
-    location.reload();
-}
-
-function initMultiStoreSwitcher() {
-    const sw = document.querySelector('.msm-store-switch');
-    if (!sw) return;
-    if (!isMultiStoreManager()) { sw.style.display = 'none'; return; }
-    const current = (sessionStorage.getItem('speeksUserStore') || MULTISTORE_MANAGER_STORES[0]).toUpperCase();
-    // Segmented toggle instead of a native <select>: the OS-drawn option list
-    // can't be styled to match the nav, and with only two stores a toggle is
-    // one click instead of two. setMultiStore() still does the actual switch.
-    sw.innerHTML = MULTISTORE_MANAGER_STORES.map(s =>
-        `<button type="button" class="msm-seg${s === current ? ' active' : ''}" data-tip="Switch to ${s}" onclick="setMultiStore('${s}')">${s}</button>`
-    ).join('');
-    sw.style.display = 'flex';
 }
 
 function checkInstantNotifCache() {
@@ -34995,9 +34551,6 @@ function renderMonthlyGoalsBanner() {
     const labelEl = document.getElementById('giGoalsLabel');
     if (labelEl) labelEl.textContent = _mgbMonthLabel() + ' Goals';
 
-    // Multi-Store Manager: both managed stores stacked, each with its own Edit.
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return renderMonthlyGoalsBannerMS();
-
     const store = sessionStorage.getItem('speeksUserStore') || '';
     const data  = getMonthlyGoals(store);
     const goals = data?.goals || [];
@@ -35016,46 +34569,6 @@ function renderMonthlyGoalsBanner() {
         </div>`;
     });
     if (listEl) listEl.innerHTML = html;
-}
-
-// --- Multi-Store Manager: stacked monthly goals (both stores, per-store Edit) ---
-// The synced cache already holds every store's goals (syncGoalsFromSheet does a
-// getAll), so this is render-only: one labeled block per managed store, each
-// with its own Edit button feeding openEditGoalsModal(store).
-
-function _giMsGoalItemsHtml(goals) {
-    if (!goals || !goals.length) return '<div class="status-message" style="padding: 4px 0 8px;">No goals set yet.</div>';
-    return goals.map(g => `<div class="mgb-goal-item">
-        <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
-        ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
-    </div>`).join('');
-}
-
-// Store-colored block header; pass editHtml only where editing is allowed
-// (current month — past months are read-only history).
-function _giMsStoreHeadHtml(store, editHtml) {
-    const ac = _msStoreAccent(store);
-    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 4px;">
-        <span class="ms-store-name" style="color: ${ac.solid}; font-size: 12px;">${escapeHtml(store)}</span>${editHtml || ''}
-    </div>`;
-}
-
-function renderMonthlyGoalsBannerMS() {
-    const listEl = document.getElementById('giGoalsList');
-    if (!listEl) return;
-    // Per-store Edit buttons replace the single section-level one ('important'
-    // because _resetToCurrentMonth/selectGoalMonth re-show it the same way).
-    document.getElementById('giEditGoalsBtn')?.style.setProperty('display', 'none', 'important');
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach((store, idx) => {
-        const goals = getMonthlyGoals(store)?.goals || [];
-        html += `<div style="${idx ? 'margin-top: 14px;' : ''}">
-            ${_giMsStoreHeadHtml(store, `<button class="mini-action-btn" onclick="openEditGoalsModal('${store}')">Edit ✏️</button>`)}
-            ${_giMsGoalItemsHtml(goals)}
-        </div>`;
-    });
-    listEl.innerHTML = html;
 }
 
 function toggleGoalsBanner() { toggleGoalsPanel(); }
@@ -35150,33 +34663,6 @@ window.selectGoalMonth = async function(ym) {
     if (!listEl) return;
     listEl.innerHTML = '<div class="status-message">Loading...</div>';
 
-    // Multi-Store Manager: past months show BOTH stores' goals, read-only.
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        const perStore = {};
-        MULTISTORE_MANAGER_STORES.forEach(s => {
-            try { const raw = localStorage.getItem(_mgbKey(s, _selectedGoalDate)); if (raw) perStore[s] = JSON.parse(raw)?.goals ?? []; } catch {}
-        });
-        if (MULTISTORE_MANAGER_STORES.some(s => perStore[s] == null)) {
-            try {
-                const res = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
-                const map = await res.json();
-                MULTISTORE_MANAGER_STORES.forEach(s => {
-                    const entry = map[s];
-                    if (entry) { localStorage.setItem(_mgbKey(s, _selectedGoalDate), JSON.stringify(entry)); perStore[s] = entry.goals || []; }
-                    else if (perStore[s] == null) perStore[s] = [];
-                });
-            } catch { /* stores left null render as could-not-load */ }
-        }
-        listEl.innerHTML = MULTISTORE_MANAGER_STORES.map((s, idx) => {
-            const goals = perStore[s];
-            const body = goals == null
-                ? '<div class="status-message" style="padding: 4px 0 8px;">Could not load.</div>'
-                : (goals.length ? _giMsGoalItemsHtml(goals) : '<div class="status-message" style="padding: 4px 0 8px;">No goals recorded for this month.</div>');
-            return `<div style="${idx ? 'margin-top: 14px;' : ''}">${_giMsStoreHeadHtml(s)}${body}</div>`;
-        }).join('');
-        return;
-    }
-
     const store    = sessionStorage.getItem('speeksUserStore') || '';
     const cacheKey = _mgbKey(store, _selectedGoalDate);
     let goals = null;
@@ -35217,9 +34703,8 @@ window.toggleGoalsPanel = function(event) {
 
 // --- Edit Modal ---
 
-// Which store the goals modal is editing. Normally the session store; the MSM's
-// stacked panel passes an explicit store per Edit button (same pattern as
-// _editingInitiativesForStore below).
+// Which store the goals modal is editing: the session store unless a caller
+// passes one (same pattern as _editingInitiativesForStore below).
 let _editingGoalsForStore = null;
 
 function openEditGoalsModal(storeOverride) {
@@ -35331,9 +34816,8 @@ function renderCompanyProjectsBanner() {
     const listEl      = document.getElementById('giInitiativesList');
     const projects    = getCompanyProjects()?.projects || [];
     const initiatives = getStoreInitiatives(store)?.initiatives || [];
-    const isMS        = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
 
-    if (!isMS && !projects.length && !initiatives.length) {
+    if (!projects.length && !initiatives.length) {
         if (listEl) listEl.innerHTML = '<div class="status-message" style="padding: 8px 0;">No initiatives have been set yet.</div>';
         return;
     }
@@ -35344,18 +34828,7 @@ function renderCompanyProjectsBanner() {
             html += '<div class="cpb-section-label">Company</div>';
             projects.forEach(p => { html += _cpbItemHtml(p); });
         }
-        if (isMS) {
-            // Multi-Store Manager: one labeled block per managed store (store
-            // colors match the checklist sections), always shown so an empty
-            // store is visibly empty rather than missing.
-            MULTISTORE_MANAGER_STORES.forEach((s, idx) => {
-                const items = getStoreInitiatives(s)?.initiatives || [];
-                const ac = _msStoreAccent(s);
-                html += `<div class="cpb-section-label${(projects.length || idx) ? ' cpb-section-label--spaced' : ''}" style="color: ${ac.solid};">${escapeHtml(s)}</div>`;
-                if (items.length) items.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
-                else html += '<div class="status-message" style="padding: 4px 0 8px;">No initiatives set.</div>';
-            });
-        } else if (initiatives.length) {
+        if (initiatives.length) {
             html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
             initiatives.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
         }
@@ -35964,20 +35437,14 @@ function renderRequiredTasks(tasks) {
 
 // --- DM: view ONE store's full checklist — both the required tasks the DM set
 //     and the personal tasks that store's manager added themselves. Read-only.
-// Resolves the person whose checklist a store shares (its "owner"). Normal stores use
-// the owner/manager on file. BAL/MPL are run by a Multi-Store Manager whose DB `store`
-// is only their HOME store — so for those we match by role + the shared
-// MULTISTORE_MANAGER_STORES set, NOT by u.store. This is what lets a store's ASM (and the
-// DM Manager-Checklist viewer) sync to the MSM's checklist — for BAL now and a future MPL ASM.
+// Resolves the person whose checklist a store shares (its "owner"): the
+// owner/manager on file for that store. This is what lets a store's ASM (and the
+// DM Manager-Checklist viewer) sync to the manager's checklist.
 function _resolveStoreManager(store) {
     const s = String(store || '').toUpperCase();
     try {
         const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
         const users = authCache.users || [];
-        if (typeof MULTISTORE_MANAGER_STORES !== 'undefined' && MULTISTORE_MANAGER_STORES.includes(s)) {
-            const msm = users.find(u => u.role && u.role.toLowerCase() === 'multi-store manager');
-            if (msm) return msm.name;
-        }
         for (const targetRole of ['owner (manager)', 'manager']) {
             const mgr = users.find(u =>
                 u.store && u.store.toUpperCase() === s &&
@@ -37686,9 +37153,8 @@ function buildAuditSummaryHtml(audit, store) {
 
 // =========================================================
 //  SHOPIFY INSURANCE CLAIMS / ITEM-NOT-RECEIVED TOOL
-//  Store managers + owner-managers + multi-store managers log
-//  claims here. A manager sees their store's cases; a Multi-Store
-//  Manager sees every store they manage, from either dashboard.
+//  Store managers + owner-managers log claims here. A manager
+//  sees their store's cases.
 // =========================================================
 const CLAIM_STATUS = {
     in_progress: { label: 'In Progress', bg: '#fef3c7', fg: '#b45309' },
@@ -37698,9 +37164,6 @@ const CLAIM_STATUS = {
 
 // Which store(s) this user can file/view claims for.
 function _claimStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -37708,8 +37171,7 @@ function _claimStores() {
 // WHICH OF THE TWO TOOLS a person gets. A DM, the CEO and the MOCD have no
 // store of their own (_claimStores is empty), so the store tool would open on a
 // New Claim form they cannot file — they belong in the oversight one (Ethan,
-// 2026-09-22). Everyone else gets their own store's tool, or both of theirs
-// with a store picker if they run two.
+// 2026-09-22). Everyone else gets their own store's tool.
 const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 const _claimsIsOversight = () =>
     _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
@@ -37843,7 +37305,7 @@ function switchClaimsTab(tab) {
     }
 }
 
-// MSM gets a store chooser; a single-store manager is locked to their store.
+// A store manager is locked to their store.
 function _buildClaimStorePicker() {
     const row = document.getElementById('claims-store-row');
     const sel = document.getElementById('claim-store');
@@ -37855,10 +37317,9 @@ function _buildClaimStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    // Default to the store this open targets for an MSM — a single-store alert
-    // override if pending, else the active dashboard store; everyone else keeps
-    // their only option. Still switchable via the dropdown when multi-store.
-    const def = _msmToolStore();
+    // Default to the store a pending alert override targets (the DM's feed card);
+    // a single-store manager keeps their only option.
+    const def = _consumeAlertToolStore();
     if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
     else if (sel.options.length) sel.selectedIndex = 0;
 }
@@ -37906,7 +37367,7 @@ async function submitClaim() {
     }
 }
 
-let _claimsAll = []; // last fetched cases, so the MSM store filter can re-render without refetching
+let _claimsAll = []; // last fetched cases, so the store filter can re-render without refetching
 
 async function fetchMyClaims() {
     const wrap = document.getElementById('claims-table-wrap');
@@ -37929,7 +37390,8 @@ async function fetchMyClaims() {
     }
 }
 
-// MSM-only: a store filter on the My Cases tab (single-store managers don't need it).
+// A store filter on the My Cases tab, shown only when the scope spans more than
+// one store (a single-store manager never sees it).
 function _buildClaimsViewFilter(stores) {
     const row = document.getElementById('claims-view-filter-row');
     const sel = document.getElementById('claims-view-filter');
@@ -40148,8 +39610,8 @@ async function checkClaimReminders() {
                 agingCount = agingRows.length;
                 agingINRCount = agingRows.filter(_isINRTicket).length;
                 agingStores = [...new Set(agingRows.map(r => (r.store || '').toUpperCase()).filter(Boolean))];
-                // Same reasoning as the aging alert: a Multi-Store Manager's reminder
-                // spans both stores, so a bare total doesn't say where to look.
+                // Same reasoning as the aging alert: a reminder spanning more than
+                // one store needs a per-store split to say where to look.
                 if (stores.length > 1) {
                     const byStore = {};
                     agingRows.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
@@ -40189,7 +39651,7 @@ function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, break
     }
     _reminderBubbleActive = true; // claims the shared bubble so the aging alert won't clobber it
     // With a breakdown the full sentence would run past the feed's ~100-char cap and
-    // clip exactly the store split the MSM needs, so lead with counts + stores and
+    // clip exactly the store split, so lead with counts + stores and
     // demote the INR flag to a short tag (matches _showClaimAlert).
     const summary = agingCount
         ? `${from}: ` + (breakdown
@@ -40206,8 +39668,8 @@ function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, break
 let _claimAlertPollStarted = false;
 const _CLAIM_ALERT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 async function checkAgingClaims() {
-    // Same audience as the Insurance Claims tool: managers, owner-managers, MSM
-    // (MSM logs in as role 'manager'). ASMs/employees never file claims.
+    // Same audience as the Insurance Claims tool: managers and owner-managers.
+    // ASMs/employees never file claims.
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
     if (!_CLAIM_ALERT_ROLES.has(role)) return;
     const stores = (typeof _claimStores === 'function') ? _claimStores() : [];
@@ -40264,10 +39726,8 @@ async function checkAgingClaims() {
         aging.forEach(r => seen.add(r.id));
         _saveSeenAgingClaims(seen);
 
-        // A Multi-Store Manager covers two stores at once, so "2 claims are aging"
-        // doesn't tell them where to look. Break it down by store whenever the
-        // user's claim scope spans more than one; single-store managers are
-        // unaffected and keep the plain wording.
+        // Break it down by store whenever the user's claim scope spans more than
+        // one; a single-store manager keeps the plain wording.
         const byStore = {};
         aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
         const breakdown = stores.length > 1
@@ -40575,8 +40035,8 @@ function _renderClaimBubble(icon, titleHtml, bodyHtml, summary, sig, stores) {
     if (!bubble || !textEl) return;
     if (summary) textEl.dataset.summary = summary;
     else delete textEl.dataset.summary;
-    // Stores this alert covers → routes an MSM single-store click (see
-    // _samGatherReminders). Cleared when only one/none so it doesn't go stale.
+    // Stores this alert covers → routes the DM's click to a store (see
+    // _samGatherReminders). Cleared when none so it doesn't go stale.
     if (stores && stores.length) textEl.dataset.stores = [...new Set(stores.map(s => String(s).toUpperCase()))].join(',');
     else delete textEl.dataset.stores;
     // Optional snooze IDENTITY, separate from the displayed text. A DM-pushed
@@ -40625,7 +40085,7 @@ function _showClaimAlert(count, inrCount = 0, breakdown = '', stores = null) {
         + _inrGuidanceHtml(inrCount);
     // With a per-store breakdown the full sentence runs close to the feed's
     // 100-char cap, and the breakdown is last — so an overflow would cut exactly
-    // the store info a multi-store manager needs. Lead with counts + stores and
+    // the store info. Lead with counts + stores and
     // demote the INR flag to a short tag; the guidance is in the tool anyway.
     const summary = breakdown
         ? `${count} open over 7 days · ${breakdown}` + (inrCount ? ` · ${inrCount} Item Not Received` : '')
@@ -40655,7 +40115,7 @@ window._dbgClaims = async function () {
     const out = {
         buildVersion: (document.querySelector('script[src*="speeks.js"]') || {}).src || '?',
         user: sessionStorage.getItem('speeksUserName'),
-        role, isMSM: isMultiStoreManager(), stores,
+        role, stores,
         roleAllowed: _CLAIM_ALERT_ROLES.has(role),
     };
     if (!out.roleAllowed) { out.VERDICT = 'BLOCKED: role not in _CLAIM_ALERT_ROLES'; console.table(out); return out; }
@@ -40756,7 +40216,7 @@ const _EXEC_STORE_OPTIONS =
 function toggleSendCommentModal() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
     // DM/CEO keep the company-wide sender; everyone else with the tool (Manager,
-    // Owner Manager, MSM) gets a version scoped to their own store(s).
+    // Owner Manager) gets a version scoped to their own store.
     if (role === 'district manager' || role === 'ceo') { openCEOStoreComment(null); return; }
     openManagerStoreComment();
 }
@@ -40799,8 +40259,7 @@ window.openCEOStoreComment = function(targetStore) {
     switchCommentTab('send');
 };
 
-// Manager / Owner Manager / Multi-Store Manager: send only to their own store(s).
-// Single-store managers get a locked selector; the MSM gets BAL/MPL unlocked. The
+// Manager / Owner Manager: send only to their own store, on a locked selector. The
 // message is authored under their name (submitStoreComment reads speeksUserName)
 // so on the recipient side it behaves identically to a DM/CEO comment.
 window.openManagerStoreComment = function() {
@@ -40812,11 +40271,8 @@ window.openManagerStoreComment = function() {
     lockAndBlurScreen();
     document.getElementById('commentMessageInput').value = '';
 
-    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
     const active = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-    const stores = isMSM
-        ? MULTISTORE_MANAGER_STORES.map(s => String(s).toUpperCase())
-        : (active ? [active] : []);
+    const stores = active ? [active] : [];
     _commentReadsStoreScope = stores.slice();
 
     const storeSelect = document.getElementById('commentStoreSelect');
@@ -41058,17 +40514,8 @@ window.closeDailyCommentBubble = function() {
 // reminders and patch notes all already keep a local copy of the read — comments
 // were the one type that trusted the round-trip. Entries are dropped once the
 // server confirms, so this never masks a genuinely-unread comment.
-// Which stores' comments belong to this user. A Multi-Store Manager covers both
-// their stores at once — the checklist, audit and listing-goals widgets all
-// already fan out over MULTISTORE_MANAGER_STORES, but comments were still
-// matching the single active store, so an MSM sitting on BAL could not see MPL's
-// comments at all (and vice versa) no matter which dashboard they switched to.
+// Which stores' comments belong to this user: their own store.
 function _commentStoresForUser() {
-    try {
-        if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-            return MULTISTORE_MANAGER_STORES.map(s => String(s).toUpperCase());
-        }
-    } catch (_) {}
     // NO 'OVL' fallback here. Everywhere else in the app that default is harmless
     // (it picks which store you're acting on, and by then the store is known), but
     // this decides which store's comments you're allowed to SEE. During sign-in
@@ -41099,8 +40546,6 @@ async function fetchAndDisplayStoreComment() {
     // aren't meant for them.
     if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'mocd') return;
     const userStore = String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase();
-    // Set, not a single value — an MSM matches both of their stores at once, so the
-    // same comments show on either dashboard rather than following the switcher.
     const myStores = new Set(_commentStoresForUser());
     // Store not resolved yet (mid sign-in): bail rather than fall back to a real
     // store. ALL/CORP comments are withheld for one poll too, which is the right
@@ -41402,14 +40847,6 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
-// Multi-Store Manager (e.g. BAL + MPL): one checklist cache per managed store, so
-// both stores' lists render stacked in the same panel without switching dashboards.
-// { BAL: {daily,weekly,monthly,quarterly}, MPL: {...} }. Empty for everyone else.
-let checklistDataCacheMS = {};
-const _pendingTogglesMS = new Map();   // key: "STORE::id" -> { checked, expiresAt }
-function _isMSMChecklist() {
-    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
-}
 // Tracks optimistic toggle state for up to 20 seconds so a slow backend response
 // can't overwrite a locally-checked item before Apps Script persists it.
 const _pendingToggles = new Map(); // id -> { checked, expiresAt }
@@ -41426,8 +40863,7 @@ function _applyPendingToggles() {
 }
 
 // For assistant managers, returns the store's primary manager name so both share the same
-// checklist data (incl. BAL/MPL, whose manager is the Multi-Store Manager — see
-// _resolveStoreManager). All other roles return their own name, preserving existing behavior.
+// checklist data (see _resolveStoreManager). All other roles return their own name, preserving existing behavior.
 function getChecklistUser() {
     const role = sessionStorage.getItem('speeksUserRole') || '';
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -41454,7 +40890,7 @@ function switchChecklistTab(tab) {
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) qTab.classList.toggle('active', tab === 'quarterly');
 
-    if (_isMSMChecklist()) renderChecklistMS(); else renderChecklist();
+    renderChecklist();
 }
 
 async function loadChecklist() {
@@ -41463,9 +40899,6 @@ async function loadChecklist() {
     // overwrites the cache with stale (unchecked) data before the backend saves.
     const panel = document.getElementById('checklistSidePanel');
     if (!panel?.classList.contains('open')) return;
-
-    // Multi-Store Managers get both managed stores stacked in one panel.
-    if (_isMSMChecklist()) { await loadChecklistMS(); return; }
 
     const container = document.getElementById('checklistContent');
     const userName = getChecklistUser();
@@ -41550,230 +40983,6 @@ function renderChecklist() {
 
     container.innerHTML = html;
     updateChecklistChip();
-}
-
-// ============================================================================
-// MULTI-STORE MANAGER — dual-store checklist (both managed stores in one panel)
-// A MSM (Joseph: BAL + MPL) does everything a manager does, but for every store
-// they run. Rather than reload the dashboard to switch stores, we fetch each
-// managed store's checklist (user = the MSM) and render them as stacked, per-store
-// sections in the same panel, each with its own progress + add row. ASMs are
-// single-store and never hit this path, so their behavior is unchanged.
-// ============================================================================
-
-// Hide the single-store footer/add row in MSM mode — each store gets its own add row.
-function _setMSChecklistChrome(isMS) {
-    const inputArea = document.querySelector('#checklistSidePanel .cl-input-area');
-    const footer    = document.querySelector('#checklistSidePanel .cl-footer-row');
-    if (inputArea) inputArea.style.display = isMS ? 'none' : '';
-    if (footer)    footer.style.display    = isMS ? 'none' : '';
-}
-
-// Per-store accent color so the stacked sections/pills are distinguishable at a glance.
-// `solid` matches the site-wide store colors (`_storeColors`, used by the monthly-goals
-// banner & charts — BAL red, MPL orange, etc.); `soft` is a light tint for backgrounds.
-function _msStoreAccent(store) {
-    const map = {
-        OVL: { solid: '#7c3aed', soft: '#f5f3ff' },   // purple
-        LEE: { solid: '#2563eb', soft: '#eff6ff' },   // blue
-        WSP: { solid: '#5a8d3b', soft: '#f3f8ee' },   // green
-        MPL: { solid: '#ea580c', soft: '#fff7ed' },   // orange
-        BAL: { solid: '#dc2626', soft: '#fef2f2' },   // red
-    };
-    return map[String(store || '').toUpperCase()] || { solid: '#64748b', soft: '#f1f5f9' };
-}
-
-// Collapse duplicate GLOBAL/required tasks by text (mirrors renderChecklist).
-function _dedupeGlobals(rawItems) {
-    const seen = new Set();
-    return (rawItems || []).filter(it => {
-        if (it.isGlobal) {
-            const key = String(it.text || '').trim().toLowerCase();
-            if (seen.has(key)) return false;
-            seen.add(key);
-        }
-        return true;
-    });
-}
-
-function _applyPendingTogglesMS() {
-    const now = Date.now();
-    for (const [key, val] of _pendingTogglesMS) {
-        if (val.expiresAt < now) { _pendingTogglesMS.delete(key); continue; }
-        const [store, id] = key.split('::');
-        const cache = checklistDataCacheMS[store];
-        if (!cache) continue;
-        for (const tab of Object.keys(cache)) {
-            const item = (cache[tab] || []).find(i => i.id === id);
-            if (item) item.checked = val.checked;
-        }
-    }
-}
-
-async function loadChecklistMS() {
-    const container = document.getElementById('checklistContent');
-    const userName = getChecklistUser();
-    _setMSChecklistChrome(true);
-
-    // MSM effective role is manager: Daily/Weekly/Monthly apply; Quarterly is CORP/ALL-only.
-    document.getElementById('cl-tab-weekly')?.style && (document.getElementById('cl-tab-weekly').style.display = '');
-    document.getElementById('cl-tab-monthly')?.style && (document.getElementById('cl-tab-monthly').style.display = '');
-    const qTab = document.getElementById('cl-tab-quarterly');
-    if (qTab) {
-        qTab.style.display = 'none';
-        if (currentChecklistTab === 'quarterly') { currentChecklistTab = 'daily'; switchChecklistTab('daily'); return; }
-    }
-
-    if (container) container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
-    try {
-        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-            fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
-        ));
-        checklistDataCacheMS = {};
-        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-            checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
-        });
-        _applyPendingTogglesMS();
-        renderChecklistMS();
-    } catch (e) {
-        console.error('MSM Checklist Fetch Error', e);
-        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load checklist.</div>';
-    }
-}
-
-function renderChecklistMS() {
-    const container = document.getElementById('checklistContent');
-    if (!container) return;
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const cache = checklistDataCacheMS[store] || {};
-        const items = _dedupeGlobals(cache[currentChecklistTab] || []);
-        const total = items.length;
-        const done  = items.filter(i => i.checked).length;
-        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
-        const _ac = _msStoreAccent(store);
-        const _allDone = total && done === total;
-
-        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
-            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
-                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
-                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
-            </div>`;
-
-        if (total === 0) {
-            html += `<div class="ms-empty">No tasks for this tab.</div>`;
-        } else {
-            items.forEach(item => {
-                const completedClass = item.checked ? 'completed' : '';
-                const deleteHtml = !item.isGlobal
-                    ? `<button class="cl-delete-btn" onclick="deleteChecklistItemMS('${store}','${item.id}')" data-tip="Delete Task">✖</button>`
-                    : '';
-                html += `
-                <div class="cl-item ${completedClass}">
-                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleChecklistStateMS('${store}','${item.id}', this.checked)">
-                    <div class="cl-content-wrapper" style="justify-content: center;">
-                        <span class="cl-text">${escapeHtml(item.text)}</span>
-                    </div>
-                    ${deleteHtml}
-                </div>`;
-            });
-        }
-
-        html += `<div class="ms-add-row">
-                <input type="text" id="msNewTask_${store}" placeholder="Add a ${escapeHtml(store)} task..." onkeydown="if(event.key==='Enter')addChecklistItemMS('${store}')">
-                <button class="btn-primary cl-add-btn" onclick="addChecklistItemMS('${store}')">Add</button>
-            </div>
-        </div>`;
-    });
-
-    container.innerHTML = html;
-    updateChecklistChipMS();
-}
-
-function toggleChecklistStateMS(store, id, isChecked) {
-    const userName = getChecklistUser();
-    const cache = checklistDataCacheMS[store];
-    if (!cache) return;
-    const item = (cache[currentChecklistTab] || []).find(i => i.id === id);
-    if (item) item.checked = isChecked;
-    _pendingTogglesMS.set(store + '::' + id, { checked: isChecked, expiresAt: Date.now() + 20000 });
-    renderChecklistMS();
-
-    postWrite(CHECKLIST_URL, { action: 'toggle', id, checked: isChecked, tab: currentChecklistTab, user: userName, store })
-        .catch(err => {
-            const it = (cache[currentChecklistTab] || []).find(i => i.id === id);
-            if (it) it.checked = !isChecked;
-            _pendingTogglesMS.delete(store + '::' + id);
-            renderChecklistMS();
-            alert('Could not save that change: ' + err.message);
-        });
-}
-
-async function addChecklistItemMS(store) {
-    const input = document.getElementById('msNewTask_' + store);
-    if (!input) return;
-    const text = input.value.trim();
-    if (!text) return;
-
-    input.disabled = true;
-    const userName = getChecklistUser();
-    try {
-        const out = await postWrite(CHECKLIST_URL, { action: 'add', tab: currentChecklistTab, text, user: userName, store });
-        const cache = checklistDataCacheMS[store] || (checklistDataCacheMS[store] = { daily: [], weekly: [], monthly: [], quarterly: [] });
-        (cache[currentChecklistTab] ||= []).push({ id: out.id || ('temp_' + Date.now()), text, isGlobal: false, checked: false });
-        renderChecklistMS();
-    } catch (e) {
-        alert('Failed to add task: ' + (e.message || e));
-    } finally {
-        const el = document.getElementById('msNewTask_' + store);
-        if (el) { el.value = ''; el.disabled = false; el.focus(); }
-    }
-}
-
-function deleteChecklistItemMS(store, id) {
-    const userName = getChecklistUser();
-    const cache = checklistDataCacheMS[store];
-    if (!cache) return;
-    const list = cache[currentChecklistTab] || [];
-    const removed = list.find(i => i.id === id);
-    cache[currentChecklistTab] = list.filter(i => i.id !== id);
-    renderChecklistMS();
-
-    postWrite(CHECKLIST_URL, { action: 'delete', id, tab: currentChecklistTab, user: userName, store })
-        .catch(err => {
-            if (removed) { (cache[currentChecklistTab] ||= []).push(removed); renderChecklistMS(); }
-            alert('Could not delete task: ' + err.message);
-        });
-}
-
-// Combined nudge chip across both managed stores (based on the Daily list).
-function updateChecklistChipMS() {
-    const segs = [];
-    const samStores = [];
-    let anyOutstanding = false, anyTasks = false;
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const items = _dedupeGlobals((checklistDataCacheMS[store] || {}).daily || []);
-        if (!items.length) return;
-        anyTasks = true;
-        const done = items.filter(i => i.checked).length;
-        samStores.push({ store, done, total: items.length });
-        const ac = _msStoreAccent(store);
-        const label = done === items.length ? `${store} ✓` : `${store} ${done}/${items.length}`;
-        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
-        if (done < items.length) anyOutstanding = true;
-    });
-    if (typeof samSetProgress === 'function') samSetProgress('cl', samStores.length ? { stores: samStores } : { done: 0, total: 0 });
-
-    const chip = document.getElementById('cl-progress-chip');
-    const btn = document.querySelector('.cl-nav-toggle');
-    if (!chip || !btn) return;
-
-    if (!anyTasks) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
-    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
-    const panel = document.getElementById('checklistSidePanel');
-    const isOpen = panel && panel.classList.contains('open');
-    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
 }
 
 // --- API ACTIONS (POST to Apps Script) ---
@@ -41907,20 +41116,6 @@ function updateChecklistChip() {
 // Uses a separate path from loadChecklist() so the panel-open guard doesn't suppress it.
 async function _prefetchChecklistForChip() {
     const userName = getChecklistUser();
-    if (_isMSMChecklist()) {
-        try {
-            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
-            ));
-            checklistDataCacheMS = {};
-            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
-            });
-            _applyPendingTogglesMS();
-            updateChecklistChipMS();
-        } catch (_) {}
-        return;
-    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
@@ -41939,20 +41134,6 @@ function _startChecklistSync() {
         const panel = document.getElementById('checklistSidePanel');
         if (!panel?.classList.contains('open')) return;
         const userName = getChecklistUser();
-        if (_isMSMChecklist()) {
-            try {
-                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                    fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
-                ));
-                checklistDataCacheMS = {};
-                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                    checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
-                });
-                _applyPendingTogglesMS();
-                renderChecklistMS();
-            } catch (_) {}
-            return;
-        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
@@ -42031,8 +41212,6 @@ document.addEventListener('click', function(e) {
 let auditDataCache = { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
 let currentAuditTab = 'daily';
 let _auditSyncInterval = null;
-// Multi-Store Manager: one audit cache per managed store, rendered stacked. Empty for others.
-let auditDataCacheMS = {};   // { BAL: {daily,weekly}, MPL: {daily,weekly} }
 
 function _auditTab(tab) { return auditDataCache[tab] || { items: [], total: 0, completed: 0 }; }
 
@@ -42040,13 +41219,12 @@ function switchAuditTab(tab) {
     currentAuditTab = tab;
     document.getElementById('audit-tab-daily')?.classList.toggle('active', tab === 'daily');
     document.getElementById('audit-tab-weekly')?.classList.toggle('active', tab === 'weekly');
-    if (_isMSMChecklist()) renderAuditMS(); else renderAudit();
+    renderAudit();
 }
 
 async function loadAudit() {
     const panel = document.getElementById('auditSidePanel');
     if (!panel?.classList.contains('open')) return;   // only fetch when opening
-    if (_isMSMChecklist()) { await loadAuditMS(); return; }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const container = document.getElementById('auditContent');
     if (container) container.innerHTML = '<div class="status-message">Syncing checklist...</div>';
@@ -42099,127 +41277,6 @@ function renderAudit() {
     updateAuditChip();
 }
 
-// ============================================================================
-// MULTI-STORE MANAGER — dual-store audit checklist (both stores stacked).
-// The audit checklist is shared per store; a MSM sees both managed stores in one
-// panel. ASMs (single store) and the DM overview are unaffected.
-// ============================================================================
-async function loadAuditMS() {
-    const container = document.getElementById('auditContent');
-    if (container) container.innerHTML = '<div class="status-message">Syncing checklist...</div>';
-    try {
-        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-            fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
-        ));
-        auditDataCacheMS = {};
-        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-            auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
-        });
-        renderAuditMS();
-    } catch (e) {
-        console.error('MSM Audit Fetch Error', e);
-        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load the cleaning checklist.</div>';
-    }
-}
-
-function renderAuditMS() {
-    const container = document.getElementById('auditContent');
-    if (!container) return;
-
-    const label = document.getElementById('audit-week-label');
-    if (label) label.textContent = currentAuditTab === 'daily' ? 'Today · both stores' : 'This week · both stores';
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const data = (auditDataCacheMS[store] || {})[currentAuditTab] || { items: [], total: 0, completed: 0 };
-        const items = data.items || [];
-        const total = data.total || items.length;
-        const done  = (data.completed != null) ? data.completed : items.filter(i => i.checked).length;
-        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
-        const _ac = _msStoreAccent(store);
-        const _allDone = total && done === total;
-
-        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
-            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
-                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
-                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
-            </div>`;
-
-        if (items.length === 0) {
-            html += `<div class="ms-empty">No ${currentAuditTab} audit items set up.</div>`;
-        } else {
-            let lastSection = null;
-            items.forEach(item => {
-                if (item.section !== lastSection) {
-                    html += `<div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin: 12px 4px 6px;">${escapeHtml(item.section)}</div>`;
-                    lastSection = item.section;
-                }
-                const completedClass = item.checked ? 'completed' : '';
-                html += `
-                <div class="cl-item ${completedClass}">
-                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleAuditStateMS('${store}','${item.id}', this.checked)">
-                    <div class="cl-content-wrapper" style="justify-content: center;">
-                        <span class="cl-text">${escapeHtml(item.text)}</span>
-                    </div>
-                </div>`;
-            });
-        }
-        html += `</div>`;
-    });
-
-    container.innerHTML = html;
-    updateAuditChipMS();
-}
-
-function toggleAuditStateMS(store, id, isChecked) {
-    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
-    const tab = currentAuditTab;
-    const data = (auditDataCacheMS[store] || {})[tab];
-    if (!data) return;
-
-    const item = (data.items || []).find(i => i.id === id);
-    if (item) item.checked = isChecked;
-    data.completed = (data.items || []).filter(i => i.checked).length;
-    renderAuditMS();
-
-    postWrite(STORE_AUDIT_URL, { action: 'toggle', id, checked: isChecked, store, user: userName, period: tab })
-        .catch(err => {
-            if (item) item.checked = !isChecked;
-            data.completed = (data.items || []).filter(i => i.checked).length;
-            renderAuditMS();
-            alert('Could not save that change: ' + err.message);
-        });
-}
-
-function updateAuditChipMS() {
-    const segs = [];
-    const samStores = [];
-    let anyOutstanding = false, anyItems = false;
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const daily = (auditDataCacheMS[store] || {}).daily || { items: [], total: 0, completed: 0 };
-        const total = daily.total || (daily.items || []).length;
-        if (!total) return;
-        anyItems = true;
-        const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
-        samStores.push({ store, done, total });
-        const ac = _msStoreAccent(store);
-        const label = done === total ? `${store} ✓` : `${store} ${done}/${total}`;
-        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
-        if (done < total) anyOutstanding = true;
-    });
-    if (typeof samSetProgress === 'function') samSetProgress('audit', samStores.length ? { stores: samStores } : { done: 0, total: 0 });
-
-    const chip = document.getElementById('audit-progress-chip');
-    const btn = document.querySelector('.audit-nav-toggle');
-    if (!chip || !btn) return;
-
-    if (!anyItems) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
-    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
-    const panel = document.getElementById('auditSidePanel');
-    const isOpen = panel && panel.classList.contains('open');
-    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
-}
-
 async function toggleAuditState(id, isChecked) {
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
@@ -42265,19 +41322,6 @@ function updateAuditChip() {
 }
 
 async function _prefetchAuditForChip() {
-    if (_isMSMChecklist()) {
-        try {
-            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
-            ));
-            auditDataCacheMS = {};
-            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
-            });
-            updateAuditChipMS();
-        } catch (_) {}
-        return;
-    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -42291,19 +41335,6 @@ function _startAuditSync() {
     _auditSyncInterval = setInterval(async () => {
         const panel = document.getElementById('auditSidePanel');
         if (!panel?.classList.contains('open')) return;
-        if (_isMSMChecklist()) {
-            try {
-                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                    fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
-                ));
-                auditDataCacheMS = {};
-                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                    auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
-                });
-                renderAuditMS();
-            } catch (_) {}
-            return;
-        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -42345,9 +41376,8 @@ window.toggleAuditPanel = function(event) {
 const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity, TR: Infinity };
 
 window.updateRoleLocks = function() {
-    // Role capacity is per STORE. Normally the page shows one store's dots, so the
-    // whole document is one scope; the MSM's stacked dual-store widget marks each
-    // store section with data-goals-scope so BAL's B1 doesn't lock MPL's B1.
+    // Role capacity is per STORE. The page shows one store's dots, so the whole
+    // document is one scope unless a section marks itself with data-goals-scope.
     const sections = document.querySelectorAll('[data-goals-scope]');
     const scopes = sections.length ? Array.from(sections) : [document];
 
@@ -42438,7 +41468,6 @@ window.selectRole = function(clickedBtn, emp, role) {
 
 // Recompute every visible auto-goal from the currently selected roles.
 window.recomputeGoalDisplays = function() {
-    if (_msGoalsActive()) return recomputeGoalDisplaysMS();
     if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
@@ -43559,9 +42588,6 @@ const _recycleReasonKey = r => (RECYCLE_REASONS.some(x => x.key === r.reason) ? 
 function _recycleStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (role === 'ceo' || role === 'district manager') return [...RECYCLE_STORES];
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -43672,7 +42698,7 @@ function switchRecycleTab(tab) {
     if (tab === 'view') fetchMyRecycleRequests();
 }
 
-// MSM / corp roles get a store chooser; a single-store manager is locked to theirs.
+// Corp roles get a store chooser; a store manager is locked to theirs.
 function _buildRecycleStorePicker() {
     const row = document.getElementById('recycle-store-row');
     const sel = document.getElementById('recycleInvStoreSelect');
@@ -43684,10 +42710,9 @@ function _buildRecycleStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    // Default to the store this open targets for an MSM — a single-store alert
-    // override if pending, else the active dashboard store; everyone else keeps
-    // their only option. Still switchable via the dropdown when multi-store.
-    const def = _msmToolStore();
+    // Default to the store a pending alert override targets (the DM's feed card);
+    // a single-store manager keeps their only option.
+    const def = _consumeAlertToolStore();
     if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
     else if (sel.options.length) sel.selectedIndex = 0;
 }
@@ -44665,7 +43690,7 @@ function _recycleRenderBubble(icon, title, bodyText, summary, stores, focusMonth
     // the title, which is already the feed row's own title ("Recycle review").
     // The body alone is the useful part.
     textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
-    // Stores this alert covers → routes an MSM single-store click (see
+    // Stores this alert covers → routes the DM's click to a store (see
     // _samGatherReminders).
     if (stores && stores.length) textEl.dataset.stores = [...new Set(stores.map(s => String(s).toUpperCase()))].join(',');
     else delete textEl.dataset.stores;
@@ -44794,7 +43819,7 @@ const EMAIL_LIST_GROUPS = [
             { key: 'recycle_report', label: 'Recycle Month-End Report',
               desc: 'Who the month-end recycle report email is addressed to.' },
             { key: 'expense_report', label: 'Expense Reports',
-              desc: 'Where a monthly expense report goes when the DM or MSM sends one.' },
+              desc: 'Where a monthly expense report goes when the DM sends one.' },
             { key: 'idea_submissions', label: 'Submit an Idea',
               desc: 'Who receives an idea from the lightbulb in the top bar. '
                   + 'The first address is the To; any others are copied in.' },
@@ -45125,7 +44150,7 @@ const FA_ROLES = [
     { slug: 'ceo',               short: 'CEO', label: 'CEO' },
     { slug: 'district-manager',  short: 'DM',  label: 'District Manager' },
     { slug: 'owner-manager',     short: 'OM',  label: 'Owner (Manager)' },
-    { slug: 'manager',           short: 'MGR', label: 'Manager (Incl. Multi-Store)' },
+    { slug: 'manager',           short: 'MGR', label: 'Manager' },
     { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
     { slug: 'employee',          short: 'EMP', label: 'Employee' },
     { slug: 'mocd',               short: 'MOCD', label: 'MOCD' },
@@ -45141,7 +44166,7 @@ const FEATURE_CATALOG = [
     // board has no inbox; it is on the ordinary nav now and would otherwise be
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
-    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multistore-manager', 'assistant-manager', 'employee'] },
+    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager', 'employee'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -45174,22 +44199,19 @@ const FEATURE_CATALOG = [
     // TWO rows for one tool, sharing the `tool-expenses` stem the way the claims
     // and preferred-purchase pairs do. One key carrying both role classes made the
     // MGR column DISHONEST: it read as "on for the whole manager role" while the
-    // role-multistore-manager class silently admitted only the MSM, so the switch
+    // role class on the link silently admitted only one person, so the switch
     // that should have granted it to another manager was not the one anybody would
     // reach for (Ethan 2026-08-09). Split, the DM row means what it says and the
     // MGR column on the second row is a real switch — turning it on beats the role
     // class, which is how every other tool already behaves.
     //
-    // The second row's def is 'multistore-manager' — not a role COLUMN (there isn't
-    // one; they sign in as a manager) but a token _faDefaultFor understands, so the
-    // per-user tab can say "role default: visible" for Joseph and match what the
-    // `role-multistore-manager` class on the link actually does. An empty def was
-    // tried first and made his row read "hidden" while he plainly had the tool.
+    // The second row's def is empty: it was the MSM's, and that role is gone
+    // (2026-11-08). It is off for every role until someone switches it on.
     //
     // CEO dropped from both (Ethan 2026-08-09) — they no longer file or review here.
     // The edge fn still admits the role; this only takes the tool off their panel.
     { key: 'tool-expenses',            label: 'Expense Report (DM)',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
-    { key: 'tool-expenses-mgr',        label: 'Expense Report (Manager)',      tab: 'tools', group: 'Admin', def: ['multistore-manager'] },
+    { key: 'tool-expenses-mgr',        label: 'Expense Report (Manager)',      tab: 'tools', group: 'Admin', def: [] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -45321,12 +44343,12 @@ const FEATURE_CATALOG = [
     // lists it — the MOCD's ec-view-categories was revoked by hand, and a new key
     // defaulting ON would quietly re-open the page to them under a new name.
     // ASM is present: photographing an item is their job (see the notify roles).
-    { key: 'ec-view-photos',           label: 'SPEEKS Connect · No Pictures', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    { key: 'ec-view-photos',           label: 'SPEEKS Connect · No Pictures', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     // Same audience as the alarm, and for the same reason: an ASM is usually
     // the person who wrote the title. ⚠️ This list must match `byRole` in the
     // listing-titles function — a backend that says yes while the button says no
     // is a tool reachable by URL that nobody can see.
-    { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     // Picture Quality (2026-09-30): listing photos graded against the Picture
     // Guide. DM and CEO only while it is new (Ethan, 2026-09-23); it widens to
     // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
@@ -45559,10 +44581,6 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
     const slug = String(userRoleClass || '').replace(/^role-/, '');
     if (feat.def.includes(slug)) return true;
     if (slug === 'assistant-manager' && feat.def.includes('employee')) return true;
-    // Same MSM rule _passesRoleClasses applies to the DOM, so this off-page
-    // resolution (Jump To, section nav) can't disagree with the page itself.
-    if (feat.def.includes('multistore-manager') && typeof isMultiStoreManager === 'function'
-        && isMultiStoreManager()) return true;
     return false;
 }
 
@@ -45646,18 +44664,14 @@ function _applySectionNavVisibility(userRoleClass, userName) {
  * drift. No role classes at all means "everyone" — that is what most tagged
  * elements want, and changing it would hide half the site.
  *
- * A Multi-Store Manager logs in with the effective role 'manager' (see the login
- * block), so `role-manager` can't distinguish them and there is no role class of
- * their own. `role-multistore-manager` is that missing gate: it matches ONLY an
- * MSM, letting something be shown to them without also showing it to every store
- * manager.
+ * A leftover MSM role class in the HTML now matches no one (the role went
+ * 2026-11-08); a per-user Feature Access "on" still beats it.
  */
 function _passesRoleClasses(classes, userRoleClass) {
     const required = Array.from(classes).filter(c => c.startsWith('role-'));
     return required.length === 0 ||
         required.includes(userRoleClass) ||
-        (userRoleClass === 'role-assistant-manager' && required.includes('role-employee')) ||
-        (required.includes('role-multistore-manager') && isMultiStoreManager());
+        (userRoleClass === 'role-assistant-manager' && required.includes('role-employee'));
 }
 
 /**
@@ -45944,19 +44958,9 @@ function _faSyncTabButtons() {
     });
 }
 
-// `isMsm` exists because the Multi-Store Manager signs in with the effective role
-// 'manager' and so has no column of its own in this grid, while the DOM has always
-// been able to single them out with `role-multistore-manager`. A catalog entry can
-// now say the same thing by putting 'multistore-manager' in its def.
-//
-// Without this the user tab told a flat lie: Joseph HAD the Expense Report (the
-// role class admits him) and his row read "role default: hidden", because the tab
-// squashes his role to 'manager' before asking (Ethan spotted it 2026-08-09).
-// Deliberately NOT wired into the role columns — an ordinary manager really does
-// not get these, so the MGR chip staying off is the truth there.
-function _faDefaultFor(feat, roleSlug, isMsm) {
+function _faDefaultFor(feat, roleSlug) {
     if (feat.def === 'all') return true;
-    return feat.def.includes(roleSlug) || (!!isMsm && feat.def.includes('multistore-manager'));
+    return feat.def.includes(roleSlug);
 }
 
 function _faRoleOverride(key, slug) {
@@ -46052,7 +45056,7 @@ async function faToggleRole(key, slug) {
 // the tools to lend them, Grant → writes user overrides (enabled=true) in bulk.
 // Their own tools stay (overrides only add), so they see both versions. Manual
 // on/off — the "End coverage" buttons revoke. Nothing expires on its own.
-const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
+const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 
 // Features offered for delegation: DM-only SPEEKS Tools + DM-only
 // workspace/operations-style section actions (tabs). Explicitly NOT dashboard
@@ -46253,10 +45257,7 @@ function _faRenderUserRows() {
 function _faUserRowsHtml() {
     const filter = _faFilter.trim().toLowerCase();
     const u = _faUsers.find(x => x.name.toLowerCase() === _faUser);
-    // effective role slug (Multi-Store Manager logs in with role 'manager')
-    let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
-    const isMsm = roleSlug === 'multi-store-manager';
-    if (isMsm) roleSlug = 'manager';
+    const roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
     // Group features into collapsible cards (collapsed by default; a filter
     // expands the matches) so one user's exceptions aren't one huge scroll. A
     // "N set" badge on each card surfaces where this user already has overrides.
@@ -46277,7 +45278,7 @@ function _faUserRowsHtml() {
             let inherited = null;
             if (roleSlug) {
                 const roleOvr = _faRoleOverride(f.key, roleSlug);
-                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug, isMsm) : roleOvr;
+                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
             }
             const seg = (val, txt) => {
                 const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
@@ -46708,7 +45709,6 @@ function _restockWho() {
         name: sessionStorage.getItem('speeksUserName') || '',
         role: sessionStorage.getItem('speeksUserRole') || '',
         store: sessionStorage.getItem('speeksUserStore') || '',
-        multiStore: sessionStorage.getItem('speeksMultiStore') === 'true',
     };
 }
 
@@ -47137,18 +46137,15 @@ function _vrIsDM() { return _vrRole() === 'district manager' || _vrHasDmDelegati
 function _vrIsManager() { return _VR_MANAGER_ROLES.has(_vrRole()) && !_vrHasDmDelegation(); }
 
 // Stores whose periods the tab loads: the DM gets every store at once (they
-// pick a date range first, then flip between stores within it); an MSM sees
-// both managed stores; a manager is locked to their own.
+// pick a date range first, then flip between stores within it); a manager is
+// locked to their own.
 function _vrStores() {
     if (_vrIsDM()) return ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     return _vrMyStores();
 }
 
-// The manager's own store(s) — used for reminders/dots regardless of UI state.
+// The manager's own store (a list) — used for reminders/dots regardless of UI state.
 function _vrMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -47182,15 +46179,11 @@ async function loadVarianceReplies() {
         if (!json.success) throw new Error(json.error);
         _vrPeriods = json.data || [];
         // Opening the tool is the manager reviewing the DM's notes, so clear the
-        // "DM reviewed your replies" FYI for the store(s) visible here — the active
-        // store only for an MSM (they switch dashboards for the other), all periods
-        // for a single-store manager. The reply-REQUESTED nag is untouched (it's
-        // state-based and clears only when they actually answer).
+        // "DM reviewed your replies" FYI for every period here. The reply-REQUESTED
+        // nag is untouched (it's state-based and clears only when they actually answer).
         if (!_vrIsDM()) {
-            const active = _msmDefaultStore();
             const seen = _vrGetReviewSeen();
             _vrPeriods.forEach(p => {
-                if (active && (p.store || '').toUpperCase() !== active) return;
                 // Stamp the latest thing that could have surfaced this period. A
                 // cleared store has no dm_notes_at to stamp against, so the upload
                 // itself is what "I've looked at this" refers to — without it the
@@ -47211,7 +46204,7 @@ async function loadVarianceReplies() {
         // so point it there before resolving the period. One-time — normal opens
         // keep the DM's current store.
         if (_vrIsDM()) {
-            const target = _consumeMsmAlertStore();
+            const target = _consumeAlertToolStore();
             const sSel = document.getElementById('vr-store-select');
             if (target && sSel && [...sSel.options].some(o => o.value === target)) sSel.value = target;
         }
@@ -47239,23 +46232,15 @@ function _vrBuildPeriodPicker() {
             return `<option value="${key}">${escapeHtml(formatVarianceRange(p.date_from, p.date_to))}</option>`;
         }).join('');
     } else {
-        const multi = _vrStores().length > 1;
+        // A manager has one store, so the label needs no store prefix.
         sel.innerHTML = _vrPeriods.map(p => {
-            const label = `${multi ? p.store + ' · ' : ''}${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
+            const label = `${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
             return `<option value="${p.id}">${escapeHtml(label)}</option>`;
         }).join('');
     }
     sel.style.display = '';
     if (current && [...sel.options].some(o => o.value === current)) {
         sel.value = current; // keep the user's current pick across re-renders
-    } else if (!_vrIsDM()) {
-        // First load for a manager/MSM: default to a period for the store this open
-        // is meant to show — a single-store alert override if one is pending, else
-        // the active dashboard store — rather than the first in the list. Re-renders
-        // preserve the current pick (the `current` branch above).
-        const def = _msmToolStore();
-        const match = def && _vrPeriods.find(p => (p.store || '').toUpperCase() === def);
-        if (match) sel.value = match.id;
     }
 }
 
@@ -48453,15 +47438,14 @@ function _vrFmtStores(stores) {
     return `${u.slice(0, -1).join(', ')}, and ${u[u.length - 1]}`;
 }
 
-// Manager / MSM variance feed row. STATE-based, NOT one-shot: it reflects the
+// Manager variance feed row. STATE-based, NOT one-shot: it reflects the
 // actual outstanding work and re-derives every poll, so it survives navigating
 // into the tool and only leaves when the work is done (or the user snoozes it in
 // the feed). The old version fired a one-time toast per period gated by a
 // localStorage "seen" key — so clicking through to the tool set the key and the
-// row vanished even with nothing answered. An MSM covers two stores and the DM
-// normally uploads all five the same day (so BAL + MPL arrive together), hence
-// ONE combined row that lists the stores ("BAL and MPL: …") rather than a
-// separate popup per store. Cleared stores owe nothing, so they add no row.
+// row vanished even with nothing answered. Should the user cover more than one
+// store, it is still ONE combined row that lists the stores ("BAL and MPL: …")
+// rather than a separate popup per store. Cleared stores owe nothing.
 function _vrMaybePopup() {
     const reviewSeen = _vrGetReviewSeen();
     // One entry per store with unexplained lines, carrying ITS OWN deadline
@@ -48646,8 +47630,8 @@ function _vrRenderBubble(icon, title, bodyText, summary, stores, fyiOnly) {
         textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
         // Read by _samReminderCfg to soften the card when nothing is owed.
         if (fyiOnly) textEl.dataset.fyi = '1'; else delete textEl.dataset.fyi;
-        // Stores this alert covers → the feed uses it to route an MSM single-store
-        // click to that store (see _samGatherReminders).
+        // Stores this alert covers → the feed uses it to route the DM's click to
+        // the first store that needs review (see _samGatherReminders).
         if (stores && stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
         else delete textEl.dataset.stores;
     }
@@ -48707,11 +47691,8 @@ function _agEnabled() {
 function _agIsDM() { return _agEnabled() && (_agRole() === 'district manager' || _agHasDmDelegation()); }
 function _agIsStoreUser() { return _agEnabled() && _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
 
-// The store user's own store(s) — an MSM sees both, stacked in one list.
+// The store user's own store (a list, so callers that loop keep working).
 function _agMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -48886,18 +47867,10 @@ function agOnStoreChange() {
 }
 
 // The stores the current render shows (the DM flips with the dropdown; a store
-// user gets their own store(s), an MSM both at once).
-let _agViewStore = null; // MSM aging view store, resolved once per tab-open (see switchWorkspaceTab)
+// user gets their own store).
 function _agVisibleStores() {
     if (_agIsDM()) return [((document.getElementById('ag-store-select') || {}).value || 'OVL').toUpperCase()];
-    // MSM: show one store's items (switch dashboards for the other) instead of
-    // stacking both. _agViewStore is resolved at tab-open — a single-store alert
-    // override if one was pending, else the active dashboard store. The reminder
-    // still covers every managed store via _agMyStores(), and _agItems is fetched
-    // for all of them — this only scopes the on-screen view. Single-store managers
-    // are unaffected.
-    const def = _agViewStore || _msmDefaultStore();
-    return def ? [def] : _agMyStores();
+    return _agMyStores();
 }
 
 function _agSubtitleText() {
@@ -49545,10 +48518,6 @@ const _AG_TIER_BODY = {
     soon:     'Aging report replies are due within the next day — make sure they’re submitted in time.',
     plain:    'The aging report has items waiting on a reply from your store.',
 };
-// Short per-store phrase (used in the multi-store breakdown).
-const _AG_TIER_PHRASE = {
-    over: 'reply overdue', followup: 'new DM note to answer', soon: 'due within a day', plain: 'needs your reply',
-};
 function _agStoreTierOf(items) {
     const now = Date.now();
     const dueSoon = it => it.due_at && (() => { const d = new Date(it.due_at).getTime(); return now < d && d - now < 24 * 3600 * 1000; })();
@@ -49558,30 +48527,18 @@ function _agStoreTierOf(items) {
     return 'plain';
 }
 
-// Render the store-side aging bubble for the given awaiting items. A single-store
-// manager gets the tier's full sentence; a multi-store manager gets a per-store
-// breakdown ("BAL: due within a day • MPL: new DM note to answer") so both stores'
-// progress is visible at once, and finishing one store drops it (see
-// _agRefreshStorePopup). Stamps the covered stores for MSM click-routing. No
+// Render the store-side aging bubble for the given awaiting items: the tier's
+// full sentence. Stamps the covered stores on data-stores for the feed. No
 // guards here — callers own the session/ack gates.
 function _agBuildStoreBubble(mine) {
     const byStore = {};
     mine.forEach(it => { const s = (it.store || '').toUpperCase(); (byStore[s] = byStore[s] || []).push(it); });
     const stores = Object.keys(byStore);
-    const multi = _agMyStores().length > 1;
     // Overall tier = worst across every pending store → drives the title/icon.
     let top = 'plain';
     stores.forEach(s => { const t = _agStoreTierOf(byStore[s]); if (_AG_TIER_RANK[t] > _AG_TIER_RANK[top]) top = t; });
     const [icon, title] = _AG_TIER_HEAD[top];
-    let body;
-    if (multi && stores.length > 1) {
-        const ordered = stores.slice().sort((a, b) => _AG_TIER_RANK[_agStoreTierOf(byStore[b])] - _AG_TIER_RANK[_agStoreTierOf(byStore[a])]);
-        body = ordered.map(s => `${s}: ${_AG_TIER_PHRASE[_agStoreTierOf(byStore[s])]}`).join('  •  ');
-    } else if (multi && stores.length === 1) {
-        body = `${stores[0]}: ${_AG_TIER_BODY[top]}`;
-    } else {
-        body = _AG_TIER_BODY[top];
-    }
+    const body = _AG_TIER_BODY[top];
     _agRenderBubble(icon, title, body);
     const agTextEl = document.getElementById('agingAlertBubbleText');
     if (agTextEl) {
@@ -49602,9 +48559,8 @@ function _agBuildStoreBubble(mine) {
     }
 }
 
-// Store-side popup: shows on every sign-in until acknowledged. Single-store users
-// see the most-urgent tier's message; a multi-store manager sees a per-store
-// breakdown (see _agBuildStoreBubble).
+// Store-side popup: shows on every sign-in until acknowledged, with the
+// most-urgent tier's message (see _agBuildStoreBubble).
 function _agMaybePopup() {
     const mine = _agMyItemsCache.filter(_agAwaitingStore);
     if (!mine.length) return;
@@ -49618,8 +48574,7 @@ function _agMaybePopup() {
     _agBuildStoreBubble(mine);
 }
 
-// After a store posts a reply, keep the live store bubble in step: drop a store
-// that just finished (so an MSM who clears BAL still gets nagged for MPL), and
+// After a store posts a reply, keep the live store bubble in step, and
 // hide the bubble once nothing is left awaiting. Only touches a store bubble that
 // is currently up — an acked/hidden one is not resurrected.
 function _agRefreshStorePopup() {
@@ -50646,22 +49601,14 @@ function _qpBlocks(main) {
     });
 }
 function _qpKey(b) { return b.getAttribute('data-qp-block'); }
+// One layout per person. (The per-store "@STORE" layouts went with the MSM role,
+// 2026-11-08: one store per manager, so there is nothing to keep apart.)
 function _qpStoreKey() {
-    const store = _qpLayoutStore();
-    return QP_LAYOUT_KEY + String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase() + (store ? '@' + store.toLowerCase() : '');
-}
-// A MULTI-STORE MANAGER keeps a layout per store (Ethan, 2026-10-26: "saved by
-// user, by store"): BAL and MPL each remember their own page. Everyone else has
-// one. A store with nothing saved yet starts from the person's single layout,
-// here (the browser copy) and in qp-layout (the record).
-function _qpLayoutStore() {
-    return typeof isMultiStoreManager === 'function' && isMultiStoreManager()
-        ? String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase() : '';
+    return QP_LAYOUT_KEY + String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase();
 }
 function _qpSaved() {
     try {
-        const own = localStorage.getItem(_qpStoreKey());
-        const v = JSON.parse(own || (_qpLayoutStore() ? localStorage.getItem(QP_LAYOUT_KEY + _qpUser().toLowerCase()) : null) || 'null');
+        const v = JSON.parse(localStorage.getItem(_qpStoreKey()) || 'null');
         return v && v.v === 2 && Array.isArray(v.rows) ? v.rows : null;
     } catch (e) { return null; }
 }
@@ -50673,10 +49620,8 @@ function _qpSaved() {
 // layout saved before this up the first time. Writes are debounced: a drag
 // session of several drops is one save. On the localhost test login the write
 // is blocked like every other write, so the test page keeps its browser copy.
-// The save is pinned to WHO and WHICH STORE it was made on, when it is made —
-// not when the debounce fires (Ethan, 2026-10-26: a multi-store manager edited
-// BAL, switched to MPL inside the half-second, and the BAL layout was saved as
-// MPL's too). Switching stores also sends a waiting save at once (_qpFlushSave).
+// The save is pinned to WHO made it, when it is made — not when the debounce
+// fires.
 let _qpPending = null;
 function _qpSave(rows) {
     _qpSaveLocal(rows);
@@ -50690,7 +49635,7 @@ function _qpFlushSave() {
     _qpPending = null;
     if (p) _qpPush(p.body, p.who);
 }
-function _qpWho() { return { user: _qpUser(), store: _qpLayoutStore() }; }
+function _qpWho() { return { user: _qpUser() }; }
 function _qpSaveLocal(rows) {
     try {
         if (rows) localStorage.setItem(_qpStoreKey(), JSON.stringify({ v: 2, rows: rows }));
@@ -50701,10 +49646,10 @@ let _qpSaveTimer = null;
 const _qpUser = () => String(sessionStorage.getItem('speeksUserName') || '').trim();
 function _qpPush(body, who) {
     who = who || _qpWho();
-    const user = who.user, store = who.store;
+    const user = who.user;
     if (!user || user.toLowerCase() === 'unknown') return Promise.resolve();
-    // keepalive: a save sent as the page reloads (a store switch) still lands.
-    return fetch(QP_LAYOUT_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, store ? { store: store } : {}, body)) })
+    // keepalive: a save sent as the page unloads still lands.
+    return fetch(QP_LAYOUT_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, body)) })
         .catch(function () {});
 }
 // Once per page load, after the layout is drawn from the browser's copy. The
@@ -50715,8 +49660,7 @@ async function _qpLayoutSync() {
     const main = _qpMain(), user = _qpUser();
     if (!main || !user || (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole())) return;
     let j = null;
-    const store = _qpLayoutStore();
-    try { j = await fetch(QP_LAYOUT_URL + '?user=' + encodeURIComponent(user) + (store ? '&store=' + store : '') + '&v=' + Date.now()).then(function (r) { return r.json(); }); } catch (e) { return; }
+    try { j = await fetch(QP_LAYOUT_URL + '?user=' + encodeURIComponent(user) + '&v=' + Date.now()).then(function (r) { return r.json(); }); } catch (e) { return; }
     if (!j || !j.success) return;
     _qpSeenLocal(Array.isArray(j.seen) ? j.seen : []);
     const local = _qpSaved();
@@ -51677,6 +50621,8 @@ function _qpRenderHeadlinesNow(main, rows) {
     // Store Health draws from the same headline data (_qptRenderHealth).
     if (typeof _qptRenderHealth === 'function') try { _qptRenderHealth(main); } catch (e) { console.error('QuickPortal Store Health:', e); }
     if (typeof _qptRenderSales === 'function') try { _qptRenderSales(main); } catch (e) { console.error('QuickPortal Sales & Goals:', e); }
+    if (typeof _qptRenderInv === 'function') try { _qptRenderInv(main); } catch (e) { console.error('QuickPortal Inventory:', e); }
+    if (typeof _qptRenderWork === 'function') try { _qptRenderWork(main); } catch (e) { console.error('QuickPortal Listings & Deals:', e); }
 }
 function _qpSetHeadline(piece, h) {
     _qpHL[piece] = h;
@@ -52973,6 +51919,8 @@ function _qpRenderWidgets(rows) {
     try { _qptRenderHealth(main); } catch (e) { console.error('QuickPortal Store Health:', e); }
     try { _qptRenderSales(main); } catch (e) { console.error('QuickPortal Sales & Goals:', e); }
     try { _qptRenderFrame(main); } catch (e) { console.error('QuickPortal Customers:', e); }
+    try { _qptRenderInv(main); } catch (e) { console.error('QuickPortal Inventory:', e); }
+    try { _qptRenderWork(main); } catch (e) { console.error('QuickPortal Listings & Deals:', e); }
 }
 // Put a widget on the page: a row of its own at the bottom (Add), or wherever
 // it was dropped (t, from a drag out of the drawer — _qpWireDrag's drop).
@@ -53234,7 +52182,7 @@ function _qpVarianceSample() {
 // like for each role"). Live Claims, Call Backs, B2B and Store KPIs are often
 // empty or all clear, so a test user only ever saw the "All Clear" state.
 // These are made-up reads in each tool's own shape, scoped the way the real
-// read is (the signed-in store, an MSM's two, or all five for DM/CEO/MOCD), so
+// read is (the signed-in store, or all five for DM/CEO/MOCD), so
 // every model, chip and strip runs as it does on a real login. Nothing is
 // written anywhere: _qpWLoad uses one only when _speeksTestSession is set,
 // which only a test login or test account has. Variance, district Variance and SPEEKS Connect keep
@@ -54021,7 +52969,7 @@ const _QP_WSPEC = {
                 };
             }
             // Done (or not due yet): the latest period with numbers, judged on
-            // the Store Total — one store's, or the first of an MSM's two.
+            // the Store Total of the first store in scope.
             const p = (d[tab][stores[0]] || []).find(x => (x.saved_count || 0) > 0);
             if (!p) return { n: 0, badge: '', big: '—', small: 'nothing entered yet', sub: '', cap: '', lines: [], link, hv: { pct: null, fix: [] } };
             const tot = _kpiStoreTotals(p.entries || []);
@@ -54719,7 +53667,6 @@ function _qpSnapSample() {
             let team = split.map(x => ({ name: x.name, processed: Math.max(1, Math.round(proc * x.w / wsum)), value: Math.round(proc * x.w / wsum * between(r('tv' + x.name), 70, 130)) }));
             const topN = Math.max(...team.map(m => m.processed));
             team.forEach(m => { m.top = m.processed === topN && !team.some(o => o !== m && o.top); });
-            if (emp) team = [{ name: me, processed: between(r('me'), 4, 11), value: between(r('mev'), 400, 1100), top: false }];
             const lost = between(r('l'), 1, 6);
             facts.push({
                 store: s, date, est_value: est, total_spent: Math.round(est * (1 - margin)), est_margin_pct: Number(margin.toFixed(3)),
@@ -54729,6 +53676,7 @@ function _qpSnapSample() {
                 reviews_today: reviews, five_star_today: five, five_star_mtd: mtd5,
                 devices_processed: proc, processed_value: Math.round(proc * between(r('pv'), 85, 120)), listed_devices: Math.round(proc * 0.8),
                 queue_count: queue, available_count: Math.round(between(r('ac'), 140, 260) * k), available_cost: Math.round(between(r('aco'), 18000, 42000) * k),
+                available_value: Math.round(between(r('aco'), 18000, 42000) * k * (1.8 + rnd(r('avm')) * 0.6)),
                 live_count: Math.round(between(r('lc'), 320, 560) * k), team_production: team,
             });
             if (date >= lmStart) { const sales = Math.round(between(r('ns2'), 3800, 9800) * k); np.push({ store: s, date, sales, np: Math.round(sales * (0.17 + rnd(r('np')) * 0.1)) }); }
@@ -54755,12 +53703,10 @@ function _qpSnapSample() {
 }
 const _qpRole = () => (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
 const _qpIsDist = () => ['district manager', 'ceo', 'mocd'].includes(_qpRole());
-const _qpIsMgr = () => ['manager', 'owner (manager)', 'multi-store manager'].includes(_qpRole())
-    || (typeof isMultiStoreManager === 'function' && isMultiStoreManager());
+const _qpIsMgr = () => ['manager', 'owner (manager)'].includes(_qpRole());
 const _qpIsAsm = () => _qpRole() === 'assistant manager';
 const _qpIsEmp = () => _qpRole() === 'employee';
-// The store a store-side card is about: the dashboard on screen for a
-// Multi-Store Manager, otherwise the person's own.
+// The store a store-side card is about: the person's own.
 function _qpMyStore() {
     const s = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return STORE_CODES.includes(s) ? s : (_claimStores()[0] || '');
@@ -54935,7 +53881,9 @@ Object.assign(QP_WIDGETS, {
     pipeline: {
         label: 'Inventory Pipeline', sub: 'Queue, available and live, and how fast the queue clears',
         icon: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
-        tone: 't', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        // Employees too since 2026-11-08: the Inventory card is the same for the
+        // whole team (Ethan), and its band is this card's figures.
+        tone: 't', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm() || _qpIsEmp()),
     },
     buying: {
         label: 'Buying', sub: 'Yesterday\'s buying against the same day other weeks',
@@ -54968,7 +53916,7 @@ Object.assign(QP_WIDGETS, {
         tone: 'g', avail: () => _qpIsDist(),
     },
     dbuying: {
-        label: 'Buying', sub: 'What every store bought on its latest report, and the margin',
+        label: 'Buying', sub: 'What every store bought on its latest day, and the margin',
         icon: '<svg viewBox="0 0 24 24"><path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/></svg>',
         tone: 'b', avail: () => _qpIsDist(),
     },
@@ -54983,15 +53931,14 @@ Object.assign(QP_WIDGETS, {
         tone: 't', avail: () => _qpIsDist(),
     },
     // Ethan, 2026-10-29 ("Lets do expense report"). The people the Expense
-    // Report tool is for — the DM and Multi-Store Managers file, the CEO
-    // reviews — through the same Feature Access keys as its Tools entry.
+    // Report tool is for — the DM files, the CEO reviews — through the same
+    // Feature Access key as its Tools entry.
     exp: {
         label: 'Expense Report', sub: 'This month\'s mileage and expenses, and whether it is filed',
         icon: '<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6M9 13h7M9 17h5"/></svg>',
         tone: 'g', avail: () => {
             const ok = k => typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible(k);
-            if (['district manager', 'ceo'].includes(_qpRole())) return ok('tool-expenses');
-            return typeof isMultiStoreManager === 'function' && isMultiStoreManager() && ok('tool-expenses-mgr');
+            return ['district manager', 'ceo'].includes(_qpRole()) && ok('tool-expenses');
         },
     },
 });
@@ -55141,8 +54088,10 @@ Object.assign(_QP_WSPEC, {
             const t = _qpTeamOf(d, _qpMyStore()), mx = Math.max(1, ...t.team.map(m => m.n));
             const head = '<div class="qp-ai-top"><div class="qp-hl-big">' + t.total + '<small>devices processed · ' + _lvMoney(t.value, false) + ' value</small></div>'
                 + (t.avg ? _qpTrendHtml(Math.round(t.total - t.avg), _qpN, true, 'Same Day Avg') : '') + '</div>';
-            // An employee's snapshot carries their own line only (store-snapshot).
-            if (_qpIsEmp()) {
+            // Employees see the whole team, as a manager does (Ethan, 2026-11-08:
+            // "This is good for the whole team to see") — store-snapshot no longer
+            // trims their line. The old "Your Day" view is kept off.
+            if (false) {
                 const me = t.team[0];
                 return _qpBody(head + '<div class="qp-hl-cap">Your Day</div>'
                     + (me ? '<div class="qp-ai-pp"><span class="qp-ai-pn">' + escapeHtml(_qpShort(me.name)) + '</span>' + _qpHLBar(t.total ? me.n / t.total * 100 : 0, [], 'good') + '<b>' + me.n + '</b><span class="qp-tm-v">' + _lvMoney(me.value, false) + '</span></div>'
@@ -55153,11 +54102,11 @@ Object.assign(_QP_WSPEC, {
             return _qpBody(head + '<div class="qp-hl-cap">Who Processed What</div>'
                 + t.team.slice(0, 5).map(m => '<div class="qp-ai-pp"><span class="qp-ai-pn qp-tm-n">' + escapeHtml(_qpShort(m.name)) + '</span>'
                     + _qpHLBar(m.n / mx * 100, [], m.n >= mx * 0.5 ? 'good' : 'warn') + '<b>' + m.n + '</b><span class="qp-tm-v">' + _qpHLK(m.value) + '</span></div>').join('')
-                + (top ? '<div class="qp-hl-sub" style="margin-top:8px">Top producer: ' + escapeHtml(_qpShort(top.name)) + (t.topRun > 1 ? ' · ' + t.topRun + ' reports running' : '') + '</div>' : ''));
+                + (top ? '<div class="qp-hl-sub" style="margin-top:8px">Top producer: ' + escapeHtml(_qpShort(top.name)) + (t.topRun > 1 ? ' · ' + t.topRun + ' days running' : '') + '</div>' : ''));
         },
     },
     pipeline: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline']], where: () => _qpMyStore(), load: _qpSnapLoad,
         off: d => (_qpLast(d, _qpMyStore()) ? '' : 'No Day End report has come in for this store yet.'),
         card: function (d) {
             const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1], wk = f.filter(r => r.date < y.date).slice(-6)[0];
@@ -55168,7 +54117,7 @@ Object.assign(_QP_WSPEC, {
                 + '<span class="qp-pipe-a">→</span>' + stage(y.live_count, 'Live') + '</div>'
                 + '<div class="qp-hl-sub">' + (qch == null ? '' : '<span class="' + (qch > 10 ? 'warn' : qch < -10 ? 'good' : '') + '">Queue ' + (qch >= 0 ? 'up ' : 'down ') + Math.abs(qch) + '%</span> in a week · ')
                 + _qpHLK(y.available_cost) + ' sitting available</div>'
-                + '<div class="qp-hl-cap">Processed · Last 7 Reports</div>' + _qpDaysHtml(pr)
+                + '<div class="qp-hl-cap">Processed · Last 7 Days</div>' + _qpDaysHtml(pr)
                 + (avg ? '<div class="qp-hl-sub">At ' + Math.round(avg) + ' a day the queue clears in ' + Math.ceil(q / avg) + (Math.ceil(q / avg) === 1 ? ' day' : ' days') + '</div>' : ''));
         },
     },
@@ -55185,7 +54134,7 @@ Object.assign(_QP_WSPEC, {
                 + (avg ? _qpTrendHtml(Math.round(Number(y.est_value) - avg), _qpHLK, true, 'Same Day Avg') : '') + '</div>'
                 // A column a day with its margin on top, the latest in full blue
                 // (Ethan, 2026-10-29, prototypes/widget-spruce.html — five lines of text).
-                + '<div class="qp-hl-cap">Bought a Day · Last ' + Math.min(6, f.length) + ' Reports · Margin on Top</div>'
+                + '<div class="qp-hl-cap">Bought a Day · Last ' + Math.min(6, f.length) + ' Days · Margin on Top</div>'
                 + _qpDayCols(f.slice(-6).map(r => [_qpDayLabel(r.date).replace(/,.*$/, ''), Number(r.est_value) || 0, Number(r.est_margin_pct) ? Math.round(Number(r.est_margin_pct) * (Number(r.est_margin_pct) <= 1 ? 100 : 1)) + '%' : '']), 'blue', 108)
                 + '<div class="qp-hl-sub" style="margin-top:6px">' + _qpHLK(mv) + ' bought this month · ' + (mv ? ((1 - ms / mv) * 100).toFixed(1) + '% margin' : '') + '</div>');
         },
@@ -55354,7 +54303,7 @@ Object.assign(_QP_WSPEC, {
         },
     },
     dbuying: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Buying', 'Buying by Store']], where: () => 'District', load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Buying', 'Buying by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
             const rows = _qpDistLast(d).sort((a, b) => b.y.est_value - a.y.est_value);
@@ -55363,7 +54312,7 @@ Object.assign(_QP_WSPEC, {
             const mt = m => (m == null ? '' : m >= 40 ? 'good' : m >= 35 ? 'warn' : 'bad');
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(bought, false) + '<small>bought · ' + _lvMoney(paid, false) + ' paid</small></div>'
                 + (bought ? '<span class="qp-trend up">' + ((1 - paid / bought) * 100).toFixed(1) + '% Margin</span>' : '') + '</div>'
-                + '<div class="qp-hl-cap">Share of the District\'s Buying · Latest Report</div>'
+                + '<div class="qp-hl-cap">Share of the District\'s Buying · Latest Day</div>'
                 + '<div class="qp-strip">' + rows.map(x => '<i style="flex:' + (Number(x.y.est_value) || 0) + ';background:' + _qpStoreColor(x.s) + '"></i>').join('') + '</div>'
                 + '<div class="qp-stiles">' + rows.map(x => { const m = pct(x.y.est_margin_pct), sh = bought ? Math.round((Number(x.y.est_value) || 0) / bought * 100) : 0;
                     return '<div class="qp-stile" style="border-left-color:' + _qpStoreColor(x.s) + '"><div class="qp-stile-s">' + escapeHtml(x.s) + ' · ' + sh + '%</div>'
@@ -55372,7 +54321,7 @@ Object.assign(_QP_WSPEC, {
         },
     },
     dteam: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Team', 'Team Production by Store']], where: () => 'District', load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Team', 'Team Production by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
             const rows = STORE_CODES.map(s => ({ s, t: _qpTeamOf(d, s) })).filter(x => x.t);
@@ -55380,7 +54329,7 @@ Object.assign(_QP_WSPEC, {
             const ini = n => String(n || '').split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _qpN(rows.reduce((a, x) => a + x.t.total, 0)) + '<small>devices processed · '
                 + _qpHLK(rows.reduce((a, x) => a + x.t.value, 0)) + ' value</small></div></div>'
-                + '<div class="qp-hl-cap">Top Producer at Each Store · Latest Report</div>'
+                + '<div class="qp-hl-cap">Top Producer at Each Store · Latest Day</div>'
                 + '<div class="qp-lb">' + tops.map((x, i) => '<div class="qp-lb-r"><span class="qp-lb-k">' + (i + 1) + '</span>'
                     + '<span class="qp-lb-av" style="background:' + _qpStoreColor(x.s) + '">' + escapeHtml(ini(x.m.name)) + '</span>'
                     + '<div class="qp-lb-nm"><b>' + escapeHtml(x.m.name) + '</b><span>' + escapeHtml(x.s) + ' · store processed ' + _qpN(x.total) + '</span></div>'
@@ -55388,7 +54337,7 @@ Object.assign(_QP_WSPEC, {
         },
     },
     dpipeline: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline by Store']], where: () => 'District', load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
             // Days to clear: the queue over the store's own pace (processed a
@@ -55408,7 +54357,7 @@ Object.assign(_QP_WSPEC, {
     },
 });
 // EXPENSE REPORT (Ethan, 2026-10-29). The tool's own GET (expenses: PIN-gated,
-// test PINs read). The DM and an MSM see their own month — total, mileage and
+// test PINs read). The DM sees their own month — total, mileage and
 // miles, expenses, the latest lines, and whether they marked it filed (only
 // their OWN filed months come back, so that is all it can say). The CEO, who
 // reviews, sees everyone's month instead: a line a person, "Nothing Yet" for
@@ -55493,7 +54442,7 @@ const QP_MINIS = {
     mpace: { label: 'Goal Pace', sub: 'Net profit a day still needed', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
         draw: d => { const p = _qpPaceOf(d, _qpMyStore()); return p.hit ? { k: 'Goal Pace', v: '<span class="good">Goal Hit</span>', s: _qpHLK(p.soFar) + ' of ' + _qpHLK(p.goal) }
             : { k: 'Needed a Day', v: _qpHLK(p.need), s: 'To hit ' + _qpHLK(p.goal) + ' · ' + p.left + ' days left' }; } },
-    mcash: { label: 'Cash on Hand', sub: 'Drawer and safe from the latest report', icon: _qpMI.cash, tone: 'g', src: 'snap', avail: () => _qpIsMgr() || _qpIsDist(),
+    mcash: { label: 'Cash on Hand', sub: 'Drawer and safe from the latest day', icon: _qpMI.cash, tone: 'g', src: 'snap', avail: () => _qpIsMgr() || _qpIsDist(),
         draw: d => {
             const c = (d.cash || []).slice().sort((a, b) => a.day.localeCompare(b.day));
             if (_qpIsDist()) {
@@ -55505,8 +54454,10 @@ const QP_MINIS = {
             return l ? { k: 'Cash on Hand · ' + _qpDayLabel(l.day).replace(/,.*$/, ''), v: _lvMoney(l.total, false), s: 'Drawer ' + _qpHLK(l.drawer) + ' · Safe ' + _qpHLK(l.safe), right: _qpSpark(mine.map(x => Number(x.total)), '#1f9d57') }
                 : { k: 'Cash on Hand', v: '—', s: 'No cash count yet' };
         } },
-    mqueue: { label: 'Waiting to Process', sub: 'The processing queue and what is available', icon: _qpMI.box, tone: 'b', src: 'snap', avail: _qpStoreSide,
-        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; return y ? { k: 'Waiting to Process', v: _qpN(y.queue_count), s: _qpN(y.available_count) + ' available · ' + _qpHLK(y.available_cost) + ' cost', right: _qpSpark(f.slice(-7).map(r => Number(r.queue_count)), '#2563b8') } : { k: 'Waiting to Process', v: '—', s: 'No report yet' }; } },
+    // IN STOCK, not the processing queue (Ethan, 2026-11-08) — the Day End
+    // Available card, its value once stored (available_value). Key kept: saved rails hold it.
+    mqueue: { label: 'In Stock', sub: 'What is in stock, and what it is worth', icon: _qpMI.box, tone: 'b', src: 'snap', avail: _qpStoreSide,
+        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; return y ? { k: 'In Stock', v: _qpN(y.available_count), s: (y.available_value != null ? _qpHLK(y.available_value) + ' value · ' : '') + _qpN(y.live_count) + ' live', right: _qpSpark(f.slice(-7).map(r => Number(r.available_count)), '#2563b8') } : { k: 'In Stock', v: '—', s: 'No Day End Yet' }; } },
     mdue: { label: 'Next Due', sub: 'The nearest deadline from Your Feed', icon: _qpMI.clock, tone: 'r', src: 'page', avail: () => true,
         draw: () => {
             const order = ['over', 'today', 'week', 'later', 'none'];
@@ -55537,25 +54488,27 @@ const QP_MINIS = {
             return { k: 'What\'s New', v: k ? 'v' + String(k[0]).replace(/^\s*v/i, '') : '—', s: k ? 'Released ' + escapeHtml(k[1] || '') : 'No patch notes yet', go: 'openHubToPatch()' }; } },
     mlive: { label: 'Live Listings', sub: 'Listings live on the online store', icon: _qpMI.tag, tone: 'g', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
         draw: d => {
-            if (_qpIsDist()) { const t = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean); return { k: 'Live Listings · District', v: _qpN(_qpSum(t, 'live_count')), s: _qpN(_qpSum(t, 'listed_devices')) + ' listed on the latest report' }; }
+            if (_qpIsDist()) { const t = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean); return { k: 'Live Listings · District', v: _qpN(_qpSum(t, 'live_count')), s: _qpN(_qpSum(t, 'listed_devices')) + ' listed on the latest day' }; }
             const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-            return y ? { k: 'Live Listings', v: _qpN(y.live_count), s: _qpN(y.listed_devices) + ' listed on the latest report', right: _qpSpark(f.slice(-7).map(r => Number(r.live_count)), '#1f9d57') } : { k: 'Live Listings', v: '—', s: 'No report yet' };
+            return y ? { k: 'Live Listings', v: _qpN(y.live_count), s: _qpN(y.listed_devices) + ' listed on the latest day', right: _qpSpark(f.slice(-7).map(r => Number(r.live_count)), '#1f9d57') } : { k: 'Live Listings', v: '—', s: 'No Day End Yet' };
         } },
     musage: { label: 'SPEEKSNET Use', sub: 'Who signed in this week, and who did not', icon: _qpMI.pulse, tone: 'b', src: 'snap', avail: () => _qpIsDist(),
         draw: d => { const u = d.usage; if (!u) return { k: 'SPEEKSNET Use', v: '—', s: '' };
             return { k: 'SPEEKSNET Use · 7 Days', v: u.week + '<small>of ' + u.roster + ' signed in</small>', s: u.quiet.length ? 'Not yet: ' + u.quiet.slice(0, 2).map(q => _qpShort(q.name)).join(', ') + (u.quiet.length > 2 ? ' +' + (u.quiet.length - 2) : '') : 'Everyone signed in',
                      right: _qpSpark(u.days.map(x => x.people), '#2563b8') }; } },
-    mavail: { label: 'Available Inventory', sub: 'Cost of stock sitting available, every store', icon: _qpMI.layers, tone: 't', src: 'snap', avail: () => _qpIsDist(),
-        draw: d => { const t = STORE_CODES.map(s => ({ s, f: _qpLast(d, s) })).filter(x => x.f); const top = t.slice().sort((a, b) => b.f.available_cost - a.f.available_cost)[0];
-            return { k: 'Available Inventory', v: _qpHLK(t.reduce((a, x) => a + (Number(x.f.available_cost) || 0), 0)), s: top ? top.s + ' holds ' + _qpHLK(top.f.available_cost) : '' }; } },
-    mbuy: { label: 'Buying', sub: 'What the store bought on the latest report', icon: _qpMI.cart, tone: 'b', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
-        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; if (!y) return { k: 'Buying', v: '—', s: 'No report yet' };
+    // In stock by its VALUE, not its cost (Ethan, 2026-11-08); until a store's
+    // value is stored (available_value) its count stands in, said as devices.
+    mavail: { label: 'In Stock', sub: 'What every store has in stock, and what it is worth', icon: _qpMI.layers, tone: 't', src: 'snap', avail: () => _qpIsDist(),
+        draw: d => { const t = _qpStockList(d), top = t[0], val = t.every(x => x.v != null);
+            return { k: 'In Stock · District', v: val ? _qpHLK(_qpSum(t, 'v')) : _qpN(_qpSum(t, 'c')), s: top ? top.k + ' holds ' + (val ? _qpHLK(top.v) : _qpN(top.c) + ' devices') : '' }; } },
+    mbuy: { label: 'Buying', sub: 'What the store bought on the latest day', icon: _qpMI.cart, tone: 'b', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; if (!y) return { k: 'Buying', v: '—', s: 'No Day End Yet' };
             const m = Number(y.est_margin_pct); return { k: 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _lvMoney(y.est_value, false), s: (m ? (m * (m <= 1 ? 100 : 1)).toFixed(1) + '% margin · ' : '') + _lvMoney(y.total_spent, false) + ' paid', right: _qpSpark(f.slice(-7).map(r => Number(r.est_value)), '#2563b8') }; } },
-    mlost: { label: 'Lost Deals', sub: 'What walked out on the latest report', icon: _qpMI.x, tone: 'r', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
-        draw: d => { const y = _qpLast(d, _qpMyStore()); return y ? { k: 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span>', s: (Number(y.failed_deals) || 0) + ' failed · ' + (Number(y.devices_lost) || 0) + ' devices lost' } : { k: 'Lost Deals', v: '—', s: 'No report yet' }; } },
-    mtop: { label: 'Top Producer', sub: 'Who processed the most on the latest report', icon: _qpMI.trophy, tone: 'a', src: 'snap', avail: () => _qpStoreSide() && !_qpIsEmp(),
+    mlost: { label: 'Lost Deals', sub: 'What walked out on the latest day', icon: _qpMI.x, tone: 'r', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => { const y = _qpLast(d, _qpMyStore()); return y ? { k: 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span>', s: (Number(y.failed_deals) || 0) + ' failed · ' + (Number(y.devices_lost) || 0) + ' devices lost' } : { k: 'Lost Deals', v: '—', s: 'No Day End Yet' }; } },
+    mtop: { label: 'Top Producer', sub: 'Who processed the most on the latest day', icon: _qpMI.trophy, tone: 'a', src: 'snap', avail: () => _qpStoreSide() && !_qpIsEmp(),
         draw: d => { const t = _qpTeamOf(d, _qpMyStore()); const top = t && (t.team.find(m => m.top) || t.team[0]);
-            return top ? { k: 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), v: escapeHtml(_qpShort(top.name)), s: top.n + ' devices · ' + _qpHLK(top.value) + (t.topRun > 1 ? ' · ' + t.topRun + ' running' : '') } : { k: 'Top Producer', v: '—', s: 'No report yet' }; } },
+            return top ? { k: 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), v: escapeHtml(_qpShort(top.name)), s: top.n + ' devices · ' + _qpHLK(top.value) + (t.topRun > 1 ? ' · ' + t.topRun + ' days running' : '') } : { k: 'Top Producer', v: '—', s: 'No Day End Yet' }; } },
     mcal: { label: 'Coming Up', sub: 'The next three events on the Store Calendar', icon: _qpMI.cal, tone: 'b', src: 'cal', double: true, avail: () => typeof toggleCalendar === 'function' && (!!_qpMyStore() || _qpIsDist()),
         draw: () => {
             const today = _scalTodayISO(), store = _qpIsDist() ? 'ALL' : _qpMyStore();
@@ -55619,7 +54572,7 @@ Object.assign(QP_MINIS.mstars, { draw2: d => {
     const s = _qpMyStore(), f = _qpFacts(d, s).slice(-14), me = _qpReviewsOf(d, s).stars;
     const prev = _qpSum(_qpLastMonthSoFar(d, s), 'five_star_today');
     return _qpX2.head(m, 'Five-Star Reviews · This Month', me + '<small>' + (!prev ? 'this month' : me === prev ? 'same as last month' : (me > prev ? '▲ ' : '▼ ') + Math.abs(me - prev) + ' vs last month') + '</small>')
-        + _qpDaysHtml(f.map(r => Number(r.five_star_today) || 0)) + _qpX2.cap('Five-Star a Day · Last 14 Reports');
+        + _qpDaysHtml(f.map(r => Number(r.five_star_today) || 0)) + _qpX2.cap('Five-Star a Day · Last 14 Days');
 } });
 Object.assign(QP_MINIS.mpace, { draw2: d => {
     const m = QP_MINIS.mpace, p = _qpPaceOf(d, _qpMyStore());
@@ -55652,12 +54605,12 @@ Object.assign(QP_MINIS.mcash, { draw2: d => {
 } });
 Object.assign(QP_MINIS.mqueue, { draw2: d => {
     const m = QP_MINIS.mqueue, f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Waiting to Process', '—') + _qpX2.cap('No report yet');
-    const wk = f.filter(r => r.date < y.date).slice(-6)[0], q = Number(y.queue_count) || 0;
-    const ch = wk && Number(wk.queue_count) ? Math.round((q - wk.queue_count) / wk.queue_count * 100) : null;
-    return _qpX2.head(m, 'Waiting to Process', _qpN(q) + '<small>in queue' + (ch == null ? '' : ' · ' + (ch >= 0 ? '▲ ' : '▼ ') + Math.abs(ch) + '% in a week') + '</small>')
-        + _qpX2.split([[_qpN(q), 'In Queue'], [_qpN(y.available_count), 'Available'], [_qpN(y.live_count), 'Live']])
-        + _qpX2.wide(f.slice(-14).map(r => r.queue_count), '#2563b8') + _qpX2.cap('Queue a Day · Last 14 Reports');
+    if (!y) return _qpX2.head(m, 'In Stock', '—') + _qpX2.cap('No Day End Yet');
+    const wk = f.filter(r => r.date < y.date).slice(-6)[0], q = Number(y.available_count) || 0;
+    const ch = wk && Number(wk.available_count) ? Math.round((q - wk.available_count) / wk.available_count * 100) : null;
+    return _qpX2.head(m, 'In Stock', _qpN(q) + '<small>in stock' + (ch == null ? '' : ' · ' + (ch >= 0 ? '▲ ' : '▼ ') + Math.abs(ch) + '% in a week') + '</small>')
+        + _qpX2.split([[_qpN(q), 'In Stock'], [y.available_value != null ? _qpHLK(y.available_value) : '—', 'Value'], [_qpN(y.live_count), 'Live']])
+        + _qpX2.wide(f.slice(-14).map(r => r.available_count), '#2563b8') + _qpX2.cap('In Stock a Day · Last 14 Days');
 } });
 Object.assign(QP_MINIS.mdue, { draw2: () => {
     const m = QP_MINIS.mdue, order = ['over', 'today', 'week', 'later', 'none'];
@@ -55690,37 +54643,37 @@ Object.assign(QP_MINIS.mlive, { draw2: d => {
         const list = t.map(x => ({ k: x.s, n: Number(x.f.live_count) || 0 })).sort((a, b) => b.n - a.n);
         // Columns in each store's colour (Ethan, 2026-10-29, widget-spruce.html).
         const mx = Math.max(1, ...list.map(x => x.n));
-        return _qpX2.head(m, 'Live Listings · District', _qpN(_qpSum(list, 'n')) + '<small>live · ' + _qpN(t.reduce((a, x) => a + (Number(x.f.listed_devices) || 0), 0)) + ' listed on the latest report</small>')
+        return _qpX2.head(m, 'Live Listings · District', _qpN(_qpSum(list, 'n')) + '<small>live · ' + _qpN(t.reduce((a, x) => a + (Number(x.f.listed_devices) || 0), 0)) + ' listed on the latest day</small>')
             + '<div class="qp-x2-cols">' + list.map(x => '<div><b>' + _qpN(x.n) + '</b><i style="height:' + Math.max(3, Math.round(x.n / mx * 52)) + 'px;background:' + _qpStoreColor(x.k) + '"></i><span>' + escapeHtml(x.k) + '</span></div>').join('') + '</div>';
     }
     const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Live Listings', '—') + _qpX2.cap('No report yet');
-    return _qpX2.head(m, 'Live Listings', _qpN(y.live_count) + '<small>' + _qpN(y.listed_devices) + ' listed on the latest report</small>')
+    if (!y) return _qpX2.head(m, 'Live Listings', '—') + _qpX2.cap('No Day End Yet');
+    return _qpX2.head(m, 'Live Listings', _qpN(y.live_count) + '<small>' + _qpN(y.listed_devices) + ' listed on the latest day</small>')
         + _qpX2.wide(f.slice(-14).map(r => r.live_count), '#1f9d57') + _qpDaysHtml(f.slice(-14).map(r => Number(r.listed_devices) || 0))
-        + _qpX2.cap('Live (line) and Listed (bars) a Day · Last 14 Reports');
+        + _qpX2.cap('Live (line) and Listed (bars) a Day · Last 14 Days');
 } });
 Object.assign(QP_MINIS.mbuy, { draw2: d => {
     const m = QP_MINIS.mbuy, f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Buying', '—') + _qpX2.cap('No report yet');
+    if (!y) return _qpX2.head(m, 'Buying', '—') + _qpX2.cap('No Day End Yet');
     const mg = Number(y.est_margin_pct), avg = _qpAvg(_qpSameWeekday(f, y, 'est_value')), diff = Math.round(Number(y.est_value) - avg);
     return _qpX2.head(m, 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), _lvMoney(y.est_value, false) + '<small>' + (mg ? (mg * (mg <= 1 ? 100 : 1)).toFixed(1) + '% margin' : '') + '</small>')
         + _qpDaysHtml(f.slice(-7).map(r => Number(r.est_value) || 0))
-        + _qpX2.cap('Bought a Day · Last 7 Reports' + (avg && diff ? ' · ' + (diff > 0 ? '▲ ' : '▼ ') + _qpHLK(Math.abs(diff)) + ' vs same day avg' : ''));
+        + _qpX2.cap('Bought a Day · Last 7 Days' + (avg && diff ? ' · ' + (diff > 0 ? '▲ ' : '▼ ') + _qpHLK(Math.abs(diff)) + ' vs same day avg' : ''));
 } });
 Object.assign(QP_MINIS.mlost, { draw2: d => {
     const m = QP_MINIS.mlost, s = _qpMyStore(), f = _qpFacts(d, s), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Lost Deals', '—') + _qpX2.cap('No report yet');
+    if (!y) return _qpX2.head(m, 'Lost Deals', '—') + _qpX2.cap('No Day End Yet');
     const cur = _qpThisMonth(d, s), tot = _qpSum(cur, 'total_customers');
     return _qpX2.head(m, 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span><small>' + _qpHLK(_qpSum(cur, 'lost_revenue')) + ' this month</small>')
         + _qpX2.split([[_qpN(y.failed_deals), 'Failed Deals'], [_qpN(y.devices_lost), 'Devices Lost'], [(tot ? Math.round(_qpSum(cur, 'no_deal_customers') / tot * 100) : 0) + '%', 'No Deal This Month']])
-        + _qpDaysHtml(f.slice(-7).map(r => Number(r.lost_revenue) || 0)) + _qpX2.cap('Lost a Day · Last 7 Reports');
+        + _qpDaysHtml(f.slice(-7).map(r => Number(r.lost_revenue) || 0)) + _qpX2.cap('Lost a Day · Last 7 Days');
 } });
 Object.assign(QP_MINIS.mtop, { draw2: d => {
     const m = QP_MINIS.mtop, t = _qpTeamOf(d, _qpMyStore()), top = t && (t.team.find(x => x.top) || t.team[0]);
-    if (!top) return _qpX2.head(m, 'Top Producer', '—') + _qpX2.cap('No report yet');
+    if (!top) return _qpX2.head(m, 'Top Producer', '—') + _qpX2.cap('No Day End Yet');
     return _qpX2.head(m, 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), escapeHtml(_qpShort(top.name)) + '<small>' + top.n + ' devices · ' + _qpHLK(top.value) + '</small>')
         + _qpX2.rows(t.team.slice(0, 4).map(x => ({ k: String(x.name).split(' ')[0], n: x.n })), _qpN, _qpX2.tone, true)
-        + (t.topRun > 1 ? _qpX2.cap('Top ' + t.topRun + ' reports running') : '');
+        + (t.topRun > 1 ? _qpX2.cap('Top ' + t.topRun + ' days running') : '');
 } });
 Object.assign(QP_MINIS.musage, { draw2: d => {
     const m = QP_MINIS.musage, u = d.usage;
@@ -55730,12 +54683,19 @@ Object.assign(QP_MINIS.musage, { draw2: d => {
         + (u.quiet.length ? _qpX2.line('Not Yet', 'warn', u.quiet.map(q => _qpShort(q.name) + (q.store ? ' (' + q.store + ')' : '')).join(' · ')) : _qpX2.line('', '', 'Everyone signed in this week'));
 } });
 Object.assign(QP_MINIS.mavail, { draw2: d => {
-    const m = QP_MINIS.mavail, list = STORE_CODES.map(s => ({ k: s, f: _qpLast(d, s) })).filter(x => x.f).map(x => ({ k: x.k, n: Number(x.f.available_cost) || 0 })).sort((a, b) => b.n - a.n);
+    const m = QP_MINIS.mavail, t = _qpStockList(d), val = t.every(x => x.v != null);
+    const list = t.map(x => ({ k: x.k, n: val ? x.v : x.c })), fmt = val ? _qpHLK : _qpN;
     // A share strip and a legend (Ethan, 2026-10-29, widget-spruce.html).
-    return _qpX2.head(m, 'Available Inventory', _qpHLK(_qpSum(list, 'n')) + '<small>at cost · latest report</small>')
+    return _qpX2.head(m, 'In Stock · District', fmt(_qpSum(list, 'n')) + '<small>' + (val ? 'value' : 'devices') + ' · latest day</small>')
         + '<div class="qp-strip qp-x2-strip">' + list.map(x => '<i style="flex:' + x.n + ';background:' + _qpStoreColor(x.k) + '"></i>').join('') + '</div>'
-        + '<div class="qp-mix-l">' + list.map(x => '<span><i class="qp-sw" style="background:' + _qpStoreColor(x.k) + '"></i>' + escapeHtml(x.k) + '<b>' + _qpHLK(x.n) + '</b></span>').join('') + '</div>';
+        + '<div class="qp-mix-l">' + list.map(x => '<span><i class="qp-sw" style="background:' + _qpStoreColor(x.k) + '"></i>' + escapeHtml(x.k) + '<b>' + fmt(x.n) + '</b></span>').join('') + '</div>';
 } });
+// Every store's latest in stock: count, and value when stored. Most first.
+function _qpStockList(d) {
+    return STORE_CODES.map(s => ({ k: s, f: _qpLast(d, s) })).filter(x => x.f)
+        .map(x => ({ k: x.k, c: Number(x.f.available_count) || 0, v: x.f.available_value == null ? null : Number(x.f.available_value) }))
+        .sort((a, b) => (b.v != null && a.v != null ? b.v - a.v : b.c - a.c));
+}
 function _qpMiniOk(id) { const m = QP_MINIS[_qpTokId(id)]; try { return !!m && !!m.avail(); } catch (e) { return false; } }
 function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
 
@@ -56165,12 +55125,29 @@ const QPT_TABS = [
     // One frame (Ethan, 2026-11-08: design A of artifact W5cUaNGHUjtHchnGaRkTwb):
     // the cards as they are, in one card under one header (_qptMergeFrame).
     { k: 'customers', l: 'Customers', merge: 'frame', keys: ['reviews', 'dreviews', 'lost', 'dlost', 'callbacks'] },
-    { k: 'inventory', l: 'Inventory & Team', keys: ['pipeline', 'dpipeline', 'connect', 'dconnect', 'b2b', 'team', 'dteam', 'variance', 'dvariance'] },
-    { k: 'company', l: 'Company & Tools', keys: ['stats', 'docs', 'calendar', 'hotkeys', 'qmsgs', 'exp'] },
+    // JUST INVENTORY (Ethan, 2026-11-08: "Make this tab just inventory"): one
+    // card, the pipeline and who is clearing it (_qptRenderInv) — the DM's Pace
+    // Board, a store's Person Tiles.
+    { k: 'inventory', l: 'Inventory', merge: 'inv', keys: ['pipeline', 'dpipeline', 'team', 'dteam'] },
+    // LISTINGS & DEALS replaces Company & Tools (Ethan, 2026-11-08: design B of
+    // artifact 9jz7JGawrggijNciHztmKu, "I like Listings and Deals better"). Only
+    // the three tools that are work waiting on someone — B2B, Variance, SPEEKS
+    // Connect — as ONE work list, soonest first (_qptRenderWork). Stats & Awards,
+    // Processes & Policies, Store Calendar, Hotkeys, Quick Messages and Expense
+    // Report are off the tabs page entirely ("you can just get rid of entirely").
+    // A new key, not 'company': a saved layout had Company & Tools hidden, and
+    // this tab starts shown for everyone (_qptRead appends a tab it doesn't know).
+    { k: 'deals', l: 'Listings & Deals', merge: 'work', keys: ['b2b', 'variance', 'dvariance', 'connect', 'dconnect'] },
 ];
-const QPT_HIDDEN_DEFAULT = ['company'];
+const QPT_HIDDEN_DEFAULT = [];
 // The rail a person starts with: the first five of these they can see.
 const QPT_MINI_DEFAULT = ['mdue', 'mpace', 'mreviews', 'mcash', 'mtop', 'mstars', 'musage', 'mavail', 'mlive', 'mnews'];
+// THE FIRST TAB ON SIGN-IN (Ethan, 2026-11-08: "whatever their first tab is, is
+// what shows up upon sign in"). The open tab is remembered for this sign-in
+// only (sessionStorage), so moving between pages comes back to it, but signing
+// in — or a fresh browser tab — opens the person's first tab. It used to be
+// localStorage, which reopened whatever this browser last had open. The order
+// and hidden tabs themselves follow the person (qp-layout); this never did.
 const QPT_TAB_KEY = 'speeksQptTab';
 
 let _qptState = null;     // { order, hidden, minis } as saved (minis null = default)
@@ -56277,7 +55254,7 @@ function _qptApply(main) {
     const have = k => _qptHave.find(t => t.k === k);
     const vis = _qptState.order.filter(k => have(k) && _qptState.hidden.indexOf(k) === -1);
     let tab = null;
-    try { tab = localStorage.getItem(QPT_TAB_KEY); } catch (e) { /* private mode */ }
+    try { tab = sessionStorage.getItem(QPT_TAB_KEY); } catch (e) { /* private mode */ }
     _qptTab = vis.indexOf(_qptTab) !== -1 ? _qptTab : (vis.indexOf(tab) !== -1 ? tab : (vis[0] || null));
 
     // The rows: the feed, every shown tab's cards, then the stash (all else).
@@ -56378,6 +55355,8 @@ function _qptApply(main) {
     _qptRenderHealth(main);
     _qptRenderSales(main);
     _qptRenderFrame(main);
+    _qptRenderInv(main);
+    _qptRenderWork(main);
 }
 // STORE HEALTH AS ONE CARD (Ethan, 2026-11-07: picked design C of artifact
 // TmBQECFLJkeFUYUysrttDa, "but segmenting out the scorecard vs. the ebay
@@ -56408,6 +55387,8 @@ function qptHealthStore(s) {
 }
 function _qptMerge(pane, kind) {
     const blocks = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]'));
+    if (kind === 'inv' && blocks.length) return _qptMergeInv(pane, blocks);
+    if (kind === 'work' && blocks.length) return _qptMergeWork(pane, blocks);
     if (blocks.length < 2) return;
     if (kind === 'sales') return _qptMergeSales(pane, blocks);
     if (kind === 'frame') return _qptMergeFrame(pane, blocks);
@@ -56770,7 +55751,7 @@ function _qptRenderSales(main) {
         html = '<div class="qpt-sec qpt-sec-b"><div class="qpt-cells c4">'
             + cell('Net Profit So Far', _lvMoney(so, false), goal ? 'of ' + _qpHLK(goal) + ' goal' : 'no goals set')
             + cell('Tracking', track == null ? '—' : Math.round(track) + '%', left + ' days left', _qpBand(track))
-            + cell('Bought', _lvMoney(bought, false), 'latest report')
+            + cell('Bought', _lvMoney(bought, false), 'latest day')
             + cell('Paid', _lvMoney(paid, false), margin == null ? '' : margin.toFixed(1) + '% margin') + '</div></div>'
             + '<div class="qpt-sec"><div class="qpt-tw"><table class="qpt-sb qpt-sb-d"><thead><tr><th class="qpt-sb-s">Store</th><th class="qpt-sb-bar">Tracking to Goal</th><th class="r">Needs Per Day (NP)</th><th class="r">Bought</th><th class="r">Margin</th></tr></thead><tbody>'
             // Worst pace first; a store with no goal set goes last.
@@ -56820,7 +55801,7 @@ function _qptRenderSales(main) {
                 const mv = _qpSum(cur, 'est_value'), ms = _qpSum(cur, 'total_spent');
                 buy = '<div class="qpt-buy"><span class="qp-hl-cap">Buying This Month</span><b>' + _lvMoney(mv, false) + '</b>'
                     + (mv ? '<span class="qpt-cnt ' + _qptMarginBand((1 - ms / mv) * 100) + '">' + ((1 - ms / mv) * 100).toFixed(1) + '% Margin</span>' : '')
-                    + (y ? '<span class="qpt-buy-l">Latest report ' + escapeHtml(_qpDayLabel(y.date)) + ' · ' + _lvMoney(Number(y.est_value) || 0, false) + ' bought</span>' : '') + '</div>';
+                    + (y ? '<span class="qpt-buy-l">Latest Day ' + escapeHtml(_qpDayLabel(y.date)) + ' · ' + _lvMoney(Number(y.est_value) || 0, false) + ' bought</span>' : '') + '</div>';
             }
             lists.push('<div class="qpt-sec"><div class="qp-hl-cap">Selling · Last ' + days.length + ' Days</div>'
                 + (days.length ? '<table class="qpt-sb qpt-sb-sm qpt-sb-sell"><thead><tr><th>Day</th><th class="r">Net Sales</th><th class="r">Net Profit</th><th class="r">Net Margin</th></tr></thead><tbody>'
@@ -56844,6 +55825,277 @@ function _qptRenderSales(main) {
     if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
     if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
     if (e && e.textContent !== eb) e.textContent = eb;
+}
+// INVENTORY AS ONE CARD (Ethan, 2026-11-08, artifact 24AE7LWPxDGPJXjiSpVeqx).
+// The pipeline and the people clearing it are one story — what is waiting,
+// and who is working it down — so Inventory Pipeline and Team Production are
+// one card, drawn from the store snapshot the hidden cards already read.
+//   DM     the PACE BOARD: a row a store, most in stock first — in stock and
+//          its value, processed for each of the last 7 days, the latest
+//          against the store's own average (amber under 60%), who led.
+//   Store  PERSON TILES: the band (available devices / available value / processed),
+//          then a tile a person — latest, their last 7 days, average, total,
+//          value. Employees see the same card, whole team (Ethan, 2026-11-08).
+// IN STOCK, NOT IN QUEUE (Ethan, 2026-11-08, on the queue column: "These
+// numbers are wrong. These should be instock numbers" — he picked the Day End
+// email's Available card). So the stock is available_count / available_value,
+// and with no queue there is no "days to clear" either.
+// DAYS, NOT REPORTS (Ethan, same day: "Every report is one day, so that makes
+// more sense"). "Last 7 Days" is the store's last seven Day End days; a closed
+// Sunday has no report, so it is not one of them.
+const _QPT_PERSON_TINTS = ['#7b61d9', '#3b82d6', '#1f9d57', '#d68a12', '#d9675f', '#0f9fb0', '#b5487a', '#5b6675'];
+function _qptMergeInv(pane, blocks) {
+    const dist = blocks.some(b => /^d(pipeline|team)$/.test(_qpKey(b)));
+    const head = document.createElement('div');
+    head.className = 'qpt-mh';
+    head.innerHTML = '<span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg></span>'
+        + '<div><div class="ew-eyebrow qpt-ieb"></div><div class="qpt-mt">Pipeline &amp; Production</div></div>'
+        + '<div class="qpt-spills qpt-ipills"></div>';
+    const view = document.createElement('div');
+    view.className = 'qpt-iv';
+    pane.classList.add('qpt-merge');
+    pane.setAttribute('data-merge', 'inv');
+    pane.toggleAttribute('data-qpt-dist', dist);
+    pane.insertBefore(view, pane.firstChild);
+    pane.insertBefore(head, view);
+}
+// A store's last 7 Day End days: processed a day, the average over the days it
+// processed anything, and what is in stock on the latest.
+function _qptInvStore(d, s) {
+    const f = _qpFacts(d, s).slice(-7), y = f[f.length - 1];
+    if (!y) return null;
+    const p7 = f.map(r => Number(r.devices_processed) || 0), avg = _qpAvg(p7.filter(Boolean));
+    // VALUE, NOT COST (Ethan, 2026-11-08: "Show the value here not the cost"): the
+    // Available card's Projection column, stored as available_value. Rows from
+    // before it was stored have none, and then no money is shown at all.
+    const v = y.available_value;
+    return { s, f, y, p7, avg, stock: Number(y.available_count) || 0, value: v == null || v === '' ? null : Number(v), latest: Number(y.devices_processed) || 0 };
+}
+// Bars a day, the latest in full colour; a day with nothing is a flat stub.
+function _qptBars(vals, color) {
+    const mx = Math.max(1, ...vals);
+    return '<div class="qpt-bars">' + vals.map((n, i) => '<i style="height:' + (n ? Math.round(5 + n / mx * 25) : 3) + 'px;background:'
+        + (n ? color + (i === vals.length - 1 ? '' : '88') : '#e6ebf1') + '"></i>').join('') + '</div>';
+}
+function _qptRenderInv(main) {
+    const pane = main && main.querySelector('.qpt-pane.qpt-merge[data-merge="inv"]');
+    if (!pane) return;
+    const keys = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(_qpKey);
+    const d = _qpSnap.data, dist = pane.hasAttribute('data-qpt-dist');
+    const pill = (t, cls) => '<span class="qpt-vp ' + cls + '">' + t + '</span>';
+    const ini = n => String(n || '').split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+    const av = (n, c) => '<span class="qpt-av" style="background:' + c + '">' + escapeHtml(ini(n)) + '</span>';
+    const dayWord = n => n + (n === 1 ? ' Day' : ' Days');
+    let eb = '', pills = '', html = '';
+    if (!d) {
+        eb = (dist ? 'District' : (_qpMyStore() || 'Your Store')) + ' · Last 7 Days';
+        html = '<div class="qpt-sec"><div class="status-message">Syncing…</div></div>';
+    } else if (dist) {
+        const rows = STORE_CODES.map(s => _qptInvStore(d, s)).filter(Boolean);
+        const last = rows.map(r => r.y.date).sort().pop();
+        eb = 'District · Last 7 Days' + (last ? ' · Through ' + _qpDayLabel(last) : '');
+        const stock = _qpSum(rows, 'stock'), lat = _qpSum(rows, 'latest'), most = Math.max(1, ...rows.map(r => r.stock));
+        const vals = rows.filter(r => r.value != null);
+        pills = pill(_qpN(stock) + ' In Stock' + (vals.length ? ' · ' + _qpHLK(_qpSum(vals, 'value')) : ''), '') + pill(_qpN(lat) + ' Processed · Latest Day', 'good');
+        html = '<div class="qpt-sec">' + (!rows.length ? '<div class="qpt-none-g">No Day End report has come in yet.</div>'
+            : '<div class="qpt-pb qpt-pb-h"><span>Store</span><span>In Stock · Value</span><span>Processed · Last 7 Days</span><span class="c">Latest / Avg</span><span>Top Producer · Latest Day</span></div>'
+            // Most in stock first.
+            + rows.slice().sort((a, b) => b.stock - a.stock).map(r => {
+                const lo = r.avg && r.latest < r.avg * 0.6;
+                const t = _qpTeamOf(d, r.s), m = t && (t.team.find(x => x.top) || t.team[0]);
+                return '<div class="qpt-pb"><span class="qpt-sb-st">' + _qpDot(r.s) + escapeHtml(r.s) + '</span>'
+                    + '<span class="qpt-pb-q"><span class="qpt-sbar"><i style="width:' + Math.max(2, r.stock / most * 100).toFixed(1) + '%;background:' + _qpStoreColor(r.s) + '"></i></span>'
+                    + '<b class="qpt-pb-n">' + _qpN(r.stock) + '</b><span class="qpt-pb-a qpt-pb-n">' + (r.value == null ? '' : _qpHLK(r.value)) + '</span></span>'
+                    + _qptBars(r.p7, _qpStoreColor(r.s))
+                    + '<span class="c"><b class="' + (lo ? 'warn' : '') + '">' + _qpN(r.latest) + '</b> <span class="qpt-pb-a">/ ' + Math.round(r.avg) + '</span></span>'
+                    + (m ? '<span class="qpt-who">' + av(m.name, _qpStoreColor(r.s)) + '<span class="qpt-who-n"><b>' + escapeHtml(m.name) + '</b><small>' + _qpN(m.n) + ' Devices</small></span></span>' : '<span class="qpt-none-g">—</span>')
+                    + '</div>';
+            }).join('') + '<div class="qpt-foot">Amber Latest = Under 60% of the Store\'s Own Average. In Stock = the Day End Report\'s Available Card.</div>')
+            + '</div>';
+    } else {
+        const s = _qpMyStore(), r = s && _qptInvStore(d, s);
+        eb = (s || 'Your Store') + ' · Last 7 Days' + (r ? ' · Through ' + _qpDayLabel(r.y.date) : '');
+        if (!r) html = '<div class="qpt-sec"><div class="qpt-none-g">No Day End report has come in for this store yet.</div></div>';
+        else {
+            const cell = (k, v, sub, cls) => '<div class="qpt-cell ' + (cls || '') + '"><span class="qpt-ck">' + k + '</span><b>' + v + '</b>' + (sub ? '<em>' + sub + '</em>' : '') + '</div>';
+            const pipe = keys.indexOf('pipeline') !== -1;
+            if (pipe) pills = pill(_qpN(r.stock) + ' In Stock' + (r.value == null ? '' : ' · ' + _qpHLK(r.value)), '');
+            pills += pill(_qpN(r.latest) + ' Processed · Latest Day', 'good');
+            const cells = pipe
+                // Available devices and their value, no Live box (Ethan, 2026-11-08:
+                // "I don't think we need the Live card" — "both are available devices
+                // and available value").
+                ? cell('Available Devices', _qpN(r.stock), 'In Stock')
+                    + cell('Available Value', r.value == null ? '—' : _qpHLK(r.value), r.value == null ? 'Fills From the Next Day End' : 'What It Is Worth')
+                    + cell('Processed · Latest Day', _qpN(r.latest), 'Avg ' + r.avg.toFixed(1) + ' a Day')
+                : cell('Store Processed · Latest Day', _qpN(r.latest), 'Avg ' + r.avg.toFixed(1) + ' a Day');
+            // Everyone on any of the 7 days, latest first then the week's total.
+            const ppl = {};
+            r.f.forEach((day, i) => (day.team_production || []).forEach(m => {
+                const p = ppl[m.name] || (ppl[m.name] = { name: m.name, n7: [0, 0, 0, 0, 0, 0, 0].slice(0, r.f.length), value: 0, top: false });
+                p.n7[i] = Number(m.processed) || 0;
+                if (i === r.f.length - 1) { p.value = Number(m.value) || 0; p.top = !!m.top; }
+            }));
+            const t = _qpTeamOf(d, s);
+            const people = Object.values(ppl).map(p => Object.assign(p, { latest: p.n7[p.n7.length - 1], total: p.n7.reduce((a, b) => a + b, 0), avg: _qpAvg(p.n7.filter(Boolean)), worked: p.n7.filter(Boolean).length }))
+                .sort((a, b) => b.latest - a.latest || b.total - a.total);
+            html = '<div class="qpt-sec qpt-sec-b"><div class="qpt-cells ' + (pipe ? 'c3' : 'c1') + '">' + cells + '</div></div>'
+                + '<div class="qpt-sec">' + (!people.length ? '<div class="qpt-none-g">No one is on the Day End report\'s team production yet.</div>'
+                    : '<div class="qpt-pts">' + people.map((p, i) => {
+                        const c = _QPT_PERSON_TINTS[i % _QPT_PERSON_TINTS.length], lo = p.avg && p.latest < p.avg * 0.6;
+                        return '<div class="qpt-pt" style="--c:' + c + '"><div class="qpt-pt-top"><span class="qpt-who">' + av(p.name, c) + '<span class="qpt-who-n"><b>' + escapeHtml(p.name) + '</b></span></span>'
+                            + (p.top ? '<span class="qpt-cnt good">' + (t && t.topRun > 1 ? 'Top · ' + t.topRun + ' Days Running' : 'Top') + '</span>' : '') + '</div>'
+                            + '<div class="qpt-pt-n' + (lo ? ' warn' : '') + '"><b>' + _qpN(p.latest) + '</b><span>Latest Day</span></div>'
+                            + '<div class="qp-hl-cap">Last ' + r.f.length + ' Days</div>' + _qptBars(p.n7, c)
+                            + '<div class="qpt-pt-kv"><span>Daily Average</span><b>' + p.avg.toFixed(1) + '</b></div>'
+                            + '<div class="qpt-pt-kv"><span>Total · ' + dayWord(p.worked) + ' Worked</span><b>' + _qpN(p.total) + '</b></div>'
+                            + '<div class="qpt-pt-kv"><span>Value · Latest Day</span><b>' + _qpHLK(p.value) + '</b></div></div>';
+                    }).join('') + '</div>') + '</div>';
+        }
+    }
+    const view = pane.querySelector('.qpt-iv'), pp = pane.querySelector('.qpt-ipills'), e = pane.querySelector('.qpt-ieb');
+    if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
+    if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
+    if (e && e.textContent !== eb) e.textContent = eb;
+}
+// LISTINGS & DEALS AS ONE WORK LIST (Ethan, 2026-11-08, design B of artifact
+// 9jz7JGawrggijNciHztmKu). B2B, Variance and SPEEKS Connect melted into one
+// to-do list, soonest first: Overdue, Due Today, This Week, Later, No Set Date.
+// A coloured tag says which tool a line is from and a click opens that tool;
+// a cell a tool across the top gives its total. Drawn from the hidden cards'
+// own reads (_qpWState: b2b, variance / dvariance, connect / dconnect), so no
+// second fetch, and only the tools this person's cards hold are in it.
+function _qptMergeWork(pane, blocks) {
+    const dist = blocks.some(b => /^d(variance|connect)$/.test(_qpKey(b)));
+    const head = document.createElement('div');
+    head.className = 'qpt-mh';
+    head.innerHTML = '<span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>'
+        + '<div><div class="ew-eyebrow">' + escapeHtml((dist ? 'District' : (_qpStoreLabel().trim() || 'Your Store')) + ' · Right Now') + '</div><div class="qpt-mt">Listings &amp; Deals</div></div>'
+        + '<div class="qpt-spills qpt-wpills"></div>';
+    const view = document.createElement('div');
+    view.className = 'qpt-wv';
+    pane.classList.add('qpt-merge');
+    pane.setAttribute('data-merge', 'work');
+    pane.toggleAttribute('data-qpt-dist', dist);
+    pane.insertBefore(view, pane.firstChild);
+    pane.insertBefore(head, view);
+}
+const _qptDayOf = iso => iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) : '';
+function _qptRenderWork(main) {
+    const pane = main && main.querySelector('.qpt-pane.qpt-merge[data-merge="work"]');
+    if (!pane) return;
+    const keys = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(_qpKey);
+    const has = k => keys.indexOf(k) !== -1;
+    const today = _qpWToday(), week = (() => { const d = new Date(today + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); })();
+    const short = day => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+    const items = [], cells = [];
+    let syncing = false;
+    const go = { b2b: "window.location.href='b2b.html'", var: "window.location.href='workspace.html#vreplies'",
+        photos: "window.location.href='operations.html#photos'", category: "window.location.href='operations.html#categories'", titles: "window.location.href='operations.html#titles'" };
+    const cell = (k, v, sub, cls) => '<div class="qpt-cell ' + (cls || '') + '"><span class="qpt-ck">' + k + '</span><b>' + v + '</b>' + (sub ? '<em>' + sub + '</em>' : '') + '</div>';
+    // --- Business-to-Business: deals to price (with their due day) and deals waiting on this person.
+    if (has('b2b')) {
+        const d = _qpWState('b2b').data;
+        if (!d) syncing = true;
+        else {
+            const bday = _b2bCentralDay(new Date());
+            const price = d.deals.filter(x => x.stage === 'pricing' && (_b2bIsCorp() || _b2bActionFor(x))).map(x => ({ x, due: _b2bPricingDue(x, bday) })).filter(e => e.due);
+            const need = d.deals.filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor);
+            const unl = (d.unl || []).filter(r => Number(r.unlisted_units) > 0).reduce((a, r) => a + (Number(r.unlisted_value) || 0), 0);
+            price.forEach(e => items.push({ tag: 'b2b', tl: 'B2B', due: e.due.dueOn, open: go.b2b,
+                text: e.x.ref + (e.x.company ? ' · ' + e.x.company : ''), sub: 'Price' + (e.x.total_units ? ' ' + e.x.total_units + (Number(e.x.total_units) === 1 ? ' Unit' : ' Units') : '') + (e.x.store && _b2bIsCorp() ? ' · ' + e.x.store : ''),
+                when: e.due.late ? Math.abs(e.due.left) + 'd Overdue' : e.due.left === 0 ? 'Due Today' : 'Due ' + short(e.due.dueOn).replace(/^\w+, /, '') }));
+            need.forEach(x => { const n = _b2bDaysIn(x);
+                items.push({ tag: 'b2b', tl: 'B2B', due: null, rank: -n, open: go.b2b, text: x.ref + (x.company ? ' · ' + x.company : ''),
+                    sub: ((B2B_STAGE[x.stage] || {}).label || x.stage) + (x.store && _b2bIsCorp() ? ' · ' + x.store : ''), when: n + (n === 1 ? ' Day Waiting' : ' Days Waiting'), tone: _b2bAgeTone(n) === 'crit' ? 'bad' : _b2bAgeTone(n) === 'warn' ? 'warn' : '' }); });
+            const late = price.filter(e => e.due.late).length;
+            cells.push(cell('Business-to-Business', price.length + need.length,
+                price.length + ' to Price · ' + need.length + ' Need You' + (unl ? ' · ' + _qpHLK(unl) + ' Unlisted' : ''), late ? 'bad' : price.length + need.length ? 'warn' : 'good'));
+        }
+    }
+    // --- Variance: a store's lines to explain and DM notes to answer; the DM's reports to review.
+    if (has('variance')) {
+        const d = _qpWState('variance').data;
+        if (!d) syncing = true;
+        else {
+            let n = 0, first = '';
+            d.periods.filter(p => !p.all_clear && (p.items || 0) > (p.answered || 0)).forEach(p => {
+                const due = _qptDayOf(p.manager_due_at), lines = (d.items[p.id] || []).filter(x => x.needs_reply && !x.gm_note);
+                n += p.items - (p.answered || 0);
+                if (!first || due < first) first = due;
+                if (lines.length) lines.forEach(x => items.push({ tag: 'var', tl: 'Variance', due, open: go.var, text: _qpClaimsText(x.item_title),
+                    sub: (x.buyer_name ? _qpWWho(x.buyer_name) + ' · ' : '') + Math.round(Number(x.variance_pct)) + '%' }));
+                else items.push({ tag: 'var', tl: 'Variance', due, open: go.var, text: (p.items - (p.answered || 0)) + ' Lines to Explain', sub: 'Variance Report' });
+            });
+            d.periods.filter(p => (p.awaiting_reply || 0) > 0).forEach(p => {
+                const due = _qptDayOf(new Date(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000).toISOString());
+                (d.items[p.id] || []).filter(x => x.dm_note && x.dm_reply_requested && !x.mgr_reply).forEach(x => {
+                    n++;
+                    if (!first || due < first) first = due;
+                    items.push({ tag: 'var', tl: 'Variance', due, open: go.var, text: _qpClaimsText(x.item_title), sub: 'DM Note · Reply Needed' });
+                });
+            });
+            cells.push(cell('Variance', n, n ? (first ? 'Due ' + short(first) : 'Replies Needed') : 'Caught Up', n ? (first && first < today ? 'bad' : 'warn') : 'good'));
+        }
+    }
+    if (has('dvariance')) {
+        const d = _qpWState('dvariance').data;
+        if (!d) syncing = true;
+        else {
+            const t = _vrDmTriage(d.data), st = p => (p.store || '').toUpperCase();
+            t.ready.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, text: st(p) + ' Report',
+                sub: p.answered >= p.items ? 'Ready for Your Notes' : 'Late · ' + p.answered + ' of ' + p.items + ' Replied', when: p.answered >= p.items ? 'Ready' : 'Late', tone: p.answered >= p.items ? 'warn' : 'bad' }));
+            t.closed.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, text: st(p) + ' Report',
+                sub: t.replied.has(st(p)) ? 'A Manager Replied' : 'Reply Window Closed', when: 'Wrap Up' }));
+            const n = t.ready.length + t.closed.length;
+            cells.push(cell('Variance', n, n ? 'To Review' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : '') : 'Caught Up' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : ''), n ? 'warn' : 'good'));
+        }
+    }
+    // --- SPEEKS Connect: no set date — a line a kind for a store, a line a store for the DM.
+    const conKey = has('dconnect') ? 'dconnect' : has('connect') ? 'connect' : '';
+    if (conKey) {
+        const d = _qpWState(conKey).data, ok = _QP_WSPEC[conKey].has;
+        if (!d) syncing = true;
+        else {
+            const stores = (d.scope && d.scope.stores && d.scope.stores.length) ? d.scope.stores : (conKey === 'dconnect' ? _DMX_STORES : [_qpMyStore()]);
+            const num = (o, s) => Number(o && o[s]) || 0;
+            const per = s => ({ photos: ok('photos') ? num(d.photos, s) : 0, category: ok('category') ? num(d.other, s) + num(d.unmatched, s) + num(d.misfiled, s) : 0,
+                titles: ok('titles') ? num(d.lt && d.lt.titles, s) : 0 });
+            const tot = { photos: 0, category: 0, titles: 0 };
+            const word = { photos: ['Listing With No Pictures', 'Listings With No Pictures'], category: ['Listing to Sort', 'Listings to Sort'], titles: ['Title to Check', 'Titles to Check'] };
+            stores.forEach(s => { const c = per(s); Object.keys(tot).forEach(k => { tot[k] += c[k]; });
+                if (conKey === 'dconnect') {
+                    const all = c.photos + c.category + c.titles;
+                    if (all) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -all, open: go[c.photos ? 'photos' : c.category ? 'category' : 'titles'], store: s, text: s,
+                        sub: ['photos', 'category', 'titles'].filter(k => c[k]).map(k => c[k] + ' ' + { photos: 'Pictures', category: 'Categories', titles: 'Titles' }[k]).join(' · '), when: String(all) });
+                } else ['photos', 'category', 'titles'].forEach(k => { if (c[k]) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -c[k], open: go[k], text: c[k] + ' ' + word[k][c[k] === 1 ? 0 : 1], sub: '', when: String(c[k]), tone: k === 'photos' ? 'bad' : '' }); });
+            });
+            const n = tot.photos + tot.category + tot.titles;
+            cells.push(cell('SPEEKS Connect', n, n ? ['photos', 'category', 'titles'].filter(k => ok(k)).map(k => tot[k] + ' ' + { photos: 'Pictures', category: 'Categories', titles: 'Titles' }[k]).join(' · ') : 'All Clear', tot.photos ? 'bad' : n ? 'warn' : 'good'));
+        }
+    }
+    // --- group and draw, soonest first
+    const groups = [['over', 'Overdue'], ['today', 'Due Today'], ['week', 'This Week'], ['later', 'Later'], ['none', 'No Set Date']];
+    const grp = it => !it.due ? 'none' : it.due < today ? 'over' : it.due === today ? 'today' : it.due <= week ? 'week' : 'later';
+    const dist = pane.hasAttribute('data-qpt-dist');
+    const row = it => '<div class="qpt-wl" role="link" tabindex="0" onclick="' + it.open + '" onkeydown="if(event.key===\'Enter\'){' + it.open + '}">'
+        + '<span class="qpt-src ' + it.tag + '">' + it.tl + '</span>'
+        + '<span class="qpt-wl-t">' + (it.store ? _qpDot(it.store) + '<b>' + escapeHtml(it.text) + '</b>' : escapeHtml(it.text)) + (it.sub ? ' <small>· ' + escapeHtml(it.sub) + '</small>' : '') + '</span>'
+        + '<span class="qpt-when ' + (it.tone || (grp(it) === 'over' ? 'bad' : grp(it) === 'none' ? '' : 'warn')) + '">'
+        + escapeHtml(it.when || (grp(it) === 'over' ? 'Overdue' : it.due === today ? 'Due Today' : 'Due ' + short(it.due).replace(/,.*$/, ''))) + '</span></div>';
+    let list = '';
+    groups.forEach(([g, label]) => {
+        const these = items.filter(it => grp(it) === g).sort((a, b) => (a.due || '').localeCompare(b.due || '') || (a.rank || 0) - (b.rank || 0));
+        if (these.length) list += '<div class="qpt-wgrp">' + label + '</div>' + these.map(row).join('');
+    });
+    const waiting = items.length;
+    const html = (cells.length ? '<div class="qpt-sec qpt-sec-b"><div class="qpt-cells c' + cells.length + '">' + cells.join('') + '</div></div>' : '')
+        + '<div class="qpt-sec">' + (list || (syncing ? '<div class="status-message">Syncing…</div>'
+            : '<div class="qp-clear"><div class="qp-clear-t">Nothing Waiting</div><div class="qp-clear-s">No deals, variance or listing fixes need ' + (dist ? 'anyone' : 'you') + ' right now</div></div>')) + '</div>';
+    const pills = waiting ? '<span class="qpt-vp ' + (items.some(it => grp(it) === 'over') ? 'bad' : 'warn') + '">' + waiting + ' Waiting</span>' : (syncing ? '' : '<span class="qpt-vp good">All Clear</span>');
+    const view = pane.querySelector('.qpt-wv'), pp = pane.querySelector('.qpt-wpills');
+    if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
+    if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
 }
 function _qptLiveCard(main, kind) {
     const card = document.createElement('div');
@@ -56943,7 +56195,7 @@ function qptTab(k) {
     const main = _qpMain();
     if (!main || k === _qptTab) return;
     _qptTab = k;
-    try { localStorage.setItem(QPT_TAB_KEY, k); } catch (e) { /* private mode */ }
+    try { sessionStorage.setItem(QPT_TAB_KEY, k); } catch (e) { /* private mode */ }
     _qptPaint(main);
     const t = main.querySelector('.qpt-tab[data-qpt-tab="' + k + '"]');
     if (t && document.activeElement && document.activeElement.classList.contains('qpt-tab')) t.focus();
@@ -56959,7 +56211,7 @@ function qptShow(k, on) {
     if (!_qptState) return;
     _qptState.hidden = _qptState.hidden.filter(x => x !== k);
     if (!on) _qptState.hidden.push(k);
-    else { _qptTab = k; try { localStorage.setItem(QPT_TAB_KEY, k); } catch (e) { /* private mode */ } }
+    else { _qptTab = k; try { sessionStorage.setItem(QPT_TAB_KEY, k); } catch (e) { /* private mode */ } }
     _qptRebuild();
 }
 function qptMenu() {
@@ -56973,7 +56225,7 @@ function qptResetTabs() {
     _qptState.order = d.order;
     _qptState.hidden = d.hidden;
     _qptTab = null;
-    try { localStorage.removeItem(QPT_TAB_KEY); } catch (e) { /* private mode */ }
+    try { sessionStorage.removeItem(QPT_TAB_KEY); } catch (e) { /* private mode */ }
     _qptRebuild();
 }
 
@@ -58441,10 +57693,6 @@ function _samAnnRead(item) {
     return inReadBy || localRead.has(item.rowId);
 }
 
-function _samIsMSM() {
-    try { return typeof _isMSMChecklist === 'function' && _isMSMChecklist(); } catch (_) { return false; }
-}
-
 // --- UNIFIED FEED (announcements + store notes + reminders/due dates) ---
 // One "everything" feed. Announcements + store notes get a permanent read;
 // reminders get a per-day dismiss (they re-surface tomorrow if still due). The
@@ -58627,7 +57875,7 @@ function _samRenderFeedNow(rows) {
     // mark-all — each item must be read individually.
     const activeCount = rems.length + notes.length + anns.filter(a => !a.read).length + (patchUnseen ? 1 : 0);
 
-    const ctx = { all, patchRow, patchUnseen, activeCount, tabsOn: _samFeedTabsOn(), showStoreChip: _samIsMSM() };
+    const ctx = { all, patchRow, patchUnseen, activeCount, tabsOn: _samFeedTabsOn() };
     cards.forEach(c => _samPaintFeedCard(c, ctx));
     _samAddReadFull();
     _samSyncRailFill();
@@ -58761,11 +58009,10 @@ function _samPaintFeedCard(c, ctx) {
             return;
         }
         if (it.type === 'note') {
-            const chip = (ctx.showStoreChip && it.store) ? `<span class="sam-schip">${_samEsc(it.store)}</span>` : '';
             desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}','unread')">
                 <span class="sam-adot"></span>
                 <div class="sam-a-body">
-                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}</div>
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span></div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                     <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) : 'Store note'}</div>
                 </div>
@@ -59200,8 +58447,7 @@ function samSetProgress(kind, data) {
 // element only ever reads "Goal: 190 Listings" — no slash — so the match always
 // failed and the bar and value silently stayed blank. Read the same elements the
 // modal itself fills instead: #goals-total-actual is the week's summed goals, and
-// the weekly target comes from targetFor(). MSM stacks two stores, so its totals
-// live in per-store elements and both sides get summed.
+// the weekly target comes from targetFor().
 // Role class for the current user (mirrors applyRoleBasedUI's derivation).
 function _speeksRoleClass() {
     const r = sessionStorage.getItem('speeksUserRole') || 'employee';
@@ -59268,21 +58514,11 @@ function samRefreshListing() {
     };
     const targetOf = s => { try { return targetFor(s) || 0; } catch (_) { return 0; } };
 
-    let done = 0, target = 0, label = '';
-
-    if (_samIsMSM()) {
-        MULTISTORE_MANAGER_STORES.forEach(s => {
-            done += num(document.getElementById(`goals-total-actual-${s}`));
-            target += targetOf(s);
-        });
-        label = MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetOf(s)}`).join(' · ');
-    } else {
-        done = num(document.getElementById('goals-total-actual'));
-        target = (typeof _weekTargetTotal === 'number' && _weekTargetTotal)
-            ? _weekTargetTotal
-            : targetOf(sessionStorage.getItem('speeksUserStore'));
-        label = target ? `Goal: ${target} listings this week` : '';
-    }
+    const done = num(document.getElementById('goals-total-actual'));
+    const target = (typeof _weekTargetTotal === 'number' && _weekTargetTotal)
+        ? _weekTargetTotal
+        : targetOf(sessionStorage.getItem('speeksUserStore'));
+    const label = target ? `Goal: ${target} listings this week` : '';
 
     // Nothing loaded yet — leave the card's default subtitle rather than flashing 0/0.
     if (!target) return;
@@ -59660,7 +58896,7 @@ function _samReminderCfg() {
     // the saved rows, so whoever sets them clears it for the manager AND the ASM.
     // noSnooze: the goals have to actually be entered — there is no "later" for
     // this one, so the card stays put until the roles are in.
-    // DM + MSM, monthly. The app cannot tell whether the report was actually
+    // DM, monthly. The app cannot tell whether the report was actually
     // emailed (mailto hands it to their own mail client), so this one is cleared
     // by the person saying so — Snooze quiets it for today, "Mark filed" is what
     // ends it, and that assertion is stored server-side per person + month.
@@ -59964,22 +59200,15 @@ function _samGatherReminders() {
         // So the map is not consulted for them at all — including any entry
         // written before this was fixed.
         if (!c.noSnooze && _samIsHidden(c.key, sig)) return;
-        // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
-        // covered stores on data-stores), clicking it opens that store's tool even
-        // while he's on the other store's dashboard — without switching dashboards.
-        // A both-store alert stamps two, so nothing is set and the tool opens on the
-        // active dashboard store (the user's chosen rule).
+        // The bubble stamps the stores an alert covers on data-stores. The DM lands
+        // on the first store that needs review (the bubble lists them attention-first).
         let action = _samDestDead(c.action) ? '' : (c.action || '');
         if (action && t && t.dataset && t.dataset.stores) {
             const stores = t.dataset.stores.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
             const roleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
             let target = '';
-            // MSM: only route a single-store alert; a both-store one opens the active
-            // dashboard store. DM: land on the first store that needs review (the
-            // bubble lists them attention-first).
-            if (isMultiStoreManager()) { if (stores.length === 1) target = stores[0]; }
-            else if (roleLc === 'district manager' && stores.length) target = stores[0];
-            if (target) action = `sessionStorage.setItem('speeksMsmToolStore','${target}');` + action;
+            if (roleLc === 'district manager' && stores.length) target = stores[0];
+            if (target) action = `sessionStorage.setItem('speeksAlertToolStore','${target}');` + action;
         }
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
@@ -60502,7 +59731,7 @@ async function openVersionPatchNotes() {
    ========================================================= */
 const _PL_OWNER_ROLES = new Set(['owner (manager)', 'owner manager']);
 // ASMs included: they are the ones handling the supplies day to day.
-const _PL_REQ_ROLES = new Set(['manager', 'assistant manager', 'district manager', 'multi-store manager']);
+const _PL_REQ_ROLES = new Set(['manager', 'assistant manager', 'district manager']);
 
 let _plRequests = [];      // rows for whichever view is open
 let _plTab = 'new';
@@ -64219,10 +63448,10 @@ function _dcwListingTab(rows, cfg) {
 }
 
 // ============================================================================
-// MODULE: EXPENSE REPORT  (DM / MSM file, CEO reviews)
+// MODULE: EXPENSE REPORT  (DM files, CEO reviews)
 // ============================================================================
 // One report per person per month, holding two kinds of line: mileage and
-// ordinary expenses. The DM and MSM see only their own report; the CEO sees
+// ordinary expenses. The DM sees only their own report; the CEO sees
 // everyone's via a person picker. Submitting is the site-standard "email
 // generator" — a To/Subject/Body preview plus a mailto: draft and a clipboard
 // failsafe (same shape as Box Order and the recycle report), so the report
@@ -64439,7 +63668,7 @@ function _expControlsHtml() {
         + '</span></div>';
 }
 
-// A DM/MSM may only edit their own report; the CEO may edit anyone's.
+// A DM may only edit their own report; the CEO may edit anyone's.
 function _expCanEdit() {
     // "All" is a read-only overview — a line has to belong to one person, so
     // there is nothing sensible to add or edit against the aggregate.
@@ -64988,7 +64217,7 @@ async function expExportExcel(btn) {
 window.expExportExcel = expExportExcel;
 
 // ---- monthly "file your expense report" reminder ------------------------------
-// DM and MSM only (the CEO receives the reports, they don't file one). Unlike the
+// DM only (the CEO receives the reports, they don't file one). Unlike the
 // KPI nags this cannot be data-derived — the report leaves as a mailto handed to
 // the person's mail client, so the app never sees it sent. "Filed" is therefore
 // an assertion the person makes, stored server-side (expense_submissions) so it
@@ -64998,10 +64227,8 @@ let _expRemindStarted = false;
 
 function _expRemindApplies() {
     const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    if (_EXP_REMIND_ROLES.has(r)) return true;
-    // An MSM signs in with the effective role 'manager', so the flag is the only
-    // way to tell them apart from a store manager.
-    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+    // The DM is the only filer since the MSM role went (2026-11-08).
+    return _EXP_REMIND_ROLES.has(r);
 }
 
 // The month being chased is the one that just CLOSED — you file August in
@@ -70303,7 +69530,7 @@ function _lhUpdateNag(d, stores) {
         // no image_count" is a database sentence; an empty picture box is the
         // thing that costs the sale, and it tells the reader why to care.
         // "BAL & MPL has" is wrong; the verb follows the SUBJECT (the stores),
-        // not the count. A two-store MSM reads this line every day.
+        // not the count.
         t.dataset.summary = where + (stores.length > 1 ? ' have ' : ' has ')
             + n + ' listing' + (n === 1 ? '' : 's')
             + ' live on the online store with no pictures — a shopper sees an empty box, so '

@@ -417,6 +417,59 @@ sketched a replacement and picked it from a rendering of the local site
   link is left-aligned now (`justify-self: start`). The Claims & Disputes
   workspace tab row no longer jumps on a pick (`.claims-tabs` min-width
   max-content + the chosen tab keeps weight 750).
+- **2026-11-08: Inventory is one card** (artifact 24AE7LWPxDGPJXjiSpVeqx;
+  Ethan: "Make this tab just inventory"). The tab is `inventory` "Inventory",
+  `merge: 'inv'` → `_qptMergeInv` + `_qptRenderInv`, keys pipeline / dpipeline
+  / team / dteam only, all read from `_qpSnap.data` (`_qptInvStore`: last 7
+  Day End days, average over days with any processing). **In stock, not the
+  queue** (Ethan, same day: the queue figures "should be instock numbers" — the
+  Day End email's Available card, `available_count` / `available_cost`), so no
+  days-to-clear either. **Value, not cost** (Ethan, same day): the card shows
+  `available_value` = the Available card's Projection column. Stored since 0180
+  (applied 11-08); day-end-ingest + store-snapshot deployed 11-08 (byte-checked).
+  The .gs sends `availableValue` (3 lines after `out.availableCost`) — Ethan
+  pastes + publishes a NEW VERSION; then backfill with
+  `day-end-ingest?secret=…&days=45&goals=0` (`goals=0` = no goal-result rewrite). Until then no money shows; test logins have
+  sample values. The "Waiting to Process" mini (`mqueue`) is now In Stock and
+  the district `mavail` mini is In Stock by value (count until stored).
+  Phones/tablets: unchanged — widgets and minis are hidden there already. DM = **Pace Board** (a row a store, most in stock first: in stock bar
+  + cost, `_qptBars` 7 days, latest / avg with amber under 60%, top producer).
+  Store = **Person Tiles** (band: In Stock / Processed / Live, then a tile a person from
+  each day's `team_production`: latest, 7 bars, avg a day worked, total, value,
+  Top · N Days Running). The inv merge runs with ONE card too: an employee has
+  only Team Production, and gets their own tile under the store's latest day.
+  **SPEEKS Connect, B2B and Variance moved to Company & Tools** (hidden by
+  default) until their new homes are agreed — proposed: Connect as a Listings
+  part of Store Health; Variance and B2B as rail Action Items lines; a B2B
+  Unlisted mini. **Days, not reports** (Ethan, same day: "Every report is one
+  day"): every Day End caption / when-label on the QuickPortal widgets and
+  minis says Days ("Last 7 Days", "Latest Day", "days running", "No Day End
+  Yet"). Variance *reports* keep the word — those are real reports.
+
+- **2026-11-08: follows the person; opens on the first tab.** Order, hidden
+  tabs and rail minis save to qp_layouts through qp-layout (keyed by display
+  name; the per-store MSM layouts went with the role 11-08), so any device loads them (`_qpLayoutSync`,
+  server wins). The OPEN tab is now sessionStorage, not localStorage, and
+  `checkPIN` clears it: a sign-in (or a fresh browser tab) opens the person's
+  first visible tab; moving between pages inside a sign-in keeps the tab.
+  Checked with a real PIN sign-in (0003). A name change loses the layout (no
+  user ids — CLAUDE.md); test accounts' layouts stay in their browser.
+
+- **2026-11-08: Listings & Deals replaces Company & Tools** (design B of
+  artifact 9jz7JGawrggijNciHztmKu). Tab `deals`, `merge: 'work'` →
+  `_qptMergeWork` + `_qptRenderWork`: B2B, Variance and SPEEKS Connect as ONE
+  work list — Overdue / Due Today / This Week / Later / No Set Date, a coloured
+  tag a tool (`.qpt-src`), a click opens the tool — under a cell a tool. Reads
+  the hidden cards' own state (`_qpWState('b2b'|'variance'|'dvariance'|
+  'connect'|'dconnect')`). Shown by default (new key, so a saved hidden
+  'company' doesn't hide it; `QPT_HIDDEN_DEFAULT` is []). Stats & Awards,
+  Processes & Policies, Store Calendar, Hotkeys, Quick Messages and Expense
+  Report are in no tab now. Employees have none of the three tools, so no tab.
+- **2026-11-08: no Multi-Store Manager.** Ethan: "we have gone away from MSM
+  entirely". Removed from speeks.js, the six pages (BAL/MPL switcher, the MSM
+  Expense Report row), styles.css and the test login. The test account PIN 0005
+  is still in test_users (its delete was declined). Edge functions keep dead
+  MSM branches unless Ethan wants all 20 redeployed.
 
 How it sits on the engine: `_qpApplyLayout` → `_qptApply` when `_qptOn()`
 (`_qpHeadlinesOn() && !_isMobileLayout()`), else `_qptTeardown` + the rows.

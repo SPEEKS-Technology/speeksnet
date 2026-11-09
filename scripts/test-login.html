@@ -18,9 +18,7 @@
   ONE A ROLE (Ethan, 2026-10-28: "make a test account for each role … I want
   to verify myself each of these looks good in the role it's for"; he chose
   local-only over real accounts). Each button writes what checkPIN() writes for
-  that role — including a Multi-Store Manager, who logs in as role "manager"
-  with speeksMultiStore set and BAL as the first store, exactly as the real
-  login does. DM and CEO are separate: the DM sees more (Variance Review,
+  that role, exactly as the real login does. DM and CEO are separate: the DM sees more (Variance Review,
   district SPEEKS Connect, Monthly Team Goals, the Manager Checklist). Owner
   (Manager) has the manager's QuickPortal but more in Tools (Announcements, User
   Permissions, Preferred approvals), so it has its own button too.
@@ -51,7 +49,7 @@
 <div class="box" id="box">
   <h1>Test login</h1>
   <p>Opens the real QuickPortal as a test user of that role. Nothing can be saved. The QuickPortal shows made-up sample data; other pages show live data, read-only.</p>
-  <p>On speeksnet.com, sign in with a test PIN instead: 0000 CEO · 0001 DM · 0002 MOCD · 0003 Manager OVL · 0004 Owner (Manager) LEE · 0005 Multi-Store Manager BAL &amp; MPL · 0006 ASM WSP · 0007 Employee OVL · 0008 Store Board OVL.</p>
+  <p>On speeksnet.com, sign in with a test PIN instead: 0000 CEO · 0001 DM · 0002 MOCD · 0003 Manager OVL · 0004 Owner (Manager) LEE · 0006 ASM WSP · 0007 Employee OVL · 0008 Store Board OVL.</p>
   <div class="grp">Company</div>
   <div class="grid">
     <button type="button" onclick="signIn('Test CEO', 'ceo', 'ALL')">CEO<small>All stores</small></button>
@@ -62,7 +60,6 @@
   <div class="grid">
     <button type="button" onclick="signIn('Test Manager', 'manager', 'OVL')">Store Manager<small>OVL</small></button>
     <button type="button" onclick="signIn('Test Owner', 'owner (manager)', 'LEE')">Owner (Manager)<small>LEE</small></button>
-    <button type="button" onclick="signIn('Test MSM', 'manager', 'BAL', true)">Multi-Store Manager<small>BAL &amp; MPL</small></button>
     <button type="button" onclick="signIn('Test ASM', 'assistant manager', 'WSP')">Assistant Manager<small>WSP</small></button>
   </div>
   <div class="grp">Store Team</div>
@@ -87,9 +84,6 @@
     sessionStorage.setItem('speeksUserStore', store);
     sessionStorage.setItem('speeksUserPin', '');
     sessionStorage.setItem('speeksUserOnboardedAt', '');
-    // A Multi-Store Manager, as checkPIN() writes one: role manager, the flag
-    // that drives the store switcher, the first managed store.
-    if (multi) sessionStorage.setItem('speeksMultiStore', 'true');
     // A copy for speeks.js to restore from when the Claude browser pane re-opens
     // the tab with an empty sessionStorage (TEST SESSION, top of speeks.js).
     var keep = {};

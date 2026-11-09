@@ -61,7 +61,6 @@ var OVL = {
 };
 
 function _pwSetup() {
-    window.isMultiStoreManager = function () { return false; };
     goalsTargetStore = 'OVL';
     _goalsFloaters.OVL = [{ name: 'Zach Marchesano', claimedBy: null, available: true, mine: false, homeStore: 'OVL' }];
     _lgpw.data = { OVL: { at: Date.now(), payload: OVL } };
@@ -87,9 +86,9 @@ t('markup: the Today pane still holds the editor, and the total row is still its
     var today = document.getElementById('goals-pane-today');
     if (!today) return 'no #goals-pane-today';
     if (!today.contains(document.getElementById('goals-manager-body'))) return 'the roster left the Today pane';
-    // _setMSGoalsChrome finds the total row with this exact sibling selector.
+    // The page's Total row sits right after the roster, as its sibling.
     return !!document.querySelector('#goals-manager-body ~ .goals-total-row')
-        || '#goals-manager-body ~ .goals-total-row no longer matches — the MSM chrome toggle would break';
+        || '#goals-manager-body ~ .goals-total-row no longer matches — the Total row left the Today pane';
 });
 
 t('markup: Today is the default view, week arrows hidden', function () {

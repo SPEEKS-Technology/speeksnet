@@ -2521,22 +2521,10 @@ _b2bModalItems = b2bFixtureItems();
 // ---------------------------------------------------------------------------
 // Split completion, 2026-09-26 review. Every complete call used to send no
 // store, which the server can only resolve for a one-store deal: corp could
-// never finish a split deal, a multi-store manager never their part, and the
-// card's quick Complete waited on the deal-wide count.
+// never finish a split deal, and the card's quick Complete waited on the
+// deal-wide count. (The multi-store manager checks went with the MSM role,
+// 2026-11-08.)
 // ---------------------------------------------------------------------------
-function _asMsm(fn) {
-    var m = sessionStorage.getItem('speeksMultiStore');
-    sessionStorage.setItem('speeksMultiStore', 'true');
-    try { return _asRole('manager', 'MPL', fn); }
-    finally { sessionStorage.setItem('speeksMultiStore', m); }
-}
-function _splitItems() {
-    return [
-        { id: 'm1', listing_store: 'MPL', quantity: 2, listed_qty: 2, recycled_qty: 0 },
-        { id: 'm2', listing_store: 'MPL', quantity: 1, listed_qty: 0, recycled_qty: 1 },
-        { id: 'o1', listing_store: 'OVL', quantity: 2, listed_qty: 0, recycled_qty: 0 },
-    ];
-}
 
 t('review corp gets no quick Complete while a part is still outstanding', function () {
     return _asRole('ceo', 'CORP', function () {
@@ -2580,21 +2568,6 @@ t('review an unsplit deal keeps the whole-deal quick Complete', function () {
         if (_b2bClosableParts(d) !== null) return 'an unsplit deal was treated as split';
         var q = _b2bQuickAction(d);
         return (q && q.label === 'Complete Deal') || 'lost the plain Complete';
-    });
-});
-t('review a multi-store manager can close their part from the loaded lines', function () {
-    return _asMsm(function () {
-        var d = _b2bSplitDeal();
-        var parts = _b2bClosableParts(d, _splitItems());
-        return JSON.stringify(parts) === '["MPL"]' || 'got ' + JSON.stringify(parts);
-    });
-});
-t('review a multi-store manager Complete does not wait on another store', function () {
-    return _asMsm(function () {
-        var saved = _b2bModalItems;
-        _b2bModalItems = _splitItems();
-        try { return _b2bAllSatisfied() || 'OVL lines held the button back'; }
-        finally { _b2bModalItems = saved; }
     });
 });
 // Filtered by deal id: other checks' async sends land in B2B_SENT while these
@@ -2737,12 +2710,6 @@ t('open a line with one real serial among NO SERIALs still picks by serial', fun
             if (html.indexOf('type="number"') >= 0) return 'offered a count on a serialled line';
             return html.indexOf('M1') >= 0 || 'the real serial is not listed';
         } finally { _b2bSplitting = null; }
-    });
-});
-t('open a multi-store manager scopes the board and items to both stores', function () {
-    return _asMsm(function () {
-        if (_b2bFetchScope() !== 'BAL,MPL') return 'board scope was ' + _b2bFetchScope();
-        return _b2bScopeQs() === '&store=' + encodeURIComponent('BAL,MPL') || 'item scope was ' + _b2bScopeQs();
     });
 });
 t('open corp is still unscoped', function () {
