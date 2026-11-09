@@ -303,6 +303,137 @@ designs since have been shown inline in chat.
 - Layout saves **per person in localStorage** (`speeksQpLayout_<name>`), not the
   database yet.
 
+## THE TABS PAGE (2026-11-06) — replaces the rows on desktop
+
+Ethan: the rows-and-drag Customize page "feels very chaotic, clunky". He
+sketched a replacement and picked it from a rendering of the local site
+(artifact BNhYqLVvodVRRbJoRYfrKP, built in-session from captured DOM):
+
+- **Your Feed** full width on top (420px, no scrollbars shown, still scrolls).
+- **Tabs** under it, all one width, labels wrap (never a sideways scroll):
+  Live Dashboard · Performance · Action Items & Claims · Store Health · Sales &
+  Goals · Customers · Inventory & Team · Company & Tools (hidden by default).
+  Each tab's cards are role-neutral candidate lists in `QPT_TABS` (store and
+  district versions side by side; whoever can see one gets it), chunked into
+  rows of ≤3 (`_qptChunk`). **Hide** a tab with its × (hover) or the Tabs ▾
+  menu (checkboxes + Reset Tabs); **drag** tabs to reorder. Hidden tabs build
+  nothing (their widgets are never made, so no reads).
+- **Live Dashboard tab** = the full board: store roles get fresh `.lv-strip` /
+  `.lv-detail` mounts (as the full-screen view does); DM/CEO get the real
+  `#dc-panel-live` MOVED in (mark comment, `_qptRestoreDist` puts it back).
+- **Performance tab** = the pre-QuickPortal combined card: `.ew-standings` is
+  moved into the chart block's `.ew-perf-body` (`_qptPerf`), `.qpt-perf` lifts
+  the one-column rule. The Leaderboard is still the podium design.
+- **Mini rail** on the right ("At a Glance"): Customize toggles × / 1|2 and
+  drag-to-reorder; **+ Add Mini Widget** opens a tile drawer (`qptDrawerOpen`)
+  with a fixed-size hover preview; added tiles show a Remove pill. Minis draw
+  through the shelf code's `_qpMiniHtml`; `qpAddMini` / `qpRemoveMini` /
+  `qpMiniRows` route to the rail when the tabs are up.
+
+- **2026-11-07, option C of the Action Items & Claims designs** (artifact
+  SiKF5g5TdUW8qNm7BiRsjn): Action Items moved to the TOP OF THE RAIL
+  (`_qptRenderAi` — a line a piece: count, bar, "Next: …" or the old rail row's
+  line; a click clicks the stashed card's own row, with stopPropagation or the
+  side panel's click-outside shuts it again). The tab is now `claims`
+  "Claims & Disputes" (a saved `todo` reads as `claims`). A widget alone in its
+  tab row gets `.qpt-wide`; a model with `wide` then draws two columns in
+  `_qpWidgetCard` (Claims: Every Tab table; dClaims: By Store table + every
+  claim soonest first via `wideLines`). The rail is no longer sticky (too tall
+  for 900px with Action Items on it). Daily Breakdown is a rectangle now
+  (`.bd-open`, cc-seg button look).
+- **2026-11-07 (later): Store Health is one card for every role — design C**
+  of artifact TmBQECFLJkeFUYUysrttDa, with Ethan's change: What Needs Fixing
+  split into a box per part. A tab with `merge: true` (only `health`) runs
+  `_qptMerge` once its pane holds 2+ cards: `.qpt-merge` (one frame), a
+  `.qpt-mh` header (verdict pill a part) and a `.qpt-hv` view. The real cards
+  stay in the pane's rows, hidden (`display:none`), still rendered —
+  `_qptHealthParts` reads THEIR data (`_qpHL.ebay/score/kpis`,
+  `_qpDistrictHL('watch'|'ebay'|'score')`, the kpis/dkpis widget models' new
+  `hv: { pct, fix }`), so no second fetch. `_qptRenderHealth` redraws from
+  `_qptApply`, `_qpRenderHeadlinesNow` and `_qpRenderWidgets`. Ring colour =
+  its own number; dot/pill = worst item. Six items a box, then "+ N more".
+  **The DM gets store tabs, not a district view** (Ethan, same day: "a bit
+  empty and overwhelming"): `.qpt-stabs`, one tab a store, its name only (the worst-item
+  dot was always red — dropped 11-08); `_qptStoreParts(store)` builds Matrix / eBay / Scorecard &
+  Audit / Store KPIs from `_dcWatch`, `_dccRows` and the dkpis data (the kpis
+  model takes `d._stores`). Opens on the worst store until one is clicked
+  (`speeksQptHealthStore` in localStorage). eBay categories are judged as the
+  store's own card judges them (any very-high = red, Ethan's call), not by the
+  district board's rule (projected very-high = amber).
+  **No bullets; each part its own shape** (Ethan, same day): `_qptBody` draws
+  eBay as Seller Level (four rate tiles, clear ones too — the store headline
+  now carries `rates`) + Performance · Categories (level tag + names);
+  Scorecard & Audit as audit/scorecard tiles + category chips; Store KPIs as
+  six tiles (kpis model `hv.tiles`) or a Due/Overdue banner; Matrix as three
+  tiles. **Rings are slices** (`_qptRing`): one per metric, red first — they
+  used to fill by the share clear, so 1-of-8 off drew a nearly closed red ring.
+  Only an audit ring fills (it is a %).
+- **2026-11-08: Sales & Goals is one card too — design B "Scoreboard"**
+  (artifact Mih223v8gbXEpZfhYefQ44). `merge` is now a kind ('health' /
+  'sales'); the pane carries `data-merge`. `_qptMergeSales` + `_qptRenderSales`
+  read `_qpSnap.data` (`_qpPaceOf`, `_qpLast`, `_qpFacts`) and the monthly
+  model's new `hv` rows; the hidden pace/buying/monthly (or dpace/dbuying)
+  cards keep loading. DM: four total tiles + a table a store, worst pace
+  first (tracking bar, needs per day (NP), bought, margin; no share column). Store: pace band
+  (so far vs goal + averaging / needed / best day), then SELLING for the last
+  six days off daily_np (net sales / NP / net margin) with one Buying This
+  Month line under it (Ethan 11-08: selling over buying), and Monthly
+  Breakdown's rows (fixed columns) with Net Margin in place of GP.
+  **Pace now matches the Live board** (Ethan, same day: "I show something
+  different on the Live dashboard"): `_qpPaceOf` projects so far ÷ calendar
+  days through × days in month, Sundays included (shopify-live's monthDays
+  rule); it used to average open days × OPEN days left, assuming the rest of
+  the month's Sundays earn nothing — BAL Nov 1–7 read 94% vs the board's 108%.
+  `need` = what is left ÷ calendar days left; `thru` = the store's last banked
+  day. Feeds the Scoreboard, Goal Pace card, district rings and pace minis.
+  Buying tiles are the LATEST single Day End report (each report is one day),
+  not month-to-date.
+- **2026-11-08: employee Store Health = design A "Scorecard Tiles"** (artifact
+  Jf3zLScCBEui37vb8R7pqv). When My KPIs (command:kpis) is alone in its tab and
+  `.qpt-wide`, `_qpRenderHeadlinesNow` passes `wide` and adds `.qpt-kw` (hides
+  the card's own ew-head); `_QP_HL_BUILD.kpis` → `_qpKpiWide`: header + equal
+  pills, a slice ring, a tile a judged KPI (misses first, goal + store under),
+  no-goal Buying Value / Listed in a row below. `_qptApply` now also redraws
+  headlines after placing cards (they drew before `.qpt-wide` was set). Rail
+  Action Items: every line 78px (bar slot + "when" line always present), 12px
+  hover padding.
+- **2026-11-08: Customers = design A "One Frame"** (artifact
+  W5cUaNGHUjtHchnGaRkTwb). `merge: 'frame'` → `_qptMergeFrame`: the cards stay
+  VISIBLE (`.qpt-frame > .qp-row` shown again), inside one frame + header
+  ("District/LEE · This Month / Customers"); their frames, icons and eyebrows
+  lifted, titles worn as section captions, hairlines between. Pills
+  (`_qptRenderFrame`): reviews (of goal for a store) and walked out, from
+  `_qpSnap`; a pill only for a card the tab holds. **Lost Deals is open to
+  employees since 11-08**: the store's month on top, then "Mine · Week Ending …"
+  — My No Deals and My Conversion from their Weekly KPIs (`_qpHL.kpis`; the Day
+  End report has no per-person lost deals), each beside the store's figure.
+  Managers/ASMs keep the lost-a-day columns. `_qpSetHeadline('kpis')` redraws
+  widgets for an employee so the card fills when the KPIs land. Every Lost
+  Deals figure says its range (11-08): store/district = month to the latest
+  report ("Nov 1–7", `_qpRange`), change "vs Oct 1–7", day columns "Last 6
+  Days · Nov 2–7", employee "Mine · One Week · Nov 2–8" (`_qpKpiWeek`) with
+  "Store Total" (No Deals) / "Store Avg" (Conversion); pill "Walked Out · MTD".
+  The wide Claims
+  link is left-aligned now (`justify-self: start`). The Claims & Disputes
+  workspace tab row no longer jumps on a pick (`.claims-tabs` min-width
+  max-content + the chosen tab keeps weight 750).
+
+How it sits on the engine: `_qpApplyLayout` → `_qptApply` when `_qptOn()`
+(`_qpHeadlinesOn() && !_isMobileLayout()`), else `_qptTeardown` + the rows.
+The tabs hold ordinary `.qp-row/.qp-cell` rows, keys are the engine's
+(`command:ebay` shells via `_qpDistribute`, widgets via `_qpEnsureWidgets`),
+and `_qpCurrentRows` returns `_qptRowsNow` so every renderer still works.
+Unplaced blocks (original Command Center, emptied Leaderboard, hidden cards)
+live in a hidden `.qpt-stash`. Saved as rows of `qpt:` keys
+(`qpt:v1`, `qpt:order …`, `qpt:hidden …`, `qpt:minis …`, `~` written as `.`)
+so qp-layout needed no change; the open tab is localStorage only
+(`speeksQptTab`). A row layout saved before this is ignored; `_qpLayout`
+ignores a `qpt:` layout (phones get the default stack). The pane's viewport
+emulation fires no resize/change events — dispatch `resize` by hand to test
+the phone ⇄ desktop swap. The rows engine (drag, Card Widths, drawer of full
+widgets, Undo) is dormant on desktop but still runs on nothing else; the
+corner buttons are hidden on the tabs page (`.qp-tabs-on .qp-bar > *`).
+
 ## Where the code is
 
 - `speeks.js`

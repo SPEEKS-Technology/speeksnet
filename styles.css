@@ -1018,7 +1018,20 @@ input, textarea, select,
     max-width: 100%;
     overflow-x: auto; /* phone: scroll the row rather than squeeze the labels */
 }
-.claims-tabs .tab-btn { min-width: 0; padding-left: 8px; padding-right: 8px; text-align: center; white-space: nowrap; }
+.claims-tabs .tab-btn { min-width: max-content; padding-left: 8px; padding-right: 8px; text-align: center; white-space: nowrap; }
+/* THE ROW MUST NOT MOVE WHEN A TAB IS PICKED (Ethan, 2026-11-07: "when switching
+   tabs within the tool, the whole bar glitches and moves left and right").
+   Two things did it. min-width:0 let the 1fr tracks squeeze below their labels
+   on a phone (six 35px tabs, "Cases & Disputes" spilling 100px over its
+   neighbours) and on a laptop window under ~1180px, so the row's scroll width
+   was the overflowing TEXT, not the buttons. And the chosen tab is bolder (800
+   against 750), so every pick re-measured that text: 306px wide on a phone,
+   321 with Cases & Disputes picked — the row jumped on each click.
+   max-content as the floor makes each track at least its label (the row
+   scrolls instead, as overflow-x above intends), and the chosen tab keeps the
+   others' weight — its green fill and edge already say which one it is — so
+   no pick changes any width. */
+.notif-tabs.notif-tabs.claims-tabs > .tab-btn.tab-btn.active { font-weight: 750 !important; }
 .tab-btn { background: transparent; border: none; padding: 6px 16px; font-size: 12px; font-weight: 700; color: #64748b; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
 .tab-btn.active { background: white; color: var(--slate-charcoal); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
 
@@ -26564,6 +26577,13 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 .qp-rvc-s { font-size: 11px; font-weight: 800; color: #647082; display: flex; align-items: center; justify-content: center; gap: 5px; }
 .qp-rvc-v { font-size: 24px; font-weight: 900; color: #1a1c1e; margin-top: 2px; }
 .qp-rvc-st { font-size: 11px; font-weight: 800; color: #b7791f; }
+.qp-rv-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; color: #5b6675; }
+.qp-rv-best { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 10px; border-radius: 999px; background: #f6f8fa; box-shadow: inset 0 0 0 1px #eef1f4; }
+.qp-rv-best > span { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; }
+.qp-rv-best b { color: #1d2530; font-weight: 750; }
+.qp-rv-best em { font-style: normal; color: #5b6675; }
+.qp-rvc-w { font-size: 10.5px; font-weight: 700; color: #8a94a3; margin: -1px 0 4px; }
+.qpt .qp-rvc-st { white-space: nowrap; }
 .qp-rvc-sp { display: block; width: 100%; height: 28px; margin-top: 6px; }
 /* Lost Deals by Store: donut + legend. */
 .qp-dn { display: flex; align-items: center; gap: 22px; margin-top: 8px; flex: none; }
@@ -27200,3 +27220,491 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 #restockSkuModal .rsk-nb-note { width: 100%; box-sizing: border-box; margin-top: 8px; font-size: 16px; resize: vertical; }
 #restockSkuModal .rsk-nb-row { display: flex; gap: 8px; }
 #restockSkuModal .rsk-nb-row .rsk-btn { flex: 1; }
+
+/* ============================================================================
+   QUICKPORTAL TABS — Your Feed on top, the dashboard as tabs, minis on a rail
+   ============================================================================
+   speeks.js (QUICKPORTAL TABS). Ethan, 2026-11-06, from the rendering he
+   picked (artifact BNhYqLVvodVRRbJoRYfrKP). The cards inside the tabs are the
+   ordinary .qp-row / .qp-cell rows, so every rule above still sizes them; this
+   is only the frame around them. Desktop only — the compact tier keeps the
+   stacked page. */
+.main-content.qp-tabs-on .qp-bar > * { display: none !important; }
+.qpt { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; margin-bottom: 22px; }
+.qpt-left { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.qpt .qp-row:last-child { margin-bottom: 0; }
+
+/* Your Feed: full width, one fixed height (Ethan: "slightly taller", then
+   "slightly smaller" — 420). No scrollbars, sideways or down; it still scrolls.
+   The clip sits on the list, not the card: on the card it cut the shadow into
+   square corners. */
+.qpt-feed .qp-cell > [data-qp-block] { height: 420px; max-height: none; overflow: visible; }
+.qpt-feed .sam-feed { overflow-x: hidden !important; scrollbar-width: none; }
+.qpt-feed .sam-feed::-webkit-scrollbar { display: none; }
+
+/* The strip: every tab one width, labels wrap to two lines rather than
+   scroll; × to hide on hover; Tabs ▾ at the end. */
+.qpt-tabs { position: relative; min-width: 0; }
+.qpt-strip { display: grid; grid-auto-flow: column; align-items: end; gap: 4px; margin-bottom: -1px; position: relative; z-index: 1; }
+.qpt-tab { position: relative; height: 48px; min-width: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+    padding: 6px 18px 7px; border: 1px solid #e6ebf1; border-bottom: 0; border-radius: 12px 12px 0 0; background: #eceff3;
+    color: #5b6675; font-size: 13px; font-weight: 600; line-height: 1.2; cursor: pointer; user-select: none; }
+.qpt-tl { min-width: 0; overflow-wrap: anywhere; }
+.qpt-tab:hover { background: #f3f5f8; color: #1d2530; }
+.qpt-tab.on { background: #f7f9fb; color: #14532d; box-shadow: inset 0 3px 0 #1f9d57; }
+.qpt-tab:focus-visible { outline: 2px solid #1f9d57; outline-offset: -2px; }
+.qpt-tab.dragging { opacity: .35; }
+.qpt-tab.over { box-shadow: inset 3px 0 0 #1f9d57; }
+.qpt-hx { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 5px; display: inline-grid; place-items: center;
+    font-size: 15px; line-height: 1; color: #8a94a3; visibility: hidden; }
+.qpt-tab:hover .qpt-hx, .qpt-tab:focus-within .qpt-hx { visibility: visible; }
+.qpt-hx:hover { background: #fdeeee; color: #c43d3d; }
+.qpt-mbtn { align-self: center; border: 0; background: none; padding: 10px 6px; font: inherit; font-size: 13px; font-weight: 600; color: #1f9d57; white-space: nowrap; cursor: pointer; }
+.qpt-menu { position: absolute; right: 0; top: 44px; z-index: 30; width: min(310px, calc(100vw - 32px)); padding: 12px;
+    background: #fff; border: 1px solid #d7dee6; border-radius: 12px; box-shadow: 0 12px 32px rgba(16,24,40,.14); }
+.qpt-menu h5 { margin: 0; font-size: 13px; color: #1d2530; }
+.qpt-menu p { margin: 2px 0 8px; font-size: 12px; color: #5b6675; }
+.qpt-menu label { display: flex; gap: 10px; align-items: center; padding: 6px 4px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #1d2530; }
+.qpt-menu label:hover { background: #f4f7f9; }
+.qpt-menu input { accent-color: #1f9d57; width: 16px; height: 16px; margin: 0; }
+.qpt-menu small { margin-left: auto; color: #8a94a3; }
+.qpt-menu button { border: 0; background: none; color: #1f9d57; font: inherit; font-weight: 600; font-size: 13px; padding: 6px 4px; cursor: pointer; }
+.qpt-panel { background: #f7f9fb; border: 1px solid #e6ebf1; border-radius: 0 16px 16px 16px; padding: 16px; min-height: 380px; }
+.qpt-ph { margin: 0 2px 12px; font-size: 12px; color: #5b6675; }
+.qpt-none { font-size: 13px; color: #5b6675; }
+
+/* Live Dashboard: the full board in a card, as the full-screen view draws it.
+   Its table fits the tab instead of scrolling sideways (names wrap). */
+.qpt-live.lv-fs-card { margin: 0; width: auto; max-width: none; box-sizing: border-box; }
+.qpt-live .lv-tbl-scroll { overflow-x: hidden !important; }
+.qpt-live .lv-tbl-scroll table { min-width: 0 !important; }
+.qpt-live .lv-tbl-scroll th, .qpt-live .lv-tbl-scroll td { white-space: normal !important; overflow-wrap: anywhere; }
+.qpt-live-dist { padding: 0; border: 0; background: none; }
+.qpt-live-dist > .cc-panel { display: block !important; }
+
+/* Performance: the pre-QuickPortal card (b8dbb73) — chart, and the Leaderboard
+   in the pale-green 300px column beside it. Lifts the one-column rule .qp-part
+   set when the two became cards of their own. */
+.ew-perf.qp-part.qpt-perf .ew-perf-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+.main-content .qp-cell > .ew-perf.qpt-perf { min-height: 520px; }
+.main-content .qp-cell > .ew-perf.qpt-perf > .ew-perf-body { display: grid; flex-direction: initial; }
+
+/* The rail. Minis keep one height a row (two for a two-row one), so the rail
+   reads as a column of equal tiles. */
+/* Not sticky (2026-11-07): with Action Items on top the rail is taller than
+   a 900px window, and a sticky rail that tall cuts its last minis off. */
+.qpt-rail { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.qpt-rhead { display: flex; align-items: center; gap: 8px; padding: 2px 2px 0; }
+.qpt-rhead h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #1f9d57; }
+.qpt-redit { margin-left: auto; border: 1px solid #d7dee6; background: #fff; border-radius: 8px; padding: 4px 12px; font: inherit; font-size: 12px; font-weight: 600; color: #1d2530; cursor: pointer; }
+.qpt-redit.on { background: #1f9d57; border-color: #1f9d57; color: #fff; }
+.qpt-mlist { display: flex; flex-direction: column; gap: 10px; }
+.qpt-mlist .qp-mn { min-height: 104px; }
+.qpt-mlist .qp-mn.x2 { min-height: 208px; }
+.qpt-mwrap { position: relative; }
+.qpt-mwrap.dragging { opacity: .35; }
+.qpt-mwrap.over::before { content: ""; position: absolute; left: 8px; right: 8px; top: -6px; height: 3px; border-radius: 2px; background: #1f9d57; }
+.qpt-rail.edit .qp-mn { cursor: grab; outline: 2px dashed #9fd8b6; outline-offset: -3px; }
+.qpt-rail.edit .qp-mn-x { display: grid; place-items: center; }
+.qpt-rail.edit .qp-mn-sz { display: flex; }
+.qpt-add { border: 1.5px dashed #c9d2dc; background: none; border-radius: 16px; padding: 14px; font: inherit; color: #1f9d57; font-weight: 700; font-size: 13px; cursor: pointer; }
+.qpt-add:hover { border-color: #1f9d57; background: #eaf6ef; }
+.qpt-empty { border: 1.5px dashed #c9d2dc; border-radius: 16px; min-height: 104px; display: grid; place-items: center; color: #8a94a3; font-size: 13px; background: #fff; }
+
+/* Narrower desktops: the rail goes under the tabs as a grid of minis. */
+@media (max-width: 1200px) {
+    .qpt { grid-template-columns: minmax(0, 1fr); }
+    .qpt-rail { position: static; }
+    .qpt-mlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+}
+
+/* The mini drawer: tiles three across, and one fixed-size preview above them
+   (Ethan: two-row minis made it grow and pushed the tiles under the cursor). */
+.qpt-scrim { position: fixed; inset: 0; background: rgba(16,24,40,.28); z-index: 200000; opacity: 0; transition: opacity .18s; }
+.qpt-scrim.on { opacity: 1; }
+.qpt-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: #fff; z-index: 200001; transform: translateX(100%);
+    transition: transform .22s ease; box-shadow: -10px 0 30px rgba(16,24,40,.14); display: flex; flex-direction: column; }
+.qpt-drawer.on { transform: none; }
+.qpt-dh { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid #e6ebf1; }
+.qpt-dh h2 { margin: 0; font-size: 17px; color: #1d2530; }
+.qpt-dh .modal-close-btn { margin-left: auto; }
+.qpt-db { overflow: auto; flex: 1; padding: 16px 20px 24px; }
+.qpt-prev { background: #f4f7f9; border-radius: 16px; padding: 14px; display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 16px; align-items: center;
+    margin-bottom: 16px; height: 232px; box-sizing: border-box; overflow: hidden; }
+.qpt-pslot { height: 200px; display: flex; flex-direction: column; justify-content: center; min-width: 0; pointer-events: none; }
+.qpt-pslot > * { flex: none; }
+.qpt-prev .qp-mn { min-height: 104px; box-shadow: 0 8px 20px rgba(16,24,40,.08); }
+.qpt-prev .qp-mn.x2 { min-height: 200px; height: 200px; }
+.qpt-pk { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+.qpt-pt { font-weight: 700; margin: 3px 0; color: #1d2530; }
+.qpt-pd { font-size: 13px; color: #5b6675; }
+.qpt-pstate { margin-top: 6px; }
+.qpt-pstate.on { color: #14532d; }
+.qpt-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.qpt-tile { position: relative; min-height: 100px; padding: 12px 10px 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+    border: 1px solid #e6ebf1; background: #fff; border-radius: 14px; font-size: 13px; font-weight: 600; color: #1d2530; cursor: pointer; text-align: left; }
+.qpt-tile:hover, .qpt-tile:focus-visible, .qpt-tile.pv { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); outline: 0; }
+.qpt-tile.added { cursor: default; }
+.qpt-pill { position: absolute; top: 8px; right: 8px; font-size: 10px; font-weight: 700; border-radius: 99px; padding: 2px 8px; background: #f1f4f7; color: #5b6675; }
+.qpt-pill-rm { border: 0; font-family: inherit; line-height: inherit; cursor: pointer; background: #fdeeee; color: #c43d3d; }
+.qpt-pill-rm:hover, .qpt-pill-rm:focus-visible { background: #c43d3d; color: #fff; outline: 0; }
+.qpt-tfoot { margin-top: auto; min-height: 16px; }
+.qpt-tfoot small { font-size: 11px; color: #8a94a3; font-weight: 500; }
+.qpt-tile .sam-mico { width: 30px; height: 30px; border-radius: 9px; }
+@media (max-width: 560px) {
+    .qpt-prev { grid-template-columns: minmax(0, 1fr); height: 370px; align-content: start; }
+    .qpt-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { .qpt-drawer, .qpt-scrim { transition: none; } }
+
+/* DAILY BREAKDOWN AS A RECTANGLE (Ethan, 2026-11-07: "the same style rectangle
+   as our new buttons"). The pill predates the ONE TAB LOOK; it now wears the
+   .cc-seg button beside it — 8px corners, the green-grey border, the same type —
+   so the Live header's controls read as one set. Everywhere it appears (store
+   card, district card, full-screen view, the QuickPortal Live tab). */
+.bd-open {
+    padding: 7px 14px; border-radius: 8px;
+    font-size: 11.5px; font-weight: 750; letter-spacing: 0;
+    color: #5b6b64; background: #fff; border: 1px solid #dde6e0;
+    transition: color .15s, border-color .15s, box-shadow .15s;
+}
+.bd-open:hover { color: var(--slate-charcoal); border-color: #c3d6cb; background: #fff; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); }
+
+/* ACTION ITEMS ON THE RAIL + THE WIDE CLAIMS CARD (Ethan, 2026-11-07: option C
+   of the Action Items & Claims designs). speeks.js _qptRenderAi / the wide
+   branch of _qpWidgetCard. */
+/* The hover box has room around the text (Ethan, 2026-11-08: the green box
+   "hugs the border of the text"): the card's side padding moved onto the
+   lines, so a highlighted line has 12px each side and the text still lines up
+   with the header. Every line is the same height (.qpt-ai-it min-height). */
+.qpt-ai { background: #fff; border: 1px solid #e6ebf1; border-radius: 16px; padding: 14px 6px 6px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+.qpt-ai-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; padding: 0 12px; }
+.qpt-ai-h b { font-size: 14px; color: #1d2530; }
+.qpt-ai-h span { font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #1f9d57; }
+.qpt-ai-it { display: flex; flex-direction: column; justify-content: center; min-height: 72px; box-sizing: border-box; width: 100%; text-align: left; font: inherit; background: none; border: 0; border-top: 1px solid #f0f3f6; padding: 10px 12px; margin: 0; cursor: pointer; border-radius: 10px; color: inherit; }
+.qpt-ai-it:hover + .qpt-ai-it { border-top-color: transparent; }
+.qpt-ai-h + .qpt-ai-it { border-top-color: transparent; }
+.qpt-ai-it:hover { background: #f2f8f4; border-top-color: transparent; }
+.qpt-ai-it:focus-visible { outline: 2px solid #1f9d57; outline-offset: -2px; }
+.qpt-ai-l { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.qpt-ai-l b { font-weight: 700; color: #1d2530; }
+.qpt-ai-n { color: #5b6675; font-weight: 600; font-variant-numeric: tabular-nums; }
+.qpt-ai-bar { display: block; height: 6px; border-radius: 99px; background: #eef1f4; overflow: hidden; margin: 6px 0 0; }
+.qpt-ai-bar i { display: block; height: 100%; border-radius: 99px; background: #1f9d57; }
+.qpt-ai-bar.none { visibility: hidden; }
+.qpt-ai-s { display: block; font-size: 12px; color: #5b6675; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1200px) { .qpt-ai { order: 0; } }
+
+.qp-ai-body.qpt-wb { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); column-gap: 32px; align-content: start; }
+.qp-ai-body.qpt-wb > .qp-hl-link { grid-column: 1 / -1; justify-self: start; }
+.qpt-wl, .qpt-wr { min-width: 0; }
+.qpt-wr .qp-hl-cap:first-child { margin-top: 0; }
+.qpt-ctab { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.qpt-ctab th { text-align: left; font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #8a94a3; padding: 5px 8px; border-bottom: 1px solid #e6ebf1; }
+.qpt-ctab td { padding: 7px 8px; border-bottom: 1px solid #f0f3f6; color: #1d2530; }
+.qpt-ctab tr:last-child td { border-bottom: 0; }
+.qpt-ctab .r { text-align: right; }
+.qpt-ctab tr.on td { background: #f6faf7; }
+.qpt-ctab tr.on td:first-child { box-shadow: inset 3px 0 0 #1f9d57; font-weight: 700; }
+
+/* STORE HEALTH AS ONE CARD — design C (Ethan, 2026-11-07, artifact
+   TmBQECFLJkeFUYUysrttDa: "C, but segmenting out the scorecard vs. the ebay
+   metrics"). speeks.js _qptMerge / _qptRenderHealth. The pane is the card: a
+   header with a verdict pill a part, a ring a part on the left, What Needs
+   Fixing on the right in a box a part. The eBay / Scorecard / KPI cards the
+   view reads from stay in the pane's rows, out of sight, still rendered. */
+.qpt-pane.qpt-merge { background: #fff; border: 1px solid #e6ebf1; border-radius: 18px; box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 28px rgba(16,24,40,.06); overflow: hidden; }
+.qpt-pane.qpt-merge > .qp-row { display: none; }
+.qpt-mh { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-bottom: 1px solid #edf1f5; flex-wrap: wrap; }
+.qpt-mh .ew-eyebrow { display: block; }
+.qpt-mt { font-size: 17px; font-weight: 800; color: #1d2530; line-height: 1.25; }
+/* One width for every pill — the widest one's (Ethan, 2026-11-07: "make these
+   3 pills the same size"): equal grid columns, sized to the longest label. */
+.qpt-mparts { margin-left: auto; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.qpt-vp { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; font-size: 12.5px; font-weight: 750; border-radius: 999px; padding: 4px 11px; background: #f1f4f7; color: #5b6675; }
+.qpt-vp.bad { background: #fdeeee; color: #c43d3d; }
+.qpt-vp.warn { background: #fdf3e1; color: #a5660f; }
+.qpt-vp.good { background: #e8f7ee; color: #146c3c; }
+.qpt-hd { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; background: #c9d2dc; }
+.qpt-hd.bad { background: #e04848; } .qpt-hd.warn { background: #e6a019; } .qpt-hd.good { background: #1f9d57; }
+/* The DM's store tabs (one store at a time — Ethan, 2026-11-07): the site's
+   segmented buttons, the store's name only. */
+.qpt-stabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 5px; margin: 14px 22px 0; padding: 4px;
+    background: #f3f7f4; border: 1px solid #e4ece7; border-radius: 12px; }
+.qpt-stab { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 10px; font: inherit; font-size: 13px; font-weight: 750;
+    color: #5b6b64; background: #fff; border: 1px solid #dde6e0; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+.qpt-stab:hover:not(.on) { border-color: #c3d6cb; color: var(--slate-charcoal); }
+.qpt-stab.on { background: #e8f7ee; color: #146c3c; border-color: #1f9d57; box-shadow: 0 0 0 1px rgba(31, 157, 87, .35); }
+.qpt-stab:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+.qpt-hv { display: grid; grid-template-columns: 290px minmax(0, 1fr); }
+.qpt-hl, .qpt-hr { padding: 16px 22px 20px; min-width: 0; }
+.qpt-hr { border-left: 1px solid #edf1f5; }
+.qpt-hl .qp-hl-cap, .qpt-hcap .qp-hl-cap { margin: 0; }
+.qpt-g { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f2f5f8; }
+.qpt-g:last-child { border-bottom: 0; }
+.qpt-g h4 { margin: 0; font-size: 15px; color: #1d2530; }
+.qpt-g p { margin: 2px 0 0; font-size: 13px; color: #5b6675; }
+.qpt-ring { width: 64px; height: 64px; border-radius: 50%; background: #eef1f4; display: grid; place-items: center; flex: none; }
+.qpt-ring i { width: 50px; height: 50px; border-radius: 50%; background: #fff; display: grid; place-items: center; font-style: normal; font-weight: 800; font-size: 14px; color: #1d2530; font-variant-numeric: tabular-nums; }
+.qpt-ring i.bad { color: #c43d3d; } .qpt-ring i.warn { color: #a5660f; } .qpt-ring i.good { color: #146c3c; }
+.qpt-hcap { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+/* A box a part. No bullets inside (Ethan, 2026-11-07: "lots of bullet points"):
+   each part draws its own shape — tiles, tag rows, chips (speeks.js _qptBody). */
+.qpt-grp { border: 1px solid #e6ebf1; border-radius: 14px; padding: 4px 16px 14px; margin-top: 12px; }
+.qpt-grph { display: flex; align-items: center; gap: 10px; padding: 10px 0; flex-wrap: wrap; }
+.qpt-grph h4 { margin: 0; font-size: 15px; color: #1d2530; }
+.qpt-cnt { font-size: 11.5px; font-weight: 750; border-radius: 999px; padding: 2px 9px; background: #f1f4f7; color: #5b6675; }
+.qpt-cnt.bad { background: #fdeeee; color: #c43d3d; } .qpt-cnt.warn { background: #fdf3e1; color: #a5660f; } .qpt-cnt.good { background: #e8f7ee; color: #146c3c; }
+.qpt-grph .qp-hl-link { margin: 0 0 0 auto; padding: 0; font-size: 12.5px; }
+.qpt-sub { margin: 10px 0 6px; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+.qpt-grph + .qpt-sub { margin-top: 2px; }
+/* Tiles: a status grid (eBay's seller level, the audits, the KPIs, the Matrix). */
+.qpt-cells { display: grid; gap: 8px; }
+.qpt-cells.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.qpt-cells.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.qpt-cells.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.qpt-cells.c1 { grid-template-columns: minmax(0, 1fr); }
+.qpt-cell { min-width: 0; border-radius: 10px; padding: 9px 11px; background: #f6f8fa; border: 1px solid #eef1f4; display: flex; flex-direction: column; gap: 1px; }
+.qpt-cell .qpt-ck { font-size: 11.5px; font-weight: 650; color: #5b6675; }
+.qpt-cell b { font-size: 17px; font-weight: 800; color: #1d2530; font-variant-numeric: tabular-nums; }
+.qpt-cell em { font-style: normal; font-size: 11.5px; font-weight: 650; color: #8a94a3; overflow-wrap: anywhere; }
+.qpt-cell.good { background: #f2faf5; border-color: #dcefe3; } .qpt-cell.good em { color: #146c3c; }
+.qpt-cell.warn { background: #fdf7ec; border-color: #f5e3c2; } .qpt-cell.warn b, .qpt-cell.warn em { color: #a5660f; }
+.qpt-cell.bad { background: #fdf2f2; border-color: #f6d4d4; } .qpt-cell.bad b, .qpt-cell.bad em { color: #c43d3d; }
+.qpt-cell.tile b { order: -1; }
+/* eBay's categories: the level as a tag, the categories beside it. */
+.qpt-cats { display: flex; flex-direction: column; gap: 6px; }
+.qpt-crow { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; align-items: baseline; font-size: 13px; color: #1d2530; }
+.qpt-tag { justify-self: start; font-size: 11.5px; font-weight: 750; border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.qpt-tag.bad { background: #fdeeee; color: #c43d3d; } .qpt-tag.warn { background: #fdf3e1; color: #a5660f; }
+.qpt-cl { min-width: 0; overflow-wrap: anywhere; }
+.qpt-cl i { font-style: normal; color: #c9d2dc; margin: 0 6px; }
+/* Scorecard categories as chips, worst first. */
+.qpt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.qpt-chip { font-size: 12px; font-weight: 650; border-radius: 7px; padding: 3px 9px; background: #f1f4f7; color: #5b6675; }
+.qpt-chip b { font-weight: 800; margin-left: 2px; }
+.qpt-chip.good { background: #e8f7ee; color: #146c3c; } .qpt-chip.warn { background: #fdf3e1; color: #a5660f; } .qpt-chip.bad { background: #fdeeee; color: #c43d3d; }
+.qpt-due { border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.qpt-due b { font-size: 14px; }
+.qpt-due.bad { background: #fdf2f2; color: #c43d3d; } .qpt-due.warn { background: #fdf7ec; color: #a5660f; }
+.qpt-none { font-size: 12.5px; color: #146c3c; padding: 2px 0; }
+@media (max-width: 1000px) {
+    .qpt-hv { grid-template-columns: minmax(0, 1fr); }
+    .qpt-hr { border-left: 0; border-top: 1px solid #edf1f5; }
+}
+@media (max-width: 1350px) { .qpt-cells.c4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .qpt-crow { grid-template-columns: minmax(0, 1fr); gap: 3px; } }
+
+/* MY KPIs, WIDE — design A "Scorecard Tiles" (Ethan, 2026-11-08, artifact
+   Jf3zLScCBEui37vb8R7pqv). speeks.js _qpKpiWide: an employee's Store Health
+   tab is this one card, so it draws its own header (pills on the right, equal
+   width) and the card's "BAL Command Center · Weekly KPIs" head steps aside. */
+.qpt-kw > .ew-head { display: none; }
+/* The card keeps the one card height (350px); the tiles' row takes the slack,
+   so it sits centred instead of leaving a strip of white under the last row. */
+.qpt-kw .qp-hl { padding: 0; display: flex; flex-direction: column; }
+.qp-kw-h { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-bottom: 1px solid #edf1f5; flex-wrap: wrap; }
+.qp-kw-h .ew-eyebrow { display: block; }
+.qp-kw-ti { font-size: 17px; font-weight: 800; color: #1d2530; }
+.qp-kw-pills { margin-left: auto; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.qp-kw-b { flex: 1; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: center; padding: 18px 22px 10px; }
+.qp-kw-ring { width: 88px; height: 88px; border-radius: 50%; display: grid; place-items: center; }
+.qp-kw-ring i { width: 70px; height: 70px; border-radius: 50%; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; font-style: normal; line-height: 1.05; }
+.qp-kw-ring b { font-size: 24px; font-weight: 800; color: #1d2530; }
+.qp-kw-ring small { font-size: 11px; font-weight: 700; color: #8a94a3; }
+.qp-kw-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.qp-kw-t { min-width: 0; border-radius: 12px; padding: 12px 13px; border: 1px solid #eef1f4; background: #f6f8fa; display: flex; flex-direction: column; gap: 3px; }
+.qp-kw-t.bad { background: #fdf2f2; border-color: #f6d4d4; } .qp-kw-t.good { background: #f2faf5; border-color: #dcefe3; }
+.qp-kw-st { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.qp-kw-t.bad .qp-kw-st, .qp-kw-t.bad .qp-kw-v { color: #c43d3d; } .qp-kw-t.good .qp-kw-st, .qp-kw-t.good .qp-kw-v { color: #146c3c; }
+.qp-kw-k { font-size: 12.5px; font-weight: 700; color: #5b6675; }
+.qp-kw-v { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.qp-kw-g { display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; font-weight: 650; color: #8a94a3; margin-top: 2px; }
+.qp-kw-g b { color: #1d2530; }
+.qp-kw-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; padding: 6px 22px 20px; }
+.qp-kw-i { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; border-radius: 12px; padding: 11px 14px; background: #f6f8fa; border: 1px solid #eef1f4; font-size: 13px; font-weight: 700; color: #5b6675; }
+.qp-kw-i b { font-size: 17px; color: #1d2530; font-variant-numeric: tabular-nums; }
+.qp-kw-i small { font-size: 12px; font-weight: 600; color: #8a94a3; }
+
+/* ONE FRAME — Customers (Ethan, 2026-11-08, design A of artifact
+   W5cUaNGHUjtHchnGaRkTwb). speeks.js _qptMergeFrame. Unlike Store Health and
+   Sales & Goals the cards stay visible: .qpt-merge's frame and header, the rows
+   shown again, each card's own frame / icon / eyebrow lifted, a hairline
+   between them, and each card's title worn as its section caption. */
+.qpt-pane.qpt-frame > .qp-row { display: flex; gap: 0; margin: 0; }
+.qpt-frame .qp-cell + .qp-cell { border-left: 1px solid #edf1f5; }
+.qpt-frame .qp-cell > .card, .qpt-frame .qp-cell .sam-card {
+    background: transparent !important; border: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+.qpt-frame .qp-ai-head > .sam-mico, .qpt-frame .qp-ai-head .ew-eyebrow { display: none; }
+.qpt-frame .qp-ai-title { font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+
+/* SALES & GOALS AS ONE CARD — design B, the Scoreboard (Ethan, 2026-11-08,
+   artifact Mih223v8gbXEpZfhYefQ44). speeks.js _qptMergeSales / _qptRenderSales.
+   Same frame and header as Store Health (.qpt-merge, .qpt-mh); the DM gets a
+   row a store, a store gets its pace band over two plain lists. */
+/* Pills side by side are one width, the widest one's (the standard since
+   2026-11-08 — Ethan: "keep that standard going forward"), as .qpt-mparts. */
+.qpt-spills { margin-left: auto; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.qpt-sec { padding: 16px 22px 18px; min-width: 0; }
+.qpt-sec-b { border-bottom: 1px solid #edf1f5; }
+.qpt-big { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.qpt-big b { font-size: 28px; font-weight: 800; color: #1d2530; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.qpt-big span { font-size: 14px; color: #5b6675; }
+.qpt-gbar { position: relative; height: 10px; border-radius: 99px; background: #eef1f4; }
+.qpt-gbar.thin { height: 7px; }
+.qpt-gbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: #1f9d57; }
+.qpt-gbar i.warn { background: #e6a019; } .qpt-gbar i.bad { background: #e04848; }
+/* the goal: a mark at the bar's right-hand end */
+.qpt-gbar::after { content: ""; position: absolute; right: 0; top: -4px; bottom: -4px; width: 2px; border-radius: 1px; background: #1d2530; opacity: .5; }
+.qpt-pace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); gap: 24px; align-items: end; }
+.qpt-tw { overflow-x: auto; }
+.qpt-sb { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.qpt-sb th { text-align: left; font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #8a94a3; padding: 8px 10px; border-bottom: 1px solid #e6ebf1; white-space: nowrap; }
+.qpt-sb td { padding: 11px 10px; border-bottom: 1px solid #f0f3f6; color: #1d2530; vertical-align: middle; }
+.qpt-sb tr:last-child td { border-bottom: 0; }
+/* The figure columns centre under their headers (Ethan, 2026-11-08: right-
+   aligned under a centred-looking header "looks a bit odd"). */
+.qpt-sb .r { text-align: center; }
+.qpt-sb th.qpt-sb-bar { width: 36%; }
+/* The DM's table: fixed columns, so the three figure columns are one width
+   each and evenly spaced (Ethan, 2026-11-08: "a weird space in between bought
+   value and the other 2 columns" — auto widths gave the long "Needs Per Day
+   (NP)" header the room). Store 12%, the bar 43%, then 15% x 3. */
+.qpt-sb-d { table-layout: fixed; }
+.qpt-sb-d th.qpt-sb-s { width: 12%; }
+.qpt-sb-d th.qpt-sb-bar { width: 43%; }
+.qpt-sb-d th.r { width: 15%; white-space: normal; }
+.qpt-sb-st { display: inline-flex; align-items: center; gap: 6px; font-weight: 800; }
+.qpt-sb-tr { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 10px; align-items: center; }
+.qpt-sb-tr b { text-align: right; font-weight: 800; } .qpt-sb-tr b.good { color: #146c3c; } .qpt-sb-tr b.warn { color: #a5660f; } .qpt-sb-tr b.bad { color: #c43d3d; }
+.qpt-sb-sm td { padding: 8px 10px; }
+.qpt-sb td .qpt-cnt { display: inline-block; }
+.qpt-none-g { font-size: 12.5px; color: #8a94a3; }
+.qpt-foot { margin-top: 8px; font-size: 12.5px; color: #5b6675; }
+.qpt-neg { color: #c43d3d; }
+/* Buying, one line under the selling days (Ethan, 2026-11-08: "still show
+   total buying numbers somewhere"). */
+.qpt-buy { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: #f6f8fa; border: 1px solid #eef1f4; }
+.qpt-buy .qp-hl-cap { margin: 0; }
+.qpt-buy b { font-size: 15px; color: #1d2530; font-variant-numeric: tabular-nums; }
+.qpt-buy-l { margin-left: auto; font-size: 12px; color: #8a94a3; }
+.qpt-ssplit { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+.qpt-ssplit.one { grid-template-columns: minmax(0, 1fr); }
+.qpt-ssplit > .qpt-sec + .qpt-sec { border-left: 1px solid #edf1f5; }
+.qpt-ssplit .qp-hl-cap { margin-top: 0; }
+.qpt-sh { padding: 0 0 6px; }
+.qpt-sh .qp-hl-cap { margin: 0; }
+/* Fixed columns, so every row's value, change and rank line up (Ethan,
+   2026-11-08: "allign the numbers on the right side better" — auto columns
+   sized each row to itself). Value and change right-aligned, rank centred. */
+.qpt-krow { display: grid; grid-template-columns: minmax(0, 1fr) 84px 96px 44px; gap: 10px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid #f2f5f8; font-size: 13.5px; color: #1d2530; }
+.qpt-krow > b, .qpt-krow > .qpt-kd { text-align: right; white-space: nowrap; }
+.qpt-krow > :last-child { justify-self: center; }
+.qpt-krow:last-child { border-bottom: 0; }
+.qpt-krow b { font-variant-numeric: tabular-nums; }
+.qpt-kd { font-size: 12px; font-weight: 700; } .qpt-kd .good { color: #146c3c; } .qpt-kd .bad { color: #c43d3d; }
+@media (max-width: 1100px) {
+    .qpt-pace, .qpt-ssplit { grid-template-columns: minmax(0, 1fr); }
+    .qpt-ssplit > .qpt-sec + .qpt-sec { border-left: 0; border-top: 1px solid #edf1f5; }
+}
+.qpt-z { color: #b4bcc6; }
+
+/* ============================================================================
+   ONE PALETTE ON THE TABS PAGE (Ethan, 2026-11-08: "can we make the color
+   scheme match this? it looks weird with some lighter and some darker and more
+   contrast"). "This" is Store Health's tiles: a soft tint, a border one step
+   darker, and the word in the state's dark shade. Every good / warning / bad
+   mark on the tabs page — the new tab cards, the older widgets they hold, the
+   rail — now takes its colours from these nine values instead of the five reds
+   and three ambers it had collected (#fdecec, #fdeeee, #fee2e2 / #c53030,
+   #c43d3d, #991b1b; #fdf3e2, #fdf3e1, #fef3c7 ...). Badges get the tile's border
+   too, as an inset ring so no pill changes size. Bars, rings and dots take one
+   fill a state, a mid shade of the same family (lightened the same day: the
+   rings' strong red / amber / green were "too dark" beside the tints). Scoped to .qpt: phones and the other pages are untouched.
+   ============================================================================ */
+.qpt {
+    --qs-good-bg: #f2faf5; --qs-good-bd: #dcefe3; --qs-good-fg: #146c3c; --qs-good-fill: #72c495;
+    --qs-warn-bg: #fdf7ec; --qs-warn-bd: #f5e3c2; --qs-warn-fg: #a5660f; --qs-warn-fill: #f2c464;
+    --qs-bad-bg:  #fdf2f2; --qs-bad-bd:  #f6d4d4; --qs-bad-fg:  #c43d3d; --qs-bad-fill:  #ef8b8b;
+}
+/* badges: pills, counts, tags, chips — new and old */
+.qpt :is(.qpt-vp, .qpt-cnt, .qpt-tag, .qpt-chip, .qp-cw-due, .qp-trend, .qp-stile-tag, .sh-badge):is(.good, .up, .ok) {
+    background: var(--qs-good-bg); color: var(--qs-good-fg); box-shadow: inset 0 0 0 1px var(--qs-good-bd); }
+.qpt :is(.qpt-vp, .qpt-cnt, .qpt-tag, .qpt-chip, .qp-cw-due, .qp-trend, .qp-stile-tag, .sh-badge).warn {
+    background: var(--qs-warn-bg); color: var(--qs-warn-fg); box-shadow: inset 0 0 0 1px var(--qs-warn-bd); }
+.qpt :is(.qpt-vp, .qpt-cnt, .qpt-tag, .qpt-chip, .qp-cw-due, .qp-trend, .qp-stile-tag, .sh-badge):is(.bad, .down, .crit) {
+    background: var(--qs-bad-bg); color: var(--qs-bad-fg); box-shadow: inset 0 0 0 1px var(--qs-bad-bd); }
+/* tiles and banners */
+.qpt :is(.qpt-cell, .qp-kw-t, .qpt-due).good { background: var(--qs-good-bg); border-color: var(--qs-good-bd); }
+.qpt :is(.qpt-cell, .qp-kw-t, .qpt-due).warn { background: var(--qs-warn-bg); border-color: var(--qs-warn-bd); }
+.qpt :is(.qpt-cell, .qp-kw-t, .qpt-due).bad { background: var(--qs-bad-bg); border-color: var(--qs-bad-bd); }
+.qpt .qpt-due { border: 1px solid transparent; }
+.qpt .qpt-due.bad { color: var(--qs-bad-fg); } .qpt .qpt-due.warn { color: var(--qs-warn-fg); }
+/* A good tile's figure is ink and only its word is green, as in Store Health;
+   a warning or bad tile's figure and word both take the state's colour. */
+.qpt .qp-kw-t.good .qp-kw-v { color: #1d2530; }
+.qpt .qp-kw-t.good .qp-kw-st { color: var(--qs-good-fg); }
+.qpt .qp-kw-t.bad .qp-kw-st, .qpt .qp-kw-t.bad .qp-kw-v { color: var(--qs-bad-fg); }
+/* words in a state's colour inside the cards */
+.qpt :is(span, b, em, small).good { color: var(--qs-good-fg); }
+.qpt :is(span, b, em, small).warn { color: var(--qs-warn-fg); }
+.qpt :is(span, b, em, small).bad { color: var(--qs-bad-fg); }
+.qpt :is(.qpt-vp, .qpt-cnt, .qpt-tag, .qpt-chip, .qp-cw-due, .qp-trend, .qp-stile-tag, .sh-badge) { border: 0; }
+/* fills: bars, segment strips, dots */
+.qpt .qp-hl-bar > i, .qpt .qp-hl-seg > i.good, .qpt .qpt-gbar i, .qpt .qpt-ai-bar i, .qpt .qpt-hd.good { background: var(--qs-good-fill); }
+.qpt .qp-hl-bar.warn > i, .qpt .qp-hl-seg > i.warn, .qpt .qpt-gbar i.warn, .qpt .qpt-hd.warn { background: var(--qs-warn-fill); }
+.qpt .qp-hl-bar.bad > i, .qpt .qp-hl-seg > i.bad, .qpt .qpt-gbar i.bad, .qpt .qpt-hd.bad { background: var(--qs-bad-fill); }
+/* The Inventory pipeline's heat tiles and their key, and the cards' summary
+   lines — an older rule there (.main-content .qp-hl-sub .bad etc.) outranked
+   the words rule above, so these say it with the panes in the selector. */
+.qpt .qp-heat-t.good { background: var(--qs-good-bg); color: var(--qs-good-fg); box-shadow: inset 0 0 0 1px var(--qs-good-bd); }
+.qpt .qp-heat-t.warn { background: var(--qs-warn-bg); color: var(--qs-warn-fg); box-shadow: inset 0 0 0 1px var(--qs-warn-bd); }
+.qpt .qp-heat-t.bad { background: var(--qs-bad-bg); color: var(--qs-bad-fg); box-shadow: inset 0 0 0 1px var(--qs-bad-bd); }
+.qpt .qp-heat-key i.good { background: var(--qs-good-bg); box-shadow: inset 0 0 0 1px var(--qs-good-fill); }
+.qpt .qp-heat-key i.warn { background: var(--qs-warn-bg); box-shadow: inset 0 0 0 1px var(--qs-warn-fill); }
+.qpt .qp-heat-key i.bad { background: var(--qs-bad-bg); box-shadow: inset 0 0 0 1px var(--qs-bad-fill); }
+.qpt :is(.qpt-pane, .qpt-rail, .qpt-feed) :is(span, b, em, small).good:not(.qpt-vp, .qpt-cnt, .qpt-tag, .qpt-chip, .qp-cw-due, .qp-trend, .qp-stile-tag, .sh-badge) { color: var(--qs-good-fg); }
+.qpt :is(.qpt-pane, .qpt-rail, .qpt-feed) :is(span, b, em, small).warn:not(.qpt-vp, .qpt-cnt, .qpt-tag, .qpt-chip, .qp-cw-due, .qp-trend, .qp-stile-tag, .sh-badge) { color: var(--qs-warn-fg); }
+.qpt :is(.qpt-pane, .qpt-rail, .qpt-feed) :is(span, b, em, small).bad:not(.qpt-vp, .qpt-cnt, .qpt-tag, .qpt-chip, .qp-cw-due, .qp-trend, .qp-stile-tag, .sh-badge) { color: var(--qs-bad-fg); }
+/* Your Feed's status dots, on the same fills as the bars and rings. */
+.qpt .sam-adot.good { background: var(--qs-good-fill); }
+.qpt .sam-adot.warn { background: var(--qs-warn-fill); }
+.qpt .sam-adot.bad { background: var(--qs-bad-fill); }
+/* THE REST OF THE STATUS COLOURS ON THE TABS PAGE (Ethan, 2026-11-08: "I want
+   all the red, yellow, green, and other colors to match across all of these
+   widgets"). A sweep of every colour drawn on every tab found these still on
+   their own shades: Your Feed's dots, pips, due chips and flags (--red-alert
+   #ef4444 / --idea-gold #f59e0b), the Claims due strip, the red / amber / green
+   icon squares, Google Reviews' gold stars and leader card, Lost Deals' red day
+   columns. They join the palette. Left as they are on purpose: the store
+   colours (one set, STORE_TINTS, everywhere), the brand green of links,
+   eyebrows and the open tab, the leaderboard's gold / bronze medals, and the
+   blue / teal / violet category colours, none of which mean good or bad. */
+.qpt .speeks-action-menu .sam-adot.urgent { background: var(--qs-bad-fill); box-shadow: 0 0 0 4px var(--qs-bad-bg); }
+.qpt .speeks-action-menu .sam-adot.warn { background: var(--qs-warn-fill); box-shadow: 0 0 0 4px var(--qs-warn-bg); }
+.qpt .speeks-action-menu .sam-pip { background: var(--qs-bad-fill); }
+.qpt .speeks-action-menu .sam-due-red { background: var(--qs-bad-bg); color: var(--qs-bad-fg); box-shadow: inset 0 0 0 1px var(--qs-bad-bd); }
+.qpt .speeks-action-menu .sam-due-amber { background: var(--qs-warn-bg); color: var(--qs-warn-fg); box-shadow: inset 0 0 0 1px var(--qs-warn-bd); }
+.qpt .speeks-action-menu .sam-a-flag { background: var(--qs-bad-bg); color: var(--qs-bad-fg); }
+.qpt .speeks-action-menu .sam-a-flag.gold { background: var(--qs-warn-bg); color: var(--qs-warn-fg); }
+.qpt .qp-tl.r { background: var(--qs-bad-bg); color: var(--qs-bad-fg); box-shadow: inset 0 0 0 1px var(--qs-bad-bd); }
+.qpt .qp-tl.a { background: var(--qs-warn-bg); color: var(--qs-warn-fg); box-shadow: inset 0 0 0 1px var(--qs-warn-bd); }
+.qpt :is(.qp-cw-ico, .qp-lib-ico).r { background: var(--qs-bad-bg); color: var(--qs-bad-fg); }
+.qpt :is(.qp-cw-ico, .qp-lib-ico).a { background: var(--qs-warn-bg); color: var(--qs-warn-fg); }
+.qpt :is(.qp-cw-ico, .qp-lib-ico).g { background: var(--qs-good-bg); color: var(--qs-good-fg); }
+.qpt .qp-rvc > div.lead { background: var(--qs-warn-bg); border-color: var(--qs-warn-bd); }
+.qpt .qp-rvc-st { color: var(--qs-warn-fg); }
+.qpt .qp-dcols.red i { background: var(--qs-bad-bd); }
+.qpt .qp-dcols.red .on i { background: var(--qs-bad-fill); }
+.qpt .qp-dn-svg .qp-dn-mid { fill: var(--qs-bad-fg); }
+/* LOST DEALS FOR AN EMPLOYEE (Ethan, 2026-11-08): the store's month on top,
+   then two tiles of their own week — My No Deals, My Conversion — each with
+   its goal and the store's figure, in the tiles' palette. */
+.qp-lmines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.qp-lmine { border-radius: 10px; padding: 9px 11px; display: flex; flex-direction: column; gap: 1px; min-width: 0; border: 1px solid #eef1f4; background: #f6f8fa; }
+.qp-lmine span { font-size: 11.5px; font-weight: 700; color: #5b6675; }
+.qp-lmine b { font-size: 18px; font-weight: 800; color: #1d2530; font-variant-numeric: tabular-nums; }
+.qp-lmine em { font-style: normal; font-size: 11.5px; font-weight: 650; color: #8a94a3; }
+.qp-lmine.good { background: #f2faf5; border-color: #dcefe3; } .qp-lmine.good span { color: #146c3c; }
+.qp-lmine.bad { background: #fdf2f2; border-color: #f6d4d4; } .qp-lmine.bad b, .qp-lmine.bad span { color: #c43d3d; }
+.qpt .qp-lmine.good { background: var(--qs-good-bg); border-color: var(--qs-good-bd); }
+.qpt .qp-lmine.bad { background: var(--qs-bad-bg); border-color: var(--qs-bad-bd); }

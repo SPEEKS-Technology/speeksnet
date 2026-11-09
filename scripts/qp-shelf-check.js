@@ -60,12 +60,14 @@ var SNAP = {
     ],
 };
 
-t('Goal Pace: what is left, over the open days left', function () {
+t('Goal Pace: what is left, over the calendar days left (as the Live board counts, since 2026-11-08)', function () {
     var p = _qpPaceOf(SNAP, 'OVL');
     if (p.soFar !== 6000) return 'so far ' + p.soFar;
-    if (p.avg !== 2000) return 'average ' + p.avg;
-    // Oct 29 (Thu) to Oct 31 (Sat): three open days, no Sunday.
+    // Through Oct 28: $6,000 over 28 calendar days, Sundays included.
+    if (Math.abs(p.avg - 6000 / 28) > 1e-9) return 'average ' + p.avg;
+    // Oct 29 to Oct 31: three calendar days left.
     if (p.left !== 3) return 'days left ' + p.left;
+    if (Math.abs(p.pct - 6000 / 28 * 31 / 55000 * 100) > 1e-9) return 'tracking ' + p.pct;
     if (Math.round(p.need) !== Math.round((55000 - 6000) / 3)) return 'needed ' + p.need;
     if (p.best.date !== '2026-10-27') return 'best day ' + p.best.date;
     if (p.hit) return 'goal not hit yet';
