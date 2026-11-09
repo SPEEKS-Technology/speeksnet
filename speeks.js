@@ -40708,6 +40708,11 @@ async function _champData() {
         });
         return matched ? matched.name : shortName;
     };
+    // Kept off the Buyer and Lister boards (Ethan, 2026-11-09): the owner's own
+    // buys and listings shouldn't take a staff award. Matched on the resolved
+    // full name, so a sheet row keyed "Ethan" is caught too. Reviews unchanged.
+    const CHAMP_EXCLUDED = ['ethan kushnir'];
+    const champExcluded = (fullName) => CHAMP_EXCLUDED.indexOf(String(fullName).toLowerCase().trim()) !== -1;
 
     // 3. LISTERS + REVIEWS
     const results = await Promise.all(stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())));
@@ -40716,7 +40721,7 @@ async function _champData() {
         (d.employees || []).forEach(e => {
             const listed  = parseNum(e.listed_count);
             const reviews = parseNum(e.mtd_google_reviews);
-            if (listed  > 0) allListers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], listed });
+            if (listed  > 0 && !champExcluded(getFullName(e.employee_name))) allListers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], listed });
             if (reviews > 0) allGoogleReviews.push({ name: getFullName(e.employee_name), store: stores[storeIdx], reviews });
         });
     });
@@ -40732,6 +40737,7 @@ async function _champData() {
                 const tc  = parseNum(e.transaction_count);
                 const tco = parseNum(e.transaction_converted);
                 if (bv <= 0) return;
+                if (champExcluded(getFullName(e.employee_name))) return;
                 const conv = tc > 0 ? tco / tc : 0;
                 const gm   = 1 - bc / bv;
                 const convScore = conv >= 0.95 ? 100 : conv >= 0.9 ? 400 * conv - 280 : conv >= 0.8 ? 600 * conv - 460 : conv >= 0.7 ? 200 * conv - 140 : 0;
