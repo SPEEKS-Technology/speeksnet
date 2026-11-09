@@ -53936,15 +53936,16 @@ Object.assign(QP_WIDGETS, {
         icon: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
         tone: 't', avail: () => _qpIsDist(),
     },
-    // Ethan, 2026-10-29 ("Lets do expense report"). The people the Expense
-    // Report tool is for — the DM files, the CEO reviews — through the same
-    // Feature Access key as its Tools entry.
+    // Ethan, 2026-10-29 ("Lets do expense report"). Whoever has the Expense
+    // Report tool, through the same Feature Access key as its Tools entry —
+    // no role check on top (Ethan 2026-11-09: any role can use any tool once
+    // Feature Access switches it on for them).
     exp: {
         label: 'Expense Report', sub: 'This month\'s mileage and expenses, and whether it is filed',
         icon: '<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6M9 13h7M9 17h5"/></svg>',
         tone: 'g', avail: () => {
             const ok = k => typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible(k);
-            return ['district manager', 'ceo'].includes(_qpRole()) && ok('tool-expenses');
+            return ok('tool-expenses');
         },
     },
 });
@@ -64228,13 +64229,16 @@ window.expExportExcel = expExportExcel;
 // the person's mail client, so the app never sees it sent. "Filed" is therefore
 // an assertion the person makes, stored server-side (expense_submissions) so it
 // survives filing from another machine and shows leadership who has filed.
-const _EXP_REMIND_ROLES = new Set(['district manager']);
 let _expRemindStarted = false;
 
+// Everyone who has the tool files a report, so everyone who has it gets the
+// reminder — except the CEO, who receives the reports rather than filing one.
+// Was DM-only by role; since any role can be given the tool (2026-11-09) the
+// filer list is Feature Access's, not a role list.
 function _expRemindApplies() {
     const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    // The DM is the only filer since the MSM role went (2026-11-08).
-    return _EXP_REMIND_ROLES.has(r);
+    if (r === 'ceo') return false;
+    return typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible('tool-expenses');
 }
 
 // The month being chased is the one that just CLOSED — you file August in

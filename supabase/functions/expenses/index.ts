@@ -7,10 +7,14 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
-// Who may use the tool at all. Unlike most functions here the GET is pin-gated
-// too — these are people's reimbursement claims, not store operating data, so
-// they should not be readable by an unauthenticated request.
-const TOOL_ROLES = new Set(["ceo", "district manager"]);
+// Who may use the tool at all: ANY signed-in user (Ethan 2026-11-09). Whether
+// the tool shows up for someone is Feature Access's call (tool-expenses /
+// tool-expenses-mgr), not this function's — it used to admit only CEO + DM, so
+// switching the tool on for an employee (Zach) put the link on his panel and
+// then answered "Insufficient role". A non-reviewer is pinned to their own
+// report by scopePerson/canWrite below, so opening the door costs nothing.
+// The GET is still pin-gated — these are people's reimbursement claims, not
+// store operating data, so they should not be readable without a PIN.
 // Reviewers can LOOK AT other people's reports. The CEO reviews everyone; the DM
 // reviews everyone EXCEPT the CEO, whose own claims stay private from them. That
 // exclusion is enforced on every path below (list, read, write, delete), not just
@@ -86,7 +90,6 @@ Deno.serve(async (req: Request) => {
 
   const role = String(user.role || "").toLowerCase().trim();
   const me = String(user.name || "").trim();
-  if (!TOOL_ROLES.has(role)) return json({ error: "Insufficient role" }, 403);
   const isReviewer = REVIEWER_ROLES.has(role);
   const canEditOthers = EDITOR_ROLES.has(role);
 
@@ -114,11 +117,23 @@ Deno.serve(async (req: Request) => {
     const { data: staff } = await supabase
       .from("users").select("name, role")
       .in("role", ["CEO", "District Manager"]);
+    // Anyone of any role who has filed a line is on the roster too — since the
+    // tool opened to every role, the people filing are no longer only CEO/DM,
+    // and a reviewer who cannot pick them cannot review them.
+    const { data: filers } = await supabase
+      .from("expense_entries").select("person");
     const hideCeo = EXCLUDES_CEO.has(role);
-    _visible = (staff || [])
+    const ceoNames = new Set((staff || [])
+      .filter((u: any) => String(u.role || "").toLowerCase().trim() === "ceo")
+      .map((u: any) => String(u.name)));
+    const names = new Set<string>([
+      ...(staff || []).map((u: any) => String(u.name)),
+      ...(filers || []).map((r: any) => String(r.person)),
+    ]);
+    _visible = [...names]
       // never hide the viewer from themselves, whatever their role
-      .filter((u: any) => !hideCeo || String(u.role || "").toLowerCase().trim() !== "ceo" || String(u.name) === me)
-      .map((u: any) => String(u.name)).filter(Boolean).sort();
+      .filter((n) => !hideCeo || !ceoNames.has(n) || n === me)
+      .filter(Boolean).sort();
     if (!_visible.includes(me)) _visible.push(me);
     return _visible;
   }
