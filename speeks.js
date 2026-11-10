@@ -54477,18 +54477,23 @@ const QP_MINIS = {
             const v = n.dueGroup === 'over' ? '<span class="bad">Overdue</span>' : n.dueGroup === 'today' ? '<span class="warn">Today</span>' : escapeHtml(String(n.due || '').replace(/^Due /, '') || 'Due');
             return { k: 'Next Due' + (due.length > 1 ? ' · ' + due.length + ' Deadlines' : ''), v, s: n.title, go: n.action || '' };
         } },
-    mmix: { label: 'Customer Mix', sub: 'New, returning, recycle and no-deal customers', icon: _qpMI.users, tone: 'b', src: 'snap', double: true, avail: () => _qpStoreSide() || _qpIsDist(),
+    // ONE ROW like every other mini (Ethan, 2026-11-09: "redesign them to
+    // fit"). Was two rows (a legend under the bar); now the four-colour bar sits
+    // where the others keep their sparkline, a hover names each part, and the
+    // line under the total says what matters most: who came back, and conversion.
+    mmix: { label: 'Customer Mix', sub: 'New, returning, recycle and no-deal customers', icon: _qpMI.users, tone: 'b', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
         draw: d => {
             const rows = _qpIsDist() ? [].concat(...STORE_CODES.map(s => _qpThisMonth(d, s))) : _qpThisMonth(d, _qpMyStore());
             const v = { n: _qpSum(rows, 'new_customers'), r: _qpSum(rows, 'return_customers'), c: _qpSum(rows, 'recycle_customers'), x: _qpSum(rows, 'no_deal_customers') };
             const tot = _qpSum(rows, 'total_customers') || (v.n + v.r + v.c + v.x);
             const conv = _qpSum(rows, 'cust_conv_den') ? Math.round(_qpSum(rows, 'cust_conv_num') / _qpSum(rows, 'cust_conv_den') * 100) : null;
-            const seg = (n, c) => n ? '<i style="flex:' + n + ';background:' + c + '"></i>' : '';
-            const li = (lab, n, c) => '<span><i class="qp-sw" style="background:' + c + '"></i>' + lab + '<b>' + _qpN(n) + '</b></span>';
-            return { html: '<div class="qp-mn-head">' + _qpMiniIco(_qpMI.users, 'b') + '<div class="qp-mn-b"><div class="qp-mn-k">Customers · This Month</div><div class="qp-mn-v">' + _qpN(tot) + '<small>through the door</small></div></div></div>'
-                + '<div class="qp-mix">' + seg(v.n, '#2563b8') + seg(v.r, '#1f9d57') + seg(v.c, '#f0a92b') + seg(v.x, '#e05252') + '</div>'
-                + '<div class="qp-mix-l">' + li('New', v.n, '#2563b8') + li('Returning', v.r, '#1f9d57') + li('Recycle', v.c, '#f0a92b') + li('No Deal', v.x, '#e05252') + '</div>'
-                + '<div class="qp-mn-s">' + (tot ? Math.round(v.r / tot * 100) + '% came back' : '') + (conv != null ? ' · conversion ' + conv + '%' : '') + '</div>' };
+            const parts = [['New', v.n, '#2563b8'], ['Returning', v.r, '#1f9d57'], ['Recycle', v.c, '#f0a92b'], ['No Deal', v.x, '#e05252']];
+            // The bar rides on the number's line, not in the right-hand slot: on
+            // the rail the slot squeezed the label and the sub-line to "…".
+            const bar = (v.n + v.r + v.c + v.x) ? '<span class="qp-mix qp-mix-in" title="' + escapeHtml(parts.map(p => p[0] + ' ' + _qpN(p[1])).join(' · ')) + '">'
+                + parts.map(p => p[1] ? '<i style="flex:' + p[1] + ';background:' + p[2] + '"></i>' : '').join('') + '</span>' : '';
+            return { k: 'Customers · This Month', v: _qpN(tot) + bar,
+                s: (tot ? Math.round(v.r / tot * 100) + '% came back' : 'No customers yet') + (conv != null ? ' · ' + conv + '% conversion' : '') };
         } },
     mrecycle: { label: 'Recycle Requests', sub: 'Requests waiting on a verdict', icon: _qpMI.recycle, tone: 'g', src: 'recycle', avail: () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('tool-recycle-inventory') && (_qpStoreSide() || _qpIsDist()),
         draw: d => { const open = (d.rows || []).filter(r => !r.reviewed_at && !r.deleted_at); return { k: 'Recycle Requests', v: String(open.length), s: open.length ? (_qpIsDist() ? 'Waiting on your verdict' : 'Waiting on the DM') : 'Nothing waiting', go: 'openRecycleFocused()' }; } },
@@ -54518,13 +54523,18 @@ const QP_MINIS = {
     mtop: { label: 'Top Producer', sub: 'Who processed the most on the latest day', icon: _qpMI.trophy, tone: 'a', src: 'snap', avail: () => _qpStoreSide() && !_qpIsEmp(),
         draw: d => { const t = _qpTeamOf(d, _qpMyStore()); const top = t && (t.team.find(m => m.top) || t.team[0]);
             return top ? { k: 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), v: escapeHtml(_qpShort(top.name)), s: top.n + ' devices · ' + _qpHLK(top.value) + (t.topRun > 1 ? ' · ' + t.topRun + ' days running' : '') } : { k: 'Top Producer', v: '—', s: 'No Day End Yet' }; } },
-    mcal: { label: 'Coming Up', sub: 'The next three events on the Store Calendar', icon: _qpMI.cal, tone: 'b', src: 'cal', double: true, avail: () => typeof toggleCalendar === 'function' && (!!_qpMyStore() || _qpIsDist()),
+    // ONE ROW (Ethan, 2026-11-09): the NEXT event big — its day, then what it
+    // is — and how many more follow in the next 30 days. Was two rows listing
+    // three; the calendar itself is a click away.
+    mcal: { label: 'Coming Up', sub: 'The next event on the Store Calendar', icon: _qpMI.cal, tone: 'b', src: 'cal', avail: () => typeof toggleCalendar === 'function' && (!!_qpMyStore() || _qpIsDist()),
         draw: () => {
             const today = _scalTodayISO(), store = _qpIsDist() ? 'ALL' : _qpMyStore();
-            const occ = _scalOccurrences(today, _scalISO(_scalAddDays(new Date(), 30)), store).filter(o => o.first || o.day === today).slice(0, 3);
-            return { go: 'toggleCalendar()', html: '<div class="qp-mn-head">' + _qpMiniIco(_qpMI.cal, 'b') + '<div class="qp-mn-b"><div class="qp-mn-k">Coming Up</div><div class="qp-mn-v">' + occ.length + '<small>' + (occ.length === 1 ? 'event' : 'events') + ' · next 30 days</small></div></div></div>'
-                + (occ.length ? '' : '<div class="qp-mn-s">Nothing on the calendar yet</div>')
-                + occ.map(o => '<div class="qp-mn-ev"><b>' + (o.day === today ? 'Today' : escapeHtml(_qpDayLabel(o.day).replace(/^\w+, /, ''))) + '</b><span>' + escapeHtml(o.ev.title) + '</span></div>').join('') };
+            const occ = _scalOccurrences(today, _scalISO(_scalAddDays(new Date(), 30)), store).filter(o => o.first || o.day === today);
+            const n = occ[0];
+            if (!n) return { k: 'Coming Up · Next 30 Days', v: '—', s: 'Nothing on the calendar yet', go: 'toggleCalendar()' };
+            const more = occ.length - 1;
+            return { k: 'Coming Up' + (more ? ' · ' + more + ' More' : ''), v: n.day === today ? '<span class="warn">Today</span>' : escapeHtml(_qpDayLabel(n.day).replace(/^\w+, /, '')),
+                s: n.ev.title, go: 'toggleCalendar()' };
         } },
 };
 const _QP_MINI_ADDED = '2026-10-29';
@@ -54755,7 +54765,13 @@ const _qpShelfKey = ids => 'shelf:' + ids.join(',');
 // like everything else about it. Customer Mix and Coming Up are always two.
 const _qpTokId = tok => String(tok || '').split('~')[0];
 const _qpTokTwo = tok => /~2$/.test(String(tok || ''));
-const _qpMiniSize = tok => { const m = QP_MINIS[_qpTokId(tok)]; return m && (m.double || (_qpTokTwo(tok) && m.draw2)) ? 2 : 1; };
+// ONE SIZE (Ethan, 2026-11-09: "keep all mini widgets the 1 size and get rid of
+// the bigger size"): a saved "id~2" now draws at one row too, and the 1 | 2
+// switch is gone (_qpMiniHtml). Customer Mix and Coming Up, the two that only
+// came in two rows (double), were redrawn as one-row minis the same day, so no
+// mini sets double now. The draw2 layouts stay in the code, unused, in case
+// the bigger size comes back.
+const _qpMiniSize = tok => { const m = QP_MINIS[_qpTokId(tok)]; return m && m.double ? 2 : 1; };
 const _qpShelfUsed = ids => ids.filter(_qpMiniOk).reduce((a, id) => a + _qpMiniSize(id), 0);
 function _qpShelves(main) { return Array.from(main.querySelectorAll('[data-qp-shelf]')); }
 function _qpMiniShelf(main, id) { id = _qpTokId(id); return _qpShelves(main).find(b => _qpShelfIds(_qpKey(b)).some(t => _qpTokId(t) === id)) || null; }
@@ -54925,13 +54941,9 @@ function _qpMiniHtml(tok) {
     // its page ("go") — so they stop there (Ethan, 2026-10-29: × "ends up
     // getting rid of it then taking me to that place on the site").
     const x = '<button type="button" class="qp-mn-x" data-qp-edit-ok title="Remove ' + escapeHtml(m.label) + '" aria-label="Remove ' + escapeHtml(m.label) + '" onclick="event.stopPropagation(); qpRemoveMini(\'' + id + '\')">'
-        + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'
-        // Customize only, beside the ×: 1 Row / 2 Rows, on every mini that has
-        // both. Two is greyed out when the shelf has no free row for it.
-        + (m.draw2 && !m.double ? '<span class="qp-mn-sz">'
-            + '<button type="button" data-qp-edit-ok class="' + (two ? '' : 'on') + '" title="One Row" onclick="event.stopPropagation(); qpMiniRows(\'' + id + '\', 1)">1</button>'
-            + '<button type="button" data-qp-edit-ok class="' + (two ? 'on' : '') + '" title="' + (two || _qpMiniRoom(tok) ? 'Two Rows' : 'No Free Row on This Shelf') + '"'
-            + (two || _qpMiniRoom(tok) ? '' : ' disabled') + ' onclick="event.stopPropagation(); qpMiniRows(\'' + id + '\', 2)">2</button></span>' : '');
+        + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+        // (The 1 | 2 row switch that sat beside the × was removed 2026-11-09 —
+        // every mini is one size now; see _qpMiniSize.)
     const go = r && r.go ? ' data-go="1" role="button" tabindex="0" onclick="' + escapeHtml(r.go) + '"' : '';
     if (!r) return '<div class="qp-mn' + (m.double || two ? ' x2' : '') + '" data-qp-mini="' + id + '">' + _qpMiniIco(m.icon, m.tone)
         + '<div class="qp-mn-b"><div class="qp-mn-k">' + escapeHtml(m.label) + '</div><div class="qp-mn-s">Syncing…</div></div>' + x + '</div>';
@@ -55217,6 +55229,13 @@ function _qptSave() {
     _qpSave(same ? null : _qptEncode({ order: s.order, hidden: s.hidden, minis: minis }));
 }
 function _qptMinis() { return (_qptState && _qptState.minis) || _qptDefaultMinis(); }
+// EIGHT AT MOST (Ethan, 2026-11-09: "cap the mini widgets to 8 total at one
+// time"). Counted over the minis this person can actually see (_qpMiniOk) —
+// a saved one whose tool was taken away is not on the rail, so it doesn't use
+// a place. At eight the drawer's tiles and the rail's + Add say so and add nothing.
+const QPT_MINI_MAX = 8;
+const _qptRailToks = () => _qptMinis().filter(_qpMiniOk).slice(0, QPT_MINI_MAX);
+const _qptRailFull = () => _qptRailToks().length >= QPT_MINI_MAX;
 
 // --- which cards this person has ---
 function _qptShown(main, k) {
@@ -55997,8 +56016,13 @@ function _qptRenderWork(main) {
     const has = k => keys.indexOf(k) !== -1;
     const today = _qpWToday(), week = (() => { const d = new Date(today + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); })();
     const short = day => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+    // Top cells read B2B · SPEEKS Connect · Variance (Ethan, 2026-11-09): the
+    // Variance cell is held back in varCell and goes on the end.
     const items = [], cells = [];
-    let syncing = false;
+    let syncing = false, varCell = '';
+    // Header pills, one a thing that is waiting, each saying exactly what it
+    // counts (Ethan, 2026-11-09) — not one lump "10 Waiting". [count, words, tone].
+    const hp = [];
     const go = { b2b: "window.location.href='b2b.html'", var: "window.location.href='workspace.html#vreplies'",
         photos: "window.location.href='operations.html#photos'", category: "window.location.href='operations.html#categories'", titles: "window.location.href='operations.html#titles'" };
     const cell = (k, v, sub, cls) => '<div class="qpt-cell ' + (cls || '') + '"><span class="qpt-ck">' + k + '</span><b>' + v + '</b>' + (sub ? '<em>' + sub + '</em>' : '') + '</div>';
@@ -56011,15 +56035,45 @@ function _qptRenderWork(main) {
             const price = d.deals.filter(x => x.stage === 'pricing' && (_b2bIsCorp() || _b2bActionFor(x))).map(x => ({ x, due: _b2bPricingDue(x, bday) })).filter(e => e.due);
             const need = d.deals.filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor);
             const unl = (d.unl || []).filter(r => Number(r.unlisted_units) > 0).reduce((a, r) => a + (Number(r.unlisted_value) || 0), 0);
-            price.forEach(e => items.push({ tag: 'b2b', tl: 'B2B', due: e.due.dueOn, open: go.b2b,
-                text: e.x.ref + (e.x.company ? ' · ' + e.x.company : ''), sub: 'Price' + (e.x.total_units ? ' ' + e.x.total_units + (Number(e.x.total_units) === 1 ? ' Unit' : ' Units') : '') + (e.x.store && _b2bIsCorp() ? ' · ' + e.x.store : ''),
+            // The store(s) a deal is assigned to — the B2B board's own rule
+            // (_b2bDealStoreTag): listing_stores once split, else listing_store,
+            // else the pricing store. Nothing assigned → the Store column is blank.
+            const bst = x => { const ls = x.listing_stores || []; return ls.length ? ls.slice() : [x.listing_store || x.pricing_store].filter(Boolean); };
+            price.forEach(e => items.push({ tag: 'b2b', tl: 'B2B', due: e.due.dueOn, open: go.b2b, stores: bst(e.x),
+                text: e.x.ref + (e.x.company ? ' · ' + e.x.company : ''), sub: 'Price' + (e.x.total_units ? ' ' + e.x.total_units + (Number(e.x.total_units) === 1 ? ' Unit' : ' Units') : ''),
                 when: e.due.late ? Math.abs(e.due.left) + 'd Overdue' : e.due.left === 0 ? 'Due Today' : 'Due ' + short(e.due.dueOn).replace(/^\w+, /, '') }));
             need.forEach(x => { const n = _b2bDaysIn(x);
-                items.push({ tag: 'b2b', tl: 'B2B', due: null, rank: -n, open: go.b2b, text: x.ref + (x.company ? ' · ' + x.company : ''),
-                    sub: ((B2B_STAGE[x.stage] || {}).label || x.stage) + (x.store && _b2bIsCorp() ? ' · ' + x.store : ''), when: n + (n === 1 ? ' Day Waiting' : ' Days Waiting'), tone: _b2bAgeTone(n) === 'crit' ? 'bad' : _b2bAgeTone(n) === 'warn' ? 'warn' : '' }); });
+                items.push({ tag: 'b2b', tl: 'B2B', due: null, rank: -n, open: go.b2b, stores: bst(x), text: x.ref + (x.company ? ' · ' + x.company : ''),
+                    sub: (B2B_STAGE[x.stage] || {}).label || x.stage, when: n + (n === 1 ? ' Day Waiting' : ' Days Waiting'), tone: _b2bAgeTone(n) === 'crit' ? 'bad' : _b2bAgeTone(n) === 'warn' ? 'warn' : '' }); });
+            // TO LIST (Ethan, 2026-11-09: "for stores with B2B to list, shouldn't we
+            // show that as well"): one line a deal a store from the same unlisted
+            // read the Unlisted Value card uses (b2b_unlisted_value), after the
+            // deals to price and the ones waiting on you, largest value first.
+            // The pill says how long since it went to listing (listing_since).
+            // Corp gets ONE LINE A STORE (WSP alone had 11 deals on 11-09), the
+            // pill its oldest; a store gets a line a deal — that is its own work.
+            const toList = (d.unl || []).filter(r => Number(r.unlisted_units) > 0);
+            const daysSince = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : null;
+            const listLine = (stores, text, u, v, since, pre) => items.push({ tag: 'b2b', tl: 'B2B', due: null, rank: 1e9 - v, open: go.b2b, stores,
+                text, sub: 'List ' + u + (u === 1 ? ' Unit' : ' Units') + (v ? ' · ' + _qpHLK(v) : ''),
+                when: since === null ? 'To List' : (pre || '') + since + (since === 1 ? ' Day' : ' Days') + (pre ? '' : ' Listing') });
+            if (_b2bIsCorp()) {
+                const by = new Map();
+                toList.forEach(r => { const s = String(r.store || '').toUpperCase(), g = by.get(s) || { n: 0, u: 0, v: 0, since: null };
+                    const dd = daysSince(r.listing_since);
+                    g.n++; g.u += Number(r.unlisted_units) || 0; g.v += Number(r.unlisted_value) || 0;
+                    if (dd !== null && (g.since === null || dd > g.since)) g.since = dd;
+                    by.set(s, g); });
+                by.forEach((g, s) => listLine(s ? [s] : [], g.n + (g.n === 1 ? ' Deal to List' : ' Deals to List'), g.u, g.v, g.since, g.n > 1 ? 'Oldest ' : ''));
+            } else toList.forEach(r => listLine(r.store ? [String(r.store).toUpperCase()] : [], r.ref + (r.company ? ' · ' + r.company : ''),
+                Number(r.unlisted_units) || 0, Number(r.unlisted_value) || 0, daysSince(r.listing_since)));
+            const toListUnits = toList.reduce((a, r) => a + (Number(r.unlisted_units) || 0), 0);
             const late = price.filter(e => e.due.late).length;
             cells.push(cell('Business-to-Business', price.length + need.length,
                 price.length + ' to Price · ' + need.length + ' Need You' + (unl ? ' · ' + _qpHLK(unl) + ' Unlisted' : ''), late ? 'bad' : price.length + need.length ? 'warn' : 'good'));
+            if (price.length) hp.push([price.length, 'B2B To Price', late ? 'bad' : 'warn']);
+            if (need.length) hp.push([need.length, 'B2B Waiting On You', 'warn']);
+            if (toListUnits) hp.push([toListUnits, toListUnits === 1 ? 'B2B Unit To List' : 'B2B Units To List', 'warn']);
         }
     }
     // --- Variance: a store's lines to explain and DM notes to answer; the DM's reports to review.
@@ -56032,19 +56086,20 @@ function _qptRenderWork(main) {
                 const due = _qptDayOf(p.manager_due_at), lines = (d.items[p.id] || []).filter(x => x.needs_reply && !x.gm_note);
                 n += p.items - (p.answered || 0);
                 if (!first || due < first) first = due;
-                if (lines.length) lines.forEach(x => items.push({ tag: 'var', tl: 'Variance', due, open: go.var, text: _qpClaimsText(x.item_title),
+                if (lines.length) lines.forEach(x => items.push({ tag: 'var', tl: 'Variance', due, open: go.var, stores: [_qpMyStore()].filter(Boolean), text: _qpClaimsText(x.item_title),
                     sub: (x.buyer_name ? _qpWWho(x.buyer_name) + ' · ' : '') + Math.round(Number(x.variance_pct)) + '%' }));
-                else items.push({ tag: 'var', tl: 'Variance', due, open: go.var, text: (p.items - (p.answered || 0)) + ' Lines to Explain', sub: 'Variance Report' });
+                else items.push({ tag: 'var', tl: 'Variance', due, open: go.var, stores: [_qpMyStore()].filter(Boolean), text: (p.items - (p.answered || 0)) + ' Lines to Explain', sub: 'Variance Report' });
             });
             d.periods.filter(p => (p.awaiting_reply || 0) > 0).forEach(p => {
                 const due = _qptDayOf(new Date(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000).toISOString());
                 (d.items[p.id] || []).filter(x => x.dm_note && x.dm_reply_requested && !x.mgr_reply).forEach(x => {
                     n++;
                     if (!first || due < first) first = due;
-                    items.push({ tag: 'var', tl: 'Variance', due, open: go.var, text: _qpClaimsText(x.item_title), sub: 'DM Note · Reply Needed' });
+                    items.push({ tag: 'var', tl: 'Variance', due, open: go.var, stores: [_qpMyStore()].filter(Boolean), text: _qpClaimsText(x.item_title), sub: 'DM Note · Reply Needed' });
                 });
             });
-            cells.push(cell('Variance', n, n ? (first ? 'Due ' + short(first) : 'Replies Needed') : 'Caught Up', n ? (first && first < today ? 'bad' : 'warn') : 'good'));
+            varCell = cell('Variance', n, n ? (first ? 'Due ' + short(first) : 'Replies Needed') : 'Caught Up', n ? (first && first < today ? 'bad' : 'warn') : 'good');
+            if (n) hp.push([n, n === 1 ? 'Variance Reply Due' : 'Variance Replies Due', first && first < today ? 'bad' : 'warn']);
         }
     }
     if (has('dvariance')) {
@@ -56052,12 +56107,13 @@ function _qptRenderWork(main) {
         if (!d) syncing = true;
         else {
             const t = _vrDmTriage(d.data), st = p => (p.store || '').toUpperCase();
-            t.ready.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, text: st(p) + ' Report',
+            t.ready.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, stores: [st(p)], text: 'Variance Report',
                 sub: p.answered >= p.items ? 'Ready for Your Notes' : 'Late · ' + p.answered + ' of ' + p.items + ' Replied', when: p.answered >= p.items ? 'Ready' : 'Late', tone: p.answered >= p.items ? 'warn' : 'bad' }));
-            t.closed.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, text: st(p) + ' Report',
+            t.closed.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, stores: [st(p)], text: 'Variance Report',
                 sub: t.replied.has(st(p)) ? 'A Manager Replied' : 'Reply Window Closed', when: 'Wrap Up' }));
             const n = t.ready.length + t.closed.length;
-            cells.push(cell('Variance', n, n ? 'To Review' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : '') : 'Caught Up' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : ''), n ? 'warn' : 'good'));
+            varCell = (cell('Variance', n, n ? 'To Review' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : '') : 'Caught Up' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : ''), n ? 'warn' : 'good'));
+            if (n) hp.push([n, n === 1 ? 'Variance Report To Review' : 'Variance Reports To Review', t.ready.some(p => p.answered < p.items) ? 'bad' : 'warn']);
         }
     }
     // --- SPEEKS Connect: no set date — a line a kind for a store, a line a store for the DM.
@@ -56075,33 +56131,54 @@ function _qptRenderWork(main) {
             stores.forEach(s => { const c = per(s); Object.keys(tot).forEach(k => { tot[k] += c[k]; });
                 if (conKey === 'dconnect') {
                     const all = c.photos + c.category + c.titles;
-                    if (all) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -all, open: go[c.photos ? 'photos' : c.category ? 'category' : 'titles'], store: s, text: s,
-                        sub: ['photos', 'category', 'titles'].filter(k => c[k]).map(k => c[k] + ' ' + { photos: 'Pictures', category: 'Categories', titles: 'Titles' }[k]).join(' · '), when: String(all) });
-                } else ['photos', 'category', 'titles'].forEach(k => { if (c[k]) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -c[k], open: go[k], text: c[k] + ' ' + word[k][c[k] === 1 ? 0 : 1], sub: '', when: String(c[k]), tone: k === 'photos' ? 'bad' : '' }); });
+                    if (all) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -all, open: go[c.photos ? 'photos' : c.category ? 'category' : 'titles'], stores: [s], text: all + (all === 1 ? ' Listing Fix' : ' Listing Fixes'),
+                        sub: ['photos', 'category', 'titles'].filter(k => c[k]).map(k => c[k] + ' ' + { photos: 'Pictures', category: 'Categories', titles: 'Titles' }[k]).join(' · '), noWhen: true });
+                } else ['photos', 'category', 'titles'].forEach(k => { if (c[k]) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -c[k], open: go[k], stores: [s], text: c[k] + ' ' + word[k][c[k] === 1 ? 0 : 1], sub: '', noWhen: true }); });
             });
             const n = tot.photos + tot.category + tot.titles;
             cells.push(cell('SPEEKS Connect', n, n ? ['photos', 'category', 'titles'].filter(k => ok(k)).map(k => tot[k] + ' ' + { photos: 'Pictures', category: 'Categories', titles: 'Titles' }[k]).join(' · ') : 'All Clear', tot.photos ? 'bad' : n ? 'warn' : 'good'));
+            if (n) hp.push([n, n === 1 ? 'Listing Fix' : 'Listing Fixes', tot.photos ? 'bad' : 'warn']);
         }
     }
-    // --- group and draw, soonest first
-    const groups = [['over', 'Overdue'], ['today', 'Due Today'], ['week', 'This Week'], ['later', 'Later'], ['none', 'No Set Date']];
+    // --- group and draw: BY TOOL, then soonest first inside each (Ethan,
+    // 2026-11-09: "group by category — B2B, then SPEEKS Connect, then Variance
+    // if applicable — by date within"). Date order inside a tool is the old
+    // bucket order (Overdue, Due Today, This Week, Later, No Set Date), so the
+    // pill on the right still says how soon; a dateless line sorts by rank.
+    const tools = [['b2b', 'Business-To-Business'], ['con', 'SPEEKS Connect'], ['var', 'Variance']];
+    const bucket = { over: 0, today: 1, week: 2, later: 3, none: 4 };
     const grp = it => !it.due ? 'none' : it.due < today ? 'over' : it.due === today ? 'today' : it.due <= week ? 'week' : 'later';
     const dist = pane.hasAttribute('data-qpt-dist');
+    // A row is five COLUMNS (Ethan, 2026-11-09: "evenly spaced and formatted
+    // columns"): Tool · Store · Item · Detail · When, the same widths on every
+    // row so they line up down the list, and the When pill one width for all.
+    // The Store column is dropped when no line has a store (a store's own view).
+    const anyStore = items.some(it => it.stores && it.stores.length);
     const row = it => '<div class="qpt-wl" role="link" tabindex="0" onclick="' + it.open + '" onkeydown="if(event.key===\'Enter\'){' + it.open + '}">'
         + '<span class="qpt-src ' + it.tag + '">' + it.tl + '</span>'
-        + '<span class="qpt-wl-t">' + (it.store ? _qpDot(it.store) + '<b>' + escapeHtml(it.text) + '</b>' : escapeHtml(it.text)) + (it.sub ? ' <small>· ' + escapeHtml(it.sub) + '</small>' : '') + '</span>'
-        + '<span class="qpt-when ' + (it.tone || (grp(it) === 'over' ? 'bad' : grp(it) === 'none' ? '' : 'warn')) + '">'
-        + escapeHtml(it.when || (grp(it) === 'over' ? 'Overdue' : it.due === today ? 'Due Today' : 'Due ' + short(it.due).replace(/,.*$/, ''))) + '</span></div>';
+        + (anyStore ? '<span class="qpt-wl-s">' + (it.stores || []).map(s => '<span>' + _qpDot(s) + escapeHtml(s) + '</span>').join('') + '</span>' : '')
+        + '<span class="qpt-wl-t">' + escapeHtml(it.text) + '</span>'
+        + '<span class="qpt-wl-d">' + escapeHtml(it.sub || '') + '</span>'
+        // SPEEKS Connect has no date to show (Ethan, 2026-11-09: "we don't need
+        // this due date pill") — an empty cell keeps the columns lined up.
+        + (it.noWhen ? '<span class="qpt-when-none"></span>' : '<span class="qpt-when ' + (it.tone || (grp(it) === 'over' ? 'bad' : grp(it) === 'none' ? '' : 'warn')) + '">'
+        + escapeHtml(it.when || (grp(it) === 'over' ? 'Overdue' : it.due === today ? 'Due Today' : 'Due ' + short(it.due).replace(/,.*$/, ''))) + '</span>') + '</div>';
     let list = '';
-    groups.forEach(([g, label]) => {
-        const these = items.filter(it => grp(it) === g).sort((a, b) => (a.due || '').localeCompare(b.due || '') || (a.rank || 0) - (b.rank || 0));
-        if (these.length) list += '<div class="qpt-wgrp">' + label + '</div>' + these.map(row).join('');
+    tools.forEach(([tag, label]) => {
+        const these = items.filter(it => it.tag === tag).sort((a, b) => bucket[grp(a)] - bucket[grp(b)]
+            || (a.due || '').localeCompare(b.due || '') || (a.rank || 0) - (b.rank || 0));
+        if (these.length) list += '<div class="qpt-wgrp">' + label + ' · ' + these.length + '</div>' + these.map(row).join('');
     });
     const waiting = items.length;
+    if (varCell) cells.push(varCell);
     const html = (cells.length ? '<div class="qpt-sec qpt-sec-b"><div class="qpt-cells c' + cells.length + '">' + cells.join('') + '</div></div>' : '')
-        + '<div class="qpt-sec">' + (list || (syncing ? '<div class="status-message">Syncing…</div>'
+        + '<div class="qpt-sec">' + (list ? '<div class="qpt-wlist' + (anyStore ? '' : ' nos') + '">' + list + '</div>' : (syncing ? '<div class="status-message">Syncing…</div>'
             : '<div class="qp-clear"><div class="qp-clear-t">Nothing Waiting</div><div class="qp-clear-s">No deals, variance or listing fixes need ' + (dist ? 'anyone' : 'you') + ' right now</div></div>')) + '</div>';
-    const pills = waiting ? '<span class="qpt-vp ' + (items.some(it => grp(it) === 'over') ? 'bad' : 'warn') + '">' + waiting + ' Waiting</span>' : (syncing ? '' : '<span class="qpt-vp good">All Clear</span>');
+    // Pills in the tiles' order: B2B, then SPEEKS Connect, then Variance.
+    const hpRank = w => /^B2B/.test(w) ? 0 : /^Listing/.test(w) ? 1 : 2;
+    hp.sort((a, b) => hpRank(a[1]) - hpRank(b[1]));
+    const pills = hp.length ? hp.map(([n, words, tone]) => '<span class="qpt-vp ' + tone + '">' + n + ' ' + words + '</span>').join('')
+        : waiting ? '<span class="qpt-vp warn">' + waiting + ' Waiting</span>' : (syncing ? '' : '<span class="qpt-vp good">All Clear</span>');
     const view = pane.querySelector('.qpt-wv'), pp = pane.querySelector('.qpt-wpills');
     if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
     if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
@@ -56186,9 +56263,11 @@ function _qptPaint(main) {
     const slot = root.querySelector('.qpt-menuslot');
     slot.innerHTML = _qptMenuOpen ? '<div class="qpt-menu" role="dialog" aria-label="Dashboard tabs"><h5>Dashboard Tabs</h5><p>Untick a tab to hide it. Drag tabs on the strip to reorder them.</p>'
         + _qptState.order.filter(k => _qptHave.find(t => t.k === k)).map(k => {
-            const t = _qptHave.find(x => x.k === k), n = [].concat.apply([], t.rows).filter(x => x !== '@live').length;
+            // No "N Widgets" count beside a tab (Ethan, 2026-11-09: get rid of
+            // it) — every tab is one card now, so the count meant nothing.
+            const t = _qptHave.find(x => x.k === k);
             return '<label><input type="checkbox" onchange="qptShow(\'' + k + '\', this.checked)"' + (_qptState.hidden.indexOf(k) === -1 ? ' checked' : '') + '>'
-                + escapeHtml(t.l) + (n > 1 ? '<small>' + n + ' Widgets</small>' : '') + '</label>';
+                + escapeHtml(t.l) + '</label>';
         }).join('')
         + '<button type="button" onclick="qptResetTabs()">Reset Tabs</button></div>' : '';
     root.querySelectorAll('.qpt-pane').forEach(p => { p.hidden = p.getAttribute('data-tab') !== _qptTab; });
@@ -56249,7 +56328,15 @@ function _qptRenderRail(main) {
     btn.classList.toggle('on', _qptEdit);
     btn.setAttribute('aria-pressed', String(_qptEdit));
     _qpShelfFreeNow = 3;   // the rail has no row limit: 2 Rows is always open
-    const toks = _qptMinis().filter(_qpMiniOk);
+    // At most QPT_MINI_MAX (8) on the rail. A layout saved before the cap with
+    // more keeps them saved; the rail shows the first eight.
+    const toks = _qptRailToks();
+    const full = toks.length >= QPT_MINI_MAX, add = rail.querySelector('.qpt-add');
+    if (add) {
+        add.disabled = full;
+        add.classList.toggle('full', full);
+        add.textContent = full ? QPT_MINI_MAX + ' of ' + QPT_MINI_MAX + ' Minis · Remove One to Add' : '+ Add Mini Widget';
+    }
     const html = toks.length ? toks.map(t => '<div class="qpt-mwrap" data-qpt-mini="' + _qpTokId(t) + '"' + (_qptEdit ? ' draggable="true"' : '') + '>' + _qpMiniHtml(t) + '</div>').join('')
         : '<div class="qpt-empty">No Mini Widgets Yet</div>';
     if (list._qpHtml !== html) { list.innerHTML = html; list._qpHtml = html; _qpCapLines(list); }
@@ -56264,6 +56351,7 @@ function qptMiniAdd(id) {
     if (!_qptState || !_qpMiniOk(id)) return;
     const list = _qptMinis().slice();
     if (list.some(t => _qpTokId(t) === id)) return;
+    if (_qptRailFull()) return;   // eight on the rail is the most (QPT_MINI_MAX)
     list.push(id);
     _qptState.minis = list;
     _qptSave();
@@ -56271,7 +56359,12 @@ function qptMiniAdd(id) {
 }
 function qptMiniRemove(id) {
     if (!_qptState) return;
-    _qptState.minis = _qptMinis().filter(t => _qpTokId(t) !== id);
+    // A layout saved before the cap can hold more than eight; the ones past
+    // the eighth aren't on the rail. They go now, so the place this frees stays
+    // free instead of the ninth sliding up into it. A mini hidden because its
+    // tool was taken away (not _qpMiniOk) is kept — it is not using a place.
+    let seen = 0;
+    _qptState.minis = _qptMinis().filter(t => !_qpMiniOk(t) || ++seen <= QPT_MINI_MAX).filter(t => _qpTokId(t) !== id);
     _qptSave();
     _qptAfterMini(id);
 }
@@ -56384,14 +56477,17 @@ function qptDrawerClose() {
 function _qptTiles() {
     const box = document.querySelector('#qptDrawer .qpt-tiles');
     if (!box) return;
-    const on = {};
-    _qptMinis().forEach(t => { on[_qpTokId(t)] = true; });
+    const on = {}, toks = _qptRailToks(), full = toks.length >= QPT_MINI_MAX;
+    toks.forEach(t => { on[_qpTokId(t)] = true; });
+    // How many places are used, in the drawer's header.
+    const h = document.querySelector('#qptDrawer .qpt-dh h2');
+    if (h) h.textContent = 'Mini Widgets · ' + toks.length + ' of ' + QPT_MINI_MAX;
     box.innerHTML = Object.keys(QP_MINIS).filter(_qpMiniOk).map(id => {
-        const m = QP_MINIS[id], has = !!on[id];
-        return '<div role="button" tabindex="0" class="qpt-tile' + (has ? ' added' : '') + (_qptPrevId === id ? ' pv' : '') + '" data-qpt-prev="' + id + '"'
-            + (has ? '' : ' onclick="qptMiniAdd(\'' + id + '\')"') + ' aria-label="' + escapeHtml(has ? m.label + ' Is on Your Rail' : 'Add ' + m.label) + '">'
+        const m = QP_MINIS[id], has = !!on[id], shut = !has && full;
+        return '<div role="button" tabindex="0" class="qpt-tile' + (has ? ' added' : '') + (shut ? ' full' : '') + (_qptPrevId === id ? ' pv' : '') + '" data-qpt-prev="' + id + '"'
+            + (has || shut ? '' : ' onclick="qptMiniAdd(\'' + id + '\')"') + ' aria-label="' + escapeHtml(has ? m.label + ' Is on Your Rail' : shut ? m.label + ' · Your Rail Is Full' : 'Add ' + m.label) + '"' + (shut ? ' aria-disabled="true"' : '') + '>'
             + (has ? '<button type="button" class="qpt-pill qpt-pill-rm" aria-label="Remove ' + escapeHtml(m.label) + ' From Your Rail" onclick="event.stopPropagation(); qptMiniRemove(\'' + id + '\')">Remove</button>'
-                : '<span class="qpt-pill">+ Add</span>')
+                : shut ? '<span class="qpt-pill qpt-pill-full">Rail Full</span>' : '<span class="qpt-pill">+ Add</span>')
             + _qpMiniIco(m.icon, m.tone) + '<span class="qpt-tname">' + escapeHtml(m.label) + '</span>'
             + '<span class="qpt-tfoot">' + (m.double ? '<small>Two Rows</small>' : '') + '</span></div>';
     }).join('');
@@ -56410,7 +56506,7 @@ function _qptPreview(id, force) {
     box.innerHTML = '<div class="qpt-pslot">' + _qpMiniHtml(id) + '</div>'
         + '<div><div class="qpt-pk">Preview</div><div class="qpt-pt">' + escapeHtml(m.label) + '</div>'
         + '<div class="qpt-pd">' + escapeHtml(m.sub || '') + (m.double ? ' · Takes Two Rows' : '') + '</div>'
-        + '<div class="qpt-pd qpt-pstate' + (has ? ' on' : '') + '">' + (has ? 'On Your Rail.' : 'Click the Tile to Add It.') + '</div></div>';
+        + '<div class="qpt-pd qpt-pstate' + (has ? ' on' : '') + '">' + (has ? 'On Your Rail.' : _qptRailFull() ? 'Your Rail Has ' + QPT_MINI_MAX + ' — Remove One to Add This.' : 'Click the Tile to Add It.') + '</div></div>';
     _qpCapLines(box.querySelector('.qpt-pslot'));
 }
 

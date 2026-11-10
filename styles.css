@@ -25429,6 +25429,9 @@ body.sam-active .hotbars-stack.qp-pinned { margin: 0 0 22px; }
 .qp-spark { display: block; }
 .qp-mix { display: flex; height: 10px; border-radius: 99px; overflow: hidden; gap: 2px; margin: 2px 0 4px; }
 .qp-mix i { display: block; }
+/* Customer Mix as a one-row mini (2026-11-09): the bar sits on the number's
+   line, after the total, so the label and the line under it keep full width. */
+.qp-mix.qp-mix-in { display: inline-flex; width: 80px; height: 9px; margin: 0 0 0 10px; vertical-align: middle; }
 .qp-mix-l { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; font-size: 11.5px; font-weight: 700; color: #3c4654; }
 .qp-mix-l span { display: flex; align-items: center; gap: 6px; }
 .qp-mix-l b { margin-left: auto; font-weight: 800; }
@@ -27147,6 +27150,11 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     border: 1px solid #e6ebf1; background: #fff; border-radius: 14px; font-size: 13px; font-weight: 600; color: #1d2530; cursor: pointer; text-align: left; }
 .qpt-tile:hover, .qpt-tile:focus-visible, .qpt-tile.pv { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); outline: 0; }
 .qpt-tile.added { cursor: default; }
+/* Rail full (eight minis, QPT_MINI_MAX, 2026-11-09): tiles not on it go quiet
+   and say why; the rail's + Add turns into a plain note. */
+.qpt-tile.full { cursor: not-allowed; opacity: .55; }
+.qpt-pill.qpt-pill-full { background: #fdf3e1; color: #a5660f; }
+.qpt-add.full, .qpt-add:disabled { border-style: solid; border-color: #e3e8ee; color: #8a94a3; background: none; cursor: default; font-weight: 650; }
 .qpt-pill { position: absolute; top: 8px; right: 8px; font-size: 10px; font-weight: 700; border-radius: 99px; padding: 2px 8px; background: #f1f4f7; color: #5b6675; }
 .qpt-pill-rm { border: 0; font-family: inherit; line-height: inherit; cursor: pointer; background: #fdeeee; color: #c43d3d; }
 .qpt-pill-rm:hover, .qpt-pill-rm:focus-visible { background: #c43d3d; color: #fff; outline: 0; }
@@ -27452,11 +27460,32 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
    one to-do list, soonest first, a tag a tool. */
 .qpt-wgrp { font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; margin: 14px 0 2px; }
 .qpt-wgrp:first-child { margin-top: 0; }
-.qpt-wl { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 4px; border-bottom: 1px solid #f2f5f8; font-size: 13.5px; color: #1d2530; border-radius: 6px; cursor: pointer; }
+/* Five columns, the same widths on every row (Ethan, 2026-11-09: "evenly
+   spaced and formatted columns"): Tool · Store · Item · Detail · When. The When
+   pill fills its column so every pill is one width (pills-same-size). .nos (no
+   line has a store — a store's own view) drops the Store column. */
+.qpt-wl { display: grid; grid-template-columns: 84px 112px minmax(0, 1.25fr) minmax(0, 1fr) 140px; gap: 14px; align-items: center; padding: 9px 4px; border-bottom: 1px solid #f2f5f8; font-size: 13.5px; color: #1d2530; border-radius: 6px; cursor: pointer; }
+.qpt-wlist.nos .qpt-wl { grid-template-columns: 84px minmax(0, 1.25fr) minmax(0, 1fr) 140px; }
 .qpt-wl:hover { background: #f7f9fb; }
 .qpt-wl:last-child { border-bottom: 0; }
-.qpt-wl-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qpt-wl-t small { color: #5b6675; font-size: 12px; }
+.qpt-wl-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.qpt-wl-d { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5b6675; font-size: 12.5px; }
+.qpt-wl-s { min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12.5px; font-weight: 800; color: #1d2530; }
+.qpt-wl-s > span { display: inline-flex; align-items: center; white-space: nowrap; }
+.qpt-wl-s .qp-dot { margin-right: 5px; }
+.qpt-wl .qpt-when { display: block; text-align: center; overflow: hidden; text-overflow: ellipsis; }
+.qpt-wl .qpt-src { display: block; }
+/* Phone: Tool and When stay put; Store, Item and Detail stack in the middle. */
+@media (max-width: 640px) {
+  .qpt-wl, .qpt-wlist.nos .qpt-wl { grid-template-columns: 64px minmax(0, 1fr) 104px; grid-template-areas: "src t w" "src s w" "src d w"; gap: 2px 10px; }
+  .qpt-wl > .qpt-src { grid-area: src; align-self: start; }
+  .qpt-wl > .qpt-wl-s { grid-area: s; }
+  .qpt-wl > .qpt-wl-t { grid-area: t; }
+  .qpt-wl > .qpt-wl-d { grid-area: d; }
+  .qpt-wl > :is(.qpt-when, .qpt-when-none) { grid-area: w; }
+  .qpt-wl-s:empty, .qpt-wl-d:empty { display: none; }
+  .qpt-wpills { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-left: 0; width: 100%; }
+}
 .qpt-src { display: inline-block; text-align: center; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: 6px; padding: 3px 6px; }
 .qpt-src.b2b { background: #eaf2fd; color: #2563b8; }
 .qpt-src.var { background: #fdeeee; color: #c43d3d; }

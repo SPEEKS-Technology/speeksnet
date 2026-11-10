@@ -23,16 +23,64 @@ t('a shelf is a third of a row, and its key is its contents', function () {
     return true;
 });
 
-t('a shelf holds three rows; a double mini takes two', function () {
+// ONE SIZE since 2026-11-09 (Ethan: "keep all mini widgets the 1 size"): no
+// mini is a double any more, and a saved "id~2" counts as one row.
+t('a shelf holds three rows; every mini is one row, a saved ~2 included', function () {
     var real = _qpMiniOk;
     try {
         _qpMiniOk = function () { return true; };
         if (_qpShelfUsed(['mcash', 'mdue', 'mnews']) !== 3) return 'three singles';
-        if (_qpShelfUsed(['mmix', 'mdue']) !== 3) return 'double + single';
-        if (_qpShelfUsed(['mmix']) !== 2) return 'one double';
-        if (!QP_MINIS.mmix.double || !QP_MINIS.mcal.double) return 'Customer Mix and Coming Up should be doubles';
+        if (_qpShelfUsed(['mmix', 'mdue']) !== 2) return 'Customer Mix should be one row';
+        if (_qpShelfUsed(['mcash~2']) !== 1) return 'a saved two-row mini should count as one';
+        var dbl = Object.keys(QP_MINIS).filter(function (id) { return QP_MINIS[id].double; });
+        if (dbl.length) return 'still two-row only: ' + dbl.join(', ');
         return true;
     } finally { _qpMiniOk = real; }
+});
+
+t('Customer Mix and Coming Up draw as one-row minis', function () {
+    var mix = QP_MINIS.mmix.draw({ today: '2026-11-09', np: [], facts: [
+        { store: 'OVL', date: '2026-11-07', total_customers: 10, new_customers: 4, return_customers: 3, recycle_customers: 1, no_deal_customers: 2 }] });
+    if (!mix || mix.html || mix.k === undefined || mix.v === undefined) return 'Customer Mix is not one-row: ' + JSON.stringify(mix);
+    var real = [window._scalOccurrences, window._scalTodayISO];
+    try {
+        window._scalTodayISO = function () { return '2026-11-09'; };
+        window._scalOccurrences = function () { return [
+            { day: '2026-11-12', first: true, ev: { title: 'Holiday Hours Start' } },
+            { day: '2026-11-20', first: true, ev: { title: 'Inventory Count' } }]; };
+        var cal = QP_MINIS.mcal.draw();
+        if (!cal || cal.html) return 'Coming Up is not one-row';
+        if (cal.k !== 'Coming Up · 1 More') return 'k ' + cal.k;
+        if (cal.s !== 'Holiday Hours Start') return 's ' + cal.s;
+        window._scalOccurrences = function () { return []; };
+        if (QP_MINIS.mcal.draw().v !== '—') return 'empty calendar';
+        return true;
+    } finally { window._scalOccurrences = real[0]; window._scalTodayISO = real[1]; }
+});
+
+// EIGHT AT MOST on the rail (Ethan, 2026-11-09).
+t('the rail takes eight minis at most; the ninth add does nothing', function () {
+    var keep = [_qptState, window._qpMiniOk, window._qptSave, window._qptAfterMini];
+    try {
+        window._qpMiniOk = function () { return true; };
+        window._qptSave = function () {};
+        window._qptAfterMini = function () {};
+        var ids = Object.keys(QP_MINIS);
+        if (ids.length < 9) return 'need nine minis to test, have ' + ids.length;
+        _qptState = { order: [], hidden: [], minis: ids.slice(0, 7) };
+        qptMiniAdd(ids[7]);
+        if (_qptState.minis.length !== 8) return 'the eighth was refused: ' + _qptState.minis.length;
+        if (!_qptRailFull()) return 'eight should read as full';
+        qptMiniAdd(ids[8]);
+        if (_qptState.minis.length !== 8) return 'a ninth got on: ' + _qptState.minis.join(',');
+        _qptState = { order: [], hidden: [], minis: ids.slice(0, 10) };
+        if (_qptRailToks().length !== 8) return 'an old ten-mini layout should show eight, shows ' + _qptRailToks().length;
+        // Removing one from it frees a place: the two past eighth go, not slide up.
+        qptMiniRemove(ids[0]);
+        if (_qptState.minis.length !== 7) return 'after a remove the old layout should hold seven, holds ' + _qptState.minis.join(',');
+        if (_qptRailFull()) return 'a place should be free after a remove';
+        return true;
+    } finally { _qptState = keep[0]; window._qpMiniOk = keep[1]; window._qptSave = keep[2]; window._qptAfterMini = keep[3]; }
 });
 
 t('every widget is in a drawer category, and every mini can draw', function () {
