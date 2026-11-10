@@ -54443,16 +54443,53 @@ const _qpMI = {
 };
 const _qpStoreSide = () => !!_qpMyStore() && !_qpIsDist();
 const QP_MINIS = {
-    mreviews: { label: 'Google Reviews', sub: 'This month, and how it is tracking', icon: _qpMI.star, tone: 'a', src: 'snap', avail: _qpStoreSide,
+    // ONE REVIEWS MINI (Ethan, 2026-11-10: "just have one review one and just
+    // have it show total 5-star reviews ... just show what they are tracking for.
+    // We shouldn't have things cutoff"). Google Reviews is retired into Five-Star
+    // Reviews: a saved mreviews reads as mstars (_QPT_MINI_ALIAS). Short words and
+    // no sparkline, so nothing on the rail ends in "…".
+    // RETIRED 2026-11-10 — restore by putting back avail: _qpStoreSide.
+    mreviews: { label: 'Google Reviews', sub: 'This month, and how it is tracking', icon: _qpMI.star, tone: 'a', src: 'snap', avail: () => false,
         draw: d => { const r = _qpReviewsOf(d, _qpMyStore()); return { k: 'Google Reviews · This Month', v: r.mtd + (r.goal ? '<small>of ' + r.goal + '</small>' : ''), s: 'Tracking to ' + r.track + ' · ' + r.stars + ' five-star', right: _qpSpark(r.days, '#d68a12') }; } },
-    mstars: { label: 'Five-Star Reviews', sub: 'Five-star reviews this month', icon: _qpMI.star, tone: 'a', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
+    // A store: its five-star reviews this month, and where the month lands at
+    // this rate (so far ÷ days gone × days in the month, as Google Reviews did).
+    // The district: every store's, and which store has the most.
+    mstars: { label: 'Five-Star Reviews', sub: 'Five-star reviews this month, and where the month is tracking', icon: _qpMI.star, tone: 'a', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
         draw: d => {
-            if (_qpIsDist()) { const r = STORE_CODES.map(s => ({ s, n: _qpReviewsOf(d, s).stars })).sort((a, b) => b.n - a.n); return { k: 'Five-Star · This Month', v: String(_qpSum(r, 'n')), s: 'Most at ' + r[0].s + ' (' + r[0].n + ')' }; }
-            const me = _qpReviewsOf(d, _qpMyStore()).stars; return { k: 'Five-Star Reviews', v: String(me), s: 'This month' };
+            if (_qpIsDist()) { const r = STORE_CODES.map(s => ({ s, n: _qpReviewsOf(d, s).stars })).sort((a, b) => b.n - a.n); return { k: 'Five-Star Reviews', v: String(_qpSum(r, 'n')), s: 'Most at ' + r[0].s + ' (' + r[0].n + ')' }; }
+            const r = _qpReviewsOf(d, _qpMyStore()), dim = new Date(Date.UTC(+d.today.slice(0, 4), +d.today.slice(5, 7), 0)).getUTCDate();
+            const gone = dim - (r.left || 0), track = gone ? Math.round(r.stars / gone * dim) : r.stars;
+            return { k: 'Five-Star Reviews', v: String(r.stars), s: 'Tracking to ' + track };
         } },
-    mpace: { label: 'Goal Pace', sub: 'Net profit a day still needed', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+    // RETIRED 2026-11-10 into % to Goal (Ethan: "combine % to Goal and goal pace
+    // into one widget"); a saved mpace reads as mgoal (_QPT_MINI_ALIAS).
+    // Restore by putting back avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()).
+    mpace: { label: 'Goal Pace', sub: 'Net profit a day still needed', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => false,
         draw: d => { const p = _qpPaceOf(d, _qpMyStore()); return p.hit ? { k: 'Goal Pace', v: '<span class="good">Goal Hit</span>', s: _qpHLK(p.soFar) + ' of ' + _qpHLK(p.goal) }
             : { k: 'Needed a Day', v: _qpHLK(p.need), s: 'To hit ' + _qpHLK(p.goal) + ' · ' + p.left + ' days left' }; } },
+    // % TO GOAL (Ethan, 2026-11-10: "add a % to goal mini widget"). The big
+    // number is the Live board's "% to Goal through yesterday": net profit so far
+    // against the goal pro-rated to the days gone (calendar days, _qpPaceOf) — so
+    // 100% means on pace, the same number the Live board shows beside it. Green
+    // at 100%+, amber within 10%, else red. The DM's is the district, every store summed.
+    // Goal Pace folded in the same day (Ethan: "combine % to Goal and goal pace
+    // into one widget? Just % to goal and how much per day needed and how many
+    // days left"): the line under the % is what a day still needs and the days
+    // left, or Goal Hit. Nothing else (he'd asked for "only the %" before that).
+    mgoal: { label: '% to Goal', sub: 'Net profit against the goal, what a day still needs, and days left', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => _qpIsDist() || (!!_qpMyStore() && (_qpIsMgr() || _qpIsAsm())),
+        draw: d => {
+            const ps = (_qpIsDist() ? STORE_CODES : [_qpMyStore()]).map(s => _qpPaceOf(d, s));
+            const soFar = _qpSum(ps, 'soFar'), goal = _qpSum(ps, 'goal');
+            if (!goal) return { k: '% to Goal', v: '—', s: 'No goal set this month' };
+            const proj = ps.reduce((a, p) => a + (p.thru ? p.soFar / p.thru * p.dim : 0), 0);
+            const pace = Math.round(proj / goal * 100);
+            const tone = pace >= 100 ? 'good' : pace >= 90 ? 'warn' : 'bad';
+            // Days left from the latest day any store has reported — a store with
+            // no rows yet would otherwise say the whole month is left.
+            const need = _qpSum(ps, 'need'), left = Math.max(0, ps[0].dim - Math.max(0, ...ps.map(p => p.thru || 0)));
+            const s = soFar >= goal ? 'Goal hit' : need && left ? _qpHLK(need) + ' a day · ' + left + (left === 1 ? ' day left' : ' days left') : '';
+            return { k: '% to Goal' + (_qpIsDist() ? ' · District' : ''), v: '<span class="' + tone + '">' + pace + '%</span>', s };
+        } },
     mcash: { label: 'Cash on Hand', sub: 'Drawer and safe from the latest day', icon: _qpMI.cash, tone: 'g', src: 'snap', avail: () => _qpIsMgr() || _qpIsDist(),
         draw: d => {
             const c = (d.cash || []).slice().sort((a, b) => a.day.localeCompare(b.day));
@@ -54462,69 +54499,137 @@ const QP_MINIS = {
                 return { k: 'Cash in Stores · ' + (lastDay ? _qpDayLabel(lastDay).replace(/,.*$/, '') : ''), v: _qpHLK(_qpSum(on, 'total')), s: lo ? 'Lowest ' + lo.store + ' ' + _qpHLK(lo.total) : '' };
             }
             const mine = c.filter(x => x.store === _qpMyStore()), l = mine[mine.length - 1];
-            return l ? { k: 'Cash on Hand · ' + _qpDayLabel(l.day).replace(/,.*$/, ''), v: _lvMoney(l.total, false), s: 'Drawer ' + _qpHLK(l.drawer) + ' · Safe ' + _qpHLK(l.safe), right: _qpSpark(mine.map(x => Number(x.total)), '#1f9d57') }
+            // No chart (Ethan, 2026-11-10: "lose the chart and try and show drawer
+            // and safe as well as the main total") — the chart is what squeezed the
+            // label and the drawer/safe line to "…".
+            return l ? { k: 'Cash on Hand · ' + _qpDayLabel(l.day).replace(/,.*$/, ''), v: _lvMoney(l.total, false), s: 'Drawer ' + _qpHLK(l.drawer) + ' · Safe ' + _qpHLK(l.safe) }
                 : { k: 'Cash on Hand', v: '—', s: 'No cash count yet' };
         } },
     // IN STOCK, not the processing queue (Ethan, 2026-11-08) — the Day End
     // Available card, its value once stored (available_value). Key kept: saved rails hold it.
     mqueue: { label: 'In Stock', sub: 'What is in stock, and what it is worth', icon: _qpMI.box, tone: 'b', src: 'snap', avail: _qpStoreSide,
-        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; return y ? { k: 'In Stock', v: _qpN(y.available_count), s: (y.available_value != null ? _qpHLK(y.available_value) + ' value · ' : '') + _qpN(y.live_count) + ' live', right: _qpSpark(f.slice(-7).map(r => Number(r.available_count)), '#2563b8') } : { k: 'In Stock', v: '—', s: 'No Day End Yet' }; } },
-    mdue: { label: 'Next Due', sub: 'The nearest deadline from Your Feed', icon: _qpMI.clock, tone: 'r', src: 'page', avail: () => true,
+        // Just the total value and the items in stock (Ethan, 2026-11-10: "doesn't
+        // need the chart and should just show total value and items in stock") —
+        // the value big, the items under it; no chart, no live count.
+        draw: d => { const y = _qpLast(d, _qpMyStore()), n = Number(y && y.available_count) || 0;
+            if (!y) return { k: 'In Stock', v: '—', s: 'No Day End Yet' };
+            const items = _qpN(n) + (n === 1 ? ' item in stock' : ' items in stock');
+            return y.available_value != null ? { k: 'In Stock', v: _qpHLK(y.available_value), s: items } : { k: 'In Stock', v: _qpN(n), s: 'items in stock' }; } },
+    mdue: { label: 'Due', sub: 'How many deadlines from Your Feed are due, and how many are overdue', icon: _qpMI.clock, tone: 'r', src: 'page', avail: () => true,
         draw: () => {
             const order = ['over', 'today', 'week', 'later', 'none'];
             const due = (typeof _samGatherReminders === 'function' ? _samGatherReminders() : []).filter(x => x.kind === 'due')
                 .sort((a, b) => order.indexOf(a.dueGroup || 'none') - order.indexOf(b.dueGroup || 'none') || String(a.dueOn || '9').localeCompare(String(b.dueOn || '9')));
+            // HOW MANY are due, big (Ethan, 2026-11-10: "show how many things are
+            // due instead"), and under it just how many are overdue and due today
+            // — no "Next:" line (Ethan, same day: "what does Next: mean? Shouldn't
+            // we just show due and overdue?"). Red when any is overdue, amber when
+            // one is due today. A click still opens the nearest.
             const n = due[0];
-            if (!n) return { k: 'Next Due', v: '<span class="good">All Clear</span>', s: 'Nothing due' };
-            const v = n.dueGroup === 'over' ? '<span class="bad">Overdue</span>' : n.dueGroup === 'today' ? '<span class="warn">Today</span>' : escapeHtml(String(n.due || '').replace(/^Due /, '') || 'Due');
-            return { k: 'Next Due' + (due.length > 1 ? ' · ' + due.length + ' Deadlines' : ''), v, s: n.title, go: n.action || '' };
+            if (!n) return { k: 'Due', v: '<span class="good">All Clear</span>', s: 'Nothing due' };
+            const over = due.filter(x => x.dueGroup === 'over').length, today = due.filter(x => x.dueGroup === 'today').length;
+            const tone = over ? 'bad' : today ? 'warn' : '';
+            const split = [over + ' overdue', today ? today + ' due today' : ''].filter(Boolean).join(' · ');
+            return { k: 'Due', v: (tone ? '<span class="' + tone + '">' + due.length + '</span>' : String(due.length)) + '<small>due</small>',
+                s: split, go: n.action || '' };
         } },
     // ONE ROW like every other mini (Ethan, 2026-11-09: "redesign them to
-    // fit"). Was two rows (a legend under the bar); now the four-colour bar sits
-    // where the others keep their sparkline, a hover names each part, and the
-    // line under the total says what matters most: who came back, and conversion.
+    // fit"): the total, and under it what matters most — who came back, and
+    // conversion. The four-colour bar went 2026-11-10 (Ethan: "we don't need the
+    // bar anymore").
     mmix: { label: 'Customer Mix', sub: 'New, returning, recycle and no-deal customers', icon: _qpMI.users, tone: 'b', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
         draw: d => {
             const rows = _qpIsDist() ? [].concat(...STORE_CODES.map(s => _qpThisMonth(d, s))) : _qpThisMonth(d, _qpMyStore());
             const v = { n: _qpSum(rows, 'new_customers'), r: _qpSum(rows, 'return_customers'), c: _qpSum(rows, 'recycle_customers'), x: _qpSum(rows, 'no_deal_customers') };
             const tot = _qpSum(rows, 'total_customers') || (v.n + v.r + v.c + v.x);
             const conv = _qpSum(rows, 'cust_conv_den') ? Math.round(_qpSum(rows, 'cust_conv_num') / _qpSum(rows, 'cust_conv_den') * 100) : null;
-            const parts = [['New', v.n, '#2563b8'], ['Returning', v.r, '#1f9d57'], ['Recycle', v.c, '#f0a92b'], ['No Deal', v.x, '#e05252']];
-            // The bar rides on the number's line, not in the right-hand slot: on
-            // the rail the slot squeezed the label and the sub-line to "…".
-            const bar = (v.n + v.r + v.c + v.x) ? '<span class="qp-mix qp-mix-in" title="' + escapeHtml(parts.map(p => p[0] + ' ' + _qpN(p[1])).join(' · ')) + '">'
-                + parts.map(p => p[1] ? '<i style="flex:' + p[1] + ';background:' + p[2] + '"></i>' : '').join('') + '</span>' : '';
-            return { k: 'Customers · This Month', v: _qpN(tot) + bar,
+            return { k: 'Customers · This Month', v: _qpN(tot),
                 s: (tot ? Math.round(v.r / tot * 100) + '% came back' : 'No customers yet') + (conv != null ? ' · ' + conv + '% conversion' : '') };
         } },
     mrecycle: { label: 'Recycle Requests', sub: 'Requests waiting on a verdict', icon: _qpMI.recycle, tone: 'g', src: 'recycle', avail: () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('tool-recycle-inventory') && (_qpStoreSide() || _qpIsDist()),
         draw: d => { const open = (d.rows || []).filter(r => !r.reviewed_at && !r.deleted_at); return { k: 'Recycle Requests', v: String(open.length), s: open.length ? (_qpIsDist() ? 'Waiting on your verdict' : 'Waiting on the DM') : 'Nothing waiting', go: 'openRecycleFocused()' }; } },
-    mnews: { label: 'What\'s New', sub: 'The latest patch notes', icon: _qpMI.spark, tone: 'b', src: 'page', avail: () => true,
+    // RETIRED 2026-11-10 with SPEEKSNET Use and Live Listings (Ethan: "get rid
+    // of the What's New, SPEEKSNET Use, and Live listings widget"): avail() is
+    // false, so no drawer, rail or shelf offers or draws it, and a saved one is
+    // skipped. To bring one back, restore the avail in its /* was */ note.
+    mnews: { label: 'What\'s New', sub: 'The latest patch notes', icon: _qpMI.spark, tone: 'b', src: 'page', avail: () => false /* was () => true */,
         draw: () => { const k = (typeof _latestPatchKey === 'string' && _latestPatchKey) ? _latestPatchKey.split('|') : null;
             return { k: 'What\'s New', v: k ? 'v' + String(k[0]).replace(/^\s*v/i, '') : '—', s: k ? 'Released ' + escapeHtml(k[1] || '') : 'No patch notes yet', go: 'openHubToPatch()' }; } },
-    mlive: { label: 'Live Listings', sub: 'Listings live on the online store', icon: _qpMI.tag, tone: 'g', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
+    // RETIRED 2026-11-10 — see mnews.
+    mlive: { label: 'Live Listings', sub: 'Listings live on the online store', icon: _qpMI.tag, tone: 'g', src: 'snap', avail: () => false /* was () => _qpStoreSide() || _qpIsDist() */,
         draw: d => {
             if (_qpIsDist()) { const t = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean); return { k: 'Live Listings · District', v: _qpN(_qpSum(t, 'live_count')), s: _qpN(_qpSum(t, 'listed_devices')) + ' listed on the latest day' }; }
             const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
             return y ? { k: 'Live Listings', v: _qpN(y.live_count), s: _qpN(y.listed_devices) + ' listed on the latest day', right: _qpSpark(f.slice(-7).map(r => Number(r.live_count)), '#1f9d57') } : { k: 'Live Listings', v: '—', s: 'No Day End Yet' };
         } },
-    musage: { label: 'SPEEKSNET Use', sub: 'Who signed in this week, and who did not', icon: _qpMI.pulse, tone: 'b', src: 'snap', avail: () => _qpIsDist(),
+    // RETIRED 2026-11-10 — see mnews.
+    musage: { label: 'SPEEKSNET Use', sub: 'Who signed in this week, and who did not', icon: _qpMI.pulse, tone: 'b', src: 'snap', avail: () => false /* was () => _qpIsDist() */,
         draw: d => { const u = d.usage; if (!u) return { k: 'SPEEKSNET Use', v: '—', s: '' };
             return { k: 'SPEEKSNET Use · 7 Days', v: u.week + '<small>of ' + u.roster + ' signed in</small>', s: u.quiet.length ? 'Not yet: ' + u.quiet.slice(0, 2).map(q => _qpShort(q.name)).join(', ') + (u.quiet.length > 2 ? ' +' + (u.quiet.length - 2) : '') : 'Everyone signed in',
                      right: _qpSpark(u.days.map(x => x.people), '#2563b8') }; } },
     // In stock by its VALUE, not its cost (Ethan, 2026-11-08); until a store's
     // value is stored (available_value) its count stands in, said as devices.
+    // The number of items too (Ethan, 2026-11-10: "add number of items for in
+    // stock"), beside the value.
     mavail: { label: 'In Stock', sub: 'What every store has in stock, and what it is worth', icon: _qpMI.layers, tone: 't', src: 'snap', avail: () => _qpIsDist(),
-        draw: d => { const t = _qpStockList(d), top = t[0], val = t.every(x => x.v != null);
-            return { k: 'In Stock · District', v: val ? _qpHLK(_qpSum(t, 'v')) : _qpN(_qpSum(t, 'c')), s: top ? top.k + ' holds ' + (val ? _qpHLK(top.v) : _qpN(top.c) + ' devices') : '' }; } },
-    mbuy: { label: 'Buying', sub: 'What the store bought on the latest day', icon: _qpMI.cart, tone: 'b', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
-        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; if (!y) return { k: 'Buying', v: '—', s: 'No Day End Yet' };
-            const m = Number(y.est_margin_pct); return { k: 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _lvMoney(y.est_value, false), s: (m ? (m * (m <= 1 ? 100 : 1)).toFixed(1) + '% margin · ' : '') + _lvMoney(y.total_spent, false) + ' paid', right: _qpSpark(f.slice(-7).map(r => Number(r.est_value)), '#2563b8') }; } },
+        draw: d => { const t = _qpStockList(d), val = t.every(x => x.v != null), n = _qpSum(t, 'c');
+            // Total value and items in stock, as the store's reads (2026-11-10).
+            return val ? { k: 'In Stock · District', v: _qpHLK(_qpSum(t, 'v')), s: _qpN(n) + (n === 1 ? ' item in stock' : ' items in stock') }
+                : { k: 'In Stock · District', v: _qpN(n), s: 'items in stock' }; } },
+    // BUYING (Ethan, 2026-11-10: "store based for managers and ASM's, for
+    // employees it can be personal based stats. ... get rid of the chart line and
+    // just have value, margin and conversion rate"). A manager or ASM: the store's
+    // latest Day End — value bought, its margin, customer conversion. An
+    // employee: their own row of last week's Weekly KPIs (the 'wkpi' read) —
+    // value, margin (1 − cost ÷ value) and conversion (converted ÷ transactions).
+    // Corp (DM / CEO / MOCD) gets the district (Ethan, 2026-11-10: "a district
+    // wide buying widget like the manager one"): every store's Day End on the
+    // latest day any store reported — value bought summed, margin weighted by
+    // value, conversion from the summed customer counts.
+    mbuy: { label: 'Buying', sub: 'Value bought, margin and conversion — the district\'s, the store\'s, or yours for an employee', icon: _qpMI.cart, tone: 'b', src: 'snap', avail: () => _qpIsDist() || (!!_qpMyStore() && (_qpIsMgr() || _qpIsAsm() || _qpIsEmp())),
+        draw: d => {
+            const pct = (n, dd) => dd > 0 ? Math.round(n / dd * 100) + '%' : null;
+            const frac = m => { m = Number(m) || 0; return m > 1 ? m / 100 : m; };
+            if (_qpIsDist()) {
+                const last = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean);
+                const day = last.map(y => y.date).sort().pop();
+                const on = last.filter(y => y.date === day);
+                if (!on.length) return { k: 'Buying · District', v: '—', s: 'No Day End Yet' };
+                const val = _qpSum(on, 'est_value');
+                const m = val ? on.reduce((a, y) => a + (Number(y.est_value) || 0) * frac(y.est_margin_pct), 0) / val : 0;
+                const conv = pct(_qpSum(on, 'cust_conv_num'), _qpSum(on, 'cust_conv_den'));
+                return { k: 'Bought · District · ' + _qpDayLabel(day).replace(/,.*$/, ''), v: _qpHLK(val),
+                    s: [m ? Math.round(m * 100) + '% margin' : '', conv ? conv + ' conversion' : ''].filter(Boolean).join(' · ') };
+            }
+            if (_qpIsEmp()) {
+                const w = _qpMiniData('wkpi');
+                if (!w) return { k: 'Your Buying', v: '—', s: 'Syncing…' };
+                const me = String(sessionStorage.getItem('speeksUserName') || '').toLowerCase().trim();
+                const r = (w.emps || []).find(e => String(e.employee_name || '').toLowerCase().trim() === me);
+                const bv = Number(r && r.buying_value) || 0, bc = Number(r && r.buying_cost) || 0;
+                if (!bv) return { k: 'Your Buying · Last Week', v: '—', s: 'No buys on last week\'s KPIs' };
+                const conv = pct(Number(r.transaction_converted) || 0, Number(r.transaction_count) || 0);
+                return { k: 'Your Buying · Last Week', v: _lvMoney(bv, false), s: Math.round((1 - bc / bv) * 100) + '% margin' + (conv ? ' · ' + conv + ' conversion' : '') };
+            }
+            const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; if (!y) return { k: 'Buying', v: '—', s: 'No Day End Yet' };
+            const m = Number(y.est_margin_pct), conv = pct(Number(y.cust_conv_num) || 0, Number(y.cust_conv_den) || 0);
+            return { k: 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _lvMoney(y.est_value, false),
+                s: [m ? Math.round(m * (m <= 1 ? 100 : 1)) + '% margin' : '', conv ? conv + ' conversion' : ''].filter(Boolean).join(' · ') };
+        } },
     mlost: { label: 'Lost Deals', sub: 'What walked out on the latest day', icon: _qpMI.x, tone: 'r', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
         draw: d => { const y = _qpLast(d, _qpMyStore()); return y ? { k: 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span>', s: (Number(y.failed_deals) || 0) + ' failed · ' + (Number(y.devices_lost) || 0) + ' devices lost' } : { k: 'Lost Deals', v: '—', s: 'No Day End Yet' }; } },
-    mtop: { label: 'Top Producer', sub: 'Who processed the most on the latest day', icon: _qpMI.trophy, tone: 'a', src: 'snap', avail: () => _qpStoreSide() && !_qpIsEmp(),
-        draw: d => { const t = _qpTeamOf(d, _qpMyStore()); const top = t && (t.team.find(m => m.top) || t.team[0]);
-            return top ? { k: 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), v: escapeHtml(_qpShort(top.name)), s: top.n + ' devices · ' + _qpHLK(top.value) + (t.topRun > 1 ? ' · ' + t.topRun + ' days running' : '') } : { k: 'Top Producer', v: '—', s: 'No Day End Yet' }; } },
+    // TOP LISTER, not Top Producer (Ethan, 2026-11-10): who listed the most last
+    // week, from the Weekly KPIs (listed_count) — the number Stats & Awards' Lister
+    // board ranks by, with its one exclusion (the owner's own listings). Key kept
+    // 'mtop' so saved rails keep it.
+    mtop: { label: 'Top Lister', sub: 'Who listed the most last week', icon: _qpMI.trophy, tone: 'a', src: 'wkpi', avail: () => _qpStoreSide() && !_qpIsEmp(),
+        draw: w => {
+            const top = (w.emps || []).filter(e => (Number(e.listed_count) || 0) > 0 && String(e.employee_name || '').toLowerCase().trim() !== 'ethan kushnir')
+                .sort((a, b) => (Number(b.listed_count) || 0) - (Number(a.listed_count) || 0))[0];
+            if (!top) return { k: 'Top Lister · Last Week', v: '—', s: 'No listings on last week\'s KPIs' };
+            const n = Number(top.listed_count) || 0, val = Number(top.listed_retail_price) || 0;
+            return { k: 'Top Lister · Last Week', v: escapeHtml(_qpShort(top.employee_name)), s: n + ' listed' + (val ? ' · ' + _qpHLK(val) + ' retail' : '') };
+        } },
     // ONE ROW (Ethan, 2026-11-09): the NEXT event big — its day, then what it
     // is — and how many more follow in the next 30 days. Was two rows listing
     // three; the calendar itself is a click away.
@@ -54721,7 +54826,16 @@ function _qpMiniOk(id) { const m = QP_MINIS[_qpTokId(id)]; try { return !!m && !
 function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
 
 // The data a mini draws from, loading it once if it is missing or stale.
-const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: false, data: null } };
+const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: false, data: null }, wkpi: { at: 0, busy: false, data: null } };
+// 'wkpi' (2026-11-10): the store's Weekly KPIs, a row a person for the last
+// week entered — what Stats & Awards ranks its Lister and Buyer boards from.
+// Top Lister and an employee's own Buying read it. { end, emps } or null.
+function _qpWkpiSample() {
+    const me = sessionStorage.getItem('speeksUserName') || 'Test Employee';
+    const end = (() => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 7) % 7 || 7)); return d.toISOString().slice(0, 10); })();
+    const p = (n, l, r, bv, bc, tc, tco) => ({ employee_name: n, listed_count: l, listed_retail_price: r, buying_value: bv, buying_cost: bc, transaction_count: tc, transaction_converted: tco });
+    return { end, emps: [p('Zach Marchesano', 45, 13200, 1703, 670, 6, 5), p('Nathan Zimmer', 38, 9100, 2410, 1150, 9, 8), p(me, 22, 5400, 1980, 860, 8, 7), p('Colin Davis', 17, 3900, 0, 0, 0, 0)] };
+}
 function _qpMiniData(src) {
     if (src === 'page') return {};
     if (src === 'snap') {
@@ -54750,6 +54864,18 @@ function _qpMiniData(src) {
             const scope = _qpIsDist() ? '' : _claimStores().join(',');
             fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(scope)}&v=${Date.now()}`).then(r => r.json())
                 .then(j => { if (j && j.success) st.data = { rows: j.data || [] }; })
+                .catch(() => {}).finally(() => { st.busy = false; st.at = Date.now(); _qpRenderWidgets(); });
+        }
+        return st.data;
+    }
+    if (src === 'wkpi') {
+        const st = _qpMiniSrcState.wkpi, store = _qpMyStore();
+        if (window._speeksTestSession) return _qpWkpiSample();
+        if (!store) return null;
+        if (!st.busy && Date.now() - st.at > 600000) {
+            st.busy = true;
+            fetch(`${WEEKLY_KPI_URL}?store=${encodeURIComponent(store)}&v=${Date.now()}`).then(r => r.json())
+                .then(j => { if (j && Array.isArray(j.employees)) st.data = { end: j.period_end_date || '', emps: j.employees }; })
                 .catch(() => {}).finally(() => { st.busy = false; st.at = Date.now(); _qpRenderWidgets(); });
         }
         return st.data;
@@ -55164,7 +55290,13 @@ const QPT_TABS = [
 ];
 const QPT_HIDDEN_DEFAULT = [];
 // The rail a person starts with: the first five of these they can see.
-const QPT_MINI_DEFAULT = ['mdue', 'mpace', 'mreviews', 'mcash', 'mtop', 'mstars', 'musage', 'mavail', 'mlive', 'mnews'];
+// mgoal (% to Goal) added 2026-11-10; musage, mlive, mnews, mpace and mreviews
+// were retired the same day, so they are not in the default any more.
+const QPT_MINI_DEFAULT = ['mdue', 'mgoal', 'mstars', 'mcash', 'mtop', 'mavail', 'mqueue'];
+// A retired mini that was folded into another reads as that one from a saved
+// rail (2026-11-10), so nobody's rail just loses a place: Goal Pace → % to Goal,
+// Google Reviews → Five-Star Reviews. A duplicate it makes is dropped.
+const _QPT_MINI_ALIAS = { mpace: 'mgoal', mreviews: 'mstars' };
 // THE FIRST TAB ON SIGN-IN (Ethan, 2026-11-08: "whatever their first tab is, is
 // what shows up upon sign in"). The open tab is remembered for this sign-in
 // only (sessionStorage), so moving between pages comes back to it, but signing
@@ -55210,7 +55342,8 @@ function _qptRead() {
         known.forEach(k => { if (s.order.indexOf(k) === -1) s.order.push(k); });
     }
     if (seen.hidden) s.hidden = got.hidden.filter(k => known.indexOf(k) !== -1);
-    if (seen.minis) s.minis = got.minis.filter(t => QP_MINIS[_qpTokId(t)]);
+    if (seen.minis) s.minis = got.minis.map(t => _QPT_MINI_ALIAS[_qpTokId(t)] || t)
+        .filter((t, i, a) => QP_MINIS[_qpTokId(t)] && a.findIndex(x => _qpTokId(x) === _qpTokId(t)) === i);
     return s;
 }
 function _qptEncode(s) {
@@ -55316,7 +55449,8 @@ function _qptApply(main) {
             + '<div class="qpt-none" hidden>Every tab is hidden. Open Tabs ▾ to bring one back.</div></div></div></div>'
             + '<aside class="qpt-rail" aria-label="Mini widgets"><div class="qpt-ai" hidden></div><div class="qpt-rhead"><h3>At a Glance</h3>'
             + '<button type="button" class="qpt-redit" onclick="qptRailEdit()">Customize</button></div>'
-            + '<div class="qpt-mlist"></div><button type="button" class="qpt-add" onclick="qptDrawerOpen()">+ Add Mini Widget</button></aside>';
+            + '<div class="qpt-mlist"></div><button type="button" class="qpt-add" onclick="qptDrawerOpen()">+ Add Mini Widget</button>'
+            + '<button type="button" class="qpt-reset-all" hidden onclick="qptResetAsk()">Reset Dashboard</button></aside>';
         main.insertBefore(root, _qpAnchor(main));
         const stash = document.createElement('div');
         stash.className = 'qpt-stash';
@@ -56271,7 +56405,9 @@ function _qptPaint(main) {
             return '<label><input type="checkbox" onchange="qptShow(\'' + k + '\', this.checked)"' + (_qptState.hidden.indexOf(k) === -1 ? ' checked' : '') + '>'
                 + escapeHtml(t.l) + '</label>';
         }).join('')
-        + '<button type="button" onclick="qptResetTabs()">Reset Tabs</button></div>' : '';
+        // Reset moved out of this menu to the rail's Customize (Reset Dashboard,
+        // 2026-11-10): it resets the minis too, so it isn't a tabs-only thing.
+        + '</div>' : '';
     root.querySelectorAll('.qpt-pane').forEach(p => { p.hidden = p.getAttribute('data-tab') !== _qptTab; });
     root.querySelector('.qpt-none').hidden = !!_qptTab;
     // "Combines …" over a tab of several cards, so it is plain what is in it.
@@ -56309,11 +56445,39 @@ function qptMenu() {
     const main = _qpMain();
     if (main) _qptPaint(main);
 }
+// RESET DASHBOARD asks first (Ethan, 2026-11-10: "make the reset tabs button red
+// and have it popup with an HTML warning", then "make the mini widgets also be a
+// part of that reset ... move that reset button to something more central"). It
+// lives at the foot of the rail while Customize is on, and resets the tab order,
+// hidden tabs AND the minis. The same dialog as the layout's Reset to Default
+// (qpReset, .qp-ask) — never confirm(), which is banned here and dead in the
+// Claude pane. Cancel has the focus; Escape and the dim background cancel.
+function qptResetAsk() {
+    if (document.getElementById('qptResetAsk')) return;
+    const ov = document.createElement('div');
+    ov.id = 'qptResetAsk';
+    ov.className = 'qp-ask';
+    ov.innerHTML = '<div class="qp-ask-card" role="alertdialog" aria-modal="true" aria-labelledby="qptResetAskT" aria-describedby="qptResetAskD">'
+        + '<div class="qp-ask-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></div>'
+        + '<div class="qp-ask-t" id="qptResetAskT">Reset Your Dashboard?</div>'
+        + '<div class="qp-ask-d" id="qptResetAskD">Your tabs go back to their starting order and any tab you hid comes back. Your mini widgets go back to the starting set. This can\'t be undone.</div>'
+        + '<div class="qp-ask-btns"><button type="button" class="qp-ask-no" onclick="qptResetClose()">Cancel</button>'
+        + '<button type="button" class="qp-ask-yes" onclick="qptResetClose(); qptResetTabs()">Reset Dashboard</button></div></div>';
+    ov.addEventListener('click', function (e) { e.stopPropagation(); if (e.target === ov) qptResetClose(); });
+    ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); qptResetClose(); } });
+    document.body.appendChild(ov);
+    ov.querySelector('.qp-ask-no').focus();
+}
+function qptResetClose() {
+    const ov = document.getElementById('qptResetAsk');
+    if (ov) ov.remove();
+}
 function qptResetTabs() {
     if (!_qptState) return;
     const d = _qptDefaults();
     _qptState.order = d.order;
     _qptState.hidden = d.hidden;
+    _qptState.minis = null;   // the starting set (_qptDefaultMinis), since 2026-11-10
     _qptTab = null;
     try { sessionStorage.removeItem(QPT_TAB_KEY); } catch (e) { /* private mode */ }
     _qptRebuild();
@@ -56329,15 +56493,19 @@ function _qptRenderRail(main) {
     btn.textContent = _qptEdit ? 'Done' : 'Customize';
     btn.classList.toggle('on', _qptEdit);
     btn.setAttribute('aria-pressed', String(_qptEdit));
+    const reset = rail.querySelector('.qpt-reset-all');
+    if (reset) reset.hidden = !_qptEdit;
     _qpShelfFreeNow = 3;   // the rail has no row limit: 2 Rows is always open
     // At most QPT_MINI_MAX (8) on the rail. A layout saved before the cap with
     // more keeps them saved; the rail shows the first eight.
     const toks = _qptRailToks();
     const full = toks.length >= QPT_MINI_MAX, add = rail.querySelector('.qpt-add');
     if (add) {
-        add.disabled = full;
+        // Full, it still opens the drawer — the other minis preview there, and
+        // the rail's own minis can be removed from it (2026-11-10).
+        add.disabled = false;
         add.classList.toggle('full', full);
-        add.textContent = full ? QPT_MINI_MAX + ' of ' + QPT_MINI_MAX + ' Minis · Remove One to Add' : '+ Add Mini Widget';
+        add.textContent = full ? QPT_MINI_MAX + ' of ' + QPT_MINI_MAX + ' Minis · Customize' : '+ Add Mini Widget';
     }
     const html = toks.length ? toks.map(t => '<div class="qpt-mwrap" data-qpt-mini="' + _qpTokId(t) + '"' + (_qptEdit ? ' draggable="true"' : '') + '>' + _qpMiniHtml(t) + '</div>').join('')
         : '<div class="qpt-empty">No Mini Widgets Yet</div>';
@@ -56464,13 +56632,17 @@ function qptDrawerOpen() {
         if (t && (e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
             const id = t.getAttribute('data-qpt-prev');
-            qptMiniAdd(id);
+            qptMiniAdd(id);   // does nothing on a full rail (_qptRailFull)
             const again = document.querySelector('.qpt-tile[data-qpt-prev="' + id + '"]');
             if (again) again.focus();
         }
     });
     requestAnimationFrame(() => { scrim.classList.add('on'); d.classList.add('on'); });
 }
+// A FULL RAIL (Ethan, 2026-11-10, after trying a Swap option the same day: "get
+// rid of the swap stuff ... add the Add pill back to all non added widgets once
+// the user is at max, but gray it out"). The other tiles still preview on
+// hover; their + Add is greyed and a click adds nothing until one is removed.
 function qptDrawerClose() {
     const d = document.getElementById('qptDrawer'), s = document.getElementById('qptScrim');
     if (d) d.remove();
@@ -56489,7 +56661,7 @@ function _qptTiles() {
         return '<div role="button" tabindex="0" class="qpt-tile' + (has ? ' added' : '') + (shut ? ' full' : '') + (_qptPrevId === id ? ' pv' : '') + '" data-qpt-prev="' + id + '"'
             + (has || shut ? '' : ' onclick="qptMiniAdd(\'' + id + '\')"') + ' aria-label="' + escapeHtml(has ? m.label + ' Is on Your Rail' : shut ? m.label + ' · Your Rail Is Full' : 'Add ' + m.label) + '"' + (shut ? ' aria-disabled="true"' : '') + '>'
             + (has ? '<button type="button" class="qpt-pill qpt-pill-rm" aria-label="Remove ' + escapeHtml(m.label) + ' From Your Rail" onclick="event.stopPropagation(); qptMiniRemove(\'' + id + '\')">Remove</button>'
-                : shut ? '<span class="qpt-pill qpt-pill-full">Rail Full</span>' : '<span class="qpt-pill">+ Add</span>')
+                : '<span class="qpt-pill' + (shut ? ' qpt-pill-off' : '') + '">+ Add</span>')
             + _qpMiniIco(m.icon, m.tone) + '<span class="qpt-tname">' + escapeHtml(m.label) + '</span>'
             + '<span class="qpt-tfoot">' + (m.double ? '<small>Two Rows</small>' : '') + '</span></div>';
     }).join('');
@@ -56508,7 +56680,8 @@ function _qptPreview(id, force) {
     box.innerHTML = '<div class="qpt-pslot">' + _qpMiniHtml(id) + '</div>'
         + '<div><div class="qpt-pk">Preview</div><div class="qpt-pt">' + escapeHtml(m.label) + '</div>'
         + '<div class="qpt-pd">' + escapeHtml(m.sub || '') + (m.double ? ' · Takes Two Rows' : '') + '</div>'
-        + '<div class="qpt-pd qpt-pstate' + (has ? ' on' : '') + '">' + (has ? 'On Your Rail.' : _qptRailFull() ? 'Your Rail Has ' + QPT_MINI_MAX + ' — Remove One to Add This.' : 'Click the Tile to Add It.') + '</div></div>';
+        + '<div class="qpt-pd qpt-pstate' + (has ? ' on' : '') + '">' + (has ? 'On Your Rail.' : !_qptRailFull() ? 'Click the Tile to Add It.'
+            : 'Your Rail Has ' + QPT_MINI_MAX + ' — Remove One to Add This.') + '</div></div>';
     _qpCapLines(box.querySelector('.qpt-pslot'));
 }
 

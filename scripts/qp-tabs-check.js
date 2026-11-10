@@ -30,7 +30,7 @@ t('nothing saved: every tab in order, nothing hidden', function () {
 });
 
 t('the state saves as rows qp-layout accepts, and reads back the same', function () {
-    var st = { order: ['deals', 'live', 'perf', 'claims', 'health', 'sales', 'customers', 'inventory'], hidden: ['customers', 'perf'], minis: ['mpace~2', 'mreviews', 'mtop', 'mcal', 'mdue', 'mcash', 'mnews'] };
+    var st = { order: ['deals', 'live', 'perf', 'claims', 'health', 'sales', 'customers', 'inventory'], hidden: ['customers', 'perf'], minis: ['mbuy~2', 'mlost', 'mtop', 'mcal', 'mdue', 'mcash', 'mnews'] };
     var rows = _qptEncode(st);
     var KEY = /^[a-z0-9:_,.-]{1,80}$/i;
     for (var i = 0; i < rows.length; i++) {
@@ -326,12 +326,12 @@ t('a layout from the server reads back as the person saved it, first tab first',
         { items: ['qpt:order', 'live', 'perf', 'claims', 'sales', 'health'], w: null },
         { items: ['qpt:order', 'customers', 'inventory', 'company'], w: null },
         { items: ['qpt:hidden', 'company'], w: null },
-        { items: ['qpt:minis', 'mpace.2', 'mtop'], w: null },
+        { items: ['qpt:minis', 'mbuy.2', 'mtop'], w: null },
     ];
     var s = _qptRead();
     if (s.order.join(',') !== 'live,perf,claims,sales,health,customers,inventory,deals') return 'order ' + s.order;
     if (s.hidden.length) return 'hidden ' + s.hidden;
-    if ((s.minis || []).join(',') !== 'mpace~2,mtop') return 'minis ' + s.minis;
+    if ((s.minis || []).join(',') !== 'mbuy~2,mtop') return 'minis ' + s.minis;
     _saved = null;
     return true;
 });
