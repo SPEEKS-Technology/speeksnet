@@ -3398,3 +3398,21 @@ t('review: the numbers block is always on the page, hidden until there is a line
 t('review: closing a deal drops a half-built listing split', function () {
     return _srcOf(b2bCloseDeal).indexOf('_b2bSplitMode = false') > -1 || 'split mode carries over to the next deal';
 });
+t('sort by brand: the button is drawn on an empty deal and shown once there are two lines', function () {
+    var keep = _b2bModalItems, box = document.createElement('div');
+    try {
+        _b2bModalItems = [];
+        box.innerHTML = _b2bPricingTools(B2B_FIXTURE_DEAL);
+        document.body.appendChild(box);
+        var btn = document.getElementById('b2bSortBtn');
+        if (!btn) return 'a deal opened with no lines never gets the button';
+        if (btn.style.display !== 'none') return 'shown with nothing to sort';
+        _b2bModalItems = [{ id: 'a', quantity: 1, listings: [] }, { id: 'b', quantity: 1, listings: [] }];
+        _b2bPaintSortBtn();
+        if (btn.style.display === 'none') return 'still hidden with two lines';
+        _b2bModalItems = [_b2bModalItems[0]];
+        _b2bPaintSortBtn();
+        if (btn.style.display !== 'none') return 'still shown after dropping to one line';
+        return _srcOf(_b2bPaintTotals).indexOf('_b2bPaintSortBtn()') > -1 || 'nothing repaints it as lines come and go';
+    } finally { _b2bModalItems = keep; box.remove(); }
+});
