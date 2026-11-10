@@ -153,6 +153,17 @@ t('sent back: chip says so, the DM\'s reason is on the card', function () {
     return /Not in stock — find the lens and restock it/.test(x) || 'reason missing';
 });
 
+// 2026-11-10: a send-back on a missed-window case only undoes the resolution —
+// the server keeps it hushed, and the card reads as the quiet case, not a to-do.
+t('sent back but hushed (missed window): reads as the quiet case, not "Sent back by DM"', function () {
+    var it = inr({ state: 'needs_reply', state_note: 'missed_window', missed_window: true, hush: 'missed_window',
+        review: { status: 'resolved', by_name: 'Pat', note: 'Didn\'t respond via ebay, nothing to be done.' },
+        dm: { pending: false, status: 'denied', by: 'Ethan', note: 'Still open on eBay, let it ride out', at: '2026-11-10T18:00:00Z', resolved_by: 'Pat' } });
+    var x = text(draw(it));
+    if (/Sent back by DM/.test(x)) return 'chip still says sent back: ' + x.slice(0, 160);
+    return /Missed reply window/.test(x) || 'chip: ' + x.slice(0, 160);
+});
+
 t('DM To Confirm list: renders, send back needs a reason, posts against the review key', function () {
     as('District Manager');
     _holdData.ov = { stores: ['BAL'], cases: [inr({ state: 'dm_review' })], mismatches: [], disputes: [], payments: [],

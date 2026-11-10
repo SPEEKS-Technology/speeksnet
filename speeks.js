@@ -37811,8 +37811,10 @@ function _holdStateLabel(type, it, s) {
         return s.label;
     }
     // 0164: the DM sent a resolution back. Said on the chip, because the card
-    // looks exactly like any other due item otherwise.
-    if (it.dm && it.dm.status === 'denied' && it.state !== 'needs_reply'
+    // looks exactly like any other due item otherwise. Not when hushed (2026-11-10):
+    // a send-back on a missed-window case only undoes the resolution, so the card
+    // reads as the quiet case it was, not as a to-do.
+    if (it.dm && it.dm.status === 'denied' && !it.hush && it.state !== 'needs_reply'
         && _HOLD_VIEWS.due.states.includes(it.state)) return 'Sent back by DM';
     // 2026-11-04: resolved, re-read afterwards, and the sites still disagree.
     if (it.dm && it.dm.kind === 'not_done' && it.state !== 'needs_reply'

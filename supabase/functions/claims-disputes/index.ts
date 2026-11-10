@@ -1743,8 +1743,15 @@ function stateOf(type: string, it: any, review: any, ctx: any): StateOut {
 // stateOf decided — the card stays in Needs Attention and still says what it
 // is — but nothing chases a manager about it: no tab badge, no QuickPortal
 // count, no feed card, no manager mail. It comes back by itself when it
-// changes: the buyer writes again (awaiting → needs_reply), the site closes it
-// (settled), or the DM sends a resolution back.
+// changes: the buyer writes again (awaiting → needs_reply) or the site closes it
+// (settled).
+// A DM SEND-BACK DOES NOT UN-HUSH IT (Ethan, 2026-11-10: "send them back and
+// have them act as they would've had the manager never confirmed it"). BAL had
+// three missed-window cases a manager marked "nothing to be done"; sending them
+// back used to put them on the manager's badge, feed card and 4pm mail as a
+// to-do nobody could do. Now a send-back just undoes the resolution — a hushed
+// item goes back to listed-and-quiet until eBay decides. not_done still un-hushes:
+// that is the sites saying the manager skipped a step they CAN still take.
 //   'replied'        an open eBay case or INR whose last word is ours. An INR
 //                    only until its refund day — that day is a real decision.
 //   'missed_window'  eBay's reply window shut (eBay case or eBay dispute). The
@@ -1752,7 +1759,7 @@ function stateOf(type: string, it: any, review: any, ctx: any): StateOut {
 // Not a payment: a card that can't be charged is still the manager's to chase.
 function hushOf(type: string, it: any, s: StateOut, ctx: any): string | null {
   if (!NEED_STATES.includes(s.state)) return null;
-  if (s.dm && (s.dm.status === "denied" || s.dm.kind === "not_done")) return null;
+  if (s.dm && s.dm.kind === "not_done") return null;
   if (s.note === "missed_window" && type !== "payment") return "missed_window";
   if (type === "ebay_case" && it.is_open && it.kind !== "return" && !ctx.awaiting(it) && it.seller_replied_at) {
     if (it.kind === "case") return "replied";
