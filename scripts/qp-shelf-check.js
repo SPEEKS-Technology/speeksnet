@@ -174,6 +174,90 @@ t('a full rail: every other tile keeps a greyed + Add that adds nothing; no Swap
     } finally { _qptState = keep[0]; window._qpMiniOk = keep[1]; }
 });
 
+// 2026-11-10 quick-fact minis. Role set where _qpRole reads it.
+function _asRole(role, fn) {
+    var keep = [sessionStorage.getItem('speeksUserRole'), sessionStorage.getItem('speeksUserName'), window._qpMyStore];
+    try { sessionStorage.setItem('speeksUserRole', role); sessionStorage.setItem('speeksUserName', 'Bo Ray'); window._qpMyStore = function () { return 'OVL'; }; return fn(); }
+    finally {
+        ['speeksUserRole', 'speeksUserName'].forEach(function (k, i) { if (keep[i] === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, keep[i]); });
+        window._qpMyStore = keep[2];
+    }
+}
+t('Sales: yesterday from the Live board — net sales, their cost, gross margin', function () {
+    var keep = _lvData;
+    try {
+        return _asRole('manager', function () {
+            _lvData = null;
+            if (QP_MINIS.msales.draw().s !== 'Syncing…') return 'should wait for the Live board';
+            _lvData = { prev: { date: '2026-11-09' }, stores: [{ code: 'OVL', prev: { netToday: 5000, gpToday: 3000 } }] };
+            var r = QP_MINIS.msales.draw();
+            if (r.v !== _lvMoney(5000, false)) return 'v ' + r.v;
+            return r.s === 'Cost $2,000 · 60% gross margin' ? true : 's ' + r.s;
+        });
+    } finally { _lvData = keep; }
+});
+t('Open Claims: Returns, Cases, Claims as the numbers; each red if its own is overdue', function () {
+    var d = { today: '2026-11-10', _split: {
+        returns: { due: [{ x: { due_on: '2026-11-12' } }], waiting: 1 },
+        cases: { due: [{ x: { due_on: '2026-11-08' } }], waiting: 2 },
+        mismatch: { due: [], waiting: 1 }, payments: { due: [], waiting: 0 } } };
+    var r = QP_MINIS.mclaims.draw(d);
+    var txt = r.v.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (txt !== '2 Returns 3 Cases 1 Claim') return 'v ' + txt;
+    if (!/class="bad">3</.test(r.v) || /class="bad">2</.test(r.v)) return 'only Cases has an overdue one: ' + r.v;
+    return r.s === '6 open · 1 overdue' ? true : 's ' + r.s;
+});
+t('Company Snapshot: % to goal big; Buy margin and conversion under it', function () {
+    var keep = _lvData;
+    try {
+        return _asRole('district manager', function () {
+            _lvData = { district: { mtdNet: 50000, mtdGp: 29000 } };
+            var d = { today: '2026-11-11', goals: { OVL: 30000 }, np: [], facts: [
+                { store: 'OVL', date: '2026-11-10', est_value: 3000, est_margin_pct: 0.5, cust_conv_num: 7, cust_conv_den: 10 },
+                { store: 'LEE', date: '2026-11-10', est_value: 1000, est_margin_pct: 0.7, cust_conv_num: 7, cust_conv_den: 10 }] };
+            for (var i = 1; i <= 10; i++) d.np.push({ store: 'OVL', date: '2026-11-' + (i < 10 ? '0' + i : i), sales: 2000, np: 1000 });
+            var r = QP_MINIS.mcompany.draw(d);
+            if (QP_MINIS.mcompany.label !== 'Company Snapshot') return 'label ' + QP_MINIS.mcompany.label;
+            if (!/>100%</.test(r.v)) return 'v ' + r.v;
+            return r.s === 'Buy 55% · Conv 70%' ? true : 's ' + r.s;   // no GM (taken out 2026-11-10)
+        });
+    } finally { _lvData = keep; }
+});
+t('B2B: deals still being listed count as deals (WSP read "0 deals · 261 to list")', function () {
+    return _asRole('manager', function () {
+        var unl = [];
+        for (var i = 0; i < 11; i++) unl.push({ deal_id: 'd' + i, unlisted_units: i === 0 ? 161 : 10 });
+        var r = QP_MINIS.mb2b.draw({ deals: [], unl: unl });
+        if (!/^11/.test(r.v)) return 'v ' + r.v;
+        return r.s === '261 units to list' ? true : 's ' + r.s;   // just deals and units (2026-11-10)
+    });
+});
+t('Call Back Matches: in stock now big (any store customer), open call backs under it', function () {
+    var keep = window._cbMatchScope;
+    try {
+        window._cbMatchScope = function () { return ['OVL']; };
+        var rows = [
+            { store: 'OVL', status: 'open', matches: [{ state: 'suggested', store_code: 'OVL' }] },
+            { store: 'LEE', status: 'open', matches: [{ state: 'suggested', store_code: 'OVL' }] },
+            { store: 'OVL', status: 'contacted', matches: [{ state: 'suggested', store_code: 'OVL' }] },
+            { store: 'OVL', status: 'open', matches: [] },
+            { store: 'OVL', status: 'completed', matches: [{ state: 'suggested', store_code: 'OVL' }] }];
+        var r = QP_MINIS.mcb.draw(rows);
+        if (!/>2</.test(r.v) || !/matches/.test(r.v)) return 'v ' + r.v;
+        return r.s === '3 call backs open' ? true : 's ' + r.s;
+    } finally { window._cbMatchScope = keep; }
+});
+t('Employee: Your No Deals and Your Listings from their own row of last week\'s KPIs', function () {
+    return _asRole('employee', function () {
+        var w = { end: '2026-11-08', emps: [{ employee_name: 'Bo Ray', no_deal_count: 2, no_deal_value: 850, listed_count: 45, listed_retail_price: 13200, listed_sold_pct: 42.6 }] };
+        var a = QP_MINIS.mnodeal.draw(w), b = QP_MINIS.mylist.draw(w);
+        if (a.v !== '2' || a.s !== '$850 in value') return 'no deals ' + a.v + ' / ' + a.s;
+        if (b.v !== '45' || b.s !== '$13.2k listed · 43% sold') return 'listings ' + b.v + ' / ' + b.s;
+        if (!QP_MINIS.mnodeal.avail() || !QP_MINIS.mylist.avail() || !QP_MINIS.mbuy.avail()) return 'an employee should have all three';
+        return true;
+    });
+});
+
 t('Top Lister: most listed on last week\'s KPIs, the owner left out', function () {
     var w = { end: '2026-11-08', emps: [
         { employee_name: 'Ethan Kushnir', listed_count: 99, listed_retail_price: 9000 },
@@ -269,7 +353,7 @@ t('the rail takes eight minis at most; the ninth add does nothing', function () 
 t('every widget is in a drawer category, and every mini can draw', function () {
     var bad = Object.keys(QP_WIDGETS).filter(function (id) { return _QP_LIB_SECTIONS.indexOf(QP_WIDGETS[id].section || 'Other') === -1 || !QP_WIDGETS[id].section; });
     if (bad.length) return 'no category: ' + bad.join(', ');
-    var mb = Object.keys(QP_MINIS).filter(function (id) { var m = QP_MINIS[id]; return !m.label || !m.sub || !m.icon || typeof m.draw !== 'function' || ['snap', 'page', 'cal', 'recycle', 'wkpi'].indexOf(m.src) === -1; });
+    var mb = Object.keys(QP_MINIS).filter(function (id) { var m = QP_MINIS[id]; return !m.label || !m.sub || !m.icon || typeof m.draw !== 'function' || (['snap', 'page', 'cal', 'recycle', 'wkpi'].indexOf(m.src) === -1 && !/^w:(claims|callbacks|b2b|connect)$/.test(m.src)); });
     if (mb.length) return 'incomplete minis: ' + mb.join(', ');
     if (QP_MINIS.shoutouts || QP_WIDGETS.shoutouts) return 'Customer Shoutouts was dropped (Ethan)';
     return true;

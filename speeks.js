@@ -54643,7 +54643,160 @@ const QP_MINIS = {
             return { k: 'Coming Up' + (more ? ' · ' + more + ' More' : ''), v: n.day === today ? '<span class="warn">Today</span>' : escapeHtml(_qpDayLabel(n.day).replace(/^\w+, /, '')),
                 s: n.ev.title, go: 'toggleCalendar()' };
         } },
+
+    // ===== 2026-11-10: QUICK FACTS, a role at a time (Ethan: "quick data points
+    // we can track ... rather than having to go searching for them"). One line
+    // each, no charts — nothing on the rail or in the drawer preview is cut off.
+
+    // --- MANAGERS AND ASMs ---
+    // Yesterday's sales over their cost: net sales big, the cost and the gross
+    // margin under it — the Live board's own Yesterday figures (_lvData, its
+    // store row's prev: netToday, gpToday; Ethan, 2026-11-10: "we can't pull it
+    // from live dashboard?"), so the two never disagree. Syncing until the
+    // Live board has loaded; the rail redraws every 15s.
+    msales: { label: 'Sales', sub: 'Yesterday\'s net sales, their cost and the gross margin, as the Live board shows them', icon: _qpMI.cash, tone: 'g', src: 'page', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()),
+        draw: () => {
+            const row = _qpLiveRow(_qpMyStore()), p = row && row.prev, day = typeof _lvData === 'object' && _lvData && _lvData.prev && _lvData.prev.date;
+            if (!p || p.netToday == null) return { k: 'Sales · Yesterday', v: '—', s: 'Syncing…' };
+            const net = Number(p.netToday) || 0, gp = Number(p.gpToday) || 0;
+            return { k: 'Sold · ' + (day ? _qpDayLabel(day).replace(/,.*$/, '') : 'Yesterday'), v: _lvMoney(net, false),
+                s: net > 0 ? 'Cost ' + _qpHLK(net - gp) + ' · ' + Math.round(gp / net * 100) + '% gross margin' : 'No sales' };
+        } },
+    // Devices listed on the latest day, against the store's own last-7-reports average.
+    mlisted: { label: 'Listed', sub: 'Devices listed on the latest day, and the 7-day average', icon: _qpMI.tag, tone: 'b', src: 'snap', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => {
+            const f = _qpFacts(d, _qpMyStore()).filter(r => r.listed_devices != null), y = f[f.length - 1];
+            if (!y) return { k: 'Listed', v: '—', s: 'No Day End Yet' };
+            const last7 = f.slice(-7).map(r => Number(r.listed_devices) || 0);
+            return { k: 'Listed · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _qpN(y.listed_devices), s: _qpAvg(last7).toFixed(0) + ' a day, last ' + last7.length + ' days' };
+        } },
+    // CALL BACK MATCHES (Ethan, 2026-11-10: "change it to matches instead"):
+    // the big number is how many customers asked for something that is on this
+    // store's shelf now — calls to make — the Call Backs card's In Stock rule
+    // (a suggested match at this store, not yet contacted). Under it, how many
+    // call backs are open in all. The Call Backs card's read.
+    mcb: { label: 'Call Back Matches', sub: 'Customers who asked for something that is in stock now', icon: '', tone: 'a', src: 'w:callbacks', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('callbacks'),
+        draw: rows => {
+            const scope = (typeof _cbMatchScope === 'function' && _cbMatchScope()) || [];
+            const all = (rows || []).filter(e => !e.archived_at && e.status !== 'completed');
+            const hits = all.filter(e => e.status !== 'contacted' && (e.matches || []).some(m => m.state === 'suggested' && scope.includes(m.store_code))).length;
+            const open = all.filter(e => scope.includes(e.store)).length;
+            return { k: 'Call Back Matches', v: (hits ? '<span class="good">' + hits + '</span>' : '0') + '<small>' + (hits === 1 ? 'match' : 'matches') + '</small>',
+                s: open + (open === 1 ? ' call back open' : ' call backs open'), go: "window.location.href='operations.html#callbacks'" };
+        } },
+    // How many are OPEN — waiting on us or on someone else — as three numbers
+    // side by side, in Ethan's order (2026-11-10: "returns, then cases, then
+    // claims"): Returns; Cases (eBay cases, Item Not Received, disputes); Claims
+    // (refund mismatches and unpaid orders). A number is red when one of its own
+    // that we owe is overdue; under them, the total open and how many are late.
+    // The Claims & Disputes card's read.
+    mclaims: { label: 'Open Claims', sub: 'Open returns, cases and INRs, and claims (mismatches, unpaid orders)', icon: '', tone: 'r', src: 'w:claims', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('claims'),
+        draw: d => {
+            if (!d._split) d._split = _qpClaimsSplit(d);
+            const today = String(d.today || '').slice(0, 10), sp = d._split;
+            const open = ts => ts.reduce((a, t) => a + sp[t].due.length + sp[t].waiting, 0);
+            const lateN = ts => ts.reduce((a, t) => a + sp[t].due.filter(e => e.x.due_on && String(e.x.due_on).slice(0, 10) < today).length, 0);
+            const groups = [[['returns'], 'Returns'], [['cases'], 'Cases'], [['mismatch', 'payments'], 'Claims']];
+            const v = groups.map((g, i) => { const n = open(g[0]), late = lateN(g[0]);
+                return '<span' + (i ? ' style="margin-left:12px"' : '') + '>' + (late ? '<span class="bad">' + n + '</span>' : n) + '<small>' + (n === 1 ? g[1].slice(0, -1) : g[1]) + '</small></span>'; }).join('');
+            const total = open(['returns', 'cases', 'mismatch', 'payments']), late = lateN(['returns', 'cases', 'mismatch', 'payments']);
+            return { k: 'Claims & Disputes', v, s: total ? total + ' open' + (late ? ' · ' + late + ' overdue' : ' · nothing overdue') : 'Nothing open', go: "openClaimsTool('returns')" };
+        } },
+    // SPEEKS Connect fixes waiting at this store, by kind (the Connect card's read).
+    mconn: { label: 'SPEEKS Connect', sub: 'Listings waiting on pictures, a category or a title', icon: '', tone: 'g', src: 'w:connect', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('connect'),
+        draw: d => {
+            const s = _qpMyStore(), ok = _QP_WSPEC.connect.has, num = o => Number(o && o[s]) || 0;
+            const c = { p: ok('photos') ? num(d.photos) : 0, c: ok('category') ? num(d.other) + num(d.unmatched) + num(d.misfiled) : 0, t: ok('titles') ? num(d.lt && d.lt.titles) : 0 };
+            const all = c.p + c.c + c.t;
+            return { k: 'SPEEKS Connect', v: (c.p ? '<span class="bad">' + all + '</span>' : String(all)) + '<small>to fix</small>',
+                s: all ? [[c.p, 'Pictures'], [c.c, 'Categories'], [c.t, 'Titles']].filter(x => x[0]).map(x => x[0] + ' ' + x[1]).join(' · ') : 'All clear',
+                go: "window.location.href='operations.html#" + (c.p ? 'photos' : c.c ? 'categories' : 'titles') + "'" };
+        } },
+    // B2B deals that need this store — to price, or waiting on it — and the units
+    // it still has to list (the B2B card's read, the Listings & Deals rules).
+    mb2b: { label: 'B2B', sub: 'Deals to price, deals waiting on you, and units to list', icon: '', tone: 't', src: 'w:b2b', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('b2b'),
+        draw: d => {
+            const bday = _b2bCentralDay(new Date());
+            const price = (d.deals || []).filter(x => x.stage === 'pricing' && _b2bActionFor(x)).map(x => _b2bPricingDue(x, bday)).filter(Boolean);
+            const need = (d.deals || []).filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor).length;
+            // Deals still being LISTED count too (Ethan, 2026-11-10: WSP showed
+            // "0 deals · 261 to list" — all eleven of its deals were at listing).
+            const unl = (d.unl || []).filter(r => Number(r.unlisted_units) > 0);
+            const units = unl.reduce((a, r) => a + (Number(r.unlisted_units) || 0), 0), listing = new Set(unl.map(r => r.deal_id || r.ref)).size;
+            const todo = price.length + need + listing, late = price.some(e => e.late);
+            // Just the deals and the units (Ethan, 2026-11-10: "just keep it #
+            // deals and # units"): the deals that need the store big, the units
+            // it still has to list under them.
+            return { k: 'B2B', v: (late ? '<span class="bad">' + todo + '</span>' : String(todo)) + '<small>' + (todo === 1 ? 'deal' : 'deals') + '</small>',
+                s: units ? _qpN(units) + (units === 1 ? ' unit to list' : ' units to list') : 'No units to list',
+                go: "window.location.href='b2b.html'" };
+        } },
+
+    // --- CORP ---
+    // COMPANY SNAPSHOT — the company in one line (renamed from "Company",
+    // 2026-11-10). % to goal (the Live board's, through yesterday) big; under it:
+    //   Buy  — the latest Day End's buying margin, all stores, weighted by value
+    //   Conv — the latest Day End's customer conversion, all stores
+    // (A GM — the Live board's month-to-date gross margin — sat between them for
+    // a day; Ethan took it out, 2026-11-10.)
+    mcompany: { label: 'Company Snapshot', sub: '% to goal, buying margin and conversion, all stores', icon: _qpMI.pulse, tone: 'g', src: 'snap', avail: () => _qpIsDist(),
+        draw: d => {
+            const g = _qpGoalSum(d, STORE_CODES), day = _qpDistDay(d);
+            const val = _qpSum(day.on, 'est_value');
+            const buyM = val ? day.on.reduce((a, y) => a + (Number(y.est_value) || 0) * _qpFrac(y.est_margin_pct), 0) / val : null;
+            const den = _qpSum(day.on, 'cust_conv_den'), conv = den ? _qpSum(day.on, 'cust_conv_num') / den : null;
+            const pc = x => x == null ? '—' : Math.round(x * 100) + '%';
+            return { k: 'Company Snapshot', v: g.goal ? '<span class="' + g.tone + '">' + g.pace + '%</span><small>to goal</small>' : '—',
+                s: 'Buy ' + pc(buyM) + ' · Conv ' + pc(conv) };
+        } },
+    // Every store's B2B value still to list, and the units.
+    mb2bunl: { label: 'Unlisted B2B', sub: 'B2B value and items still waiting to be listed, all stores', icon: '', tone: 't', src: 'w:b2b', avail: () => _qpIsDist() && _qpWidgetOk('b2b'),
+        draw: d => {
+            const rows = (d.unl || []).filter(r => Number(r.unlisted_units) > 0);
+            const units = _qpSum(rows, 'unlisted_units'), val = _qpSum(rows, 'unlisted_value'), deals = new Set(rows.map(r => r.deal_id || r.ref)).size;
+            return { k: 'Unlisted B2B', v: val ? _qpHLK(val) : '—', s: units ? _qpN(units) + ' items · ' + deals + (deals === 1 ? ' deal' : ' deals') : 'Everything is listed', go: "window.location.href='b2b.html'" };
+        } },
+
+    // --- EMPLOYEES (their own row of last week's Weekly KPIs; Buying is mbuy) ---
+    mnodeal: { label: 'Your No Deals', sub: 'Your no-deal items and their value, last week', icon: _qpMI.x, tone: 'r', src: 'wkpi', avail: () => _qpIsEmp() && !!_qpMyStore(),
+        draw: w => { const r = _qpMyWkpi(w), n = Number(r && r.no_deal_count) || 0, v = Number(r && r.no_deal_value) || 0;
+            if (!r) return { k: 'Your No Deals · Last Week', v: '—', s: 'Not on last week\'s KPIs' };
+            return { k: 'Your No Deals · Last Week', v: String(n), s: v ? _lvMoney(v, false) + ' in value' : 'Nothing walked out' }; } },
+    mylist: { label: 'Your Listings', sub: 'What you listed last week, its value and how much sold', icon: _qpMI.tag, tone: 'b', src: 'wkpi', avail: () => _qpIsEmp() && !!_qpMyStore(),
+        draw: w => { const r = _qpMyWkpi(w), n = Number(r && r.listed_count) || 0, val = Number(r && r.listed_retail_price) || 0;
+            if (!r || !n) return { k: 'Your Listings · Last Week', v: '—', s: 'None on last week\'s KPIs' };
+            const sold = r.listed_sold_pct != null ? Math.round(Number(r.listed_sold_pct)) : (val ? Math.round((Number(r.listed_sold_value) || 0) / val * 100) : null);
+            return { k: 'Your Listings · Last Week', v: String(n), s: (val ? _qpHLK(val) + ' listed' : '') + (sold != null ? (val ? ' · ' : '') + sold + '% sold' : '') }; } },
 };
+// Icons borrowed from the widgets these minis read (set after QP_WIDGETS exists).
+['mcb:callbacks', 'mclaims:claims', 'mconn:connect', 'mb2b:b2b', 'mb2bunl:b2b'].forEach(p => { const [m, w] = p.split(':'); if (QP_MINIS[m] && QP_WIDGETS[w]) QP_MINIS[m].icon = QP_WIDGETS[w].icon; });
+// Helpers for the quick-fact minis (2026-11-10).
+const _qpFrac = m => { m = Number(m) || 0; return m > 1 ? m / 100 : m; };
+// A store's row on the Live board's last read (_lvData), or null before it loads.
+function _qpLiveRow(code) {
+    const st = typeof _lvData === 'object' && _lvData && _lvData.stores;
+    return (st || []).find(s => s && !s.error && String(s.code).toUpperCase() === String(code || '').toUpperCase()) || null;
+}
+function _qpMyWkpi(w) {
+    const me = String(sessionStorage.getItem('speeksUserName') || '').toLowerCase().trim();
+    return ((w && w.emps) || []).find(e => String(e.employee_name || '').toLowerCase().trim() === me) || null;
+}
+// Every store's Day End on the latest day any store reported.
+function _qpDistDay(d) {
+    const last = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean);
+    const day = last.map(y => y.date).sort().pop() || '';
+    return { day, on: last.filter(y => y.date === day) };
+}
+// % to goal over a set of stores — the Live board's, through yesterday — with
+// what a day still needs and the days left (% to Goal and Company share it).
+function _qpGoalSum(d, stores) {
+    const ps = stores.map(s => _qpPaceOf(d, s));
+    const soFar = _qpSum(ps, 'soFar'), goal = _qpSum(ps, 'goal');
+    const proj = ps.reduce((a, p) => a + (p.thru ? p.soFar / p.thru * p.dim : 0), 0);
+    const pace = goal ? Math.round(proj / goal * 100) : 0;
+    const left = ps.length ? Math.max(0, ps[0].dim - Math.max(0, ...ps.map(p => p.thru || 0))) : 0;
+    return { soFar, goal, pace, need: _qpSum(ps, 'need'), left, tone: pace >= 100 ? 'good' : pace >= 90 ? 'warn' : 'bad' };
+}
 const _QP_MINI_ADDED = '2026-10-29';
 
 // ---- TWO-ROW MINIS (Ethan, 2026-10-29: picked "all of them" from
@@ -54833,7 +54986,9 @@ const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: f
 function _qpWkpiSample() {
     const me = sessionStorage.getItem('speeksUserName') || 'Test Employee';
     const end = (() => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 7) % 7 || 7)); return d.toISOString().slice(0, 10); })();
-    const p = (n, l, r, bv, bc, tc, tco) => ({ employee_name: n, listed_count: l, listed_retail_price: r, buying_value: bv, buying_cost: bc, transaction_count: tc, transaction_converted: tco });
+    // No-deal and sold figures too (2026-11-10), for Your No Deals / Your Listings.
+    const p = (n, l, r, bv, bc, tc, tco) => ({ employee_name: n, listed_count: l, listed_retail_price: r, buying_value: bv, buying_cost: bc, transaction_count: tc, transaction_converted: tco,
+        no_deal_count: Math.max(0, tc - tco), no_deal_value: Math.max(0, tc - tco) * 425, listed_sold_value: Math.round(r * 0.41), listed_sold_pct: 41 });
     return { end, emps: [p('Zach Marchesano', 45, 13200, 1703, 670, 6, 5), p('Nathan Zimmer', 38, 9100, 2410, 1150, 9, 8), p(me, 22, 5400, 1980, 860, 8, 7), p('Colin Davis', 17, 3900, 0, 0, 0, 0)] };
 }
 function _qpMiniData(src) {
@@ -54867,6 +55022,14 @@ function _qpMiniData(src) {
                 .catch(() => {}).finally(() => { st.busy = false; st.at = Date.now(); _qpRenderWidgets(); });
         }
         return st.data;
+    }
+    // 'w:<widget id>' (2026-11-10): a mini that reads a widget's own load —
+    // Claims, Call Backs, B2B, Connect — shares it (_qpWLoad's cache and TTL,
+    // and the test login's samples), so a card and its mini never fetch twice.
+    if (String(src).indexOf('w:') === 0) {
+        const id = String(src).slice(2);
+        if (_QP_WSPEC[id]) _qpWLoad(id);
+        return _qpWState(id).data;
     }
     if (src === 'wkpi') {
         const st = _qpMiniSrcState.wkpi, store = _qpMyStore();
