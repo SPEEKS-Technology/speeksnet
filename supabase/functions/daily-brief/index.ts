@@ -784,7 +784,7 @@ function pickExamples(all: { store: string; message: string }[], rotate: number)
 }
 
 // HIS messages only, as the few-shot pool and the per-store "don't repeat these".
-// Managers and MSMs can send store comments too (see the store-comments manager
+// Managers can send store comments too (see the store-comments manager
 // variant), and training the voice on their writing would quietly blend it into
 // someone else's. Shared by the dryRun replay and ?action=draft.
 async function loadVoice(sb: any) {
@@ -978,7 +978,7 @@ Deno.serve(async (req) => {
       const raw = String(viewer?.role ?? "").toLowerCase().trim();
       const role = raw === "district manager" ? "District Manager"
         : raw === "ceo" ? "CEO"
-        : (raw === "manager" || raw === "owner (manager)" || raw === "multi-store manager") ? "Manager"
+        : (raw === "manager" || raw === "owner (manager)") ? "Manager"
         : "";
       await queueNotification({
         category: "store_messages",

@@ -117,9 +117,8 @@ const EBAY_TITLE_MAX = 80;
 // reason ec-view-photos excludes them: their Listing Health access was revoked
 // by hand, and a new key defaulting on would re-open the page under a new name.
 const CORP_ROLES = ["district manager", "ceo", "mocd"];
-const STORE_ROLES = ["manager", "owner (manager)", "owner manager", "multi-store manager"];
+const STORE_ROLES = ["manager", "owner (manager)", "owner manager"];
 const EXTRA_ROLES = ["assistant manager"];
-const MSM_STORES = ["BAL", "MPL"];
 const TITLES_KEY = "ec-view-titles";
 
 const corsHeaders = {
@@ -206,7 +205,6 @@ async function scopeFor(pin: string, reading = false): Promise<Scope | null> {
   // this person review titles", never "whose catalogue" — that stays the store
   // on their user row, and corp is the only thing that means all five.
   const stores = corp ? STORES
-    : role === "multi-store manager" ? MSM_STORES
     : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
   if (!stores.length) return null;
   return { name: String(user.name || ""), role, stores, corp };
@@ -1278,6 +1276,18 @@ function screenSizePresent(title: string, v: string): boolean {
       || new RegExp(`(^|[^\\d.])${n}(?![\\d.])`).test(title);
 }
 
+// ⚠️ A TITLE THAT ALREADY STATES A SCREEN SIZE IS NOT MISSING ONE. OVL's HP
+// Pavilion 14M-BA013DX (KS01-7857A-R3R3, denied 2026-11-05) said 14" twice and
+// its Screen Size field said 15.6"; the rule only asked "is 15.6 here?", so it
+// put 15.6" in front of the 14" and suggested a title naming two screens. The
+// field was the wrong one — the 14M-BA013DX is a 14" laptop. When title and field
+// disagree that is a conflict for a person to settle, never a gap to fill, so
+// any inch-marked measurement already in the title keeps this rule quiet. Only
+// an inch-MARKED number counts here: a bare "13" is as likely "iPhone 13".
+function titleStatesScreen(title: string): boolean {
+  return /(^|[^\d.])\d{1,3}(?:\.\d+)?\s*(?:"|”|''|-?\s*in(ch(es)?)?\b)/i.test(title);
+}
+
 // ⚠️ THE NUMBER IS THE LISTING'S, THE UNIT MARK IS OURS. BAL's HP Chromebook
 // records `14in`, and "HP Chromebook … 14in" reads like a typo next to every
 // other title on the shelf. Normalising the unit to an inch mark is the only
@@ -1645,9 +1655,19 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 // A CPU or a memory total is the machine's own account of what is inside it,
 // read off the machine; outside knowledge of what a model "shipped with" does
 // not overrule it.
+//
+// ⚠️ AND STORAGE, 2026-11-05 — the same lesson twice more, both name-wrong,
+// both one click, both overruling a field that said otherwise in so many words:
+//   WSP PS5 Slim Digital CFI-2115 (MO02-5245A-E10): Storage Capacity = 825GB,
+//     we said "Slim models have 1TB".
+//   BAL Samsung T7 (MO04-2527B-E5): Capacity = 2TB; we read 1TB off a part
+//     number in the title that turned out to be the wrong one (a T7 Shield's).
+// A capacity field is the drive's own account of itself. Disagreeing with it is
+// a dispute for the photos, never a one-click swap.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
   "Maximum Aperture", "Focal Length", "Form Factor", "Processor", "Memory Size",
+  "Storage Capacity", "Capacity", "Storage", "Storage 1",
 ];
 
 // "2280mm" -> "2280": the one form-factor correction that is always right.
@@ -1676,6 +1696,10 @@ type NameVerdict = {
   // photos said when the listing's fields could not settle it. Absent means
   // nobody looked.
   photo?: PhotoAnswer | null;
+  // "label": built by the label check from the photos alone, never by the name
+  // check (see LABEL_SYSTEM). The photo IS the evidence, so analyse uses it even
+  // when no field repeats the title.
+  source?: "label";
 };
 type PhotoAnswer = {
   answer: "ours" | "listing" | "other" | "cannot_tell";
@@ -2015,6 +2039,154 @@ async function photoTiebreak(client: any, ask: {
   };
 }
 
+// ===================== THE LABEL CHECK ======================================
+// Ethan, 2026-11-05 ("lets go option b"): every NEWLY name-checked listing that
+// carries a part number has its own photos read for the label, and a title code
+// or capacity the label contradicts becomes a fix.
+//
+// Why: the 2026-11-05 denials were all one shape — a title code the name check
+// could not judge from knowledge, and the label in the photos could:
+//   BAL ADATA (MO04-2525B-E3): AD4U2666 38 G19-B on the stick; MPN said 28.
+//   BAL Samsung T7 (MO04-2527B-E5): the label says 2TB and MU-PC2T0T.
+//   OVL HP Pavilion (KS01-7857A): the base label reads 14M-BA013DX.
+// The tiebreak only ever looked at rows the name check had already DISPUTED, so
+// a title the name check passed as "ok" was never looked at, however wrong its
+// code. This looks at those.
+//
+// ⚠️ IT ONLY EVER READS. The answer becomes an ordinary name verdict with the
+// photo attached as "ours" (source "label"), and analyse runs it through every
+// guard a model's verdict gets: the quoted span must be in the title, the
+// replacement cannot be a placeholder, a field that repeats the title is
+// corrected with it, and the reviewer is sent to the photo.
+//
+// ⚠️ ONLY NEW TITLES. It rides the name pass, which takes only titles it has not
+// asked about (candidatesFor), so the bill is per new listing, not per sweep.
+// ~$0.015 a listing on Sonnet (the tiebreak's measured rate, Oct 7 - Nov 4).
+const LABEL_MAX = 16;          // per store per run — see the deferral note at the call
+const LABEL_CONCURRENCY = 8;
+
+const LabelAnswerSchema = z.object({
+  mismatches: z.array(z.object({
+    title_text: z.string(),
+    label_text: z.string(),
+    photo: z.number().int(),
+    seen: z.string(),
+  })),
+});
+type LabelMismatch = { title_text: string; label_text: string; photo: number; seen: string };
+
+const LABEL_SYSTEM = `You check a used-electronics listing's title against the
+printed labels in the listing's own photos of the unit being sold.
+
+Look for printed or engraved text on THE ITEM ITSELF or its own box: a model or
+part number on a sticker, a caseback, a base label, a RAM stick, a drive label,
+a box label, or a settings / About / BIOS screen. Then compare it with the
+title. Report a mismatch ONLY when the title states a part number, model number
+or capacity, and a photo clearly shows a DIFFERENT value for that same thing on
+this unit.
+
+Never report:
+  - anything you cannot read clearly — a blurry or partly hidden digit is not a
+    mismatch
+  - serial numbers, dates, batch or lot codes, FCC / regulatory ids, barcode
+    digits, or a retailer's own sticker
+  - a value the title does not state at all (a missing detail is not a mismatch)
+  - the same value written differently (spaces, dashes, case)
+  - a label on an accessory, a charger, or a different item in the photo
+  - anything, if the photos show several different units or a stock /
+    manufacturer image rather than this unit
+
+For each mismatch:
+  title_text — the title's words for it, copied EXACTLY as they appear in the
+               title, character for character
+  label_text — what should replace them, written the way the title writes
+               things (the label's value, not a sentence)
+  photo      — the photo number it is printed in
+  seen       — what you read and where, in a few words a store manager can
+               check: "the stick's label reads AD4U266638G19-B"
+
+Almost every listing has no mismatch. An empty list is the normal answer and is
+never penalised.`;
+
+// Does this listing name a part to check? A token with two or more digits and a
+// letter (AD4U266638G19-B, MU-PC2T0T, 14M-BA013DX, CFI-2115), or a filled MPN.
+// A bare size or speed (512GB, 2666MHz, 1080p) is not a part code on its own.
+function hasPartCode(title: string, specs: Record<string, string> | undefined): boolean {
+  const mpn = String(specs?.["MPN"] || "").trim();
+  if (mpn && !PLACEHOLDER.test(mpn) && /\d/.test(mpn)) return true;
+  for (const tok of title.split(/[\s,/()]+/)) {
+    const t = tok.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+    if (t.length < 5) continue;
+    if ((t.match(/\d/g) || []).length < 2 || !/[A-Za-z]/.test(t)) continue;
+    if (/^\d+(\.\d+)?(gb|tb|mb|mhz|ghz|hz|w|mah|mm|cm|in|k|p|fps|rpm|wh|v|ft|oz|lbs?)$/i.test(t)) continue;
+    return true;
+  }
+  return false;
+}
+
+// The label answer, verified, as a name verdict analyse already knows how to
+// judge — or null. The first mismatch that survives wins; one name finding per
+// row is all analyse makes.
+//   ⚠️ THE QUOTE IS RE-FOUND IN THE TITLE (case-insensitive) AND THE TITLE'S OWN
+//   SPELLING IS USED, so analyse's exact indexOf finds the span it checks.
+//   ⚠️ "THE SAME VALUE WRITTEN DIFFERENTLY" IS CHECKED HERE TOO, not trusted to
+//   the prompt: MU-PC2T0T and MUPC2T0T is not a correction.
+function labelVerdict(title: string, ms: LabelMismatch[], urls: string[],
+                      fetched: boolean[]): NameVerdict | null {
+  const squash = (s: string) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+  for (const m of ms || []) {
+    const quote = String(m?.title_text || "").trim();
+    const fix = String(m?.label_text || "").trim();
+    const seen = String(m?.seen || "").trim().replace(/[.;,]$/, "");
+    const n = Number(m?.photo);
+    if (!quote || !fix || !seen) continue;
+    if (!Number.isInteger(n) || n < 1 || n > urls.length || !fetched[n - 1]) continue;
+    if (squash(quote) === squash(fix)) continue;
+    if (/[\[\]<>{}]|\b(actual|correct|real|proper|insert|unknown|tbd|xxx+|serial)\b/i.test(fix)) continue;
+    const at = title.toLowerCase().indexOf(quote.toLowerCase());
+    if (at < 0) continue;
+    const wrong = title.slice(at, at + quote.length);
+    return {
+      verdict: "wrong", wrong_text: wrong, correct_text: fix,
+      why: `Photo ${n} shows ${seen}`, source: "label",
+      photo: { answer: "ours", photo: n, seen, url: urls[n - 1] },
+    };
+  }
+  return null;
+}
+
+async function labelCheck(client: any, title: string, specs: Record<string, string> | undefined,
+                          urls: string[]): Promise<{ verdict: NameVerdict | null; input: number; output: number; photos: number }> {
+  const fields = Object.entries(nameCheckFields(specs))
+    .map(([k, v]) => `${k}: ${v}`).join("\n");
+  const blocks: any[] = [{ type: "text", text:
+    `TITLE: ${title}\n` + (fields ? `THE LISTING'S FIELDS (for context only — the photos decide):\n${fields}\n` : "")
+    + `\nThe listing's photos, in order:` }];
+  const photos = await Promise.all(urls.map(u => photoBlock(u).catch(() => null)));
+  let n = 0;
+  photos.forEach((b, i) => {
+    if (!b) return;
+    n++;
+    blocks.push({ type: "text", text: `Photo ${i + 1}` });
+    blocks.push(b);
+  });
+  if (!n) return { verdict: null, input: 0, output: 0, photos: 0 };
+  const res = await client.messages.parse({
+    model: PHOTO_MODEL, max_tokens: 8000, system: LABEL_SYSTEM,
+    messages: [{ role: "user", content: blocks }],
+    output_config: { effort: PHOTO_EFFORT, format: zodOutputFormat(LabelAnswerSchema) },
+  } as any);
+  const p = res?.parsed_output as { mismatches: LabelMismatch[] } | null;
+  // Null is "did not answer", never "no mismatch" — the caller retries next run.
+  if (!p) throw new Error("the label check returned nothing that matched its schema");
+  return {
+    verdict: labelVerdict(title, p.mismatches, urls, photos.map(b => !!b)),
+    input: Number(res?.usage?.input_tokens || 0),
+    output: Number(res?.usage?.output_tokens || 0),
+    photos: n,
+  };
+}
+
 type Row = {
   store_code: string; product_id: string; sku: string; title: string;
   product_handle: string | null; price: number | null; quantity: number;
@@ -2237,6 +2409,13 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       return out;
     };
     const tUnits = unitsIn(original);
+    // ⚠️ A NUMBER THE TITLE CALLS RAM IS NOT A DRIVE. BAL's Azpen X1160
+    // (MO04-2532C-R3R2, denied 2026-11-05): "New Azpen X1160 4GB RAM" was flagged
+    // as contradicting Storage 1 = 128GB. The title never stated a drive at all.
+    // Storage-type fields are compared against the title with its RAM sizes
+    // taken out.
+    const tDriveUnits = unitsIn(original.replace(
+      /\b\d+(?:\.\d+)?\s?gb\s*(?:\(\s*\d+\s*x\s*\d+\s?gb\s*\)\s*)?(?:ddr\d\w*\s+)?(?:ram|memory)\b/gi, " "));
     // ⚠️ A PC WITH TWO DRIVES IS TITLED BY THE TOTAL. OVL's Cooler Master
     // (KS01-7824A-E10), denied 2026-09-22, "there are multiple storage
     // devices": Storage 1 = 1TB SSD, Storage 2 = 2TB HDD, title "3TB Storage".
@@ -2266,7 +2445,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       if (!v || PLACEHOLDER.test(v)) continue;
       const isDrive = drives.length > 1 && /^storage\s*\d+$/i.test(k);
       for (const [unit, vals] of unitsIn(v)) {
-        const mine = tUnits.get(unit);
+        const mine = (/storage|capacity/i.test(k) ? tDriveUnits : tUnits).get(unit);
         if (!mine || !mine.size) continue;
         // Only when they share NO value for that unit at all. A title listing
         // both 8GB RAM and 512GB storage must not fight a spec naming one.
@@ -2389,7 +2568,11 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // has to look. What it stops doing is proposing the swap.
     const echoed = listingSaysItself(wrong, identityFields(extra?.specs),
       changedSpan(wrong, right));
-    const respelling = !!right && (isMisspelling(wrong, right) || isM2Misnomer(wrong, right));
+    // A label read is never "a typo": AD4U266628G19-B → …38… is one character,
+    // and calling it a misspelling would word it as "not a real product name".
+    const fromLabel = nameVerdict.source === "label";
+    const respelling = !fromLabel && !!right
+      && (isMisspelling(wrong, right) || isM2Misnomer(wrong, right));
     const saidBy = respelling ? null : echoed;
     // ⚠️ A DISPUTE IS A QUESTION, AND IT IS OURS TO ANSWER, NOT THE REVIEWER'S.
     // MPL, 2026-10-05: five name-disputed rows dismissed "it's fine" in under a
@@ -2407,11 +2590,24 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // Either one makes this an ordinary fix, field correction included. Only
     // when neither can is it still disputed, and then it still says what we
     // recommend and exactly what to look at.
-    const backedBy = saidBy && right && !placeholder
+    // ⚠️ ONE CHARACTER APART IN A PART CODE IS A COIN TOSS, NOT A SECOND OPINION.
+    // BAL's ADATA (MO04-2525B-E3, denied 2026-11-05 "MPN field on listing was
+    // wrong"): Model = AD4U266638G19-B, MPN = AD4U266628G19-B. We let the MPN
+    // "back" the correction and rewrote the Model — and the MPN was the typo;
+    // the 38 part is the real one. When two of the listing's own fields differ
+    // by a single character of a code, either could be the slip, so neither
+    // settles it: the row stays disputed and goes to the photos (the label).
+    // A NAME backed by another field (the Kospet) is unaffected.
+    const oneCharCode = !!right && wrong.length === right.length && /\d/.test(wrong)
+      && [...wrong].filter((ch, i) => ch.toLowerCase() !== right[i].toLowerCase()).length === 1;
+    const backedBy = saidBy && right && !placeholder && !oneCharCode
       ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
                              nameVerdict.evidence_field)
       : null;
-    const photo = saidBy && !backedBy ? (nameVerdict.photo || null) : null;
+    // A label verdict's photo counts with or without a field repeating the title:
+    // it is the only evidence there is, and the reviewer must be sent to it.
+    const photo = (saidBy && !backedBy) || (fromLabel && !backedBy)
+      ? (nameVerdict.photo || null) : null;
     const seen = String(photo?.seen || "").trim().replace(/[.;,]$/, "");
     const shot = photo?.photo ? `Photo ${photo.photo}` : "The photos";
     // ⚠️ "Neither" is an answer too. MPL's Watch6 titled "Classic Aluminum" is a
@@ -2481,7 +2677,10 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       const wrongIsWrong = (nameVerdict.verdict === "wrong" || settled) && !respelling;
       // The model's reason argued for ITS correction; when the photos chose a
       // different one, what the photo shows is the reason.
-      const why = photoFix ? `${shot} shows ${seen}` : String(nameVerdict.why || "").trim();
+      // A label verdict's reason IS the photo sentence, which is said below —
+      // leading with it too made the finding say the same thing twice.
+      const why = photoFix ? `${shot} shows ${seen}`
+        : fromLabel ? "" : String(nameVerdict.why || "").trim();
       const fits = swapped.length <= EBAY_TITLE_MAX;
       if (fits) { title = swapped; fixable = true; }
       // ⚠️ THE REASON LEADS WITH THE FACT, and the instruction is a SEPARATE
@@ -2519,7 +2718,9 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
               ? ` Look at ${shot.toLowerCase()}: ${seen}. The ${saidBy.field} field ("${saidBy.value}") says otherwise, and approving corrects that field too.`
               : photoFix && saidBy
                 ? ` The ${saidBy.field} field says "${saidBy.value}"; approving corrects it where it repeats the title.`
-                : "")
+                : photoSaysOurs && fromLabel
+                  ? ` Look at ${shot.toLowerCase()}: ${seen}.`
+                  : "")
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
         // finding on this page is read off the title and the spec table, and
@@ -3068,6 +3269,8 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         // a spec of `6.7` or `6.7 in` into `6.7"`. Appending m.v raw meant the
         // two rules could write the same measurement two different ways.
         const isScreen = m.k === "Screen Size";
+        // See titleStatesScreen: a title with a different screen is a conflict.
+        if (isScreen && titleStatesScreen(title)) continue;
         const text = isScreen ? (screenSizeText(m.v) || m.v) : m.v;
         const placed = isScreen
           ? tryPlace(text, String(extra?.specs?.["Model"] || "").trim())
@@ -3099,14 +3302,14 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   if (!brokenTitle && !findings.some(f => f.severity >= 2) && !lazyUsed.has("Screen Size")
       && screenSpec && !PLACEHOLDER.test(screenSpec)
       && SCREEN_SHELVES.test(shelf) && !SCREEN_NOT.test(shelf)
-      && !screenSizePresent(title, screenSpec)) {
+      && !screenSizePresent(title, screenSpec) && !titleStatesScreen(title)) {
     const text = screenSizeText(screenSpec);
     // After the model, which is where every title in the estate that already
     // carries one puts it. See tryPlace.
     if (text && tryPlace(text, String(extra?.specs?.["Model"] || "").trim())) {
       findings.push({
         code: "missing-screen-size",
-        says: `This listing records a ${text} screen and the title does not say so. Screen size is one of the first things a buyer filters a phone or tablet by, so a title without it is missing from those results entirely. The measurement is the listing's own — only the inch mark is ours.`,
+        says: `This listing records a ${text} screen and the title does not say so. Screen size is one of the first things a buyer filters by, so a title without it is missing from those results entirely. The measurement is the listing's own — only the inch mark is ours.`,
         severity: 1, fixable: true,
       });
     }
@@ -3537,6 +3740,54 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     }
   }
 
+  // ===================== THE LABEL CHECK (see LABEL_SYSTEM) =================
+  // Every listing the name check just passed as "ok" that names a part. Rows the
+  // name check flagged are left to it and the tiebreak — one name finding a row.
+  const labelUsage = { looked: 0, input: 0, output: 0, found: 0, noPhotos: 0,
+                       deferred: 0, failed: [] as string[] };
+  if (wantLlm) {
+    const due = cands.filter(c => nameBy[c.product_id]?.verdict === "ok"
+      && !/\blot\s+of\b/i.test(c.title)
+      && hasPartCode(c.title, extras[c.product_id]?.specs));
+    const now = due.slice(0, LABEL_MAX);
+    // ⚠️ OVER THE CAP KEEPS THE OLD STAMP, exactly as the tiebreak's does, so the
+    // 5am run (and tomorrow's) asks again and looks. BAL put 67 new titles
+    // through one run on 2026-11-04; at ~15s a look, all of them would not fit
+    // the 150s wall beside the name pass. The re-ask costs the name check again
+    // (~$0.002 a title), which is cheaper than a sweep that dies mid-save.
+    for (const c of due.slice(LABEL_MAX)) photoDeferred.add(c.product_id);
+    labelUsage.deferred = due.length - now.length;
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    const client = apiKey ? new Anthropic({ apiKey }) : null;
+    let urls: Record<string, string[]> = {};
+    try {
+      if (client && now.length) {
+        const { shop, token } = await shopFor(store);
+        urls = await photoUrlsFor(shop, token, now.map(c => c.product_id));
+      }
+    } catch (e) {
+      for (const c of now) photoDeferred.add(c.product_id);
+      labelUsage.failed.push(`Shopify photos: ${String(e).slice(0, 120)}`);
+      now.length = 0;
+    }
+    for (let i = 0; client && i < now.length; i += LABEL_CONCURRENCY) {
+      await Promise.all(now.slice(i, i + LABEL_CONCURRENCY).map(async c => {
+        const list = urls[c.product_id] || [];
+        if (!list.length) { labelUsage.noPhotos++; return; }
+        try {
+          const r = await labelCheck(client, c.title, extras[c.product_id]?.specs, list);
+          labelUsage.looked++;
+          labelUsage.input += r.input; labelUsage.output += r.output;
+          if (r.verdict) { nameBy[c.product_id] = r.verdict; labelUsage.found++; }
+        } catch (e) {
+          // A failed look is not "no mismatch" — retry it next run.
+          photoDeferred.add(c.product_id);
+          labelUsage.failed.push(`${c.sku}: ${String(e).slice(0, 120)}`);
+        }
+      }));
+    }
+  }
+
   const out: any[] = [];
   // Pairs where the eBay listing mapped to this SKU is a DIFFERENT PRODUCT. Not
   // queued (they are not titles to rewrite) but counted, because silently
@@ -3608,7 +3859,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     // change to NAME_SYSTEM.
     // A verdict the PHOTOS overruled is not one the model invented; it is
     // counted as photoTiebreak.listing instead.
-    if (nv && nv.verdict !== "ok" && nv.photo?.answer !== "listing"
+    if (nv && nv.verdict !== "ok" && nv.photo?.answer !== "listing" && nv.source !== "label"
         && !a.findings.some(f => NAME_CODES.has(f.code))) {
       nameUnverified.push({ sku: row.sku, title: row.title,
                             claimed: String(nv.wrong_text || ""),
@@ -3768,6 +4019,30 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
     }
   }
+  // The label check's bill, its own row — the number Ethan approved at ~$30 a
+  // month (2026-11-05). If it runs well past that, LABEL_MAX or hasPartCode is
+  // letting too much through.
+  if (wantLlm && save && labelUsage.looked) {
+    try {
+      await sb("ai_usage_log", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          tool: "listing-titles:label-check",
+          store_code: store,
+          model: PHOTO_MODEL,
+          effort: PHOTO_EFFORT,
+          batches: labelUsage.looked,
+          items: labelUsage.looked,
+          input_tokens: labelUsage.input,
+          output_tokens: labelUsage.output,
+          cost_usd: labelUsage.input / 1e6 * PHOTO_PRICE[0] + labelUsage.output / 1e6 * PHOTO_PRICE[1],
+        }),
+      });
+    } catch (e) {
+      console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
+    }
+  }
 
   return {
     store, examined: cands.length, queued: out.length,
@@ -3782,7 +4057,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       // run that "felt expensive" can be checked instead of argued about.
       estCostUsd: Math.round(
         (nameUsage.input / 1e6 * 5 + nameUsage.output / 1e6 * 25) * 100) / 100,
-      flagged: Object.values(nameBy).filter(v => v?.verdict !== "ok").length,
+      flagged: Object.values(nameBy).filter(v => v?.verdict !== "ok" && v?.source !== "label").length,
       // The rate to watch. A model that starts quoting text which is not in the
       // title is a model that has started inventing, and these are the rows that
       // were dropped for it.
@@ -3797,6 +4072,14 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
         estCostUsd: Math.round((photoUsage.input / 1e6 * PHOTO_PRICE[0]
           + photoUsage.output / 1e6 * PHOTO_PRICE[1]) * 100) / 100,
         ...(photoUsage.failed.length ? { failed: photoUsage.failed.slice(0, 5) } : {}),
+      },
+      // `found` is labels that contradicted a title the name check passed.
+      labelCheck: {
+        looked: labelUsage.looked, found: labelUsage.found,
+        noPhotos: labelUsage.noPhotos, deferred: labelUsage.deferred,
+        estCostUsd: Math.round((labelUsage.input / 1e6 * PHOTO_PRICE[0]
+          + labelUsage.output / 1e6 * PHOTO_PRICE[1]) * 100) / 100,
+        ...(labelUsage.failed.length ? { failed: labelUsage.failed.slice(0, 5) } : {}),
       },
     } } : {}),
     saved: save,
@@ -5342,13 +5625,34 @@ async function handlePost(req: Request, scope: Scope) {
     if (!scope.corp) return json({ error: "forbidden", detail: "Only the DM or CEO can send a row back." }, 403);
     const note = String(body.note || "").trim().slice(0, 500);
     if (!note) return json({ error: "note required", detail: "Say why the suggestion was right — the store reads this on the row." }, 400);
-    await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}&status=eq.denied`, {
-      method: "PATCH", headers: { Prefer: "return=minimal" },
+    const back = await (await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}&status=eq.denied&select=current_title`, {
+      method: "PATCH", headers: { Prefer: "return=representation" },
       body: JSON.stringify({
         status: "open", returned_note: note, returned_by: scope.name,
         returned_at: new Date().toISOString(),
       }),
-    });
+    })).json().catch(() => []);
+    // The row went back into the store's queue silently until 2026-11-03 — no
+    // card, no mail — so a store only found it by opening Listing Health. Mailed
+    // to the store side of ec-view-titles (STORE_ROLES + EXTRA_ROLES above). Best-effort: the send-back already landed.
+    if (Array.isArray(back) && back.length) {
+      try {
+        await sb("notify_queue", {
+          method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            category: "categories", kind: "title_sent_back",
+            title: `A title was sent back to ${store}`,
+            body: `${String(back[0].current_title || "").slice(0, 120)} — ${note}`.slice(0, 300),
+            link: "operations.html", store,
+            audience_stores: [store],
+            audience_roles: ["manager", "owner (manager)", "owner manager", "assistant manager"],
+            audience_feature: TITLES_KEY,
+            exclude_user: String(scope.name || "").trim().toLowerCase() || null,
+            priority: "normal",
+          }),
+        });
+      } catch (_) { /* best-effort */ }
+    }
     return json({ ok: true, sentBack: productId });
   }
 

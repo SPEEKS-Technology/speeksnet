@@ -136,6 +136,8 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
     if (!on) return;
     const READ_POSTS = [
         { path: '/functions/v1/district-watch', actions: ['board', 'history'] },
+        // 'lookup' only reads the row and Shopify; 'close' writes and stays blocked.
+        { path: '/functions/v1/unrestocked-returns', actions: ['lookup'] },
     ];
     function isReadPost(url, init) {
         let action = '';
@@ -205,6 +207,7 @@ const B2B_INTAKE_URL    = `${_BASE}/b2b-intake`;
 const B2B_CAPTURE_URL   = `${_BASE}/b2b-capture-tool`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
+const UNRESTOCKED_URL   = `${_BASE}/unrestocked-returns`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const QP_LAYOUT_URL     = `${_BASE}/qp-layout`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
@@ -225,7 +228,7 @@ const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 // --- SHARED STORE ROSTER ---
 // Every store code in the district, plus the colour dot each is shown with.
 // These used to live inside the B2B module as B2B_STORE_LIST / B2B_STORE_ICONS,
-// but Call Backs and the MSM alert router read them too, so they belong here
+// but Call Backs and the alert router read them too, so they belong here
 // rather than inside a feature that can be rebuilt out from under them.
 const STORE_CODES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const STORE_DOTS  = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
@@ -1158,8 +1161,7 @@ function toggleNotifs() {
 //
 // Two kinds of event, and the look keeps them apart at a glance:
 //   * store events    — green. Belong to one store; that store's manager
-//                       adds, edits and deletes them. An MSM does both BAL and MPL
-//                       and switches between them with the store chips.
+//                       adds, edits and deletes them.
 //   * company events  — dark slate with a lock. Posted from the Company events
 //                       tab by the district roles (DM, CEO, MOCD) to any set of
 //                       stores; read-only on a store's calendar.
@@ -1250,7 +1252,6 @@ function _scalIsDistrict() { return _SCAL_DISTRICT_ROLES.includes(_scalRole()); 
 // The stores this person may add store events to. Drawing only — see the banner.
 function _scalWritableStores() {
     if (_scalIsDistrict()) return [];
-    if (isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.slice();
     if (_SCAL_MANAGER_ROLES.includes(_scalRole())) {
         const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
         return STORE_CODES.includes(s) ? [s] : [];
@@ -1258,12 +1259,10 @@ function _scalWritableStores() {
     return [];
 }
 function _scalCanWriteStore(store) { return _scalWritableStores().includes(String(store || '').toUpperCase()); }
-// The stores the filter chips offer — every store for corporate, and for an
-// MSM just their two, as the same All / BAL / MPL row (Ethan, 2026-10-05: "be
-// like DM, just with only All, BAL, and MPL"). Empty = no chips.
-function _scalFilterStores() { return _scalIsDistrict() ? STORE_CODES : isMultiStoreManager() ? MULTISTORE_MANAGER_STORES : []; }
-// "All" for an MSM is both their stores; they can add from it and pick which
-// store in the form. For corporate "All" stays read-only for store events.
+// The stores the filter chips offer — every store for corporate. Empty = no chips.
+function _scalFilterStores() { return _scalIsDistrict() ? STORE_CODES : []; }
+// "All" is addable only by someone who can write to more than one store, which
+// nobody can today; for corporate "All" stays read-only for store events.
 function _scalCanAddHere(store) { return store === 'ALL' ? _scalWritableStores().length > 1 : _scalCanWriteStore(store); }
 // A PAST event can't be edited (Ethan, 2026-10-05) — only deleted. Past = its
 // last day is before today and it doesn't repeat. The edge function enforces it.
@@ -1722,7 +1721,7 @@ function _scalReadForm(p) {
 // company write from them regardless.
 function _scalCompanyHTML(readOnly) {
     const today = _scalTodayISO();
-    const mine = isMultiStoreManager() ? 'ALL' : _scal.store;
+    const mine = _scal.store;
     const company = _scal.events.filter(e => e.scope === 'company' && (!readOnly || _scalShowsOn(e, mine)));
     // "Upcoming" means not over yet — a multi-day event in progress still counts.
     const isPast = e => (e.end_date || e.event_date) < today && _scalRepeatOf(e) === 'none';
@@ -1959,8 +1958,8 @@ function _scalOpenDetail(id) { _scal.panel = { kind: 'detail', id }; _scalRender
 function _scalOpenDay(day) { _scal.panel = { kind: 'day', day }; _scalRender(); }
 function _scalClosePanel() { _scal.panel = null; _scal.saving = false; _scalRender(); }
 function _scalOpenEdit(id, day) {
-    // An MSM adding an event gets the DM's "Show on" picker — All stores / BAL
-    // / MPL (Ethan, 2026-10-05) — ticked to whichever view they added from.
+    // Someone who can write to more than one store gets the DM's "Show on"
+    // picker, ticked to whichever view they added from. Nobody can today.
     const mine = _scalWritableStores();
     const pickStore = !id && mine.length > 1;
     const stores = pickStore ? (_scal.store === 'ALL' ? mine.slice() : [_scal.store]) : null;
@@ -2041,8 +2040,8 @@ function _scalUpsertLocal(ev) {
 async function _scalSaveStore() {
     const p = _scal.panel;
     if (!p || p.kind !== 'edit' || _scal.saving) return;
-    // A store event belongs to ONE store (0125's shape check), so picking both
-    // of an MSM's stores saves one copy each, in turn. Each copy is then that
+    // A store event belongs to ONE store (0125's shape check), so picking more
+    // than one store saves one copy each, in turn. Each copy is then that
     // store's own: edited or deleted there without touching the other.
     const stores = p.pickStore ? _scalPickedMine() : [p.ev.store];
     const ev = Object.assign(_scalReadForm('scalE'), { scope: 'store', store: stores[0] });
@@ -2140,10 +2139,10 @@ function toggleCalendar() {
         _scal.panel = null; _scal.saving = false;
         _scal.tab = 'calendar'; _scal.companyList = 'upcoming'; _scal.pastMonth = null; _scal.upMonth = null;
         _scal.typeEdit = null; _scal.typeColor = null;
-        if (_scalIsDistrict() || isMultiStoreManager()) _scal.store = 'ALL';
+        if (_scalIsDistrict()) _scal.store = 'ALL';
         else {
             const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-            _scal.store = STORE_CODES.includes(s) ? s : (isMultiStoreManager() ? MULTISTORE_MANAGER_STORES[0] : STORE_CODES[0]);
+            _scal.store = STORE_CODES.includes(s) ? s : STORE_CODES[0];
         }
         if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the calendar…</div>');
         else _scalRender();
@@ -2151,37 +2150,9 @@ function toggleCalendar() {
     }
     toggleModal('calendarDropdown');
 }
-// Where an idea goes if the recipient list has not loaded (or is empty). Same
-// fallback pattern as every other emailing tool: the address that was hardcoded
-// into the form before the list existed, so a failed fetch sends the idea to the
-// person it has always gone to rather than nowhere.
-const IDEA_FALLBACK_TO = ['ethan.kushnir@speekstechnology.com'];
-
-// formsubmit.co takes ONE address in the URL and the rest through a _cc field,
-// so the list is split rather than joined. Called on open, not at inject time:
-// the recipient list is fetched lazily and a modal built at page load would keep
-// whatever address was current then for the rest of the session.
-async function _ideaSyncRecipients() {
-    const form = document.getElementById('ideaForm');
-    if (!form) return;
-    await _fetchEmailLists();
-    const to = _recipientsFor('idea_submissions', IDEA_FALLBACK_TO)
-        .map(a => String(a || '').trim()).filter(Boolean);
-    const list = to.length ? to : IDEA_FALLBACK_TO;
-    form.action = 'https://formsubmit.co/' + encodeURIComponent(list[0]);
-    // _cc is rewritten every open, including to empty — an address removed in the
-    // tool has to actually stop receiving ideas, and a stale hidden field would
-    // keep copying them in forever.
-    let cc = form.querySelector('input[name="_cc"]');
-    if (!cc) {
-        cc = document.createElement('input');
-        cc.type = 'hidden';
-        cc.name = '_cc';
-        form.appendChild(cc);
-    }
-    cc.value = list.slice(1).join(',');
-}
-
+// Recipients for Submit an Idea are read SERVER side now (the idea-submit edge
+// function reads the idea_submissions list and falls back to Ethan), so the
+// popup no longer fetches the list on open or rewrites a formsubmit _cc field.
 function toggleIdeaModal() {
     // Pre-fill the submitter's name from their session so they don't retype it.
     const nameEl = document.getElementById('ideaName');
@@ -2189,10 +2160,6 @@ function toggleIdeaModal() {
         const u = sessionStorage.getItem('speeksUserName');
         if (u && u.trim()) nameEl.value = u.trim();
     }
-    // Not awaited: the address only has to be right by the time Submit is
-    // pressed, and blocking the modal open on a network call to show a form
-    // would be a worse trade. The form carries the fallback until it resolves.
-    _ideaSyncRecipients();
     toggleModal('ideaModal');
 }
 
@@ -3307,7 +3274,7 @@ function populateUsersModal() {
     // Store LAST, and deliberately so: the list above it is people in seniority
     // order, and a Store account is a screen on a sales floor — one per store,
     // never a person. Grouping it at the bottom keeps the staff list readable.
-    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
     const groups = {};
     const order = [];
     globalUsersData.forEach(u => {
@@ -3366,7 +3333,7 @@ function _muRenderTestAccounts(rows) {
         + `</div>`;
     rows.appendChild(group);
 }
-// "multi-store manager" → "Multi-Store Manager", as the role dropdown spells it.
+// "owner (manager)" → "Owner (Manager)", as the role dropdown spells it.
 function _muTestRole(r) {
     const s = String(r || '').toLowerCase();
     if (s === 'ceo' || s === 'mocd') return s.toUpperCase();
@@ -3517,7 +3484,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     // Must match ROLE_ORDER in populateManageUsers, including the trailing Store:
     // a role that can be assigned but not grouped lands in the unrecognised
     // bucket, and one that can be grouped but not assigned cannot be created.
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'MOCD', 'Store'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     // A row still stored as TOM selects MOCD, so the dropdown never renders with
@@ -4393,6 +4360,9 @@ async function checkPIN() {
         if (matched) {
             sessionStorage.setItem('speeksUnlocked', 'true');
             sessionStorage.setItem('speeksUserName', matched.name);
+            // A sign-in opens the QuickPortal on the person's first tab (QPT_TAB_KEY);
+            // the localStorage copy is the old browser-wide memory, gone too.
+            try { sessionStorage.removeItem('speeksQptTab'); localStorage.removeItem('speeksQptTab'); } catch (e) { /* private mode */ }
 
             let _loginRole = matched.role ? matched.role.toLowerCase() : 'employee';
             // TOM was renamed MOCD (Manager of Corporate Development). Normalising
@@ -4402,21 +4372,10 @@ async function checkPIN() {
             // when this code ships, instead of the two having to land together.
             if (_loginRole === 'tom') _loginRole = 'mocd';
             let _loginStore = matched.store ? matched.store.toUpperCase() : 'ALL';
-            // A Multi-Store Manager behaves EXACTLY like a store manager everywhere — so we
-            // store their effective role as 'manager' (covers every role check, current and
-            // future) and flag the multi-store capability separately to drive the store
-            // switcher. Default to their first managed store.
-            if (_loginRole === 'multi-store manager') {
-                sessionStorage.setItem('speeksMultiStore', 'true');
-                _loginRole = 'manager';
-                _loginStore = MULTISTORE_MANAGER_STORES[0];
-            } else {
-                sessionStorage.removeItem('speeksMultiStore');
-                // MOCD is homed at OVL rather than CORP (Ethan 2026-07-17). Their
-                // corp-wide powers are role-gated, not store-gated, so this only
-                // changes their default store, not their access.
-                if (_loginRole === 'mocd') _loginStore = 'OVL';
-            }
+            // MOCD is homed at OVL rather than CORP (Ethan 2026-07-17). Their
+            // corp-wide powers are role-gated, not store-gated, so this only
+            // changes their default store, not their access.
+            if (_loginRole === 'mocd') _loginStore = 'OVL';
             sessionStorage.setItem('speeksUserRole', _loginRole);
             sessionStorage.setItem('speeksUserStore', _loginStore);
             sessionStorage.setItem('speeksUserPin', matched.pin);
@@ -4504,6 +4463,9 @@ async function checkPIN() {
             if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
             if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
             if (typeof initB2bPage === 'function') initB2bPage();
+            // The morning mail's "Restocked Under Another SKU" link — a manager
+            // on a phone signs in on it far more often than they arrive signed in.
+            try { _restockHandleHash(); } catch (_) { /* not fatal to sign-in */ }
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
@@ -5551,19 +5513,15 @@ const _kpiNotesOpen = new Set();
 // Narrower than KPI editing on purpose: a coaching note is the store manager's
 // prep for a conversation with their own team, so nobody above them edits it.
 // DM, CEO and corp read only; assistant managers read only.
-const _KPI_NOTE_EDIT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
+const _KPI_NOTE_EDIT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 
 // Editing also requires that the store on screen is actually theirs — a DM's
-// store picker and an MSM's routing both mean the grid can be showing a store
-// the viewer doesn't manage.
+// store picker means the grid can be showing a store the viewer doesn't manage.
 function _kpiCanEditNotes() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (!_KPI_NOTE_EDIT_ROLES.has(role)) return false;
     const onScreen = (_kpiResolveStore() || '').toUpperCase();
     if (!onScreen) return false;
-    // An MSM manages every store in the list, not just the one whose dashboard
-    // they're currently on — _kpiResolveStore can legitimately show them either.
-    if (role === 'multi-store manager') return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
     return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
 }
 
@@ -7381,12 +7339,6 @@ function _kpiRenderMonthly(periods) {
 // Global roles (DM / CEO / owner-manager) may submit anywhere — that is the
 // backend's rule, not a guess.
 //
-// An MSM signs in as 'manager' with speeksMultiStore set (see the login block),
-// so the multi-store case is asked with isMultiStoreManager(), NOT a role string
-// — sessionStorage never holds 'multi-store manager'. The backend sees their real
-// users.role and scopes them to MULTISTORE_MANAGER_STORES, which is the same
-// answer.
-//
 // ⚠️ Paired with `canEnterKPIs` and the roleLower block in
 // supabase/functions/kpi-manage/index.ts. Change one, change the other — a
 // frontend that says yes while the backend says no is a button that 403s, which
@@ -7398,9 +7350,6 @@ function _kpiCanEditNumbers() {
     if (role !== 'manager' && role !== 'assistant manager') return false;
     const onScreen = (_kpiResolveStore() || '').toUpperCase();
     if (!onScreen) return false;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
-    }
     return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
 }
 
@@ -7503,9 +7452,7 @@ function applyKpiReminder() {
 //   • Monthly: due from the FIRST SUNDAY of the month AFTER the reporting month
 //              (so a month that ends mid-week is reported the first Sunday — e.g.
 //              the 4th); "Overdue" after that Sunday; persists until filled.
-//   Roles: manager / owner-manager / MSM. (MSM is scoped to their HOME store —
-//   the Store KPIs pane's store picker is DM/CEO-only, so an MSM can only enter
-//   their home store here today.)
+//   Roles: manager / owner-manager.
 // ============================================================================
 const _KPI_DUE_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 // NOTE: Assistant Managers are intentionally excluded. ASM KPI entry is disabled
@@ -7518,28 +7465,17 @@ let _kpiDueStarted = false;
 function _kpiDueEligible() {
     return _KPI_DUE_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 }
-// The store(s) whose KPIs THIS user is responsible for. A Multi-Store Manager
-// covers BOTH managed stores (they fill each by switching the active store, or
-// by clicking the store-specific feed card which routes the pane to that store —
-// see _kpiResolveStore); everyone else is their one home store.
+// The store whose KPIs THIS user is responsible for (as a list): their home store.
 function _kpiMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-// Which store the Store KPIs pane is currently showing/saving. Preserves the
-// existing behaviour for everyone (DM/CEO picker wins; managers = their store),
-// and adds one thing: an MSM who arrived via a store-specific KPI feed card is
-// routed to THAT store (set on pane-open in switchWorkspaceTab), without
-// switching their whole dashboard — mirrors the aging pane's _agViewStore.
-let _kpiViewStore = null;
+// Which store the Store KPIs pane is currently showing/saving: the DM/CEO
+// picker wins; managers get their store.
 function _kpiResolveStore() {
     const sel = document.getElementById('kpiModalStoreSelect');
     if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / MOCD picker
-    if (_kpiViewStore) return _kpiViewStore;                               // MSM routed store
     return sessionStorage.getItem('speeksUserStore') || '';               // manager default
 }
 // Today's date in Central time as YYYY-MM-DD — string-comparable with the
@@ -7623,11 +7559,9 @@ function _kpiRenderDueBubble(which, show, opts) {
     const when = monthly ? "Last month's" : (overdue ? "Last week's" : "This week's");
     const tab = monthly ? 'monthly' : 'weekly';
     const title = (monthly ? 'Monthly KPIs' : 'Weekly KPIs') + (overdue ? ' Overdue' : ' Due');
-    // Name the outstanding store(s) when the card can cover more than one — an MSM
-    // (either store, even when only one is left) or any multi-store list. A plain
-    // manager has one store, so naming it is just noise.
-    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
-    const storeP = ((isMSM || stores.length > 1) && stores.length) ? (' (' + stores.join(' & ') + ')') : '';
+    // Name the outstanding stores only when there is more than one. A manager has
+    // one store, so naming it is just noise.
+    const storeP = (stores.length > 1) ? (' (' + stores.join(' & ') + ')') : '';
     const tail = overdue ? ' are overdue' : ' are due Monday by 8:30am';
     const summary = overdue
         ? (when + ' KPIs' + storeP + ' are overdue — enter them now.')
@@ -7772,13 +7706,11 @@ async function openKpiEntryPanelForStore(store, tab) {
 //
 // So it asks the honest question instead: do I have a store that is actually in
 // this list? A DM or CEO is 'ALL', which matches no option, so they keep
-// whatever was selected exactly as before. An MSM routed here by a store-specific
-// feed card opens on THAT store (_kpiViewStore), same as when the picker is
-// hidden from them.
+// whatever was selected exactly as before.
 function _kpiSeedStorePicker() {
     const sel = document.getElementById('kpiModalStoreSelect');
     if (!sel) return;
-    const want = (_kpiViewStore || sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    const want = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (!want) return;
     if (Array.from(sel.options).some(o => o.value === want)) sel.value = want;
 }
@@ -7849,30 +7781,21 @@ function switchWorkspaceTab(name) {
     } else if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
-        // MSM only: a store-specific KPI feed card routes the pane to that store
-        // (consumed once, cleared after), without switching the whole dashboard.
-        // No override → their active store. Non-MSM → null (falls back normally).
-        _kpiViewStore = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
-            ? (_consumeMsmAlertStore() || null) : null;
         loadWorkspaceKpis();
     } else if (name === 'vreplies') {
         loadVarianceReplies();
     } else if (name === 'aging') {
-        // Resolve which store the aging view shows ONCE per open (a single-store /
-        // DM-routed alert override wins, else the active dashboard store), so the
-        // repeated re-renders after adding items/notes don't re-consume it.
-        const agOverride = _consumeMsmAlertStore();
+        // Consume a DM-routed alert override ONCE per open, so the repeated
+        // re-renders after adding items/notes don't re-consume it.
+        const agOverride = _consumeAlertToolStore();
         if (_agIsDM()) {
-            // The DM's aging view is driven by the store dropdown, not _agViewStore.
-            // Point the dropdown at the routed store so clicking the "replies to
-            // review" alert lands on a store that actually replied.
-            _agViewStore = null;
+            // The DM's aging view is driven by the store dropdown. Point it at the
+            // routed store so clicking the "replies to review" alert lands on a
+            // store that actually replied.
             const sel = document.getElementById('ag-store-select');
             if (agOverride && sel && [...sel.options].some(o => o.value.toUpperCase() === agOverride)) {
                 sel.value = agOverride;
             }
-        } else {
-            _agViewStore = agOverride || _msmDefaultStore();
         }
         loadAgingInventory();
     }
@@ -7929,10 +7852,9 @@ function _wsFitPanels() {
         if (!panel.offsetParent) return;                    // hidden pane
         const top = panel.getBoundingClientRect().top + window.scrollY;
         const docTop = top - window.scrollY;                // viewport-relative
-        // The B2B page runs edge to edge (2026-10), so its panel goes to the
-        // bottom of the window with no gap under it.
-        const gap = panel.closest('.b2b-wrap') ? 0 : GAP;
-        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + gap}px`);
+        // B2B ran edge to edge with no gap here until 2026-10-31; it has the
+        // standard page header and card now, so it keeps the same gap as the rest.
+        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + GAP}px`);
     });
     // The deal page takes the hub's place, so it needs the same top to size to
     // -- measured off the wrapper, which is there whether or not a deal is open.
@@ -10809,8 +10731,8 @@ function _kpiCancelEdit() {
 }
 
 async function _kpiSavePeriod(periodDate) {
-    // Mirror the load/render store resolution (DM/CEO picker → MSM routed store →
-    // manager's own store) so the save always targets the store on screen.
+    // Mirror the load/render store resolution (DM/CEO picker → manager's own
+    // store) so the save always targets the store on screen.
     const store = _kpiResolveStore();
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!store || !pin) return;
@@ -12505,7 +12427,7 @@ function handleSignOut() {
     // the credential on several writes (kpi-manage among them), so the outgoing
     // user's PIN stayed readable in the tab until the next login overwrote it.
     ['speeksUnlocked', 'speeksUserName', 'speeksUserRole', 'speeksUserStore',
-     'speeksMultiStore', 'speeksUserPin', 'speeksUserOnboardedAt',
+     'speeksUserPin', 'speeksUserOnboardedAt',
      'speeksSeenCommentKeys', 'speeksConnectFeed'].forEach(function (k) { sessionStorage.removeItem(k); });
     // The SPEEKS Connect feed is held in memory as well as in storage, and
     // sign-out does not always end in a reload.
@@ -12585,21 +12507,27 @@ function handleSignOut() {
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
-let isIdeaSubmitting = false; 
+// Posts to the idea-submit edge function with fetch. It used to be a plain form
+// posted to formsubmit.co into a hidden iframe, which is why it "took forever"
+// (2026-11-05): the success screen waited on that free service's whole reply,
+// had no timeout, and showed "Submitted" on any iframe load — error pages too.
+// Now "Submitted" means the relay took the mail, and a failure says so.
+let isIdeaSubmitting = false;
+const IDEA_SUBMIT_URL = `${_BASE}/idea-submit`;
+// Long enough for a 10 MB phone photo on store Wi-Fi, short enough that a dead
+// request ends in a message rather than a button stuck on "Sending...".
+const IDEA_SUBMIT_TIMEOUT_MS = 45000;
 
 function injectIdeaModal() {
     if (!document.getElementById('ideaModal')) {
         const modalHtml = `
-        <iframe name="hidden_iframe" id="hidden_iframe" style="display:none;" onload="handleIframeLoad()"></iframe>
         <div class="modal-menu idea-menu" id="ideaModal">
             <div class="modal-header">
                 <h3>Submit an Idea</h3>
                 <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div class="modal-content" style="padding: 25px;">
-                <form id="ideaForm" action="https://formsubmit.co/ethan.kushnir@speekstechnology.com" method="POST" enctype="multipart/form-data" target="hidden_iframe" onsubmit="prepareIdeaSubmit()">
-                    <input type="hidden" name="_captcha" value="false">
-                    <input type="hidden" name="_subject" id="ideaDynamicSubject" value="New SPEEKS Idea">
+                <form id="ideaForm" onsubmit="submitIdea(event)">
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Your Name</label>
                         <input type="text" id="ideaName" name="Name" class="idea-input" required readonly aria-readonly="true" title="Pulled from your account" style="background:#f1f5f9; color:#475569; cursor:not-allowed;">
@@ -12622,6 +12550,7 @@ function injectIdeaModal() {
                         <input type="file" id="ideaFile" name="Attachment" class="idea-input" accept="image/*,.pdf,.doc,.docx" style="padding: 10px;">
                     </div>
                     <div style="display:flex; justify-content:flex-end; gap:10px;">
+                    <div id="ideaError" role="alert" style="display:none; color:#d64545; font-size:13px; font-weight:600; margin-bottom:12px;"></div>
                         <button type="button" class="btn-secondary" onclick="closeAllModals()">Cancel</button>
                         <button type="submit" class="btn-primary" id="submitIdeaBtn">Submit Idea</button>
                     </div>
@@ -12638,23 +12567,49 @@ function injectIdeaModal() {
     }
 }
 
-function prepareIdeaSubmit() {
-    isIdeaSubmitting = true; 
+async function submitIdea(ev) {
+    if (ev) ev.preventDefault();
+    if (isIdeaSubmitting) return; // a double-click must not send the idea twice
+    const form = document.getElementById('ideaForm');
     const btn = document.getElementById('submitIdeaBtn');
-    btn.innerText = 'Sending...';
-    btn.style.opacity = '0.7';
-    const category = document.getElementById('ideaCategory').value;
-    document.getElementById('ideaDynamicSubject').value = 'New SPEEKS Idea: ' + category;
-}
+    const errEl = document.getElementById('ideaError');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
-function handleIframeLoad() {
-    if (isIdeaSubmitting) {
-        document.getElementById('ideaForm').style.display = 'none';
+    // Checked here rather than left to the server: a 10 MB limit learnt after
+    // uploading 30 MB is the slow failure this rewrite exists to remove.
+    const fileEl = document.getElementById('ideaFile');
+    const f = fileEl && fileEl.files && fileEl.files[0];
+    if (f && f.size > 10 * 1024 * 1024) {
+        if (errEl) { errEl.textContent = 'That file is over 10 MB — please attach a smaller one.'; errEl.style.display = 'block'; }
+        return;
+    }
+
+    const fd = new FormData(form);
+    fd.append('Store', sessionStorage.getItem('speeksUserStore') || '');
+
+    isIdeaSubmitting = true;
+    btn.disabled = true;
+    btn.innerText = f ? 'Uploading...' : 'Sending...';
+    btn.style.opacity = '0.7';
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), IDEA_SUBMIT_TIMEOUT_MS);
+    try {
+        const res = await fetch(IDEA_SUBMIT_URL, { method: 'POST', body: fd, signal: ctl.signal });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success) throw new Error(json.error || `Server answered ${res.status}`);
+        form.style.display = 'none';
         document.getElementById('ideaSuccess').style.display = 'block';
-        const btn = document.getElementById('submitIdeaBtn');
+    } catch (e) {
+        const msg = e && e.name === 'AbortError'
+            ? 'This is taking too long — check your connection and try again.'
+            : `Your idea did not send: ${(e && e.message) || e}`;
+        if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+    } finally {
+        clearTimeout(timer);
+        isIdeaSubmitting = false;
+        btn.disabled = false;
         btn.innerText = 'Submit Idea';
         btn.style.opacity = '1';
-        isIdeaSubmitting = false; 
     }
 }
 
@@ -13104,6 +13059,10 @@ async function fetchAlertsData() {
         if (typeof _qpSetHeadline === 'function') _qpSetHeadline('ebay', {
             crit: _crit, warn: _warn, clear: _clear,
             perf: _hlGrp(_sevs.slice(0, 4)), top: _hlGrp(_sevs.slice(4)), chips: _hlChips, perfChips: _hlPerf,
+            // All four seller-level rates, clear ones too: the Store Health tab
+            // draws them as a status grid (_qptHealthParts).
+            rates: [['Defect Rate', 'defectRate'], ['Late Shipment', 'lateShipment'], ['Cases Closed', 'casesClosed'], ['Tracking', 'tracking']]
+                .map(([name, k], i) => ({ name, val: formatPercent(storeData[k]), sev: _sevs[4 + i] === 'very-high' ? 'bad' : _sevs[4 + i] === 'high' ? 'warn' : 'good' })),
         });
 
         // ---- eBay detail panel: two metric groups, contained stat cells ----
@@ -13478,8 +13437,8 @@ function _ccStampStore(store) {
 // SCOPING IS THE EDGE FUNCTION'S JOB, not this file's. It resolves the caller's
 // role from their PIN and strips out every store they may not see before
 // responding — DM/CEO get the district roll-up, a manager/ASM/employee get their
-// own store, the MSM gets both of theirs. So there is no filtering below: what
-// arrives here is already only what this user is allowed to read.
+// own store. So there is no filtering below: what arrives here is already only
+// what this user is allowed to read.
 //
 // Managers, ASMs and employees deliberately see the SAME figures, cost and margin
 // included.
@@ -13804,7 +13763,7 @@ function _lvPaceCls(idx) {
     if (idx === null || idx === undefined) return 'flat';
     return idx >= 100 ? 'good' : 'bad';
 }
-// Per-store paceIndex is computed server-side; the district and MSM roll-ups carry
+// Per-store paceIndex is computed server-side; the district roll-up carries
 // pctOfGoal but no index of their own, so derive it the same way rather than
 // leaving the column blank on the one row that summarises all the others.
 function _lvPace(pctOfGoal, elapsedPct) {
@@ -13836,9 +13795,9 @@ function _lvPaceThruStore(m, d) {
     return v && v.paceIndex !== undefined ? v.paceIndex : null;
 }
 // A roll-up's pace is derived from its pctOfGoal, the way the table and the card
-// deck derive it on every tab. The district payload carries its own `prev`; the
-// MSM's "Both" is a sum built on the page, so it is re-summed from the same
-// healthy stores at yesterday's close.
+// deck derive it on every tab. The district payload carries its own `prev`; a
+// combined line built on the page is re-summed from the same healthy stores at
+// yesterday's close.
 function _lvPaceThruRoll(rollup, stores, d) {
     if (!(d && d.prev && d.prev.inMonth)) return null;
     const pv = _lvAsPrev(() => (rollup && rollup.prev)
@@ -13904,11 +13863,6 @@ function _lvOrderKey(code, at) {
 function _lvMyCodes(d) {
     const scope = d && d.scope;
     if (!scope) return null;
-    // An MSM's `store` is only their home store, but they run both — same reason
-    // userInStore has a branch for them.
-    if (String(scope.role || '').toLowerCase().trim() === 'multi-store manager') {
-        return new Set(MULTISTORE_MANAGER_STORES);
-    }
     const own = String(scope.store || '').toUpperCase();
     if (!own) return null;
     const codes = (d.stores || []).map(m => String(m.code).toUpperCase());
@@ -14607,7 +14561,7 @@ const _bdCache = {};
 
 function _bdEl() { return document.getElementById('bdDaily'); }
 
-// Which store the popout should open on. Their own, or an MSM's home store.
+// Which store the popout should open on: their own.
 // Anyone without one — a DM or the CEO — opens on the COMPANY rather than on
 // whichever store happens to sort first, which was only ever a way of not being
 // blank; the district is the view they came for, and the five stores are one
@@ -14900,24 +14854,25 @@ function _gpBuyDaysHtml(editable) {
 function _gpAddClosed() {
     const inp = document.getElementById('gpClosedDate');
     const lab = document.getElementById('gpClosedLabel');
-    if (!inp) return;
+    if (!inp) return false;
     // "2026-11-26" is read by its PARTS. new Date('2026-11-26') is parsed as UTC
     // and lands on the 25th here, which would close the wrong day.
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(inp.value || ''));
-    if (!m) { alert('Pick the day the stores are closed.'); return; }
+    if (!m) { alert('Pick the day the stores are closed.'); return false; }
     if (m[1] + '-' + m[2] !== _gpGoals.month) {
         alert('That day is not in ' + _gpMonthName(_gpGoals.month) + '.');
-        return;
+        return false;
     }
     const day = parseInt(m[3], 10);
     if (new Date(+m[1], +m[2] - 1, day).getDay() === 0) {
         alert('Sundays are already excluded — no need to add one.');
-        return;
+        return false;
     }
-    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return; }
+    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return false; }
     _gpClosed.push({ day, label: String((lab && lab.value) || '').trim() });
     _gpHarvestGoals();
     renderGpGoals();
+    return true;
 }
 function _gpRemoveClosed(day) {
     _gpClosed = _gpClosed.filter(c => c.day !== day);
@@ -14981,10 +14936,34 @@ function _gpUpdateTotal() {
     el.textContent = any ? _lvMoney(total, false) : '—';
 }
 
+// What the workbook said about the push, in a sentence — empty when it took.
+// gp-goals has always returned the script's answer as `sheet` and nothing read
+// it, which is how a push that never ran went unnoticed for months. Only the NP
+// goals and the buying days are judged: an NP month also gets a "no Sales tab"
+// back from the retired GP write, and that one is expected.
+function _gpSheetNote(sheet) {
+    const s = String(sheet || '');
+    if (!s) return '';
+    if (!/^ok /.test(s)) return '\n\nThe spreadsheet was NOT updated (' + s.slice(0, 120) + ').';
+    let r = null;
+    try { r = JSON.parse(s.slice(3)); } catch (_) { return ''; }   // answer cut short — it ran
+    const what = { npGoals: 'NP goals', buyDays: 'buying days', closedDays: 'closed-day $0s' };
+    const bad = Object.keys(what)
+        .filter(k => r && r[k] && r[k].ok === false)
+        .map(k => what[k] + ': ' + (r[k].error || (r[k].skipped || []).join('; ')));
+    return bad.length ? '\n\nThe spreadsheet did not take everything — ' + bad.join(' / ') : '';
+}
+
 async function saveGpGoals() {
     if (_gpGoalsBusy || !_gpGoals) return;
     const pin = sessionStorage.getItem('speeksUserPin') || '';
     if (!pin) { alert('Sign in again to save goals.'); return; }
+    // A date picked but never Added is still a closure they meant. On 2026-11-02
+    // Thanksgiving sat in the box, Save Month sent the empty list, and the month
+    // quietly kept 25 buying days. Added here first — before the button is looked
+    // up, because adding re-renders the panel and replaces it.
+    const pending = document.getElementById('gpClosedDate');
+    if (pending && pending.value && !_gpAddClosed()) return;
     const btn = document.getElementById('gpGoalSaveBtn');
     const goals = {};
     let bad = '';
@@ -15012,7 +14991,8 @@ async function saveGpGoals() {
         const j = await res.json().catch(() => ({}));
         if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
         alert((j.complete ? 'Saved. Every store has a goal' : 'Saved')
-            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.'));
+            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.')
+            + _gpSheetNote(j.sheet));
         _gpGoals = await _gpFetch(_gpGoals.month);
         _gpClosed = (_gpGoals.closed || []).map(c => ({ day: Number(c.day), label: String(c.label || '') }));
         renderGpGoals();
@@ -16784,8 +16764,6 @@ function _lvStoreError(m) {
         + ' Every other store is unaffected.</div>';
 }
 
-// The MSM sees both of their stores at once and has no district roll-up, so the
-// tiles above the table are summed here rather than server-side.
 // The signed-in user's OWN store row, out of a district payload.
 //
 // The Live tab shows the district table, but the tiles above it and the
@@ -16801,11 +16779,9 @@ function _lvStoreError(m) {
 //
 // The DASHBOARD's store wins over the payload's scope, and that ordering is the
 // whole point: `d.scope.store` is decided server-side from the pin (scopeFor in
-// shopify-live), so for a Multi-Store Manager it is a single fixed home store
-// and never moves when they switch between BAL and MPL. Every other tile on the
-// card — Scorecard, eBay, Audit — is keyed off `speeksUserStore`, so reading a
-// different source here is what let one card show MPL's heading above BAL's
-// $915.49 with BAL's row visible in the table underneath it.
+// shopify-live), while every other tile on the card — Scorecard, eBay, Audit —
+// is keyed off `speeksUserStore`; reading a different source here once let one
+// card show one store's heading above another store's figures.
 //
 // Only accepted when it is actually a healthy row in this payload, which is what
 // keeps the other roles on their existing behaviour: a DM/CEO carries 'ALL' or
@@ -16842,8 +16818,8 @@ function _lvCombine(stores) {
         mtdNet, mtdGp, mtdOrders: stores.reduce((a, m) => a + m.mtdOrders, 0),
         mtdMargin: mtdNet > 0 ? mtdGp / mtdNet * 100 : null,
         goal, pctOfGoal: goal > 0 ? mtdGp / goal * 100 : null,
-        // An NP pair (the MSM's "Both") is the two stores' NP added up, against
-        // the two NP goals — the same as the district, never re-estimated.
+        // A combined NP line is the stores' NP added up, against their NP
+        // goals — the same as the district, never re-estimated.
         ..._lvCombineNp(stores),
     };
 }
@@ -17077,32 +17053,9 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     _lvCardArgs = { stores, d, rollup, rollupLabel };
     const role = (sessionStorage.getItem("speeksUserRole") || "").toLowerCase().trim();
     const company = _LV_COMPANY_ROLES.has(role);
-    // A Multi-Store Manager runs two stores, so "their store" is both of them plus
-    // the combined line — not one of the pair. They are no longer HANDED just those
-    // two (the payload is district-wide for everyone), so the pair is filtered out
-    // of it below.
-    const msm = sessionStorage.getItem("speeksMultiStore") === "true";
 
     let list, roll, rollLabel = rollupLabel;
-    if (msm) {
-        // The payload is the whole district for EVERYBODY now (see scopeFor in
-        // shopify-live), so "their stores" has to be applied here rather than
-        // trusted from the server: the picker offers BAL, MPL and the pair, not
-        // the five-store district deck a DM gets (user's call, 19 Aug). Only the
-        // deck is narrowed — the desktop table underneath still shows all five,
-        // which is the same district-for-context decision every store gets.
-        list = stores.filter(m => m && MULTISTORE_MANAGER_STORES.includes(String(m.code || '').toUpperCase()));
-        // A payload that somehow carries neither of their stores falls back to
-        // what it does carry rather than to the empty state.
-        if (!list.length) list = stores;
-        // Built here, not taken from `rollup`: the caller is the district branch,
-        // whose roll-up is the five-store total. The pair line has to be summed
-        // out of exactly the two rows the picker can reach or it means something
-        // wider than its label says.
-        const healthy = list.filter(m => !m.error);
-        roll = list.length > 1 ? _lvCombine((healthy.length ? healthy : list).map(m => _lvView(m))) : null;
-        rollLabel = 'Both';
-    } else if (company) {
+    if (company) {
         list = stores;
         roll = rollup;
     } else {
@@ -17198,7 +17151,7 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     // meaning there and the row would just be chrome.
     const deck = [];
     if (roll) {
-        // paceIndex is computed server-side per store; a district or MSM roll-up
+        // paceIndex is computed server-side per store; a district roll-up
         // has none, so it is derived here the same way _lvTable derives it for its
         // own total row — otherwise the District card would be the one card on the
         // phone with a blank percentage.
@@ -17222,9 +17175,6 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     // A pick that is no longer in the deck — a role change, a store that dropped
     // out of the payload — falls back to the first card rather than rendering an
     // empty list under a lit pill.
-    // An MSM opens on Both, not on the store whose dashboard they are on (asked for
-    // on 19 Aug, reversed on 20 Aug): the pair total is the glance, and the two
-    // stores are one tap away in the list either way. Same as every other role —
     // deck[0] is the roll-up wherever there is one.
     let picked = deck.find(c => c.key === _lvCardPick);
     if (!picked) { picked = deck[0]; _lvCardPick = picked.key; }
@@ -17350,7 +17300,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // Named, the same way Buying below it is. Unlabelled, the table read as "the
     // dashboard" and Buying as an appendix to it; they are two halves of the same
     // question, so both get a header. Lives here so every surface that draws this
-    // table gets it — district and Multi-Store Manager, on all three days.
+    // table gets it, on all three days.
     //
     // Google reviews are NOT here. They sat in this table first, on the reasoning
     // that it is the main one — but a review is left by somebody who came in to
@@ -17702,7 +17652,7 @@ function renderLiveDashboard() {
         // Whether the district arrives at all is the SERVER's decision — see
         // scopeFor in shopify-live. This branch renders what it was given and
         // grants nothing; a payload with no district still falls through to the
-        // single-store and Multi-Store Manager branches below exactly as before.
+        // one-store and several-store branches below exactly as before.
         const views = stores.filter(m => !m.error).map(_lvView);
         // TILES AND TRACKING BAND: this person's own store. TABLES: the district.
         // You open your own Command Center to see how your store is doing and read
@@ -17728,9 +17678,10 @@ function renderLiveDashboard() {
         detail = m.error ? _lvStoreError(m)
             : _lvCards(stores, d, null, null) + _lvStoreDetail(d, _lvView(m));
     } else {
-        // Multi-Store Manager: both stores stacked, exactly as their checklist and
-        // Listing Goals already do — no dashboard switch to see the other one.
-        // Combine the VIEWS, so the pair total follows the selected day too.
+        // More than one store and no district: stack them under a combined line.
+        // Unreached today — scopeFor sends everyone the district — but it keeps
+        // a narrowed payload from rendering nothing. Combine the VIEWS, so the
+        // total follows the selected day too.
         const healthy = stores.filter(m => !m.error);
         const views = (healthy.length ? healthy : stores).map(_lvView);
         const roll = _lvCombine(views);
@@ -18260,8 +18211,8 @@ function _goalsTempCountOf(r) {
     const n = Math.round((parseInt(r.goal, 10) || 0) / GOALS_TEMP_GOAL);
     return Math.max(0, Math.min(GOALS_TEMP_MAX, n));
 }
-// sfx is '' for the single-store widget and '-<STORE>' for a MSM section,
-// matching how the roster rows' ids are scoped.
+// sfx is '' for the store widget, or a '-<STORE>' suffix when ids are
+// store-scoped, matching how the roster rows' ids are scoped.
 function _goalsTempCount(sfx) {
     const el = document.getElementById('temp-count' + (sfx || ''));
     return el ? (parseInt(el.dataset.count, 10) || 0) : 0;
@@ -18444,8 +18395,8 @@ function _goalsTempPayload(sfx) {
 }
 
 // The dots for one person: the store's role ladder plus the Off chip. Shared by
-// all three renderers (flip-card form, manager widget, MSM stacked widget) so
-// the Off chip can't be added to one and forgotten in the others.
+// both renderers (flip-card form, manager widget) so the Off chip can't be added
+// to one and forgotten in the other.
 // `emp` lands inside a single-quoted JS string in an onclick, so escape it.
 function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     const cur = String(activeRole || '').trim().toUpperCase();
@@ -18499,9 +18450,8 @@ function _goalsIsFloater(store, emp) {
     return (_goalsFloaters[store] || []).some(x => _goalsSameName(x.name, emp));
 }
 
-// Which store a role dot belongs to. The MSM's stacked widget already marks each
-// store section with data-goals-scope (updateRoleLocks uses it so BAL's B1
-// doesn't lock MPL's B1); everywhere else the page is one store.
+// Which store a role dot belongs to: a section marked data-goals-scope names
+// it; otherwise the page is one store.
 function _goalsRoleScopeStore(btn) {
     const sec = btn && btn.closest ? btn.closest('[data-goals-scope]') : null;
     return (sec && sec.getAttribute('data-goals-scope')) || goalsTargetStore;
@@ -18592,8 +18542,7 @@ function _goalsSameName(a, b) {
 // store-targets edge function.
 //
 // ONE definition, used by both the roster and the size count — they disagreed
-// before, storeRosterSize dropping the Multi-Store Manager while goalsRosterFor
-// kept them.
+// before.
 //
 // 'store' (the shop-floor BOARD account — a TV, not a person) is belt-and-braces
 // here: userInStore already rejects it, as of bf262cd on 2026-08-08. Managers
@@ -18827,8 +18776,7 @@ function normalizeGoalDate(s) {
 // Role dots offered in the goal widgets. Small teams get one lister, normal
 // teams two; past 4 people the lister lane keeps extending (L3, L4, …) so a
 // fully-staffed day can give everyone a role. Extra listers score like L1.
-// Pass a roster size for a specific store (MSM stacked widget); defaults to
-// the single-store global roster.
+// Pass a roster size for a specific store; defaults to the global roster.
 function goalsAvailableRoles(count) {
     const n = (count == null) ? goalsRoster.length : count;
     if (n <= 2) return ['B1', 'B2', 'L1'];
@@ -18867,7 +18815,6 @@ async function initListingGoals() {
 async function fetchLiveGoalsData() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
-    if (isMultiStoreManager()) return fetchLiveGoalsDataMS();
     // Only show the loading state on a COLD load. A refresh of an already-rendered
     // roster repaints in place — blanking it out mid-edit is what made picking a
     // role look like the data had been lost.
@@ -19160,10 +19107,8 @@ window.scheduleGoalsAutosave = function() {
         // Bounded, and it saves anyway at the end of it. A manager's roles are
         // the thing that must not be lost; a goal computed on defaults is wrong
         // but self-heals on the next render (_goalsResaveIfStale), whereas a
-        // roster nobody wrote is gone. The MSM widget keeps its own per-store
-        // state and saves through saveGoalsDataMS, so this single-store readiness
-        // check does not apply to it.
-        const waiting = !_msGoalsActive() && !ListingGoalsEngine.isReady(goalsTargetStore);
+        // roster nobody wrote is gone.
+        const waiting = !ListingGoalsEngine.isReady(goalsTargetStore);
         if (waiting && ++_goalsSaveWaits <= GOALS_SAVE_MAX_WAITS) return scheduleGoalsAutosave();
         _goalsSaveWaits = 0;
         saveGoalsData(true);
@@ -19173,7 +19118,6 @@ let _goalsSaveWaits = 0;
 const GOALS_SAVE_MAX_WAITS = 10;   // ~9s, then write what we have rather than lose it
 
 async function saveGoalsData(silent = false) {
-    if (_msGoalsActive()) return saveGoalsDataMS(silent);
     const status = document.getElementById('goals-save-status');
     if (status && !silent) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
 
@@ -19254,8 +19198,7 @@ async function saveGoalsData(silent = false) {
 }
 
 // Flip the manager's "Set Listing Goals" daily checklist task to done.
-// `storeArg` lets the MSM dual-store widget tick the right store's copy;
-// everyone else defaults to their session store.
+// `storeArg` picks a store's copy; it defaults to the session store.
 async function markListingGoalsChecklistComplete(storeArg) {
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
     const store = storeArg || sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -19266,16 +19209,6 @@ async function markListingGoalsChecklistComplete(storeArg) {
         if (task) {
             targetTaskId = task.id;
             if (!task.checked) { task.checked = true; if (typeof renderChecklist === 'function') renderChecklist(); }
-        }
-    }
-
-    // Multi-Store Manager: the single-store cache is empty; tick the active store's copy.
-    if (_isMSMChecklist()) {
-        const msDaily = (checklistDataCacheMS[store] || {}).daily || [];
-        const msTask = msDaily.find(t => t.text.toLowerCase().includes('listing goals'));
-        if (msTask) {
-            targetTaskId = msTask.id;
-            if (!msTask.checked) { msTask.checked = true; renderChecklistMS(); }
         }
     }
 
@@ -19317,7 +19250,6 @@ function getWeeklyResultFor(emp) {
 function renderManagerGoals() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
-    if (isMultiStoreManager()) return renderManagerGoalsMS();
 
     const now = new Date();
     const dateDisplay = document.getElementById('goals-date-display');
@@ -19369,7 +19301,7 @@ function renderManagerGoals() {
 }
 
 // Sum of an employee's saved daily goals this week, excluding today (last record per day wins).
-// `data` defaults to the single-store cache; the MSM widget passes each store's own cache.
+// `data` defaults to the store's cache.
 function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
     const target = String(emp).trim().toLowerCase();
     const tFirst = target.split(' ')[0];
@@ -19384,257 +19316,6 @@ function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
         if (goalDateObj(r.date) >= startOfWeek) byDay[dStr] = parseInt(r.goal) || 0;
     });
     return Object.values(byDay).reduce((s, g) => s + g, 0);
-}
-
-// ============================================================================
-// MULTI-STORE MANAGER — dual-store listing goals (both stores in one widget)
-// Mirrors the MSM checklist: instead of toggling the dashboard between stores,
-// the MSM's Listing Goals widget stacks a full per-store section (roster, role
-// dots, totals, level-up bars) for every store they run. Role locks, goal math
-// and autosave are all scoped per store, so BAL's B1 doesn't lock MPL's B1.
-// Single-store managers never reach this path.
-// ============================================================================
-let _goalsMS = {};             // store -> { roster: [], live: [], priorWeek: {idx: n}, history: [] }
-let _goalsChecklistDoneMS = {}; // store -> true once the "set listing goals" task was ticked
-
-// True while the stacked dual-store widget is on screen (its sections carry
-// data-goals-scope). Gates the shared save/recompute entry points.
-function _msGoalsActive() {
-    return isMultiStoreManager() && !!document.querySelector('#goals-manager-body [data-goals-scope]');
-}
-
-// Hide the widget's single-store footer (Total row + level-up bars) in MSM
-// mode — each store section renders its own copies.
-function _setMSGoalsChrome(isMS) {
-    const totalRow = document.querySelector('#goals-manager-body ~ .goals-total-row');
-    if (totalRow) totalRow.style.display = isMS ? 'none' : '';
-    const lu = document.getElementById('goals-levelup');
-    if (lu) lu.style.display = isMS ? 'none' : '';
-}
-
-async function fetchLiveGoalsDataMS() {
-    const list = document.getElementById('goals-manager-body');
-    if (!list) return;
-    // Cold load only — see fetchLiveGoalsData.
-    if (!list.querySelector('.role-dot')) {
-        list.innerHTML = '<div class="status-message">Syncing Data...</div>';
-    }
-    _setMSGoalsChrome(true);
-
-    try {
-        _goalsMS = {};
-        // Floaters first — one of them may be a name in the roster below.
-        await Promise.all(MULTISTORE_MANAGER_STORES.map(s => refreshGoalsFloaters(s)));
-        MULTISTORE_MANAGER_STORES.forEach(s => {
-            const emps = _goalsWithFloaters(s, goalsRosterFor(s));
-            _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
-        });
-
-        const [goalsResults] = await Promise.all([
-            Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()).catch(() => [])
-            )),
-            Promise.all(MULTISTORE_MANAGER_STORES.map(s => fetchStoreTarget(s))),
-        ]);
-        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-            _goalsMS[s].live = Array.isArray(goalsResults[i]) ? goalsResults[i] : [];
-            _goalsMS[s].history = weeksFor(s);
-        });
-
-        renderManagerGoalsMS();
-    } catch (e) {
-        list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
-    }
-}
-
-function renderManagerGoalsMS() {
-    const list = document.getElementById('goals-manager-body');
-    if (!list) return;
-    _setMSGoalsChrome(true);
-
-    const now = new Date();
-    const dateDisplay = document.getElementById('goals-date-display');
-    if (dateDisplay) dateDisplay.innerText = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-
-    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    // Top-right chip shows both stores' weekly goals at a glance.
-    const storeTargetEl = document.getElementById('goals-store-target');
-    if (storeTargetEl) storeTargetEl.innerText = 'Goal: ' + MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetFor(s)}`).join(' · ');
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const st = _goalsMS[store] || { roster: [], live: [], priorWeek: {}, history: [] };
-        const ac = _msStoreAccent(store);
-        const availableRoles = goalsAvailableRoles(st.roster.length);
-        st.priorWeek = {};
-
-        let rows = '';
-        const dr = _goalsDayRows(st.live, todayStr, startOfWeek);
-        st.roster.forEach((emp, idx) => {
-            const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
-
-            const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp, '', store);
-
-            st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
-
-            rows += `
-            <div class="goals-mgr-row">
-                <div class="goals-mgr-emp">
-                    <span class="goals-roster-name">${emp}</span>
-                    <div class="goals-edit-roles" id="roles-${store}-${idx}">${rolesHtml}</div>
-                    ${_goalsResultLine(emp, dr)}
-                </div>
-                <div class="goal-auto-display" id="goal-display-${store}-${idx}">–</div>
-                <div class="goals-mgr-week" id="week-display-${store}-${idx}">–</div>
-            </div>`;
-        });
-        const tempToday = _goalsTempCountOf(st.live.find(r => _goalsIsTempRow(r) && normalizeGoalDate(r.date) === todayStr));
-        rows += _goalsTempRowHtml('-' + store, tempToday, priorWeekGoal(GOALS_TEMP_NAME, todayStr, startOfWeek, st.live), dr);
-        rows = _goalsStoreResultHtml(dr) + rows;
-
-        html += `
-        <div class="ms-store-section" data-goals-scope="${store}" style="border-left: 4px solid ${ac.solid};">
-            <div class="ms-store-head" style="border-bottom-color: ${ac.soft};">
-                <span class="ms-store-name" style="color: ${ac.solid};">${store}</span>
-                <span class="ms-store-prog" style="background: ${ac.soft}; color: ${ac.solid};">Goal: ${targetFor(store)} Listings</span>
-            </div>
-            ${rows}
-            <div class="goals-total-row">
-                <span class="goals-total-lbl">Total<small class="goals-total-listed">${_goalsTotalListedHtml(dr)}</small></span>
-                <span id="goals-total-target-${store}" class="goals-total-val target">0</span>
-                <span id="goals-total-actual-${store}" class="goals-total-val actual">0</span>
-            </div>
-            <div class="goals-levelup">${levelUpHtml(st.history, targetFor(store))}</div>
-        </div>`;
-    });
-
-    list.innerHTML = html;
-    setTimeout(() => { updateRoleLocks(); recomputeGoalDisplaysMS(); }, 30);
-}
-
-// MS twin of recomputeGoalDisplays: same math, run per store section.
-function recomputeGoalDisplaysMS() {
-    const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const st = _goalsMS[store];
-        if (!st) return;
-
-        let staffedCount = 0;
-        st.roster.forEach((emp, idx) => {
-            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
-        });
-        const rosterSize = effectiveTeamSize(store);
-
-        let todayTotal = 0;
-        let weekTotal = 0;
-        st.roster.forEach((emp, idx) => {
-            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
-            const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, { employee: emp, store }) : 0;
-
-            const disp = document.getElementById(`goal-display-${store}-${idx}`);
-            if (disp) {
-                disp.innerText = _isOffRole(role) ? 'Off' : (role === '-' ? '–' : todayGoal);
-                disp.classList.toggle('goal-auto-set', _isWorkingRole(role));
-                disp.classList.toggle('goal-off-set', _isOffRole(role));
-            }
-            todayTotal += todayGoal;
-
-            const weekVal = (st.priorWeek[idx] || 0) + todayGoal;
-            const wkEl = document.getElementById(`week-display-${store}-${idx}`);
-            if (wkEl) wkEl.innerText = weekVal || '–';
-            weekTotal += weekVal;
-        });
-
-        const tp = _goalsPaintTemp('-' + store);
-        todayTotal += tp.today;
-        weekTotal += tp.week;
-
-        const tEl = document.getElementById(`goals-total-target-${store}`);
-        if (tEl) tEl.innerText = todayTotal;
-        const wEl = document.getElementById(`goals-total-actual-${store}`);
-        if (wEl) wEl.innerText = weekTotal;
-    });
-}
-
-// MS twin of saveGoalsData: each store section re-saves its full day state
-// (same semantics as the single-store autosave — payload is what's on screen).
-async function saveGoalsDataMS(silent = false) {
-    const status = document.getElementById('goals-save-status');
-    if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
-
-    const now = new Date();
-    const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-
-    const posts = MULTISTORE_MANAGER_STORES.map(async store => {
-        const st = _goalsMS[store];
-        if (!st) return true;
-
-        let staffedCount = 0;
-        st.roster.forEach((emp, idx) => {
-            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
-        });
-        const rosterSize = effectiveTeamSize(store);
-
-        const payloadEmployees = [];
-        st.roster.forEach((emp, idx) => {
-            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
-            const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store })) : '';
-            const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
-            const result = existing && existing.result != null ? String(existing.result) : '';
-            if (role !== '-' || goal !== '' || result !== '') {
-                payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
-            }
-        });
-        const tempRow = _goalsTempPayload('-' + store);
-        if (tempRow) payloadEmployees.push(tempRow);
-
-        try {
-            // See saveGoalsData — don't let our own broadcast bounce back.
-            if (typeof _rtMute === 'function') _rtMute('goals');
-            const response = await fetch(GOALS_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ store: store, date: targetDateStr, employees: payloadEmployees })
-            });
-            if (!response.ok) return false;
-
-            // Update this store's local cache so the UI reflects it instantly.
-            st.live = st.live.filter(r => !(normalizeGoalDate(r.date) === targetDateStr));
-            payloadEmployees.forEach(p => {
-                st.live.push({ date: targetDateStr, store: store, employee: p.employee, role: p.role, goal: p.goal, result: p.result });
-            });
-
-            // Tick THIS store's "set listing goals" checklist task — once per store per session.
-            if (payloadEmployees.length && !_goalsChecklistDoneMS[store]) {
-                _goalsChecklistDoneMS[store] = true;
-                markListingGoalsChecklistComplete(store);
-            }
-            return true;
-        } catch (e) { return false; }
-    });
-
-    const allOk = (await Promise.all(posts)).every(Boolean);
-    if (allOk) {
-        const pulse = document.getElementById('goals-pulse-dot');
-        if (pulse) pulse.style.display = 'none';
-        if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
-        // We muted our own broadcast (see above), so nothing else will tell this
-        // tab the day is now covered — clear the daily reminder ourselves. The
-        // single-store save has always done this; the MSM path never did, so an
-        // MSM who set both stores kept the card until the 10-minute poll.
-        if (typeof checkListingGoalsDailyReminder === 'function') {
-            checkListingGoalsDailyReminder().then(() => {
-                if (typeof renderActionFeed === 'function') renderActionFeed();
-            });
-        }
-    } else {
-        if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
-        else if (!silent) alert("Error saving goals to server.");
-    }
 }
 
 // ============================================================================
@@ -19669,7 +19350,7 @@ const LGPW_TTL_MS = 5 * 60 * 1000;
 let _lgpw = { past: false, week: 0, data: {}, failed: {} };   // data: store -> { at, payload }
 
 function _lgpwStores() {
-    return isMultiStoreManager() ? MULTISTORE_MANAGER_STORES.slice() : [goalsTargetStore];
+    return [goalsTargetStore];
 }
 function _lgpwKey(name) { return String(name || '').trim().toLowerCase(); }
 function _lgpwAddDays(ds, n) {
@@ -19697,7 +19378,7 @@ function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad
 // somebody actually opens this on a phone to do.
 //
 // SCOPED TO THE STORE-FLOOR MANAGERS, who are the ones doing it from a phone:
-// Manager, Assistant Manager and Multi-Store Manager. District Manager, CEO,
+// Manager and Assistant Manager. District Manager, CEO,
 // MOCD and Owner (Manager) keep the tab everywhere, on the reading that a
 // leadership role looking back over four weeks is at a desk. One list, one line
 // to change if that reading is wrong.
@@ -19705,7 +19386,7 @@ function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad
 // Phone only, not the whole compact band: a tablet has the width for all seven
 // columns, which is the entire reason the band and the tablet exception are
 // separate questions.
-const LGPW_PAST_CUT_ROLES = ['role-manager', 'role-assistant-manager', 'role-multistore-manager'];
+const LGPW_PAST_CUT_ROLES = ['role-manager', 'role-assistant-manager'];
 
 function _lgpwPastAllowed() {
     if (!_panelIsFullBleed()) return true;          // desktop or tablet: room for it
@@ -19914,14 +19595,8 @@ function _lgpwSumHtml(got, goal) {
 }
 
 // Roster size for a store (from auth cache). Only feeds the placeholder weekly
-// figure shown before the server's capacity number arrives.
-//
-// The Multi-Store Manager is now COUNTED here. Under the old ladder they were
-// excluded and each of their stores got a flat +15 instead, because a person
-// splitting their week across two stores isn't worth a full ±20 to either. The
-// capacity model needs no such fudge: the MSM appears in both stores at
-// part-time hours, which is the literal truth of how the week is split. Mirrors
-// rosterFor() in the store-targets edge function.
+// figure shown before the server's capacity number arrives. Mirrors rosterFor()
+// in the store-targets edge function.
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
@@ -19930,8 +19605,6 @@ function storeRosterSize(store) {
         ).length || 4;
     } catch (e) { return 4; }
 }
-// NOTE: _msmTargetBoost() lived here — the flat +15 for a store covered by a
-// Multi-Store Manager. Retired with the ladder; see storeRosterSize above.
 
 // Persisted per-store target + flag + last-4-week totals (server-side ratchet).
 let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
@@ -20092,14 +19765,11 @@ window.checkListingGoalReminders = checkListingGoalReminders;
 // construction: when the ASM sets them the manager's card clears too (instantly —
 // the goals broadcast re-runs this — and on the 10-minute poll as a backstop).
 const _LG_DAILY_ROLES = new Set([
-    'manager', 'owner (manager)', 'owner manager', 'assistant manager', 'multi-store manager'
+    'manager', 'owner (manager)', 'owner manager', 'assistant manager'
 ]);
 let _lgDailyStarted = false;
 
 function _lgDailyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return MULTISTORE_MANAGER_STORES.slice();
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -20187,7 +19857,7 @@ async function checkListingGoalsDailyReminder() {
     if (!el) return;
     const t = document.getElementById('listingGoalsDailyAlertBubbleText');
     if (t) {
-        // An MSM covers two stores, so name whichever is outstanding; a single-store
+        // Name the store only when more than one is in scope; a single-store
         // manager already knows which store is theirs.
         const which = (stores.length > 1) ? (' for ' + pending.map(p => p.store).join(' & ')) : '';
         // Naming who is still unaccounted for is what makes the card actionable —
@@ -21032,11 +20702,8 @@ function _b2bPrevalStore() {
 // no listing/complete, no accept. Pricing-edit only.
 function _b2bIsEmployee(){ return _b2bRole() === 'employee'; }
 
-// The stores this user acts for. An MSM covers both of theirs.
+// The stores this user acts for: their own (a list, so callers stay general).
 function _b2bMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = _b2bStore();
     return STORE_CODES.includes(s) ? [s] : [];
 }
@@ -21078,10 +20745,9 @@ function _b2bItemScope() {
 // cannot drift apart -- one scoped and the other not would mean a store seeing
 // the whole deal on a background refresh but not on open, which is the worst
 // kind of leak: intermittent.
-// A multi-store manager asks for both their stores as a list, so they are sent
-// their own lines and not the other store's on a split deal. _b2bItemScope
-// itself stays single-valued: it is also the caller_store on a complete, which
-// names exactly one store.
+// The stores go as a list, so a caller is sent their own lines and not another
+// store's on a split deal. _b2bItemScope itself stays single-valued: it is also
+// the caller_store on a complete, which names exactly one store.
 const _b2bScopeQs = () => {
     if (_b2bIsCorp()) return '';
     const mine = _b2bMyStores();
@@ -21569,12 +21235,9 @@ function b2bCloseDeal() {
     if (_b2bDirty) { _b2bDirty = false; b2bRefresh(); }
 }
 
-// A single-store user only pulls their own store; corp and MSMs pull the lot
-// and filter in _b2bInScope (the MSM covers two stores, which the API's
-// single-store filter can't express).
-// The board's ?store=. A multi-store manager used to get ALL -- every store's
-// deals and every client's contact details -- because the server took one code
-// or none. It takes a list now.
+// A store user only pulls their own store; corp pulls the lot and filters in
+// _b2bInScope.
+// The board's ?store=. The server takes a list of codes, or none for ALL.
 function _b2bFetchScope() {
     if (_b2bIsCorp()) return 'ALL';
     const mine = _b2bMyStores();
@@ -22439,6 +22102,13 @@ function b2bSetView(view) {
     if (changed) {
         const body = document.getElementById('b2bBody');
         if (body) body.scrollTop = 0;
+        // Since 2026-10-31 the hub grows and the PAGE scrolls, so the same
+        // rule applies to the window: scrolled past the tab row, come back up
+        // to it. Left alone when the tabs are already on screen.
+        const tabs = document.querySelector('.b2b-view-tabs');
+        if (tabs && tabs.getBoundingClientRect().top < 64) {
+            window.scrollTo({ top: Math.max(0, tabs.getBoundingClientRect().top + window.scrollY - 80) });
+        }
     }
 }
 
@@ -22478,7 +22148,7 @@ function b2bRender() {
     const queue  = scoped.filter(d => _b2bActionFor(d));
 
     // Header chrome
-    document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => {
+    document.querySelectorAll('.b2b-view-tabs .ws-tab').forEach(b => {
         b.classList.remove('active');
         // The active tab was conveyed by colour and a border only, so a screen
         // reader had no way to know which view it was on. role="tab" is in the
@@ -22491,8 +22161,16 @@ function b2bRender() {
     const activeBtn = document.getElementById(btn);
     activeBtn?.classList.add('active');
     activeBtn?.setAttribute('aria-selected', 'true');
-    // Keeps the chosen tab in view once the strip scrolls (see .b2b-view-toggle).
-    try { activeBtn?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
+    // Keeps the chosen tab in view once the strip scrolls (.ws-subtabs scrolls on
+    // phones). Scrolls the strip only: since it moved out of the card head
+    // (2026-10-31) scrollIntoView could also scroll the PAGE, and b2bRender runs
+    // on every 60s poll.
+    const strip = activeBtn?.parentElement;
+    if (strip && strip.scrollWidth > strip.clientWidth) {
+        const l = activeBtn.offsetLeft - strip.offsetLeft, r = l + activeBtn.offsetWidth;
+        if (l < strip.scrollLeft) strip.scrollLeft = l;
+        else if (r > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = r - strip.clientWidth;
+    }
 
     // Evaluations waiting on somebody. Not folded into the Needs You queue: that
     // queue derives ownership from a deal's stage, and an evaluation has no
@@ -22816,9 +22494,7 @@ function _b2bIsTerminal(d) {
 // at), else from the board's listing_parts (the card has no lines).
 //
 // Every complete call used to send no store at all, which the server can only
-// resolve for a one-store deal. So corp could never finish a split deal, and a
-// multi-store manager -- who has no single caller_store -- could never finish
-// their part of one.
+// resolve for a one-store deal. So corp could never finish a split deal.
 function _b2bClosableParts(deal, items) {
     const stores = (deal && deal.listing_stores) || [];
     if (stores.length < 2) return null;
@@ -22940,9 +22616,8 @@ function _b2bRenderFinished(scoped) {
         </div>`;
 
     // The meta counts come from the server, which scopes to one store at most --
-    // an MSM covering two pulls ALL and narrows in _b2bInScope, so quoting those
-    // numbers at them would count stores they can't see. They get the offer
-    // without the arithmetic.
+    // a user covering several would be quoted stores they can't see, so they get
+    // the offer without the arithmetic.
     const exact  = _b2bIsCorp() || _b2bMyStores().length === 1;
     // Counted from what is actually on screen, not from meta.archive_shown.
     // That figure comes off the server and rendered as "Showing the 0 most
@@ -23479,7 +23154,7 @@ function b2bOpenCreate(kind) {
     _b2bCreateClientId = null;
     // Corp routes its pickups at pricing_location, so it picks nothing here. A
     // store is raising the deal for itself: one store means there is nothing to
-    // decide, two (an MSM covers both of theirs) means there is.
+    // decide.
     const mine = _b2bIsCorp() ? [] : _b2bMyStores();
     _b2bCreateStore = mine.length === 1 ? mine[0] : null;
     // A collection run is still the common case, and it is the one that asks for
@@ -30026,10 +29701,9 @@ function _b2bDone(it)      { return (Number(it.listed_qty) || 0) + (Number(it.re
 function _b2bSatisfied(it) { return _b2bDone(it) >= (Number(it.quantity) || 1); }
 // The lines this user answers for. Corp answers for all of them; a store for its
 // own, plus any line not yet given a store. A single-store user's fetch is
-// already scoped on the server, so this is a no-op for them -- it is here for
-// the multi-store manager, whose fetch is unscoped and so carries the other
-// stores' lines on a split deal. Without it their Complete button waited on
-// work at a store they do not run.
+// already scoped on the server, so this is a no-op for them -- it guards any
+// fetch that comes back unscoped and so carries the other stores' lines on a
+// split deal, where the Complete button would wait on work at another store.
 function _b2bMyLines() {
     if (_b2bIsCorp()) return _b2bModalItems;
     const mine = _b2bMyStores();
@@ -30233,8 +29907,8 @@ function _b2bListProgress() {
     // is sent one part of a split deal and would otherwise never know it was one.
     const split = ((deal && deal.listing_stores) || []).length > 1 || live.length > 1;
 
-    // The first of MY stores, not the first row: a multi-store manager's fetch is
-    // unscoped, so live[0] can be another store's part.
+    // The first of MY stores, not the first row: an unscoped fetch can put
+    // another store's part at live[0].
     const mine = (split && !_b2bIsCorp())
         ? (live.find(p => _b2bMyStores().includes(p.store)) || live[0]) : null;
     const total = mine ? mine.total_units : live.reduce((n, p) => n + p.total_units, 0);
@@ -31846,7 +31520,7 @@ async function checkB2BReminders() {
 // 90 more days before purge — nightly `callbacks-daily-maintenance` pg_cron job).
 // Backed by the `customer-callbacks` edge function / customer_callbacks table.
 // Status changes are open to every store (the cross-store "we have this" signal);
-// add/edit/delete/restore are store-scoped (MSM covers BAL+MPL, corp covers all).
+// add/edit/delete/restore are store-scoped (corp covers all).
 // ============================================================================
 const CB_CORP_ROLES = ['district manager', 'ceo', 'mocd'];   // may create/edit entries for any store
 const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
@@ -31918,7 +31592,7 @@ const CB_SHOP_DOMAINS = {
 // edge function — an employee can see the green row and ring the customer, but
 // "That's It" / "Not It" permanently changes what the sweep offers, so it needs
 // a manager. Corp roles pass through cbCanDecide separately.
-const CB_DECIDER_ROLES = ['manager', 'assistant manager', 'multi-store manager', 'owner (manager)'];
+const CB_DECIDER_ROLES = ['manager', 'assistant manager', 'owner (manager)'];
 
 // 62 categories and ~193 types is one small payload that changes when somebody
 // seeds a new type, not while a manager is typing — so it is fetched once per
@@ -31945,11 +31619,15 @@ function _cbCatByHandle(handle) {
 // Which stores' stock counts as "ours" for the green row. A corp role holds no
 // stock at all, so it gets null — every match is information rather than an
 // instruction, and nothing turns green.
+// An employee (or the store login): call backs are a manager / ASM job.
+function _cbStaffOnly() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'employee' || role === 'store';
+}
 function _cbMatchScope() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (CB_CORP_ROLES.includes(role) || store === 'ALL') return null;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
     return STORE_CODES.includes(store) ? [store] : [];
 }
 
@@ -31990,9 +31668,7 @@ function cbCanDecide(match, entry) {
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
     if (!CB_DECIDER_ROLES.includes(role)) return false;
-    const mine = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
-        ? MULTISTORE_MANAGER_STORES : [store];
-    return mine.includes(match.store_code) || (!!entry && mine.includes(entry.store));
+    return match.store_code === store || (!!entry && entry.store === store);
 }
 
 // A link only when there is genuinely something to open. 114 of the in-stock
@@ -32041,8 +31717,7 @@ async function cbPost(payload) {
             ...payload,
             user:  sessionStorage.getItem('speeksUserName')  || '',
             role:  (sessionStorage.getItem('speeksUserRole') || '').toLowerCase(),
-            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
-            multi: (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
+            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()
         })
     });
     const out = await res.json().catch(() => ({}));
@@ -32051,7 +31726,7 @@ async function cbPost(payload) {
 }
 
 // --- Helpers
-// Edit/delete/restore: own store only (MSM covers both of theirs, corp covers all).
+// Edit/delete/restore: own store only (corp covers all).
 // Status changes are deliberately NOT gated — any store marking an entry Contacted
 // is the cross-store "we've got this" signal, and the change is attributed below.
 // WHO MAY DELETE. Management and above; an ASM or below asks instead. A delete
@@ -32061,7 +31736,7 @@ async function cbPost(payload) {
 // Mirrored by DELETE_ROLES in the customer-callbacks function, which is what
 // actually enforces it.
 const CB_DELETE_ROLES = ['manager', 'owner (manager)', 'owner manager',
-    'multi-store manager', 'district manager', 'ceo', 'mocd'];
+    'district manager', 'ceo', 'mocd'];
 
 function cbCanDelete(entry) {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
@@ -32073,16 +31748,14 @@ function cbCanModify(entry) {
     const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.includes(entry.store);
     return entry.store === store;
 }
 
-// Stores this user may CREATE entries for: corp roles get all stores, the MSM
-// gets both of their stores, everyone else is locked to their own (no picker).
+// Stores this user may CREATE entries for: corp roles get all stores, everyone
+// else is locked to their own (no picker).
 function _cbAddStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (CB_CORP_ROLES.includes(role)) return STORE_CODES;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
     return null;
 }
 
@@ -32383,9 +32056,83 @@ function _cbMatchesSubtitle(entries) {
     return mine ? `${entries.length} You can answer` : `${entries.length} With stock`;
 }
 
+// ⚠️ A REDRAW MUST NEVER EAT WHAT SOMEBODY IS TYPING — 2026-11-06.
+// cbRender rebuilds the whole pane with innerHTML, quick-add form included, and
+// several things call it with nobody's say-so: the realtime repaint when the
+// matcher finds something (ANY store's add sets that off, so BAL's form emptied
+// because OVL logged a call back), the re-fetch five seconds after your own add,
+// and every row action. Only the 60s poll checked for focus. To the person at the
+// keyboard it looked exactly like a submit that never arrived.
+//
+// Guarding each caller was the old approach, and it is what missed these. So the
+// guard lives HERE instead: every field in the pane is read before the redraw and
+// put back after, cursor included. A redraw that is MEANT to empty the form (a
+// successful Add, Cancel, Add Another Item) says so through _cbFormReset.
+let _cbFormReset = false;
+let _cbDrawnEditId = null;   // which row's edit fields the last render drew
+
+function _cbSnapshotFields(body) {
+    // The row whose edit fields are ON SCREEN, not _cbEditingId: cbEditEntry has
+    // already moved that to the new row by the time it calls cbRender.
+    const snap = { vals: {}, focus: null, selStart: null, selEnd: null, editing: _cbDrawnEditId };
+    body.querySelectorAll('input[id], select[id], textarea[id]').forEach(el => {
+        snap.vals[el.id] = el.type === 'checkbox' ? { checked: el.checked } : { value: el.value };
+    });
+    const a = document.activeElement;
+    if (a && a.id && body.contains(a)) {
+        snap.focus = a.id;
+        try { snap.selStart = a.selectionStart; snap.selEnd = a.selectionEnd; } catch (_) {}
+    }
+    return snap;
+}
+
+function _cbRestoreFields(snap) {
+    if (!snap) return;
+    // The edit row's fields share one set of ids whichever row is open, so they
+    // are only put back into the SAME row — opening Edit on another one must show
+    // that row's values, not the last row's.
+    if (snap.editing !== _cbEditingId) {
+        Object.keys(snap.vals).forEach(id => { if (id.startsWith('cbEdit')) delete snap.vals[id]; });
+        if (snap.focus && snap.focus.startsWith('cbEdit')) snap.focus = null;
+    }
+    // Categories first: putting a category back has to rebuild its Type options
+    // before the Type value can be put back into them.
+    Object.keys(snap.vals).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !el.classList.contains('cb-cat-select')) return;
+        if (el.value !== snap.vals[id].value) {
+            el.value = snap.vals[id].value;
+            const typeSel = id === 'cbAddCategory' ? 'cbAddType' : id === 'cbEditCategory' ? 'cbEditType' : null;
+            if (typeSel) cbCategoryChanged(id, typeSel);
+        }
+    });
+    Object.keys(snap.vals).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || el.classList.contains('cb-cat-select')) return;
+        const v = snap.vals[id];
+        if ('checked' in v) el.checked = v.checked;
+        else if (el.value !== v.value) el.value = v.value;
+    });
+    if (snap.focus) {
+        const f = document.getElementById(snap.focus);
+        if (f) {
+            f.focus();
+            try { if (snap.selStart != null) f.setSelectionRange(snap.selStart, snap.selEnd); } catch (_) {}
+        }
+    }
+}
+
 function cbRender() {
     const body = document.getElementById('cbBody');
     if (!body) return;
+    const snap = _cbFormReset ? null : _cbSnapshotFields(body);
+    _cbFormReset = false;
+    _cbRenderInner(body);
+    _cbDrawnEditId = _cbEditingId;
+    _cbRestoreFields(snap);
+}
+
+function _cbRenderInner(body) {
     _cbSyncControls();
 
     const filterEl = document.getElementById('cbStoreFilter');
@@ -32437,6 +32184,7 @@ function cbRender() {
 function cbAddAnotherItem() {
     if (!_cbLastAdded) return;
     _cbAddFor = _cbLastAdded;
+    _cbFormReset = true;
     cbRender();
     document.getElementById('cbAddItem')?.focus();
 }
@@ -32445,6 +32193,7 @@ window.cbAddAnotherItem = cbAddAnotherItem;
 function cbAddForClear() {
     _cbAddFor = null;
     _cbLastAdded = null;
+    _cbFormReset = true;
     cbRender();
     document.getElementById('cbAddName')?.focus();
 }
@@ -32884,6 +32633,7 @@ async function cbQuickAdd() {
     // pre-filled one moves the streak to whoever was actually logged.
     _cbLastAdded = { name, phone, store };
     if (_cbAddFor) _cbAddFor = _cbLastAdded;
+    _cbFormReset = true;
     cbRender();
     // Mid-streak the name and number are already right, so the cursor belongs in
     // the only field that changes.
@@ -32899,7 +32649,11 @@ async function cbQuickAdd() {
         // The add kicks a match sweep server-side rather than waiting for the next
         // scheduled one, so the answer to "does anybody have this" lands a few
         // seconds later. Re-fetch once instead of making the person reload.
+        // Twice now: the server refreshes every store's stock BEFORE it matches
+        // (so a just-sold unit is not offered), which can take longer than 5s.
+        // Realtime repaints too when it finds something; this is the backstop.
         setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 5000);
+        setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 25000);
     } catch (e) {
         _cbCache = _cbCache.filter(x => x.id !== entry.id);
         cbRender();
@@ -32930,6 +32684,8 @@ function cbAddNote(id) {
         at: _cbDaysAgo(0)
     };
     e.notes.push(note);
+    // Emptied BEFORE the redraw, which now keeps whatever a field holds.
+    if (input) input.value = '';
     cbRender();
     cbPost({ action: 'note', id, note }).catch(() => cbLoad());
 }
@@ -33067,6 +32823,10 @@ function closeCbMatchAlertBubble() {
 async function checkCallbackMatchReminders() {
     const scope = _cbMatchScope();
     if (!scope || !scope.length) return;    // corp, or no store to hold anything
+    // Managers and ASMs only (Ethan, 2026-11-08: "for employee get rid of the
+    // customer call back stuff. Only manager and ASM need this") — the feed card
+    // reads this bubble, so an employee's stays hidden.
+    if (_cbStaffOnly()) { closeCbMatchAlertBubble(); return; }
     const b = _cbMatchBubbleEl();
     if (!b) return;
     try {
@@ -33075,7 +32835,12 @@ async function checkCallbackMatchReminders() {
         // nagging about work in progress is how a feed stops being read.
         const hits = [];
         rows.forEach(e => {
-            if (e.status === 'completed' || e.archived_at) return;
+            // CONTACTED COUNTS AS ANSWERED — 2026-11-06. The card asks you to ring
+            // a customer; once somebody has rung them it has nothing left to ask.
+            // It used to wait for Completed, so on Nov 5-6 BAL's card still said
+            // "3 call backs" after Garrett had contacted two of them, and the one
+            // it led with was the only one nobody had touched yet.
+            if (e.status === 'completed' || e.status === 'contacted' || e.archived_at) return;
             const n = (e.matches || []).filter(m =>
                 m.state === 'suggested' && scope.includes(m.store_code)).length;
             if (n) hits.push({ entry: e, count: n });
@@ -33095,8 +32860,7 @@ async function checkCallbackMatchReminders() {
             // breaking through a snooze is the point — the old ones staying quiet
             // for the day is too.
             t.dataset.sig = hits.map(h => h.entry.id + ':' + h.count).sort().join('|');
-            // MSM routing: if every hit is at one of their stores only, the card
-            // opens that store's tool without switching dashboards.
+            // The stores the hits are at, for the feed's DM routing.
             const stores = [...new Set(hits.flatMap(h =>
                 (h.entry.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code))
                     .map(m => m.store_code)))];
@@ -33449,8 +33213,6 @@ function applyRoleBasedUI() {
         });
     }
 
-    initMultiStoreSwitcher();
-
     // The nav and the action buttons carry no data-feature, so the allow-list
     // cannot see them. This is the other half.
     _applyBoardChrome();
@@ -33491,17 +33253,11 @@ function _applyBoardChrome() {
     document.body.classList.toggle('is-store-board', _tvIsBoardRole());
 }
 
-// ===== MULTI-STORE MANAGER: global store switcher =====
-// A Multi-Store Manager (e.g. Joseph Ortega) oversees more than one store and toggles
-// which one the whole dashboard is scoped to. The first entry is the default (and is
-// set as their `store` at login). Toggling re-points the session store and reloads, so
-// every widget re-scopes through the normal load path. Single-store users never reach
-// this code, so their dashboards/feeds are unaffected.
-const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
+// No Multi-Store Manager since 2026-11-08 (Ethan: "we have gone away from MSM
+// entirely"): one store per manager, so the BAL/MPL store switcher, its store list
+// and the dual-store widgets are gone, markup and styles with them.
 
-// True if a directory user belongs to a given store's roster. A Multi-Store Manager
-// belongs to EVERY store they manage (not just their home store), so they're included
-// anywhere a regular store manager would be — variance, listing-goals roster, etc.
+// True if a directory user belongs to a given store's roster.
 // "Is this person part of this store's team?" — every caller is building a staff
 // roster (listing goals, the target ladder, the variance employee list), which is
 // why the Store role is turned away here rather than in each of them. A Store
@@ -33511,71 +33267,19 @@ const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 function userInStore(user, storeCode) {
     if (String(user.role || '').toLowerCase().trim() === 'store') return false;
     const store = String(storeCode || '').toUpperCase();
-    if (String(user.store || '').toUpperCase() === store) return true;
-    return String(user.role || '').toLowerCase() === 'multi-store manager'
-        && MULTISTORE_MANAGER_STORES.includes(store);
+    return String(user.store || '').toUpperCase() === store;
 }
 
-// Effective role is 'manager', so multi-store status is tracked via this flag (set at login).
-function isMultiStoreManager() {
-    return sessionStorage.getItem('speeksMultiStore') === 'true';
-}
-
-// The store a freshly-opened store-specific TOOL should default to for a
-// Multi-Store Manager: the store whose dashboard they're currently on
-// (speeksUserStore). Store tools used to default to the first store in the list
-// (always BAL), so on the MPL dashboard they'd wrongly populate BAL. Callers keep
-// the dropdown switchable — this only sets the INITIAL selection. Returns '' for
-// everyone else, whose single store already wins, so callers can `|| fallback`.
-function _msmDefaultStore() {
-    if (!isMultiStoreManager()) return '';
-    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-    return MULTISTORE_MANAGER_STORES.includes(s) ? s : '';
-}
-
-// One-time store override set by clicking a SINGLE-store MSM alert (e.g. an MPL-only
-// variance row while on the BAL dashboard): the tool opens on that store instead of
-// the active dashboard, WITHOUT switching the dashboard. Stored in sessionStorage so
-// it survives the navigation to workspace.html, and consumed (cleared) on read so
-// the next normal open reverts to the active-store default. A both-store alert sets
-// nothing, so the active-store default applies. Returns '' for non-MSM users.
-function _consumeMsmAlertStore() {
-    const s = sessionStorage.getItem('speeksMsmToolStore');
-    if (s) sessionStorage.removeItem('speeksMsmToolStore');
-    // Validated against every store (not just the MSM's two) so a DM alert can also
-    // route to a specific store that needs review, using the same override.
+// One-time store override set by clicking a store-specific alert (the DM's feed
+// lands on the first store that needs review): the tool opens on that store.
+// Stored in sessionStorage so it survives the navigation to workspace.html, and
+// consumed (cleared) on read so the next normal open reverts to the default.
+// Returns '' when nothing is pending.
+function _consumeAlertToolStore() {
+    const s = sessionStorage.getItem('speeksAlertToolStore');
+    if (s) sessionStorage.removeItem('speeksAlertToolStore');
     const up = (s || '').toUpperCase();
     return STORE_CODES.includes(up) ? up : '';
-}
-// The store a store-specific tool should OPEN on for an MSM: a pending single-store
-// alert override wins (cleared after use), else the active dashboard store.
-function _msmToolStore() {
-    return _consumeMsmAlertStore() || _msmDefaultStore();
-}
-
-function setMultiStore(store) {
-    const next = String(store || '').toUpperCase();
-    if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
-    if (next === (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()) return;
-    // A QuickPortal layout change still waiting to be saved goes now, as the
-    // store it was made on — not after the switch, as the next one.
-    if (typeof _qpFlushSave === 'function') _qpFlushSave();
-    sessionStorage.setItem('speeksUserStore', next);
-    location.reload();
-}
-
-function initMultiStoreSwitcher() {
-    const sw = document.querySelector('.msm-store-switch');
-    if (!sw) return;
-    if (!isMultiStoreManager()) { sw.style.display = 'none'; return; }
-    const current = (sessionStorage.getItem('speeksUserStore') || MULTISTORE_MANAGER_STORES[0]).toUpperCase();
-    // Segmented toggle instead of a native <select>: the OS-drawn option list
-    // can't be styled to match the nav, and with only two stores a toggle is
-    // one click instead of two. setMultiStore() still does the actual switch.
-    sw.innerHTML = MULTISTORE_MANAGER_STORES.map(s =>
-        `<button type="button" class="msm-seg${s === current ? ' active' : ''}" data-tip="Switch to ${s}" onclick="setMultiStore('${s}')">${s}</button>`
-    ).join('');
-    sw.style.display = 'flex';
 }
 
 function checkInstantNotifCache() {
@@ -33742,7 +33446,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkClaimsConfirmAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -33867,6 +33571,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // A #jump=<feature> deep-link from the search box: land, then spotlight
         // the panel that was asked for.
         try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
+        try { _restockHandleHash(); } catch (_) { /* not fatal to the page */ }
         applyKpiReminder();
         // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
         setInterval(applyKpiReminder, 60000);
@@ -34846,9 +34551,6 @@ function renderMonthlyGoalsBanner() {
     const labelEl = document.getElementById('giGoalsLabel');
     if (labelEl) labelEl.textContent = _mgbMonthLabel() + ' Goals';
 
-    // Multi-Store Manager: both managed stores stacked, each with its own Edit.
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return renderMonthlyGoalsBannerMS();
-
     const store = sessionStorage.getItem('speeksUserStore') || '';
     const data  = getMonthlyGoals(store);
     const goals = data?.goals || [];
@@ -34867,46 +34569,6 @@ function renderMonthlyGoalsBanner() {
         </div>`;
     });
     if (listEl) listEl.innerHTML = html;
-}
-
-// --- Multi-Store Manager: stacked monthly goals (both stores, per-store Edit) ---
-// The synced cache already holds every store's goals (syncGoalsFromSheet does a
-// getAll), so this is render-only: one labeled block per managed store, each
-// with its own Edit button feeding openEditGoalsModal(store).
-
-function _giMsGoalItemsHtml(goals) {
-    if (!goals || !goals.length) return '<div class="status-message" style="padding: 4px 0 8px;">No goals set yet.</div>';
-    return goals.map(g => `<div class="mgb-goal-item">
-        <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
-        ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
-    </div>`).join('');
-}
-
-// Store-colored block header; pass editHtml only where editing is allowed
-// (current month — past months are read-only history).
-function _giMsStoreHeadHtml(store, editHtml) {
-    const ac = _msStoreAccent(store);
-    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 4px;">
-        <span class="ms-store-name" style="color: ${ac.solid}; font-size: 12px;">${escapeHtml(store)}</span>${editHtml || ''}
-    </div>`;
-}
-
-function renderMonthlyGoalsBannerMS() {
-    const listEl = document.getElementById('giGoalsList');
-    if (!listEl) return;
-    // Per-store Edit buttons replace the single section-level one ('important'
-    // because _resetToCurrentMonth/selectGoalMonth re-show it the same way).
-    document.getElementById('giEditGoalsBtn')?.style.setProperty('display', 'none', 'important');
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach((store, idx) => {
-        const goals = getMonthlyGoals(store)?.goals || [];
-        html += `<div style="${idx ? 'margin-top: 14px;' : ''}">
-            ${_giMsStoreHeadHtml(store, `<button class="mini-action-btn" onclick="openEditGoalsModal('${store}')">Edit ✏️</button>`)}
-            ${_giMsGoalItemsHtml(goals)}
-        </div>`;
-    });
-    listEl.innerHTML = html;
 }
 
 function toggleGoalsBanner() { toggleGoalsPanel(); }
@@ -35001,33 +34663,6 @@ window.selectGoalMonth = async function(ym) {
     if (!listEl) return;
     listEl.innerHTML = '<div class="status-message">Loading...</div>';
 
-    // Multi-Store Manager: past months show BOTH stores' goals, read-only.
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        const perStore = {};
-        MULTISTORE_MANAGER_STORES.forEach(s => {
-            try { const raw = localStorage.getItem(_mgbKey(s, _selectedGoalDate)); if (raw) perStore[s] = JSON.parse(raw)?.goals ?? []; } catch {}
-        });
-        if (MULTISTORE_MANAGER_STORES.some(s => perStore[s] == null)) {
-            try {
-                const res = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
-                const map = await res.json();
-                MULTISTORE_MANAGER_STORES.forEach(s => {
-                    const entry = map[s];
-                    if (entry) { localStorage.setItem(_mgbKey(s, _selectedGoalDate), JSON.stringify(entry)); perStore[s] = entry.goals || []; }
-                    else if (perStore[s] == null) perStore[s] = [];
-                });
-            } catch { /* stores left null render as could-not-load */ }
-        }
-        listEl.innerHTML = MULTISTORE_MANAGER_STORES.map((s, idx) => {
-            const goals = perStore[s];
-            const body = goals == null
-                ? '<div class="status-message" style="padding: 4px 0 8px;">Could not load.</div>'
-                : (goals.length ? _giMsGoalItemsHtml(goals) : '<div class="status-message" style="padding: 4px 0 8px;">No goals recorded for this month.</div>');
-            return `<div style="${idx ? 'margin-top: 14px;' : ''}">${_giMsStoreHeadHtml(s)}${body}</div>`;
-        }).join('');
-        return;
-    }
-
     const store    = sessionStorage.getItem('speeksUserStore') || '';
     const cacheKey = _mgbKey(store, _selectedGoalDate);
     let goals = null;
@@ -35068,9 +34703,8 @@ window.toggleGoalsPanel = function(event) {
 
 // --- Edit Modal ---
 
-// Which store the goals modal is editing. Normally the session store; the MSM's
-// stacked panel passes an explicit store per Edit button (same pattern as
-// _editingInitiativesForStore below).
+// Which store the goals modal is editing: the session store unless a caller
+// passes one (same pattern as _editingInitiativesForStore below).
 let _editingGoalsForStore = null;
 
 function openEditGoalsModal(storeOverride) {
@@ -35182,9 +34816,8 @@ function renderCompanyProjectsBanner() {
     const listEl      = document.getElementById('giInitiativesList');
     const projects    = getCompanyProjects()?.projects || [];
     const initiatives = getStoreInitiatives(store)?.initiatives || [];
-    const isMS        = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
 
-    if (!isMS && !projects.length && !initiatives.length) {
+    if (!projects.length && !initiatives.length) {
         if (listEl) listEl.innerHTML = '<div class="status-message" style="padding: 8px 0;">No initiatives have been set yet.</div>';
         return;
     }
@@ -35195,18 +34828,7 @@ function renderCompanyProjectsBanner() {
             html += '<div class="cpb-section-label">Company</div>';
             projects.forEach(p => { html += _cpbItemHtml(p); });
         }
-        if (isMS) {
-            // Multi-Store Manager: one labeled block per managed store (store
-            // colors match the checklist sections), always shown so an empty
-            // store is visibly empty rather than missing.
-            MULTISTORE_MANAGER_STORES.forEach((s, idx) => {
-                const items = getStoreInitiatives(s)?.initiatives || [];
-                const ac = _msStoreAccent(s);
-                html += `<div class="cpb-section-label${(projects.length || idx) ? ' cpb-section-label--spaced' : ''}" style="color: ${ac.solid};">${escapeHtml(s)}</div>`;
-                if (items.length) items.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
-                else html += '<div class="status-message" style="padding: 4px 0 8px;">No initiatives set.</div>';
-            });
-        } else if (initiatives.length) {
+        if (initiatives.length) {
             html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
             initiatives.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
         }
@@ -35815,20 +35437,14 @@ function renderRequiredTasks(tasks) {
 
 // --- DM: view ONE store's full checklist — both the required tasks the DM set
 //     and the personal tasks that store's manager added themselves. Read-only.
-// Resolves the person whose checklist a store shares (its "owner"). Normal stores use
-// the owner/manager on file. BAL/MPL are run by a Multi-Store Manager whose DB `store`
-// is only their HOME store — so for those we match by role + the shared
-// MULTISTORE_MANAGER_STORES set, NOT by u.store. This is what lets a store's ASM (and the
-// DM Manager-Checklist viewer) sync to the MSM's checklist — for BAL now and a future MPL ASM.
+// Resolves the person whose checklist a store shares (its "owner"): the
+// owner/manager on file for that store. This is what lets a store's ASM (and the
+// DM Manager-Checklist viewer) sync to the manager's checklist.
 function _resolveStoreManager(store) {
     const s = String(store || '').toUpperCase();
     try {
         const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
         const users = authCache.users || [];
-        if (typeof MULTISTORE_MANAGER_STORES !== 'undefined' && MULTISTORE_MANAGER_STORES.includes(s)) {
-            const msm = users.find(u => u.role && u.role.toLowerCase() === 'multi-store manager');
-            if (msm) return msm.name;
-        }
         for (const targetRole of ['owner (manager)', 'manager']) {
             const mgr = users.find(u =>
                 u.store && u.store.toUpperCase() === s &&
@@ -37537,9 +37153,8 @@ function buildAuditSummaryHtml(audit, store) {
 
 // =========================================================
 //  SHOPIFY INSURANCE CLAIMS / ITEM-NOT-RECEIVED TOOL
-//  Store managers + owner-managers + multi-store managers log
-//  claims here. A manager sees their store's cases; a Multi-Store
-//  Manager sees every store they manage, from either dashboard.
+//  Store managers + owner-managers log claims here. A manager
+//  sees their store's cases.
 // =========================================================
 const CLAIM_STATUS = {
     in_progress: { label: 'In Progress', bg: '#fef3c7', fg: '#b45309' },
@@ -37549,9 +37164,6 @@ const CLAIM_STATUS = {
 
 // Which store(s) this user can file/view claims for.
 function _claimStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -37559,8 +37171,7 @@ function _claimStores() {
 // WHICH OF THE TWO TOOLS a person gets. A DM, the CEO and the MOCD have no
 // store of their own (_claimStores is empty), so the store tool would open on a
 // New Claim form they cannot file — they belong in the oversight one (Ethan,
-// 2026-09-22). Everyone else gets their own store's tool, or both of theirs
-// with a store picker if they run two.
+// 2026-09-22). Everyone else gets their own store's tool.
 const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 const _claimsIsOversight = () =>
     _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
@@ -37694,7 +37305,7 @@ function switchClaimsTab(tab) {
     }
 }
 
-// MSM gets a store chooser; a single-store manager is locked to their store.
+// A store manager is locked to their store.
 function _buildClaimStorePicker() {
     const row = document.getElementById('claims-store-row');
     const sel = document.getElementById('claim-store');
@@ -37706,10 +37317,9 @@ function _buildClaimStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    // Default to the store this open targets for an MSM — a single-store alert
-    // override if pending, else the active dashboard store; everyone else keeps
-    // their only option. Still switchable via the dropdown when multi-store.
-    const def = _msmToolStore();
+    // Default to the store a pending alert override targets (the DM's feed card);
+    // a single-store manager keeps their only option.
+    const def = _consumeAlertToolStore();
     if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
     else if (sel.options.length) sel.selectedIndex = 0;
 }
@@ -37757,7 +37367,7 @@ async function submitClaim() {
     }
 }
 
-let _claimsAll = []; // last fetched cases, so the MSM store filter can re-render without refetching
+let _claimsAll = []; // last fetched cases, so the store filter can re-render without refetching
 
 async function fetchMyClaims() {
     const wrap = document.getElementById('claims-table-wrap');
@@ -37780,7 +37390,8 @@ async function fetchMyClaims() {
     }
 }
 
-// MSM-only: a store filter on the My Cases tab (single-store managers don't need it).
+// A store filter on the My Cases tab, shown only when the scope spans more than
+// one store (a single-store manager never sees it).
 function _buildClaimsViewFilter(stores) {
     const row = document.getElementById('claims-view-filter-row');
     const sel = document.getElementById('claims-view-filter');
@@ -38163,13 +37774,20 @@ const _HOLD_STATE = {
     // _holdStateLabel always overrides this one (it has to name the right site),
     // so this string is a fallback only — kept accurate so it cannot mislead.
     needs_reply: { label: 'Needs a reply from us',    bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
-    needs_claim: { label: 'Refunded — needs a claim', bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    // Since 2026-11-03 only a parcel LOST IN TRANSIT is a claim — a refunded INR
+    // the carrier delivered, returned, or never scanned arrives as 'due' with a
+    // note saying which (see _holdStateLabel), because a claim is the wrong move.
+    needs_claim: { label: 'Lost in transit — needs a claim', bg: _HOLD_C.red.bg, fg: _HOLD_C.red.fg, rank: 0 },
     due:         { label: 'Check-in due',             bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 1 },
     checked:     { label: 'Checked in',               bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
     // 0112: we answered a dispute and the card network decides now. Nothing is
     // due from us, so it sits with the other "moving, not waiting on you" states.
     answered:    { label: 'Answered — with them',     bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
     covered:     { label: 'Claim open',               bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
+    // 0164: a manager marked it resolved, eBay/Shopify don't back that up, and
+    // it is the DM's call now. Off the manager's Needs Attention, on the DM's
+    // To Confirm tab.
+    dm_review:   { label: 'Waiting on DM',            bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
     resolved:    { label: 'Resolved',                 bg: _HOLD_C.green.bg, fg: _HOLD_C.green.fg, rank: 4 },
     settled:     { label: 'Settled',                  bg: _HOLD_C.grey.bg,  fg: _HOLD_C.grey.fg,  rank: 5 },
 };
@@ -38192,6 +37810,17 @@ function _holdStateLabel(type, it, s) {
         if (it.state === 'due') return 'Card expired — not collected';
         return s.label;
     }
+    // 0164: the DM sent a resolution back. Said on the chip, because the card
+    // looks exactly like any other due item otherwise. Not when hushed (2026-11-10):
+    // a send-back on a missed-window case only undoes the resolution, so the card
+    // reads as the quiet case it was, not as a to-do.
+    if (it.dm && it.dm.status === 'denied' && !it.hush && it.state !== 'needs_reply'
+        && _HOLD_VIEWS.due.states.includes(it.state)) return 'Sent back by DM';
+    // 2026-11-04: resolved, re-read afterwards, and the sites still disagree.
+    if (it.dm && it.dm.kind === 'not_done' && it.state !== 'needs_reply'
+        && _HOLD_VIEWS.due.states.includes(it.state)) return 'Marked resolved — not done';
+    // Our reply is eBay's last word on it — nothing to do until eBay decides.
+    if (it.hush === 'replied') return 'Replied — waiting on eBay';
     if (it.state === 'needs_reply') {
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
@@ -38205,6 +37834,13 @@ function _holdStateLabel(type, it, s) {
     // The claim is open, so "Check-in due" would point at the wrong person: the
     // carrier does not owe this one, eBay does.
     if (it.state_note === 'delivered_after_refund') return 'Delivered — call eBay';
+    // Past eBay's 30 days with no claim, a delivered refund is written off
+    // (claims-disputes, Ethan 2026-11-06): settled, off the managers' list,
+    // listed in the closed view so the loss is on record.
+    if (it.state_note === 'written_off') return "Written off — eBay's window closed";
+    if (it.state_note === 'returned_to_us') return 'Returned to us — restock it';
+    if (it.state_note === 'never_scanned') return 'Never scanned — find it';
+    if (it.state_note === 'partial_refund_matched') return 'Partial refund — books match';
     return s.label;
 }
 
@@ -38240,7 +37876,7 @@ const _HOLD_VIEWS = {
     // settled in neither view the card simply vanished, with nothing to show
     // the link had worked. Settled and resolved are both FINISHED, so they sit
     // in the collapsed group at the bottom of this view rather than in the list.
-    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'resolved', 'settled'] },
+    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'dm_review', 'resolved', 'settled'] },
 };
 // Which of that view's states are done with, and fold away.
 const _HOLD_DONE = ['resolved', 'settled'];
@@ -38259,9 +37895,34 @@ const _HOLD_KINDS = [
 ];
 
 const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
+// A refunded INR that is NOT a carrier claim, by what the carrier says (2026-11-03).
+const _HOLD_REFUND_NOTES = ['delivered_after_refund', 'returned_to_us', 'never_scanned'];
+// EBAY PAYS A DELIVERED REFUND BACK FOR 30 DAYS AFTER THE CASE CLOSES (Ethan,
+// 2026-11-06). The server works out the last day (claims-disputes paybackBy →
+// it.payback_by, YYYY-MM-DD); this only counts the days left, in local days.
+const _holdPaybackLeft = it => {
+    if (!it.payback_by) return null;
+    const [y, m, d] = it.payback_by.split('-').map(Number);
+    const t = new Date();
+    return Math.round((new Date(y, m - 1, d) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / 86400000);
+};
+const _holdPaybackLine = it => {
+    const n = _holdPaybackLeft(it);
+    if (n == null || n < 0) return '';
+    const left = n === 0 ? 'today is the last day' : `${n} day${n === 1 ? '' : 's'} left`;
+    return ` <b style="${n <= 7 ? 'color:#b91c1c;' : ''}">eBay pays it back only until ${_holdDay(it.payback_by)} (${left}).</b>`;
+};
 // A plain return only. An escalated one arrives folded into the case eBay opened
 // (0104), which is no longer a routine return, so it belongs with the cases.
 const _holdIsReturn = it => it.kind === 'return';
+// A return counts as NEEDING US only when the next move is ours (Ethan,
+// 2026-11-05: OVL's badge said 27 when a handful needed anything). The server
+// marks every return open past its first day 'due', including the ones sitting
+// on the buyer ("waiting for buyer to ship", "return shipped") that nobody
+// here can move. Same test the card uses to decide whether it shows a deadline,
+// so the tab badge and the QuickPortal cards count exactly the cards with one.
+// Only the COUNTS use this; the Returns list still shows every open return.
+const _holdReturnNeedsUs = it => !!it.is_open && _holdReturnAction(it).ours;
 const _holdItemKey = entry => _holdKeyFor(entry.type, entry.it);
 // One place that knows which column is an item's key, because three types now
 // use three different ones and getting it wrong silently posts against nothing.
@@ -38359,15 +38020,17 @@ function _holdNotLive(ctx) {
     });
 }
 
-// Items needing someone today, for the tab badges.
+// Items needing someone today, for the tab badges. A hushed item (replied to,
+// or past a reply window eBay won't reopen — claims-disputes hushOf, Ethan
+// 2026-11-07) stays listed but is not counted: it waits on eBay, not on us.
 function _holdDueCounts(ctx) {
     const d = _holdData[ctx];
-    const need = x => _HOLD_VIEWS.due.states.includes(x.state);
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush;
     if (!d) return { mismatch: 0, returns: 0, cases: 0, payments: 0 };
     const due = (d.cases || []).filter(need);
     return {
         mismatch: (d.mismatches || []).filter(need).length,
-        returns: due.filter(_holdIsReturn).length,
+        returns: due.filter(c => _holdIsReturn(c) && _holdReturnNeedsUs(c)).length,
         // Disputes live on this tab too, and an unanswered one is the most
         // expensive thing the badge can be counting.
         cases: due.filter(c => !_holdIsReturn(c)).length + (d.disputes || []).filter(need).length,
@@ -38376,7 +38039,9 @@ function _holdDueCounts(ctx) {
 }
 function _holdPaintBadges(ctx) {
     const n = _holdDueCounts(ctx);
-    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments]].forEach(([t, v]) => {
+    // 0164: the DM's To Confirm count — only the oversight view has that tab.
+    const conf = ctx === 'ov' ? (((_holdData[ctx] || {}).dmQueue) || []).length : 0;
+    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments], ['confirm', conf]].forEach(([t, v]) => {
         const b = document.getElementById(`hold-${ctx}-badge-${t}`);
         if (!b) return;
         b.textContent = v ? String(v) : '';
@@ -38418,6 +38083,92 @@ function renderHoldItems(ctx) {
     // because nothing here involves eBay and the fix is always on Shopify.
     const pw = _holdWrap(ctx, 'payments');
     if (pw) pw.innerHTML = _holdToolbar(ctx, 'payment') + _holdPaymentSyncLine(d) + _holdList(ctx, 'payment', d.payments || [], null);
+    // 0164: the DM's queue of resolutions the sites don't back up.
+    const fw = _holdWrap(ctx, 'confirm');
+    if (fw) fw.innerHTML = _holdConfirmList(ctx, d);
+}
+
+// =========================================================
+//  TO CONFIRM — the DM's half of the fact check (0164)
+// =========================================================
+// Ethan, 2026-11-03: "make sure anytime a manager resolves something, it gets
+// fact checked and if the system disagrees, then DM gets notified to confirm and
+// take a deeper look and confirming then gets rid of it from the sheet and
+// denying needs a reason and goes back to manager with the reason".
+//
+// The server decides what is on this list (claims-disputes dmQueue: every
+// resolution factCheck disagrees with that the DM has not answered). Each card
+// puts the manager's account beside the system's, with the item's own facts.
+// Confirm: it stands, gone for good. Send back: needs a reason, and the item is
+// due for that store again at once — on their list, their 4pm mail and their
+// feed card — with the reason on it. Items the sites catch up on (eBay posts
+// the payback, the device gets restocked) leave this list by themselves.
+let _holdDmIndex = [];
+function _holdConfirmList(ctx, d) {
+    const q = d.dmQueue || [];
+    _holdDmIndex = q.slice();
+    if (!q.length) return `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.7;">Nothing to confirm.<div style="margin-top:4px; font-weight:600; color:#cbd5e1;">When a manager marks something resolved and eBay or Shopify don't back it up, it lands here.</div></div>`;
+    // The full item, from the lists already loaded, for the facts line.
+    const find = x => {
+        const list = x.type === 'mismatch' ? d.mismatches : x.type === 'dispute' ? d.disputes : x.type === 'payment' ? d.payments : d.cases;
+        return (list || []).find(it => _holdKeyFor(x.type, it) === x.key) || {};
+    };
+    const tabOf = x => x.type === 'mismatch' ? 'mismatch' : x.type === 'payment' ? 'payments' : 'cases';
+    const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
+    return `<div style="font-size:12px; color:#64748b; margin:2px 0 12px; line-height:1.6;"><b style="color:var(--slate-charcoal);">${q.length} resolution${q.length === 1 ? '' : 's'} · ${_holdMoney(total)}</b> — marked resolved by a manager, not backed up by eBay or Shopify. Oldest first.</div>
+    <div style="display:flex; flex-direction:column; gap:10px;">${q.map((x, i) => {
+        const it = find(x);
+        const kind = _holdKindChip(x.type, it.type ? it : x) || (x.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
+        const title = x.type === 'mismatch'
+            ? (it.direction === 'ebay_only' ? 'Refunded on eBay — still a sale in Shopify' : 'Refunded in Shopify — still a sale on eBay')
+            : (x.title || it.item_title || kind);
+        const order = x.order || it.ebay_order_id || '';
+        return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; box-shadow:inset 3px 0 0 ${_HOLD_C.amber.fg};">
+            <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
+                <div style="min-width:0; flex:1 1 240px;">
+                    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
+                        <span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#f1f5f9; color:#475569;">${escapeHtml(x.store_code || '')}</span>
+                        <span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#e2e8f0; color:#334155;">${escapeHtml(kind)}</span>
+                        ${x.state === 'needs_reply' ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${_HOLD_C.red.bg}; color:${_HOLD_C.red.fg};">Deadline still open</span>` : ''}
+                    </div>
+                    <div style="font-weight:800; font-size:13.5px; color:var(--slate-charcoal);">${escapeHtml(title)}</div>
+                    ${order ? `<div style="font-size:12px; color:#334155; margin-top:3px;"><span style="color:#94a3b8;">Order</span> ${escapeHtml(order)}${siteCopyBtn(order, 'order number')}</div>` : ''}
+                </div>
+                <span style="font-weight:900; font-size:15px; color:var(--slate-charcoal);">${x.amount != null ? _holdMoney(x.amount) : ''}</span>
+            </div>
+            <div style="font-size:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; margin-top:8px; color:#334155;">
+                <b>${escapeHtml(x.resolved_by || 'The manager')} said</b>${x.resolved_at ? ' · ' + _holdDate(x.resolved_at) : ''}<div style="margin-top:2px;">“${escapeHtml(x.resolved_note || '')}”</div></div>
+            <div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:6px; color:${_HOLD_C.red.fg};"><b>The system says:</b> ${escapeHtml(x.why || '')}.</div>
+            <div style="margin-top:10px;">
+                <label class="form-label-caps" for="hold-dm-note-${i}">Note — optional to confirm, required to send back</label>
+                <textarea id="hold-dm-note-${i}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;" placeholder="e.g. Checked Seller Hub — eBay credited it Oct 30 / Not good enough: call eBay and get the case number"></textarea>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                    <button onclick="_holdDmAnswer(${i}, 'dm_confirm')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Confirm resolved</button>
+                    <button onclick="_holdDmAnswer(${i}, 'dm_send_back')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Send back to manager</button>
+                    <button onclick="switchOversightTab('${tabOf(x)}')" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">See it in ${tabOf(x) === 'mismatch' ? 'Mismatches' : tabOf(x) === 'payments' ? 'Payments' : 'Cases'}</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('')}</div>`;
+}
+async function _holdDmAnswer(i, action) {
+    const x = _holdDmIndex[i];
+    if (!x) return;
+    const ta = document.getElementById(`hold-dm-note-${i}`);
+    const note = ta ? ta.value.trim() : '';
+    if (action === 'dm_send_back' && note.length < HOLD_MIN_REASON) {
+        alert('Say why it is going back — the manager sees this.');
+        if (ta) ta.focus();
+        return;
+    }
+    try {
+        // review_key: the row the resolution actually lives on — an escalated
+        // INR's note can sit on the inquiry it came from.
+        await _holdPost({ action, item_type: x.type, item_key: x.review_key || x.key, note: note || null });
+        await _holdAfterWrite('ov');
+        if (typeof checkClaimsConfirmAlerts === 'function') checkClaimsConfirmAlerts();
+    } catch (e) { alert('Could not save: ' + e.message); }
 }
 
 // Payments are read from Shopify only, so a failure says Shopify — the eBay
@@ -38516,7 +38267,7 @@ function _holdInView(ctx, items) {
 // from the top of a long tab.
 function _holdSectionHead(t, rows) {
     const list = rows || [];
-    const hot = list.some(x => _HOLD_VIEWS.due.states.includes(x.state));
+    const hot = list.some(x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush);
     const bar = hot ? _HOLD_C.red.solid : '#94a3b8';
     const count = list.length
         ? `<span style="font-size:10.5px; font-weight:900; padding:2px 8px; border-radius:999px; background:${hot ? _HOLD_C.red.bg : '#e2e8f0'}; color:${hot ? _HOLD_C.red.fg : '#475569'};">${list.length}</span>`
@@ -38610,7 +38361,31 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
     // Most urgent state first, then oldest — the oldest open item is the one
     // closest to becoming a month-end adjusting entry.
     const at = it => new Date((type === 'mismatch' ? it.reversed_at : it.opened_at) || 0).getTime();
-    if (returns) rows.sort((a, b) => _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b));
+    // Returns: soonest deadline on top, ALWAYS (Ethan, 2026-11-05 — OVL had a
+    // run of delivered returns whose refund-by dates were scattered down the
+    // list, because the old order was status then age, and age is not when it
+    // is due). Only the date the card actually prints counts — the one shown
+    // when the next move is ours — so the order reads true on screen. Returns
+    // with no deadline of ours follow, in the old status-then-oldest order.
+    // Delivered returns outrank that, though (Ethan, 2026-11-06): the item is
+    // back and the buyer is owed money, so every delivered return sits above
+    // every label-pending one even when the label's date is sooner. Deadline
+    // order still holds within each group.
+    if (returns) {
+        const dueAt = it => {
+            if (!it.respond_by || !_holdReturnAction(it).ours) return Infinity;
+            const t = new Date(it.respond_by).getTime();
+            return isNaN(t) ? Infinity : t;
+        };
+        const delivered = it => /ITEM_DELIVERED/.test(String(it.ebay_status || '')) && it.outcome !== 'partial_matched' ? 0 : 1;
+        rows.sort((a, b) => {
+            const ga = delivered(a), gb = delivered(b);
+            if (ga !== gb) return ga - gb;
+            const da = dueAt(a), db = dueAt(b);
+            if (da !== db) return da === Infinity ? 1 : db === Infinity ? -1 : da - db;
+            return _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b);
+        });
+    }
     else if (type === 'ebay_case') rows.sort((a, b) => _holdCaseRank(a) - _holdCaseRank(b) || at(a) - at(b));
     // Soonest deadline first among the ones waiting on us — with two of these
     // open, the date is the only thing that decides which to do first.
@@ -38686,11 +38461,16 @@ const _holdEbayDay = iso => {
 // appears only when the next move is ours, as it does in Seller Hub.
 function _holdReturnAction(it) {
     const st = String(it.ebay_status || '');
+    // A partial refund eBay and Shopify agree on (claims-disputes checkPartialRefund,
+    // Ethan 2026-11-05). eBay keeps it open, but nothing is left for us to do.
+    if (it.outcome === 'partial_matched') return { text: 'Partial refund — matches Shopify', ours: false };
     // Always red, not only inside the two-day window: the item is back in our
     // hands and the buyer is owed their money, so it is the one stage where the
     // clock is already running against us (Ethan, 2026-09-22).
     if (/ITEM_DELIVERED/.test(st)) return { text: 'Return delivered — issue refund by', ours: true, urgent: true };
-    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return { text: 'Provide return shipping label by', ours: true };
+    // Red too (Ethan, 2026-11-06): the return can't move until we send the
+    // label, so it is ours to act on now, not something to wait out.
+    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return { text: 'Provide return shipping label by', ours: true, urgent: true };
     if (/READY_FOR_SHIPPING|ITEM_READY_TO_SHIP/.test(st)) return { text: 'Waiting for buyer to ship', ours: false };
     if (/ITEM_SHIPPED/.test(st)) return { text: 'Return shipped', ours: false };
     return { text: _holdPretty(st.split(' / ').pop()), ours: true };
@@ -38739,7 +38519,10 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     const idx = _holdIndex[ctx].push({ type, it }) - 1;
     const readOnly = !!(opts && opts.returns);
     const st = it.state;
-    const s = _HOLD_STATE[st] || _HOLD_STATE.due;
+    // Hushed (claims-disputes hushOf, Ethan 2026-11-07): replied to, or past a
+    // window eBay won't reopen. Still listed here, but it is waiting on eBay's
+    // decision, so the chip is blue and the card has no red edge.
+    const s = it.hush ? _HOLD_STATE.answered : (_HOLD_STATE[st] || _HOLD_STATE.due);
     const key = _holdKeyFor(type, it);
     let form = _holdOpenForm[ctx] && _holdOpenForm[ctx].id === `${type}|${key}` ? _holdOpenForm[ctx].mode : null;
     if (readOnly) form = null;
@@ -38802,9 +38585,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on ${ebay ? 'eBay' : 'Shopify'} ↗</a>` : '',
         ];
         if (st === 'needs_reply' && it.missed_window) {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and no longer takes one, so this is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and won't take one now. That doesn't mean we lose: it still decides on what it has, and this clears itself when it closes. If you hear the outcome first, mark it resolved and say what happened.</div>`;
         } else if (st === 'needs_reply') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Without our evidence, it is decided on the buyer's side alone.</div>`;
         } else if (st === 'answered') {
             extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We responded${it.responded_at ? ` ${_holdDate(it.responded_at)}` : ''} — the ${ebay ? 'eBay' : 'card'} decision can take weeks. Nothing to do until it lands.</div>`;
         } else if (st === 'settled') {
@@ -38901,16 +38684,39 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // What the carrier says. A refunded INR that turns up delivered is the
         // one to look at first: eBay refunds us for it, no claim needed (0106).
         if (it.tracking_status) {
-            const del = /DELIVERED/i.test(it.tracking_status);
+            // Green "Delivered" means "eBay pays this back"; a written-off one it
+            // didn't, so the status is shown plain, like any other.
+            const del = /DELIVERED/i.test(it.tracking_status) && it.state_note !== 'written_off';
             const tn = it.tracking_number ? `${escapeHtml(it.tracking_carrier || '')} ${escapeHtml(it.tracking_number)}${siteCopyBtn(it.tracking_number, 'tracking number')}` : '';
             facts.push(`<span style="white-space:nowrap; ${del ? `color:${_HOLD_C.green.fg}; font-weight:800;` : 'color:#475569;'}">${del ? 'Delivered' : escapeHtml(_holdPretty(it.tracking_status))}${tn ? ' · ' + tn : ''}</span>`);
         }
+        // A REFUNDED INR SAYS WHAT TO DO BY WHAT THE CARRIER SAYS (2026-11-03).
+        // Only a parcel lost in transit is a carrier claim; the other three are
+        // a phone call to eBay or a device on our own shelf. Each ends the same
+        // way — mark it resolved — and that resolution is CHECKED: eBay's payouts
+        // for the money coming back, Shopify for the device back in stock. If
+        // neither backs it up it goes to the DM, never straight off the list.
+        const box = (c, html) => `<div style="font-size:12px; background:${c.bg}; border:1px solid ${c.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${c.fg};">${html}</div>`;
         if (it.state_note === 'delivered_after_refund') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.</div>`;
-        } else if (st === 'needs_claim' && _holdDelivered(it)) {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>The carrier says this was delivered</b> — Even though the buyer was refunded. eBay covers a delivered item-not-received, so ask eBay for it rather than filing a claim, then mark this resolved and say what eBay did.</div>`;
+            extra = box(_HOLD_C.green, (it.claim
+                ? `<b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.`
+                : `<b>The carrier says this was delivered</b> — even though the buyer was refunded. eBay covers a delivered item-not-received, so call eBay for it rather than filing a claim, then mark this resolved and say what eBay did. The system checks eBay's payouts for the money coming back — if eBay says it takes a day or two, that's fine; it waits 3 days for it to show.`)
+                + _holdPaybackLine(it));
+        } else if (it.state_note === 'written_off') {
+            extra = box(_HOLD_C.grey, `<b>Written off.</b> The carrier says it was delivered, and eBay didn't pay it back before its 30 days ran out on ${_holdDay(it.payback_by)}. A carrier won't pay a claim on a delivered parcel, so there is nothing left to do — it is listed here for the record.`);
+        } else if (it.state_note === 'returned_to_us') {
+            extra = box(_HOLD_C.amber, `<b>The carrier sent this back to us</b> — after the buyer was refunded, so nobody owes us for it and no claim is needed. Put the device back in stock in Shopify, then mark this resolved. The system checks Shopify for it.`);
+        } else if (it.state_note === 'never_scanned') {
+            extra = box(_HOLD_C.red, `<b>${it.tracking_status ? 'The carrier never scanned this parcel' : 'There is no tracking on this one'}</b> — and the buyer was refunded. It may never have left the store, and a carrier won't pay a claim on a parcel it never had. Find the device and put it back in stock in Shopify, then mark this resolved. If it can't be found, say so — that goes to the DM.`);
         } else if (st === 'needs_claim') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''}. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.</div>`;
+            extra = box(_HOLD_C.red, `<b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''} and the carrier still shows the parcel in transit. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.${(_holdPaybackLeft(it) ?? -1) >= 0 ? ` If it shows delivered by ${_holdDay(it.payback_by)}, eBay pays it back instead.` : ''}`);
+        }
+        // A partial refund, checked against Shopify (2026-11-05): matched says so
+        // in green and needs nothing; unmatched says what each side shows.
+        if (it.kind === 'return' && it.outcome === 'partial_matched' && it.outcome_detail) {
+            extra = box(_HOLD_C.green, `<b>Nothing to do</b> — ${escapeHtml(it.outcome_detail)}. eBay keeps a partial refund open until the buyer's window to escalate runs out; if they do, it comes back as a case.`);
+        } else if (it.kind === 'return' && it.outcome === 'partial_unmatched' && it.outcome_detail) {
+            extra = box(_HOLD_C.amber, `<b>The refunds don't match yet</b> — ${escapeHtml(it.outcome_detail)}. Once Shopify shows the same refund as eBay, this clears itself on the next read.`);
         }
         if (it.state_note === 'outcome unread') {
             extra += `<div style="font-size:11.5px; color:#b45309; margin-top:6px;">Closed on eBay, but we couldn't read whether the buyer was refunded yet. It clears itself on the next read, or check it on eBay.</div>`;
@@ -38927,10 +38733,34 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     // A contested resolution gets the red block below INSTEAD of the green
     // "Resolved by…" one — showing both would have the same card saying it is
     // settled and not settled at once.
-    if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
+    // 0164. Every resolution is fact-checked. One the sites don't back up waits
+    // on the DM (amber); one the DM sent back is due again with the DM's reason
+    // (red). A live-deadline item keeps its red "site disagrees" block below
+    // instead, so it is not said twice.
+    const dmx = it.dm || null;
+    const dmPending = !!(dmx && dmx.pending && it.state_note !== 'resolution_disputed');
+    const dmBack = !!(dmx && dmx.status === 'denied' && _HOLD_VIEWS.due.states.includes(st));
+    // NOT DONE (Ethan, 2026-11-04): a resolution the sites were re-read after
+    // and still contradict is back in Needs Attention for the manager — red,
+    // with what the system saw, because the manager thinks it's finished.
+    const dmNotDone = !!(dmPending && dmx.kind === 'not_done' && _HOLD_VIEWS.due.states.includes(st));
+    if (dmNotDone) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(dmx.resolved_by || 'Someone')} marked this resolved${dmx.resolved_at ? ' ' + _holdDate(dmx.resolved_at) : ''} — it isn't done</b>
+            ${dmx.resolved_note ? `<div style="margin-top:2px;">“${escapeHtml(dmx.resolved_note)}”</div>` : ''}
+            <div style="margin-top:4px;">The system checked afterwards: ${escapeHtml(dmx.why || '')}. Fix it on eBay or Shopify and it clears at the next morning's read — or open a claim.</div></div>`;
+    } else if (dmPending) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>${escapeHtml(dmx.resolved_by || 'Someone')} marked this resolved${dmx.resolved_at ? ' ' + _holdDate(dmx.resolved_at) : ''} — waiting on the DM to confirm</b>
+            ${dmx.resolved_note ? `<div style="margin-top:2px;">“${escapeHtml(dmx.resolved_note)}”</div>` : ''}
+            <div style="margin-top:4px;">The system doesn't back it up yet: ${escapeHtml(dmx.why || '')}. If eBay or Shopify catch up, this clears by itself.</div></div>`;
+    } else if (dmBack) {
+        said = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The DM sent this back${dmx.by ? ' — ' + escapeHtml(dmx.by) : ''}${dmx.at ? ', ' + _holdDate(dmx.at) : ''}</b>
+            <div style="margin-top:2px; font-weight:700;">“${escapeHtml(dmx.note || '')}”</div>
+            ${dmx.resolved_note ? `<div style="margin-top:4px;">It had been marked resolved${dmx.resolved_by ? ' by ' + escapeHtml(dmx.resolved_by) : ''}: “${escapeHtml(dmx.resolved_note)}”</div>` : ''}</div>`;
+    } else if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
         const who = escapeHtml(rv.by_name || 'Someone');
         if (rv.status === 'resolved') {
-            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
+            const ok = dmx && dmx.status === 'confirmed' ? ` · confirmed by ${escapeHtml(dmx.by || 'the DM')}` : '';
+            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}${ok}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
         } else {
             said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>Still open</b> — ${who}, ${_holdDate(rv.updated_at)}${st === 'checked' && it.due_on ? ` · back on the list ${_holdDay(it.due_on)}` : ''}${rv.note ? `<div style="margin-top:2px;">${escapeHtml(rv.note)}</div>` : ''}</div>`;
         }
@@ -38955,7 +38785,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(still)}</b>
             ${rv && rv.note ? `<div style="margin-top:2px; font-weight:600;">“${escapeHtml(rv.note)}”</div>` : ''}
-            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now${age >= days ? ' — this has already gone to the DM.' : ` — after ${days} day${days === 1 ? '' : 's'} it goes to the DM.`}</div>
+            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now — it has gone to the DM to confirm${age >= days ? '' : ''}.</div>
         </div>`;
     }
     // Cases only: a dispute says its own version of this above, naming the right
@@ -38969,7 +38799,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // gone changes what this card should ask for: a record, not an argument.
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>We missed the window to reply${it.respond_by ? ` — eBay wanted an answer by ${_holdEbayDay(it.respond_by)}` : ''}.</b>
-            eBay does not take a late reply, so this is very likely decided against us. Mark it resolved and say what happened, so there is a record of it.</div>`;
+            eBay won't take a late reply, but that doesn't mean we lose the case — eBay still decides it on what it has, and this clears itself when eBay closes it. If you learn the outcome first, mark it resolved and say what happened.</div>`;
     } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
     }
@@ -38990,18 +38820,20 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     if (readOnly) { /* nothing to press: the daily read moves a return along */ }
     else if (st === 'resolved') {
         acts.push(`<button onclick="_holdReopen('${ctx}', ${idx})" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Reopen</button>`);
-    } else if (st === 'needs_claim' || it.state_note === 'delivered_after_refund') {
-        // Delivered after all: eBay pays that one back, so the first move is a
-        // note saying what eBay did, not a carrier claim (0106). Once a claim
-        // has already been opened the card arrives here as 'due' instead — same
-        // parcel, same move, so it gets the same button rather than a generic
-        // "Update status" that says nothing about who to ring.
-        if (_holdDelivered(it)) {
-            acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${form === 'status' ? 'Close' : 'Delivered — Resolve it'}</button>`);
-        }
+    } else if (st === 'needs_claim' || _HOLD_REFUND_NOTES.includes(it.state_note)) {
+        // A REFUNDED INR (2026-11-03): the button names the move the carrier's
+        // word calls for. Lost in transit leads with the claim; the other three
+        // with a resolution — which is fact-checked, and goes to the DM if eBay
+        // and Shopify don't back it up. Lost in transit can be resolved too (it
+        // turned up in the store after all), checked the same way.
         if (st === 'needs_claim') {
             acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">${form === 'claim' ? 'Close' : 'Open or link a claim'}</button>`);
         }
+        const lbl = it.state_note === 'delivered_after_refund' ? 'Delivered — Resolve it'
+            : it.state_note === 'returned_to_us' ? 'Restocked — Resolve it'
+            : it.state_note === 'never_scanned' ? 'Found it — Resolve it' : 'Resolve another way';
+        const c = st === 'needs_claim' ? _HOLD_C.grey : _HOLD_C.green;
+        acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${c.bg}; border:1.5px solid ${c.line}; color:${c.fg};">${form === 'status' ? 'Close' : lbl}</button>`);
     } else if (st === 'needs_reply' || st === 'due' || st === 'checked') {
         acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">${form === 'status' ? 'Close' : 'Update status'}</button>`);
     }
@@ -39009,6 +38841,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     let formHtml = '';
     if (form === 'status' && (st === 'due' || st === 'checked' || st === 'needs_claim' || st === 'needs_reply')) {
         const days = ((_holdData[ctx] || {}).timers || {})[type] || 0;
+        // A refunded INR is due every day until it is dealt with (2026-11-03) —
+        // the money has already gone out — so it has no "Still open" to hide it.
+        const refInr = inr && it.outcome === 'refunded';
         formHtml = `
         <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
             <label class="form-label-caps" for="hold-note-${ctx}-${idx}">Note</label>
@@ -39017,7 +38852,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
                     : type === 'dispute' ? 'e.g. Refunded the buyer and accepted it — cheaper than losing the chargeback fee too'
                     : type === 'payment' ? 'e.g. Customer paid the $28.20 in store 9/29, receipt #…'
                     : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
-            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply' && type === 'payment'
+            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${refInr
+                ? `The buyer has already been refunded, so this can't be checked in — it stays on the list every day until it's dealt with. Say what happened: what eBay did, or that the device is back in stock.`
+                : st === 'needs_reply' && type === 'payment'
                 ? `<b>Still open</b> is off the table while Shopify can still charge the card — fulfilling or cancelling the order is the fix, and the next read sees it. <b>Resolved</b> is recorded, but it stays on the list until Shopify agrees.`
                 : st === 'needs_reply'
                 ? (type === 'dispute'
@@ -39027,21 +38864,22 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
                     : `<b>Still open</b> is off the table until eBay shows our reply — that is the point of this one. <b>Resolved</b> is still here for a case that ended some other way, and needs a reason.`)
                 : type === 'mismatch'
                 ? `<b>Insurance Claim</b> opens the claim form and takes this off the list for ${days} day${days === 1 ? '' : 's'}. <b>Resolved</b> needs a reason — why it is fine that the two sites don’t match, or what you fixed.`
-                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}</div>
+                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}
+                <div style="margin-top:4px;"><b>Resolved is checked</b> against eBay and Shopify. If they don't back it up, it goes to the DM to confirm — and the DM can send it back to you with a reason.</div></div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                ${st === 'needs_reply' ? ''
+                ${st === 'needs_reply' || refInr ? ''
                     : type === 'mismatch'
                     ? `<button onclick="_holdInsuranceClaim('${ctx}', ${idx})" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Insurance Claim</button>`
                     : `<button onclick="_holdSave('${ctx}', ${idx}, 'still_open')" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Still open</button>`}
                 <button onclick="_holdSave('${ctx}', ${idx}, 'resolved')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Mark resolved</button>
-                ${inr && st !== 'needs_claim' ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
+                ${inr && !refInr ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
             </div>
         </div>`;
     } else if (form === 'claim' && (inr || type === 'mismatch')) {
         formHtml = _holdClaimForm(ctx, idx, it);
     }
 
-    const edge = (st === 'due' || st === 'needs_claim' || st === 'needs_reply') ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};` : '';
+    const edge = !it.hush && (st === 'due' || st === 'needs_claim' || st === 'needs_reply') ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};` : '';
     return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; ${edge}">
         <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
             <div style="min-width:0; flex:1 1 240px;">
@@ -39208,13 +39046,13 @@ async function _holdOpenClaim(ctx, idx) {
 // DM/CEO oversight view: the claims summary plus the same two tabs across
 // every rolled-out store.
 function switchOversightTab(tab) {
-    ['claims', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
+    ['claims', 'confirm', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const b = document.getElementById(`ov-tab-${t}`);
         const p = document.getElementById(`ov-panel-${t}`);
         if (b) b.classList.toggle('active', t === tab);
         if (p) p.style.display = t === tab ? 'block' : 'none';
     });
-    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
+    if (tab === 'confirm' || tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
         if (_holdLoading.ov) renderHoldItems('ov');
         else loadHoldItems('ov', { sync: !_holdData.ov });
     }
@@ -39368,7 +39206,7 @@ function renderClaimsOversight() {
             ping = `<span title="Reminder sent ${sentTxt} and not yet reviewed. You can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or sooner if the manager reviews it."
                 style="display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:800; color:#94a3b8; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:7px; padding:5px 11px; cursor:default;">🔔 Reminded ${sentTxt}</span>`;
         } else {
-            ping = `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
+            ping = `<button onclick="pingStoreClaims('${s}', this)" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
         }
         html += `<tr>
             ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`, 'text-align:left;')}
@@ -39498,7 +39336,26 @@ async function ovDeleteClaim(id) {
 
 // Nudge a store's manager to review their open claims. Delivers as a dedicated RED
 // review pop-up on the manager's dashboard (separate from green store comments).
-async function pingStoreClaims(store) {
+//
+// The button confirms ITSELF — first click arms it ("Send to LEE?"), a second
+// click within 6s sends — and reports back on the button, never through
+// confirm()/alert(). Ethan 2026-11-04: "I just am clicking it and nothing is
+// happening." The handler was reaching confirm() fine; his browser was answering
+// it false without drawing it (Chrome's "don't let this page create more
+// dialogs", or a pane that blocks native dialogs), so the click silently did
+// nothing and no reminder had gone out since Oct 14. A native dialog is a single
+// point of failure the page can't see, so this one doesn't use any.
+const _claimPingArmed = {};
+function _claimPingSay(btn, text, tone) {
+    if (!btn) return;
+    const c = tone === 'bad' ? ['#fef2f2', '#fecaca', '#b91c1c']
+            : tone === 'ok'  ? ['#ecfdf5', '#a7f3d0', '#047857']
+            : tone === 'arm' ? ['#fffbeb', '#fde68a', '#b45309']
+            :                  ['#eff6ff', '#bfdbfe', '#1d4ed8'];
+    btn.textContent = text;
+    btn.style.background = c[0]; btn.style.borderColor = c[1]; btn.style.color = c[2];
+}
+async function pingStoreClaims(store, btn) {
     const rows = _oversightAll || [];
     // Reminders target only claims that are actually behind: open, over 7 days,
     // not yet reviewed ("Still in progress") and not already escalated to a claim.
@@ -39509,7 +39366,7 @@ async function pingStoreClaims(store) {
         && !sup.has(r.id)
         && _isClaimAging(r));
     if (!aging.length) {
-        alert(`${store} has no claims over 7 days awaiting review — nothing to remind about.`);
+        _claimPingSay(btn, 'Nothing over 7 days', 'bad');
         return;
     }
     // Belt-and-braces: the button is already hidden during the cooldown, but a stale
@@ -39518,10 +39375,23 @@ async function pingStoreClaims(store) {
     if (lock) {
         const backIn = Math.max(1, CLAIM_REMINDER_COOLDOWN_DAYS
             - Math.floor((Date.now() - new Date(lock.created_at).getTime()) / 86400000));
-        alert(`${store} was already reminded and hasn't reviewed yet.\n\nYou can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or as soon as they review it.`);
+        _claimPingSay(btn, `Already reminded — again in ${backIn}d`, 'bad');
         return;
     }
-    if (!confirm(`Send ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review?`)) return;
+    // First click arms, second click sends. The title says what will be sent.
+    if (!_claimPingArmed[store]) {
+        _claimPingArmed[store] = setTimeout(() => {
+            delete _claimPingArmed[store];
+            if (btn && btn.isConnected) _claimPingSay(btn, '🔔 Send reminder');
+        }, 6000);
+        if (btn) btn.title = `Sends ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review.`;
+        _claimPingSay(btn, `Send to ${store}? (${aging.length}) — click again`, 'arm');
+        return;
+    }
+    clearTimeout(_claimPingArmed[store]);
+    delete _claimPingArmed[store];
+    if (btn) btn.disabled = true;
+    _claimPingSay(btn, 'Sending…');
     // Message is generic — the manager's popup computes the live over-7-day count.
     try {
         const res = await fetch(CLAIMS_URL, {
@@ -39534,10 +39404,13 @@ async function pingStoreClaims(store) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
-        alert(`Reminder sent to ${store}.`);
-        fetchAllClaims(); // re-read reminders so the button flips to its locked state
+        _claimPingSay(btn, `✓ Sent to ${store}`, 'ok');
+        // Re-read reminders so the row flips to "Reminded today" — after a beat,
+        // because the reload wipes the table and the ✓ with it.
+        setTimeout(fetchAllClaims, 1500);
     } catch (e) {
-        alert('Could not send the reminder: ' + (e.message || e));
+        if (btn) { btn.disabled = false; btn.title = 'Could not send: ' + (e.message || e); }
+        _claimPingSay(btn, '✕ Not sent — click to retry', 'bad');
     }
 }
 
@@ -39739,8 +39612,8 @@ async function checkClaimReminders() {
                 agingCount = agingRows.length;
                 agingINRCount = agingRows.filter(_isINRTicket).length;
                 agingStores = [...new Set(agingRows.map(r => (r.store || '').toUpperCase()).filter(Boolean))];
-                // Same reasoning as the aging alert: a Multi-Store Manager's reminder
-                // spans both stores, so a bare total doesn't say where to look.
+                // Same reasoning as the aging alert: a reminder spanning more than
+                // one store needs a per-store split to say where to look.
                 if (stores.length > 1) {
                     const byStore = {};
                     agingRows.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
@@ -39780,7 +39653,7 @@ function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, break
     }
     _reminderBubbleActive = true; // claims the shared bubble so the aging alert won't clobber it
     // With a breakdown the full sentence would run past the feed's ~100-char cap and
-    // clip exactly the store split the MSM needs, so lead with counts + stores and
+    // clip exactly the store split, so lead with counts + stores and
     // demote the INR flag to a short tag (matches _showClaimAlert).
     const summary = agingCount
         ? `${from}: ` + (breakdown
@@ -39797,8 +39670,8 @@ function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, break
 let _claimAlertPollStarted = false;
 const _CLAIM_ALERT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 async function checkAgingClaims() {
-    // Same audience as the Insurance Claims tool: managers, owner-managers, MSM
-    // (MSM logs in as role 'manager'). ASMs/employees never file claims.
+    // Same audience as the Insurance Claims tool: managers and owner-managers.
+    // ASMs/employees never file claims.
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
     if (!_CLAIM_ALERT_ROLES.has(role)) return;
     const stores = (typeof _claimStores === 'function') ? _claimStores() : [];
@@ -39855,10 +39728,8 @@ async function checkAgingClaims() {
         aging.forEach(r => seen.add(r.id));
         _saveSeenAgingClaims(seen);
 
-        // A Multi-Store Manager covers two stores at once, so "2 claims are aging"
-        // doesn't tell them where to look. Break it down by store whenever the
-        // user's claim scope spans more than one; single-store managers are
-        // unaffected and keep the plain wording.
+        // Break it down by store whenever the user's claim scope spans more than
+        // one; a single-store manager keeps the plain wording.
         const byStore = {};
         aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
         const breakdown = stores.length > 1
@@ -40002,6 +39873,48 @@ async function checkAgingClaimsDM() {
     }
 }
 
+// --- RESOLUTIONS TO CONFIRM, AS THE DM'S FEED CARD (0164) ---------------------
+// Ethan, 2026-11-03: "if the system disagrees, then DM gets notified to confirm".
+// The DM's notice is this card plus the 8:40 digest. State-based like the
+// delete-request card: it stays while anything waits on the DM and leaves when
+// the queue is empty, so no snooze — a glance must not silence it. District
+// manager only, the role that answers them.
+let _claimsConfirmPollStarted = false;
+function _claimsConfirmBubbleEl() {
+    let b = document.getElementById('claimsConfirmAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'claimsConfirmAlertBubble';
+    // FEED ONLY — invisible state-carrier (see _claimsDueBubbleEl, and the
+    // retired-bubble rule in styles.css that this id is listed in).
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="claimsConfirmAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+async function checkClaimsConfirmAlerts() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const hide = () => { const b = document.getElementById('claimsConfirmAlertBubble'); if (b) b.style.display = 'none'; };
+    if (role !== 'district manager') { hide(); return; }
+    if (!_claimsConfirmPollStarted) { _claimsConfirmPollStarted = true; setInterval(checkClaimsConfirmAlerts, 30 * 60 * 1000); }
+    try {
+        const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(_CLAIMS_OVERSIGHT_STORES.join(','))}&v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success) return;
+        const q = j.dmQueue || [];
+        if (!q.length) { hide(); return; }
+        const b = _claimsConfirmBubbleEl();
+        const t = document.getElementById('claimsConfirmAlertBubbleText');
+        if (!b || !t) return;
+        const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
+        const stores = [...new Set(q.map(x => x.store_code))];
+        t.textContent = `${q.length} resolution${q.length === 1 ? '' : 's'} (${_holdMoney(total)}) the system doesn't back up — ${stores.join(', ')}. Confirm or send back.`;
+        b.style.display = 'flex';
+    } catch (_) { /* next poll or ping retries */ }
+}
+
 // --- THE 4PM "DUE TODAY" ALERT, AS A FEED CARD -------------------------------
 // Ethan, 2026-10-08: "add a feed notification for the claims and disputes tool
 // only for that 4:00pm due today reminder ... they can't snooze it and it doesn't
@@ -40054,7 +39967,14 @@ async function checkClaimsDueAlerts() {
         const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const j = await res.json();
         if (!j || !j.success) return;           // a failed read leaves the card as it was
-        const items = j.dueAlerts || [];
+        // ONLY WHAT IS DUE NOW (Ethan, 2026-11-06: "we shouldn't show a feed
+        // notification unless something is due tomorrow or due today"). Overdue,
+        // due today, due tomorrow, or with no date of its own (it was mailed
+        // today and is due as of now). Something due Dec 3 stays on the tab and
+        // in the morning mail, and reaches this card the day before.
+        const _cdNow = j.today || _kpiCentralToday();
+        const items = (j.dueAlerts || []).filter(it => it.overdue || !it.due
+            || _b2bDayDiff(_cdNow, String(it.due).slice(0, 10)) <= 1);
         if (!items.length) { hide(); return; }
         const b = _claimsDueBubbleEl();
         const t = document.getElementById('claimsDueAlertBubbleText');
@@ -40064,7 +39984,13 @@ async function checkClaimsDueAlerts() {
         const line = it => {
             const what = _holdKindChip(it.type, it) || (it.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
             const amt = Number(it.amount) > 0 ? ' $' + Number(it.amount).toFixed(2) : '';
-            const when = it.overdue ? 'overdue' : it.due === today ? 'due today' : it.due ? 'due tomorrow' : '';
+            // Named by its real date: until 2026-11-06 anything not due today
+            // read "due tomorrow", so a BAL case eBay wanted answered by Dec 3
+            // said "due tomorrow" under a "Due Dec 3" badge.
+            const left = it.due && today ? _b2bDayDiff(today, String(it.due).slice(0, 10)) : null;
+            const when = it.overdue ? 'overdue' : !it.due ? ''
+                : left <= 0 ? 'due today' : left === 1 ? 'due tomorrow'
+                : 'due ' + new Date(String(it.due).slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
             return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
         };
         const overdue = items.some(it => it.overdue);
@@ -40111,8 +40037,8 @@ function _renderClaimBubble(icon, titleHtml, bodyHtml, summary, sig, stores) {
     if (!bubble || !textEl) return;
     if (summary) textEl.dataset.summary = summary;
     else delete textEl.dataset.summary;
-    // Stores this alert covers → routes an MSM single-store click (see
-    // _samGatherReminders). Cleared when only one/none so it doesn't go stale.
+    // Stores this alert covers → routes the DM's click to a store (see
+    // _samGatherReminders). Cleared when none so it doesn't go stale.
     if (stores && stores.length) textEl.dataset.stores = [...new Set(stores.map(s => String(s).toUpperCase()))].join(',');
     else delete textEl.dataset.stores;
     // Optional snooze IDENTITY, separate from the displayed text. A DM-pushed
@@ -40161,7 +40087,7 @@ function _showClaimAlert(count, inrCount = 0, breakdown = '', stores = null) {
         + _inrGuidanceHtml(inrCount);
     // With a per-store breakdown the full sentence runs close to the feed's
     // 100-char cap, and the breakdown is last — so an overflow would cut exactly
-    // the store info a multi-store manager needs. Lead with counts + stores and
+    // the store info. Lead with counts + stores and
     // demote the INR flag to a short tag; the guidance is in the tool anyway.
     const summary = breakdown
         ? `${count} open over 7 days · ${breakdown}` + (inrCount ? ` · ${inrCount} Item Not Received` : '')
@@ -40191,7 +40117,7 @@ window._dbgClaims = async function () {
     const out = {
         buildVersion: (document.querySelector('script[src*="speeks.js"]') || {}).src || '?',
         user: sessionStorage.getItem('speeksUserName'),
-        role, isMSM: isMultiStoreManager(), stores,
+        role, stores,
         roleAllowed: _CLAIM_ALERT_ROLES.has(role),
     };
     if (!out.roleAllowed) { out.VERDICT = 'BLOCKED: role not in _CLAIM_ALERT_ROLES'; console.table(out); return out; }
@@ -40292,7 +40218,7 @@ const _EXEC_STORE_OPTIONS =
 function toggleSendCommentModal() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
     // DM/CEO keep the company-wide sender; everyone else with the tool (Manager,
-    // Owner Manager, MSM) gets a version scoped to their own store(s).
+    // Owner Manager) gets a version scoped to their own store.
     if (role === 'district manager' || role === 'ceo') { openCEOStoreComment(null); return; }
     openManagerStoreComment();
 }
@@ -40335,8 +40261,7 @@ window.openCEOStoreComment = function(targetStore) {
     switchCommentTab('send');
 };
 
-// Manager / Owner Manager / Multi-Store Manager: send only to their own store(s).
-// Single-store managers get a locked selector; the MSM gets BAL/MPL unlocked. The
+// Manager / Owner Manager: send only to their own store, on a locked selector. The
 // message is authored under their name (submitStoreComment reads speeksUserName)
 // so on the recipient side it behaves identically to a DM/CEO comment.
 window.openManagerStoreComment = function() {
@@ -40348,11 +40273,8 @@ window.openManagerStoreComment = function() {
     lockAndBlurScreen();
     document.getElementById('commentMessageInput').value = '';
 
-    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
     const active = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-    const stores = isMSM
-        ? MULTISTORE_MANAGER_STORES.map(s => String(s).toUpperCase())
-        : (active ? [active] : []);
+    const stores = active ? [active] : [];
     _commentReadsStoreScope = stores.slice();
 
     const storeSelect = document.getElementById('commentStoreSelect');
@@ -40594,17 +40516,8 @@ window.closeDailyCommentBubble = function() {
 // reminders and patch notes all already keep a local copy of the read — comments
 // were the one type that trusted the round-trip. Entries are dropped once the
 // server confirms, so this never masks a genuinely-unread comment.
-// Which stores' comments belong to this user. A Multi-Store Manager covers both
-// their stores at once — the checklist, audit and listing-goals widgets all
-// already fan out over MULTISTORE_MANAGER_STORES, but comments were still
-// matching the single active store, so an MSM sitting on BAL could not see MPL's
-// comments at all (and vice versa) no matter which dashboard they switched to.
+// Which stores' comments belong to this user: their own store.
 function _commentStoresForUser() {
-    try {
-        if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-            return MULTISTORE_MANAGER_STORES.map(s => String(s).toUpperCase());
-        }
-    } catch (_) {}
     // NO 'OVL' fallback here. Everywhere else in the app that default is harmless
     // (it picks which store you're acting on, and by then the store is known), but
     // this decides which store's comments you're allowed to SEE. During sign-in
@@ -40635,8 +40548,6 @@ async function fetchAndDisplayStoreComment() {
     // aren't meant for them.
     if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'mocd') return;
     const userStore = String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase();
-    // Set, not a single value — an MSM matches both of their stores at once, so the
-    // same comments show on either dashboard rather than following the switcher.
     const myStores = new Set(_commentStoresForUser());
     // Store not resolved yet (mid sign-in): bail rather than fall back to a real
     // store. ALL/CORP comments are withheld for one poll too, which is the right
@@ -40799,6 +40710,11 @@ async function _champData() {
         });
         return matched ? matched.name : shortName;
     };
+    // Kept off the Buyer and Lister boards (Ethan, 2026-11-09): the owner's own
+    // buys and listings shouldn't take a staff award. Matched on the resolved
+    // full name, so a sheet row keyed "Ethan" is caught too. Reviews unchanged.
+    const CHAMP_EXCLUDED = ['ethan kushnir'];
+    const champExcluded = (fullName) => CHAMP_EXCLUDED.indexOf(String(fullName).toLowerCase().trim()) !== -1;
 
     // 3. LISTERS + REVIEWS
     const results = await Promise.all(stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())));
@@ -40807,7 +40723,7 @@ async function _champData() {
         (d.employees || []).forEach(e => {
             const listed  = parseNum(e.listed_count);
             const reviews = parseNum(e.mtd_google_reviews);
-            if (listed  > 0) allListers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], listed });
+            if (listed  > 0 && !champExcluded(getFullName(e.employee_name))) allListers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], listed });
             if (reviews > 0) allGoogleReviews.push({ name: getFullName(e.employee_name), store: stores[storeIdx], reviews });
         });
     });
@@ -40823,6 +40739,7 @@ async function _champData() {
                 const tc  = parseNum(e.transaction_count);
                 const tco = parseNum(e.transaction_converted);
                 if (bv <= 0) return;
+                if (champExcluded(getFullName(e.employee_name))) return;
                 const conv = tc > 0 ? tco / tc : 0;
                 const gm   = 1 - bc / bv;
                 const convScore = conv >= 0.95 ? 100 : conv >= 0.9 ? 400 * conv - 280 : conv >= 0.8 ? 600 * conv - 460 : conv >= 0.7 ? 200 * conv - 140 : 0;
@@ -40938,14 +40855,6 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
-// Multi-Store Manager (e.g. BAL + MPL): one checklist cache per managed store, so
-// both stores' lists render stacked in the same panel without switching dashboards.
-// { BAL: {daily,weekly,monthly,quarterly}, MPL: {...} }. Empty for everyone else.
-let checklistDataCacheMS = {};
-const _pendingTogglesMS = new Map();   // key: "STORE::id" -> { checked, expiresAt }
-function _isMSMChecklist() {
-    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
-}
 // Tracks optimistic toggle state for up to 20 seconds so a slow backend response
 // can't overwrite a locally-checked item before Apps Script persists it.
 const _pendingToggles = new Map(); // id -> { checked, expiresAt }
@@ -40962,8 +40871,7 @@ function _applyPendingToggles() {
 }
 
 // For assistant managers, returns the store's primary manager name so both share the same
-// checklist data (incl. BAL/MPL, whose manager is the Multi-Store Manager — see
-// _resolveStoreManager). All other roles return their own name, preserving existing behavior.
+// checklist data (see _resolveStoreManager). All other roles return their own name, preserving existing behavior.
 function getChecklistUser() {
     const role = sessionStorage.getItem('speeksUserRole') || '';
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -40990,7 +40898,7 @@ function switchChecklistTab(tab) {
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) qTab.classList.toggle('active', tab === 'quarterly');
 
-    if (_isMSMChecklist()) renderChecklistMS(); else renderChecklist();
+    renderChecklist();
 }
 
 async function loadChecklist() {
@@ -40999,9 +40907,6 @@ async function loadChecklist() {
     // overwrites the cache with stale (unchecked) data before the backend saves.
     const panel = document.getElementById('checklistSidePanel');
     if (!panel?.classList.contains('open')) return;
-
-    // Multi-Store Managers get both managed stores stacked in one panel.
-    if (_isMSMChecklist()) { await loadChecklistMS(); return; }
 
     const container = document.getElementById('checklistContent');
     const userName = getChecklistUser();
@@ -41086,230 +40991,6 @@ function renderChecklist() {
 
     container.innerHTML = html;
     updateChecklistChip();
-}
-
-// ============================================================================
-// MULTI-STORE MANAGER — dual-store checklist (both managed stores in one panel)
-// A MSM (Joseph: BAL + MPL) does everything a manager does, but for every store
-// they run. Rather than reload the dashboard to switch stores, we fetch each
-// managed store's checklist (user = the MSM) and render them as stacked, per-store
-// sections in the same panel, each with its own progress + add row. ASMs are
-// single-store and never hit this path, so their behavior is unchanged.
-// ============================================================================
-
-// Hide the single-store footer/add row in MSM mode — each store gets its own add row.
-function _setMSChecklistChrome(isMS) {
-    const inputArea = document.querySelector('#checklistSidePanel .cl-input-area');
-    const footer    = document.querySelector('#checklistSidePanel .cl-footer-row');
-    if (inputArea) inputArea.style.display = isMS ? 'none' : '';
-    if (footer)    footer.style.display    = isMS ? 'none' : '';
-}
-
-// Per-store accent color so the stacked sections/pills are distinguishable at a glance.
-// `solid` matches the site-wide store colors (`_storeColors`, used by the monthly-goals
-// banner & charts — BAL red, MPL orange, etc.); `soft` is a light tint for backgrounds.
-function _msStoreAccent(store) {
-    const map = {
-        OVL: { solid: '#7c3aed', soft: '#f5f3ff' },   // purple
-        LEE: { solid: '#2563eb', soft: '#eff6ff' },   // blue
-        WSP: { solid: '#5a8d3b', soft: '#f3f8ee' },   // green
-        MPL: { solid: '#ea580c', soft: '#fff7ed' },   // orange
-        BAL: { solid: '#dc2626', soft: '#fef2f2' },   // red
-    };
-    return map[String(store || '').toUpperCase()] || { solid: '#64748b', soft: '#f1f5f9' };
-}
-
-// Collapse duplicate GLOBAL/required tasks by text (mirrors renderChecklist).
-function _dedupeGlobals(rawItems) {
-    const seen = new Set();
-    return (rawItems || []).filter(it => {
-        if (it.isGlobal) {
-            const key = String(it.text || '').trim().toLowerCase();
-            if (seen.has(key)) return false;
-            seen.add(key);
-        }
-        return true;
-    });
-}
-
-function _applyPendingTogglesMS() {
-    const now = Date.now();
-    for (const [key, val] of _pendingTogglesMS) {
-        if (val.expiresAt < now) { _pendingTogglesMS.delete(key); continue; }
-        const [store, id] = key.split('::');
-        const cache = checklistDataCacheMS[store];
-        if (!cache) continue;
-        for (const tab of Object.keys(cache)) {
-            const item = (cache[tab] || []).find(i => i.id === id);
-            if (item) item.checked = val.checked;
-        }
-    }
-}
-
-async function loadChecklistMS() {
-    const container = document.getElementById('checklistContent');
-    const userName = getChecklistUser();
-    _setMSChecklistChrome(true);
-
-    // MSM effective role is manager: Daily/Weekly/Monthly apply; Quarterly is CORP/ALL-only.
-    document.getElementById('cl-tab-weekly')?.style && (document.getElementById('cl-tab-weekly').style.display = '');
-    document.getElementById('cl-tab-monthly')?.style && (document.getElementById('cl-tab-monthly').style.display = '');
-    const qTab = document.getElementById('cl-tab-quarterly');
-    if (qTab) {
-        qTab.style.display = 'none';
-        if (currentChecklistTab === 'quarterly') { currentChecklistTab = 'daily'; switchChecklistTab('daily'); return; }
-    }
-
-    if (container) container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
-    try {
-        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-            fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
-        ));
-        checklistDataCacheMS = {};
-        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-            checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
-        });
-        _applyPendingTogglesMS();
-        renderChecklistMS();
-    } catch (e) {
-        console.error('MSM Checklist Fetch Error', e);
-        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load checklist.</div>';
-    }
-}
-
-function renderChecklistMS() {
-    const container = document.getElementById('checklistContent');
-    if (!container) return;
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const cache = checklistDataCacheMS[store] || {};
-        const items = _dedupeGlobals(cache[currentChecklistTab] || []);
-        const total = items.length;
-        const done  = items.filter(i => i.checked).length;
-        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
-        const _ac = _msStoreAccent(store);
-        const _allDone = total && done === total;
-
-        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
-            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
-                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
-                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
-            </div>`;
-
-        if (total === 0) {
-            html += `<div class="ms-empty">No tasks for this tab.</div>`;
-        } else {
-            items.forEach(item => {
-                const completedClass = item.checked ? 'completed' : '';
-                const deleteHtml = !item.isGlobal
-                    ? `<button class="cl-delete-btn" onclick="deleteChecklistItemMS('${store}','${item.id}')" data-tip="Delete Task">✖</button>`
-                    : '';
-                html += `
-                <div class="cl-item ${completedClass}">
-                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleChecklistStateMS('${store}','${item.id}', this.checked)">
-                    <div class="cl-content-wrapper" style="justify-content: center;">
-                        <span class="cl-text">${escapeHtml(item.text)}</span>
-                    </div>
-                    ${deleteHtml}
-                </div>`;
-            });
-        }
-
-        html += `<div class="ms-add-row">
-                <input type="text" id="msNewTask_${store}" placeholder="Add a ${escapeHtml(store)} task..." onkeydown="if(event.key==='Enter')addChecklistItemMS('${store}')">
-                <button class="btn-primary cl-add-btn" onclick="addChecklistItemMS('${store}')">Add</button>
-            </div>
-        </div>`;
-    });
-
-    container.innerHTML = html;
-    updateChecklistChipMS();
-}
-
-function toggleChecklistStateMS(store, id, isChecked) {
-    const userName = getChecklistUser();
-    const cache = checklistDataCacheMS[store];
-    if (!cache) return;
-    const item = (cache[currentChecklistTab] || []).find(i => i.id === id);
-    if (item) item.checked = isChecked;
-    _pendingTogglesMS.set(store + '::' + id, { checked: isChecked, expiresAt: Date.now() + 20000 });
-    renderChecklistMS();
-
-    postWrite(CHECKLIST_URL, { action: 'toggle', id, checked: isChecked, tab: currentChecklistTab, user: userName, store })
-        .catch(err => {
-            const it = (cache[currentChecklistTab] || []).find(i => i.id === id);
-            if (it) it.checked = !isChecked;
-            _pendingTogglesMS.delete(store + '::' + id);
-            renderChecklistMS();
-            alert('Could not save that change: ' + err.message);
-        });
-}
-
-async function addChecklistItemMS(store) {
-    const input = document.getElementById('msNewTask_' + store);
-    if (!input) return;
-    const text = input.value.trim();
-    if (!text) return;
-
-    input.disabled = true;
-    const userName = getChecklistUser();
-    try {
-        const out = await postWrite(CHECKLIST_URL, { action: 'add', tab: currentChecklistTab, text, user: userName, store });
-        const cache = checklistDataCacheMS[store] || (checklistDataCacheMS[store] = { daily: [], weekly: [], monthly: [], quarterly: [] });
-        (cache[currentChecklistTab] ||= []).push({ id: out.id || ('temp_' + Date.now()), text, isGlobal: false, checked: false });
-        renderChecklistMS();
-    } catch (e) {
-        alert('Failed to add task: ' + (e.message || e));
-    } finally {
-        const el = document.getElementById('msNewTask_' + store);
-        if (el) { el.value = ''; el.disabled = false; el.focus(); }
-    }
-}
-
-function deleteChecklistItemMS(store, id) {
-    const userName = getChecklistUser();
-    const cache = checklistDataCacheMS[store];
-    if (!cache) return;
-    const list = cache[currentChecklistTab] || [];
-    const removed = list.find(i => i.id === id);
-    cache[currentChecklistTab] = list.filter(i => i.id !== id);
-    renderChecklistMS();
-
-    postWrite(CHECKLIST_URL, { action: 'delete', id, tab: currentChecklistTab, user: userName, store })
-        .catch(err => {
-            if (removed) { (cache[currentChecklistTab] ||= []).push(removed); renderChecklistMS(); }
-            alert('Could not delete task: ' + err.message);
-        });
-}
-
-// Combined nudge chip across both managed stores (based on the Daily list).
-function updateChecklistChipMS() {
-    const segs = [];
-    const samStores = [];
-    let anyOutstanding = false, anyTasks = false;
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const items = _dedupeGlobals((checklistDataCacheMS[store] || {}).daily || []);
-        if (!items.length) return;
-        anyTasks = true;
-        const done = items.filter(i => i.checked).length;
-        samStores.push({ store, done, total: items.length });
-        const ac = _msStoreAccent(store);
-        const label = done === items.length ? `${store} ✓` : `${store} ${done}/${items.length}`;
-        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
-        if (done < items.length) anyOutstanding = true;
-    });
-    if (typeof samSetProgress === 'function') samSetProgress('cl', samStores.length ? { stores: samStores } : { done: 0, total: 0 });
-
-    const chip = document.getElementById('cl-progress-chip');
-    const btn = document.querySelector('.cl-nav-toggle');
-    if (!chip || !btn) return;
-
-    if (!anyTasks) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
-    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
-    const panel = document.getElementById('checklistSidePanel');
-    const isOpen = panel && panel.classList.contains('open');
-    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
 }
 
 // --- API ACTIONS (POST to Apps Script) ---
@@ -41443,20 +41124,6 @@ function updateChecklistChip() {
 // Uses a separate path from loadChecklist() so the panel-open guard doesn't suppress it.
 async function _prefetchChecklistForChip() {
     const userName = getChecklistUser();
-    if (_isMSMChecklist()) {
-        try {
-            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
-            ));
-            checklistDataCacheMS = {};
-            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
-            });
-            _applyPendingTogglesMS();
-            updateChecklistChipMS();
-        } catch (_) {}
-        return;
-    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
@@ -41475,20 +41142,6 @@ function _startChecklistSync() {
         const panel = document.getElementById('checklistSidePanel');
         if (!panel?.classList.contains('open')) return;
         const userName = getChecklistUser();
-        if (_isMSMChecklist()) {
-            try {
-                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                    fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
-                ));
-                checklistDataCacheMS = {};
-                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                    checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
-                });
-                _applyPendingTogglesMS();
-                renderChecklistMS();
-            } catch (_) {}
-            return;
-        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
@@ -41567,8 +41220,6 @@ document.addEventListener('click', function(e) {
 let auditDataCache = { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
 let currentAuditTab = 'daily';
 let _auditSyncInterval = null;
-// Multi-Store Manager: one audit cache per managed store, rendered stacked. Empty for others.
-let auditDataCacheMS = {};   // { BAL: {daily,weekly}, MPL: {daily,weekly} }
 
 function _auditTab(tab) { return auditDataCache[tab] || { items: [], total: 0, completed: 0 }; }
 
@@ -41576,13 +41227,12 @@ function switchAuditTab(tab) {
     currentAuditTab = tab;
     document.getElementById('audit-tab-daily')?.classList.toggle('active', tab === 'daily');
     document.getElementById('audit-tab-weekly')?.classList.toggle('active', tab === 'weekly');
-    if (_isMSMChecklist()) renderAuditMS(); else renderAudit();
+    renderAudit();
 }
 
 async function loadAudit() {
     const panel = document.getElementById('auditSidePanel');
     if (!panel?.classList.contains('open')) return;   // only fetch when opening
-    if (_isMSMChecklist()) { await loadAuditMS(); return; }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const container = document.getElementById('auditContent');
     if (container) container.innerHTML = '<div class="status-message">Syncing checklist...</div>';
@@ -41635,127 +41285,6 @@ function renderAudit() {
     updateAuditChip();
 }
 
-// ============================================================================
-// MULTI-STORE MANAGER — dual-store audit checklist (both stores stacked).
-// The audit checklist is shared per store; a MSM sees both managed stores in one
-// panel. ASMs (single store) and the DM overview are unaffected.
-// ============================================================================
-async function loadAuditMS() {
-    const container = document.getElementById('auditContent');
-    if (container) container.innerHTML = '<div class="status-message">Syncing checklist...</div>';
-    try {
-        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-            fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
-        ));
-        auditDataCacheMS = {};
-        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-            auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
-        });
-        renderAuditMS();
-    } catch (e) {
-        console.error('MSM Audit Fetch Error', e);
-        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load the cleaning checklist.</div>';
-    }
-}
-
-function renderAuditMS() {
-    const container = document.getElementById('auditContent');
-    if (!container) return;
-
-    const label = document.getElementById('audit-week-label');
-    if (label) label.textContent = currentAuditTab === 'daily' ? 'Today · both stores' : 'This week · both stores';
-
-    let html = '';
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const data = (auditDataCacheMS[store] || {})[currentAuditTab] || { items: [], total: 0, completed: 0 };
-        const items = data.items || [];
-        const total = data.total || items.length;
-        const done  = (data.completed != null) ? data.completed : items.filter(i => i.checked).length;
-        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
-        const _ac = _msStoreAccent(store);
-        const _allDone = total && done === total;
-
-        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
-            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
-                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
-                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
-            </div>`;
-
-        if (items.length === 0) {
-            html += `<div class="ms-empty">No ${currentAuditTab} audit items set up.</div>`;
-        } else {
-            let lastSection = null;
-            items.forEach(item => {
-                if (item.section !== lastSection) {
-                    html += `<div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin: 12px 4px 6px;">${escapeHtml(item.section)}</div>`;
-                    lastSection = item.section;
-                }
-                const completedClass = item.checked ? 'completed' : '';
-                html += `
-                <div class="cl-item ${completedClass}">
-                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleAuditStateMS('${store}','${item.id}', this.checked)">
-                    <div class="cl-content-wrapper" style="justify-content: center;">
-                        <span class="cl-text">${escapeHtml(item.text)}</span>
-                    </div>
-                </div>`;
-            });
-        }
-        html += `</div>`;
-    });
-
-    container.innerHTML = html;
-    updateAuditChipMS();
-}
-
-function toggleAuditStateMS(store, id, isChecked) {
-    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
-    const tab = currentAuditTab;
-    const data = (auditDataCacheMS[store] || {})[tab];
-    if (!data) return;
-
-    const item = (data.items || []).find(i => i.id === id);
-    if (item) item.checked = isChecked;
-    data.completed = (data.items || []).filter(i => i.checked).length;
-    renderAuditMS();
-
-    postWrite(STORE_AUDIT_URL, { action: 'toggle', id, checked: isChecked, store, user: userName, period: tab })
-        .catch(err => {
-            if (item) item.checked = !isChecked;
-            data.completed = (data.items || []).filter(i => i.checked).length;
-            renderAuditMS();
-            alert('Could not save that change: ' + err.message);
-        });
-}
-
-function updateAuditChipMS() {
-    const segs = [];
-    const samStores = [];
-    let anyOutstanding = false, anyItems = false;
-    MULTISTORE_MANAGER_STORES.forEach(store => {
-        const daily = (auditDataCacheMS[store] || {}).daily || { items: [], total: 0, completed: 0 };
-        const total = daily.total || (daily.items || []).length;
-        if (!total) return;
-        anyItems = true;
-        const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
-        samStores.push({ store, done, total });
-        const ac = _msStoreAccent(store);
-        const label = done === total ? `${store} ✓` : `${store} ${done}/${total}`;
-        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
-        if (done < total) anyOutstanding = true;
-    });
-    if (typeof samSetProgress === 'function') samSetProgress('audit', samStores.length ? { stores: samStores } : { done: 0, total: 0 });
-
-    const chip = document.getElementById('audit-progress-chip');
-    const btn = document.querySelector('.audit-nav-toggle');
-    if (!chip || !btn) return;
-
-    if (!anyItems) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
-    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
-    const panel = document.getElementById('auditSidePanel');
-    const isOpen = panel && panel.classList.contains('open');
-    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
-}
-
 async function toggleAuditState(id, isChecked) {
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
@@ -41801,19 +41330,6 @@ function updateAuditChip() {
 }
 
 async function _prefetchAuditForChip() {
-    if (_isMSMChecklist()) {
-        try {
-            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
-            ));
-            auditDataCacheMS = {};
-            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
-            });
-            updateAuditChipMS();
-        } catch (_) {}
-        return;
-    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -41827,19 +41343,6 @@ function _startAuditSync() {
     _auditSyncInterval = setInterval(async () => {
         const panel = document.getElementById('auditSidePanel');
         if (!panel?.classList.contains('open')) return;
-        if (_isMSMChecklist()) {
-            try {
-                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
-                    fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
-                ));
-                auditDataCacheMS = {};
-                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
-                    auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
-                });
-                renderAuditMS();
-            } catch (_) {}
-            return;
-        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -41881,9 +41384,8 @@ window.toggleAuditPanel = function(event) {
 const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity, TR: Infinity };
 
 window.updateRoleLocks = function() {
-    // Role capacity is per STORE. Normally the page shows one store's dots, so the
-    // whole document is one scope; the MSM's stacked dual-store widget marks each
-    // store section with data-goals-scope so BAL's B1 doesn't lock MPL's B1.
+    // Role capacity is per STORE. The page shows one store's dots, so the whole
+    // document is one scope unless a section marks itself with data-goals-scope.
     const sections = document.querySelectorAll('[data-goals-scope]');
     const scopes = sections.length ? Array.from(sections) : [document];
 
@@ -41974,7 +41476,6 @@ window.selectRole = function(clickedBtn, emp, role) {
 
 // Recompute every visible auto-goal from the currently selected roles.
 window.recomputeGoalDisplays = function() {
-    if (_msGoalsActive()) return recomputeGoalDisplaysMS();
     if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
@@ -43095,9 +42596,6 @@ const _recycleReasonKey = r => (RECYCLE_REASONS.some(x => x.key === r.reason) ? 
 function _recycleStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (role === 'ceo' || role === 'district manager') return [...RECYCLE_STORES];
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -43208,7 +42706,7 @@ function switchRecycleTab(tab) {
     if (tab === 'view') fetchMyRecycleRequests();
 }
 
-// MSM / corp roles get a store chooser; a single-store manager is locked to theirs.
+// Corp roles get a store chooser; a store manager is locked to theirs.
 function _buildRecycleStorePicker() {
     const row = document.getElementById('recycle-store-row');
     const sel = document.getElementById('recycleInvStoreSelect');
@@ -43220,10 +42718,9 @@ function _buildRecycleStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    // Default to the store this open targets for an MSM — a single-store alert
-    // override if pending, else the active dashboard store; everyone else keeps
-    // their only option. Still switchable via the dropdown when multi-store.
-    const def = _msmToolStore();
+    // Default to the store a pending alert override targets (the DM's feed card);
+    // a single-store manager keeps their only option.
+    const def = _consumeAlertToolStore();
     if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
     else if (sel.options.length) sel.selectedIndex = 0;
 }
@@ -44201,7 +43698,7 @@ function _recycleRenderBubble(icon, title, bodyText, summary, stores, focusMonth
     // the title, which is already the feed row's own title ("Recycle review").
     // The body alone is the useful part.
     textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
-    // Stores this alert covers → routes an MSM single-store click (see
+    // Stores this alert covers → routes the DM's click to a store (see
     // _samGatherReminders).
     if (stores && stores.length) textEl.dataset.stores = [...new Set(stores.map(s => String(s).toUpperCase()))].join(',');
     else delete textEl.dataset.stores;
@@ -44322,12 +43819,15 @@ const EMAIL_LIST_GROUPS = [
               desc: '7:35am, every morning anything is open: whole items refunded or cancelled '
                   + '(in store, online or eBay) that never went back into inventory. '
                   + 'Left empty, it goes to the Claims & Disputes — District Manager list.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `unrestocked_returns_${s}`, label: `Returned But Not Back In Stock — ${s}`,
+              desc: `7:35am, only on mornings ${s} has something open: the same email, just ${s}'s lines. `
+                  + 'Left empty, the store gets nothing.' })),
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
               desc: 'Who the month-end recycle report email is addressed to.' },
             { key: 'expense_report', label: 'Expense Reports',
-              desc: 'Where a monthly expense report goes when the DM or MSM sends one.' },
+              desc: 'Where a monthly expense report goes when the DM sends one.' },
             { key: 'idea_submissions', label: 'Submit an Idea',
               desc: 'Who receives an idea from the lightbulb in the top bar. '
                   + 'The first address is the To; any others are copied in.' },
@@ -44658,7 +44158,7 @@ const FA_ROLES = [
     { slug: 'ceo',               short: 'CEO', label: 'CEO' },
     { slug: 'district-manager',  short: 'DM',  label: 'District Manager' },
     { slug: 'owner-manager',     short: 'OM',  label: 'Owner (Manager)' },
-    { slug: 'manager',           short: 'MGR', label: 'Manager (Incl. Multi-Store)' },
+    { slug: 'manager',           short: 'MGR', label: 'Manager' },
     { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
     { slug: 'employee',          short: 'EMP', label: 'Employee' },
     { slug: 'mocd',               short: 'MOCD', label: 'MOCD' },
@@ -44674,7 +44174,7 @@ const FEATURE_CATALOG = [
     // board has no inbox; it is on the ordinary nav now and would otherwise be
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
-    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multistore-manager', 'assistant-manager', 'employee'] },
+    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager', 'employee'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -44707,22 +44207,19 @@ const FEATURE_CATALOG = [
     // TWO rows for one tool, sharing the `tool-expenses` stem the way the claims
     // and preferred-purchase pairs do. One key carrying both role classes made the
     // MGR column DISHONEST: it read as "on for the whole manager role" while the
-    // role-multistore-manager class silently admitted only the MSM, so the switch
+    // role class on the link silently admitted only one person, so the switch
     // that should have granted it to another manager was not the one anybody would
     // reach for (Ethan 2026-08-09). Split, the DM row means what it says and the
     // MGR column on the second row is a real switch — turning it on beats the role
     // class, which is how every other tool already behaves.
     //
-    // The second row's def is 'multistore-manager' — not a role COLUMN (there isn't
-    // one; they sign in as a manager) but a token _faDefaultFor understands, so the
-    // per-user tab can say "role default: visible" for Joseph and match what the
-    // `role-multistore-manager` class on the link actually does. An empty def was
-    // tried first and made his row read "hidden" while he plainly had the tool.
+    // The second row's def is empty: it was the MSM's, and that role is gone
+    // (2026-11-08). It is off for every role until someone switches it on.
     //
     // CEO dropped from both (Ethan 2026-08-09) — they no longer file or review here.
     // The edge fn still admits the role; this only takes the tool off their panel.
     { key: 'tool-expenses',            label: 'Expense Report (DM)',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
-    { key: 'tool-expenses-mgr',        label: 'Expense Report (Manager)',      tab: 'tools', group: 'Admin', def: ['multistore-manager'] },
+    { key: 'tool-expenses-mgr',        label: 'Expense Report (Manager)',      tab: 'tools', group: 'Admin', def: [] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -44854,12 +44351,12 @@ const FEATURE_CATALOG = [
     // lists it — the MOCD's ec-view-categories was revoked by hand, and a new key
     // defaulting ON would quietly re-open the page to them under a new name.
     // ASM is present: photographing an item is their job (see the notify roles).
-    { key: 'ec-view-photos',           label: 'SPEEKS Connect · No Pictures', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    { key: 'ec-view-photos',           label: 'SPEEKS Connect · No Pictures', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     // Same audience as the alarm, and for the same reason: an ASM is usually
     // the person who wrote the title. ⚠️ This list must match `byRole` in the
     // listing-titles function — a backend that says yes while the button says no
     // is a tool reachable by URL that nobody can see.
-    { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     // Picture Quality (2026-09-30): listing photos graded against the Picture
     // Guide. DM and CEO only while it is new (Ethan, 2026-09-23); it widens to
     // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
@@ -45092,10 +44589,6 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
     const slug = String(userRoleClass || '').replace(/^role-/, '');
     if (feat.def.includes(slug)) return true;
     if (slug === 'assistant-manager' && feat.def.includes('employee')) return true;
-    // Same MSM rule _passesRoleClasses applies to the DOM, so this off-page
-    // resolution (Jump To, section nav) can't disagree with the page itself.
-    if (feat.def.includes('multistore-manager') && typeof isMultiStoreManager === 'function'
-        && isMultiStoreManager()) return true;
     return false;
 }
 
@@ -45179,18 +44672,14 @@ function _applySectionNavVisibility(userRoleClass, userName) {
  * drift. No role classes at all means "everyone" — that is what most tagged
  * elements want, and changing it would hide half the site.
  *
- * A Multi-Store Manager logs in with the effective role 'manager' (see the login
- * block), so `role-manager` can't distinguish them and there is no role class of
- * their own. `role-multistore-manager` is that missing gate: it matches ONLY an
- * MSM, letting something be shown to them without also showing it to every store
- * manager.
+ * A leftover MSM role class in the HTML now matches no one (the role went
+ * 2026-11-08); a per-user Feature Access "on" still beats it.
  */
 function _passesRoleClasses(classes, userRoleClass) {
     const required = Array.from(classes).filter(c => c.startsWith('role-'));
     return required.length === 0 ||
         required.includes(userRoleClass) ||
-        (userRoleClass === 'role-assistant-manager' && required.includes('role-employee')) ||
-        (required.includes('role-multistore-manager') && isMultiStoreManager());
+        (userRoleClass === 'role-assistant-manager' && required.includes('role-employee'));
 }
 
 /**
@@ -45477,19 +44966,9 @@ function _faSyncTabButtons() {
     });
 }
 
-// `isMsm` exists because the Multi-Store Manager signs in with the effective role
-// 'manager' and so has no column of its own in this grid, while the DOM has always
-// been able to single them out with `role-multistore-manager`. A catalog entry can
-// now say the same thing by putting 'multistore-manager' in its def.
-//
-// Without this the user tab told a flat lie: Joseph HAD the Expense Report (the
-// role class admits him) and his row read "role default: hidden", because the tab
-// squashes his role to 'manager' before asking (Ethan spotted it 2026-08-09).
-// Deliberately NOT wired into the role columns — an ordinary manager really does
-// not get these, so the MGR chip staying off is the truth there.
-function _faDefaultFor(feat, roleSlug, isMsm) {
+function _faDefaultFor(feat, roleSlug) {
     if (feat.def === 'all') return true;
-    return feat.def.includes(roleSlug) || (!!isMsm && feat.def.includes('multistore-manager'));
+    return feat.def.includes(roleSlug);
 }
 
 function _faRoleOverride(key, slug) {
@@ -45585,7 +45064,7 @@ async function faToggleRole(key, slug) {
 // the tools to lend them, Grant → writes user overrides (enabled=true) in bulk.
 // Their own tools stay (overrides only add), so they see both versions. Manual
 // on/off — the "End coverage" buttons revoke. Nothing expires on its own.
-const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
+const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 
 // Features offered for delegation: DM-only SPEEKS Tools + DM-only
 // workspace/operations-style section actions (tabs). Explicitly NOT dashboard
@@ -45786,10 +45265,7 @@ function _faRenderUserRows() {
 function _faUserRowsHtml() {
     const filter = _faFilter.trim().toLowerCase();
     const u = _faUsers.find(x => x.name.toLowerCase() === _faUser);
-    // effective role slug (Multi-Store Manager logs in with role 'manager')
-    let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
-    const isMsm = roleSlug === 'multi-store-manager';
-    if (isMsm) roleSlug = 'manager';
+    const roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
     // Group features into collapsible cards (collapsed by default; a filter
     // expands the matches) so one user's exceptions aren't one huge scroll. A
     // "N set" badge on each card surfaces where this user already has overrides.
@@ -45810,7 +45286,7 @@ function _faUserRowsHtml() {
             let inherited = null;
             if (roleSlug) {
                 const roleOvr = _faRoleOverride(f.key, roleSlug);
-                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug, isMsm) : roleOvr;
+                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
             }
             const seg = (val, txt) => {
                 const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
@@ -46201,6 +45677,216 @@ function _jumpHandleHash() {
     try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
 }
 
+// ============================================================================
+// RESTOCKED UNDER ANOTHER SKU (2026-11-04)
+// The "Returned But Not Back In Stock" mail links each open row here:
+//   index.html#restock=<issue_key>
+// For the item that went back on the shelf under a DIFFERENT listing than the
+// one it was refunded from. BAL #MO04-3622 was a JMGO projector listed as the
+// wrong model and restocked under the right one; the report only watches the
+// refunded SKU, which stays at 0, so it would have stayed on the mail forever.
+//
+// index.html IS the login page, so the hash survives the PIN screen: this runs
+// from page load (already signed in) AND from checkPIN (signed in on the link),
+// and until someone is signed in it leaves the hash alone for the second one.
+//
+// Built for managers doing this on a phone straight from the email (Ethan:
+// "I need them to do this"):
+//   - in-stock listings at that store with matching words are offered as
+//     one-tap picks, so most of the time nothing has to be typed;
+//   - a SKU that fails says WHY, right here, and keeps what was typed — the
+//     card never closes on a failure, so there is no going back to the email;
+//   - nothing closes on the manager's say-so: the function checks the SKU is on
+//     hand or has sold since the refund. A refusal is logged and shows on the
+//     next mail, and every close is listed there for the DM.
+// No toasts ([[no-floating-toasts]]): every message is inline on the card.
+// ============================================================================
+let _restockKey = null;
+
+function _restockHandleHash() {
+    const m = (location.hash || '').match(/^#restock=(.+)$/);
+    if (!m) return;
+    if (sessionStorage.getItem('speeksUnlocked') !== 'true') return;   // checkPIN calls again
+    if (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole()) return;
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
+    _restockOpen(decodeURIComponent(m[1]));
+}
+
+function _restockWho() {
+    return {
+        name: sessionStorage.getItem('speeksUserName') || '',
+        role: sessionStorage.getItem('speeksUserRole') || '',
+        store: sessionStorage.getItem('speeksUserStore') || '',
+    };
+}
+
+async function _restockPost(body) {
+    const res = await fetch(UNRESTOCKED_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ key: _restockKey, who: _restockWho() }, body)),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok && !json.card) throw new Error(json.error || ('Error ' + res.status));
+    return json;
+}
+
+async function _restockOpen(key) {
+    const modal = document.getElementById('restockSkuModal');
+    const body = document.getElementById('restockSkuBody');
+    if (!modal || !body) return;
+    _restockKey = key;
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    body.innerHTML = '<p class="rsk-muted">Loading…</p>';
+    try {
+        const j = await _restockPost({ action: 'lookup' });
+        _restockRender(j, {});
+    } catch (e) {
+        body.innerHTML = `<p class="rsk-bad">${escapeHtml(e.message || 'Could not load this item.')}</p>`;
+    }
+}
+
+function _restockSummary(c) {
+    const day = c.refundDay ? new Date(c.refundDay + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    return `
+      <div class="rsk-item">
+        <div class="rsk-muted">${escapeHtml(c.storeName)} · ${escapeHtml(c.channel || '')} · ${c.kind === 'cancel' ? 'Cancelled' : 'Returned'} ${escapeHtml(day)}</div>
+        <div class="rsk-title">${escapeHtml(c.title || '')}</div>
+        <div><a href="${escapeHtml(c.orderUrl)}" target="_blank" rel="noopener">${escapeHtml(c.order)}</a>
+          · Refunded From SKU <b>${escapeHtml(c.sku || '—')}</b> · $${Number(c.amount || 0).toFixed(2)}</div>
+        ${c.note ? `<div class="rsk-muted">Note: “${escapeHtml(c.note)}”</div>` : ''}
+      </div>`;
+}
+
+function _restockRender(j, st) {
+    const body = document.getElementById('restockSkuBody');
+    if (!body) return;
+    const c = j.card || {};
+    let h = _restockSummary(c);
+    if (c.closed) {
+        h += `<div class="rsk-done">${st.justClosed ? 'Closed. ' : 'Already Closed. '}${escapeHtml(c.closedHow || '')}
+              ${st.justClosed ? (/never came back/.test(c.closedHow || '') ? '<br>It drops off tomorrow’s email.' : '<br>It drops off tomorrow’s email, and the DM sees it there under Closed By A Manager.') : ''}</div>
+              <button class="btn-primary rsk-btn" onclick="closeAllModals()">Done</button>`;
+        body.innerHTML = h;
+        return;
+    }
+    if (!j.canClose) {
+        body.innerHTML = h + `<p class="rsk-bad">${escapeHtml(j.denied || 'You can’t close this one.')}</p>`;
+        return;
+    }
+    // NEVER CAME BACK waiting on the DM: the DM decides here; anyone else just
+    // sees it's waiting (the SKU route below still works for them).
+    const nb = c.nb || {};
+    if (nb.pending) {
+        const when = nb.at ? new Date(nb.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+        h += `<div class="rsk-nb rsk-nb-wait">
+                <div class="form-label-caps">Marked Never Came Back — Waiting On DM</div>
+                <div>${escapeHtml(nb.by || 'Unknown')}, ${escapeHtml(when)}: “${escapeHtml(nb.reason || '')}”</div>`;
+        if (j.canDecide) {
+            h += `<input id="restockNbNote" class="form-input-lg rsk-nb-note" placeholder="If you deny it, say why (optional)" value="${escapeHtml(st.note || '')}">
+                  ${st.nbMsg ? `<p class="rsk-bad">${escapeHtml(st.nbMsg)}</p>` : ''}
+                  <div class="rsk-nb-row">
+                    <button id="restockNbYes" class="btn-primary rsk-btn" onclick="_restockNbDecide('nb_confirm')">Confirm &amp; Close</button>
+                    <button id="restockNbNo" class="btn-secondary rsk-btn" onclick="_restockNbDecide('nb_deny')">Deny</button>
+                  </div>`;
+        } else {
+            h += `<div class="rsk-muted">It stays on the email until the DM confirms it.</div>`;
+        }
+        h += `</div>`;
+    }
+    const sugg = j.suggestions || [];
+    if (sugg.length) {
+        h += `<label class="form-label-caps">In Stock At ${escapeHtml(c.store)} Now — Tap It If It’s One Of These</label>
+              <div class="rsk-sugg">${sugg.map(s => `
+                <button type="button" class="rsk-pick" onclick="_restockPick('${escapeHtml(s.sku)}')">
+                  <b>${escapeHtml(s.sku)}</b> <span class="rsk-muted">· ${s.onHand} On Hand</span><br>${escapeHtml(s.title)}
+                </button>`).join('')}</div>`;
+    }
+    h += `<label class="form-label-caps" for="restockSkuInput">${sugg.length ? 'Or Type ' : ''}The SKU It Went Back In Under</label>
+          <input id="restockSkuInput" class="form-input-lg rsk-input" autocomplete="off" autocapitalize="characters" spellcheck="false"
+                 placeholder="${escapeHtml(String(c.sku || '').split('-')[0] || 'SKU')}-…" value="${escapeHtml(st.typed || '')}"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();_restockSubmit();}">
+          ${st.msg ? `<p class="rsk-bad">${escapeHtml(st.msg)}</p>` : ''}
+          <button id="restockSkuBtn" class="btn-primary rsk-btn" onclick="_restockSubmit()">Check &amp; Close</button>
+          <p class="rsk-muted">It only closes if that SKU is on hand now or has sold since the refund.</p>`;
+    if (!nb.pending) {
+        const denied = nb.deniedAt
+            ? `<p class="rsk-bad">Denied by ${escapeHtml(nb.deniedBy || 'the DM')}: ${escapeHtml(nb.deniedNote || '')}</p>` : '';
+        h += `<div class="rsk-nb">
+                <div class="form-label-caps">Never Came Back?</div>
+                <div class="rsk-muted">Refunded but the item was never returned to the store (buyer kept it, lost in shipping).
+                  ${j.canDecide ? 'This closes it.' : 'The DM confirms it before it comes off the email.'}</div>
+                ${denied}
+                <textarea id="restockNbReason" class="form-input-lg rsk-nb-note" rows="2" placeholder="What happened to it?">${escapeHtml(st.reason || '')}</textarea>
+                ${st.nbMsg ? `<p class="rsk-bad">${escapeHtml(st.nbMsg)}</p>` : ''}
+                <button id="restockNbBtn" class="btn-secondary rsk-btn" onclick="_restockNeverBack()">${j.canDecide ? 'Close As Never Came Back' : 'Send To DM To Confirm'}</button>
+              </div>`;
+    }
+    const tries = c.attempts || [];
+    if (tries.length) {
+        h += `<div class="rsk-tries"><div class="form-label-caps">Tried Before</div>${tries.slice(-3).reverse().map(a => `
+              <div class="rsk-muted">${escapeHtml(a.sku || '(blank)')} — ${escapeHtml(a.by || '')},
+              ${escapeHtml(new Date(a.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))}: ${escapeHtml(a.why || '')}</div>`).join('')}</div>`;
+    }
+    body.innerHTML = h;
+    window._restockLast = j;
+}
+
+async function _restockNeverBack() {
+    const last = window._restockLast || {};
+    const reason = (document.getElementById('restockNbReason')?.value || '').trim();
+    if (reason.length < 5) { _restockRender(last, { nbMsg: 'Say what happened to it first.', reason }); return; }
+    const btn = document.getElementById('restockNbBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+        const j = await _restockPost({ action: 'never_back', reason });
+        if (j.ok && j.card && j.card.closed) { _restockRender(j, { justClosed: !j.already }); return; }
+        _restockRender(Object.assign({}, last, { card: j.card || last.card }), j.ok ? {} : { nbMsg: j.why || j.error, reason });
+    } catch (e) {
+        _restockRender(last, { nbMsg: e.message || 'Could not reach the server. Try again.', reason });
+    }
+}
+
+async function _restockNbDecide(action) {
+    const last = window._restockLast || {};
+    const note = (document.getElementById('restockNbNote')?.value || '').trim();
+    ['restockNbYes', 'restockNbNo'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
+    try {
+        const j = await _restockPost({ action, note });
+        if (j.ok && j.card && j.card.closed) { _restockRender(j, { justClosed: !j.already }); return; }
+        _restockRender(Object.assign({}, last, { card: j.card || last.card }), j.ok ? {} : { nbMsg: j.why || j.error, note });
+    } catch (e) {
+        _restockRender(last, { nbMsg: e.message || 'Could not reach the server. Try again.', note });
+    }
+}
+
+function _restockPick(sku) {
+    const inp = document.getElementById('restockSkuInput');
+    if (inp) inp.value = sku;
+    _restockSubmit();
+}
+
+async function _restockSubmit() {
+    const inp = document.getElementById('restockSkuInput');
+    const btn = document.getElementById('restockSkuBtn');
+    const sku = (inp && inp.value || '').trim().toUpperCase();
+    const last = window._restockLast || {};
+    if (!sku) { _restockRender(last, { msg: 'Type the SKU it went back in under, or tap one above.' }); return; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    try {
+        const j = await _restockPost({ action: 'close', sku });
+        if (j.ok) {
+            _restockRender(j, { justClosed: !j.already });
+        } else {
+            // Keep the picks from the first load; only the card's tries changed.
+            _restockRender(Object.assign({}, last, { card: j.card || last.card }), { msg: j.why || j.error, typed: sku });
+        }
+    } catch (e) {
+        _restockRender(last, { msg: e.message || 'Could not reach the server. Try again.', typed: sku });
+    }
+}
+
 function _jumpBuildIndex() {
     _jumpCacheHotbar();
     _jumpIndex = [].concat(_jumpPlaceItems(), _jumpToolItems(), _jumpHotbarItems());
@@ -46459,18 +46145,15 @@ function _vrIsDM() { return _vrRole() === 'district manager' || _vrHasDmDelegati
 function _vrIsManager() { return _VR_MANAGER_ROLES.has(_vrRole()) && !_vrHasDmDelegation(); }
 
 // Stores whose periods the tab loads: the DM gets every store at once (they
-// pick a date range first, then flip between stores within it); an MSM sees
-// both managed stores; a manager is locked to their own.
+// pick a date range first, then flip between stores within it); a manager is
+// locked to their own.
 function _vrStores() {
     if (_vrIsDM()) return ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     return _vrMyStores();
 }
 
-// The manager's own store(s) — used for reminders/dots regardless of UI state.
+// The manager's own store (a list) — used for reminders/dots regardless of UI state.
 function _vrMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -46504,15 +46187,11 @@ async function loadVarianceReplies() {
         if (!json.success) throw new Error(json.error);
         _vrPeriods = json.data || [];
         // Opening the tool is the manager reviewing the DM's notes, so clear the
-        // "DM reviewed your replies" FYI for the store(s) visible here — the active
-        // store only for an MSM (they switch dashboards for the other), all periods
-        // for a single-store manager. The reply-REQUESTED nag is untouched (it's
-        // state-based and clears only when they actually answer).
+        // "DM reviewed your replies" FYI for every period here. The reply-REQUESTED
+        // nag is untouched (it's state-based and clears only when they actually answer).
         if (!_vrIsDM()) {
-            const active = _msmDefaultStore();
             const seen = _vrGetReviewSeen();
             _vrPeriods.forEach(p => {
-                if (active && (p.store || '').toUpperCase() !== active) return;
                 // Stamp the latest thing that could have surfaced this period. A
                 // cleared store has no dm_notes_at to stamp against, so the upload
                 // itself is what "I've looked at this" refers to — without it the
@@ -46533,7 +46212,7 @@ async function loadVarianceReplies() {
         // so point it there before resolving the period. One-time — normal opens
         // keep the DM's current store.
         if (_vrIsDM()) {
-            const target = _consumeMsmAlertStore();
+            const target = _consumeAlertToolStore();
             const sSel = document.getElementById('vr-store-select');
             if (target && sSel && [...sSel.options].some(o => o.value === target)) sSel.value = target;
         }
@@ -46561,23 +46240,15 @@ function _vrBuildPeriodPicker() {
             return `<option value="${key}">${escapeHtml(formatVarianceRange(p.date_from, p.date_to))}</option>`;
         }).join('');
     } else {
-        const multi = _vrStores().length > 1;
+        // A manager has one store, so the label needs no store prefix.
         sel.innerHTML = _vrPeriods.map(p => {
-            const label = `${multi ? p.store + ' · ' : ''}${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
+            const label = `${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
             return `<option value="${p.id}">${escapeHtml(label)}</option>`;
         }).join('');
     }
     sel.style.display = '';
     if (current && [...sel.options].some(o => o.value === current)) {
         sel.value = current; // keep the user's current pick across re-renders
-    } else if (!_vrIsDM()) {
-        // First load for a manager/MSM: default to a period for the store this open
-        // is meant to show — a single-store alert override if one is pending, else
-        // the active dashboard store — rather than the first in the list. Re-renders
-        // preserve the current pick (the `current` branch above).
-        const def = _msmToolStore();
-        const match = def && _vrPeriods.find(p => (p.store || '').toUpperCase() === def);
-        if (match) sel.value = match.id;
     }
 }
 
@@ -47775,15 +47446,14 @@ function _vrFmtStores(stores) {
     return `${u.slice(0, -1).join(', ')}, and ${u[u.length - 1]}`;
 }
 
-// Manager / MSM variance feed row. STATE-based, NOT one-shot: it reflects the
+// Manager variance feed row. STATE-based, NOT one-shot: it reflects the
 // actual outstanding work and re-derives every poll, so it survives navigating
 // into the tool and only leaves when the work is done (or the user snoozes it in
 // the feed). The old version fired a one-time toast per period gated by a
 // localStorage "seen" key — so clicking through to the tool set the key and the
-// row vanished even with nothing answered. An MSM covers two stores and the DM
-// normally uploads all five the same day (so BAL + MPL arrive together), hence
-// ONE combined row that lists the stores ("BAL and MPL: …") rather than a
-// separate popup per store. Cleared stores owe nothing, so they add no row.
+// row vanished even with nothing answered. Should the user cover more than one
+// store, it is still ONE combined row that lists the stores ("BAL and MPL: …")
+// rather than a separate popup per store. Cleared stores owe nothing.
 function _vrMaybePopup() {
     const reviewSeen = _vrGetReviewSeen();
     // One entry per store with unexplained lines, carrying ITS OWN deadline
@@ -47968,8 +47638,8 @@ function _vrRenderBubble(icon, title, bodyText, summary, stores, fyiOnly) {
         textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
         // Read by _samReminderCfg to soften the card when nothing is owed.
         if (fyiOnly) textEl.dataset.fyi = '1'; else delete textEl.dataset.fyi;
-        // Stores this alert covers → the feed uses it to route an MSM single-store
-        // click to that store (see _samGatherReminders).
+        // Stores this alert covers → the feed uses it to route the DM's click to
+        // the first store that needs review (see _samGatherReminders).
         if (stores && stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
         else delete textEl.dataset.stores;
     }
@@ -48029,11 +47699,8 @@ function _agEnabled() {
 function _agIsDM() { return _agEnabled() && (_agRole() === 'district manager' || _agHasDmDelegation()); }
 function _agIsStoreUser() { return _agEnabled() && _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
 
-// The store user's own store(s) — an MSM sees both, stacked in one list.
+// The store user's own store (a list, so callers that loop keep working).
 function _agMyStores() {
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
-        return [...MULTISTORE_MANAGER_STORES];
-    }
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
@@ -48208,18 +47875,10 @@ function agOnStoreChange() {
 }
 
 // The stores the current render shows (the DM flips with the dropdown; a store
-// user gets their own store(s), an MSM both at once).
-let _agViewStore = null; // MSM aging view store, resolved once per tab-open (see switchWorkspaceTab)
+// user gets their own store).
 function _agVisibleStores() {
     if (_agIsDM()) return [((document.getElementById('ag-store-select') || {}).value || 'OVL').toUpperCase()];
-    // MSM: show one store's items (switch dashboards for the other) instead of
-    // stacking both. _agViewStore is resolved at tab-open — a single-store alert
-    // override if one was pending, else the active dashboard store. The reminder
-    // still covers every managed store via _agMyStores(), and _agItems is fetched
-    // for all of them — this only scopes the on-screen view. Single-store managers
-    // are unaffected.
-    const def = _agViewStore || _msmDefaultStore();
-    return def ? [def] : _agMyStores();
+    return _agMyStores();
 }
 
 function _agSubtitleText() {
@@ -48867,10 +48526,6 @@ const _AG_TIER_BODY = {
     soon:     'Aging report replies are due within the next day — make sure they’re submitted in time.',
     plain:    'The aging report has items waiting on a reply from your store.',
 };
-// Short per-store phrase (used in the multi-store breakdown).
-const _AG_TIER_PHRASE = {
-    over: 'reply overdue', followup: 'new DM note to answer', soon: 'due within a day', plain: 'needs your reply',
-};
 function _agStoreTierOf(items) {
     const now = Date.now();
     const dueSoon = it => it.due_at && (() => { const d = new Date(it.due_at).getTime(); return now < d && d - now < 24 * 3600 * 1000; })();
@@ -48880,30 +48535,18 @@ function _agStoreTierOf(items) {
     return 'plain';
 }
 
-// Render the store-side aging bubble for the given awaiting items. A single-store
-// manager gets the tier's full sentence; a multi-store manager gets a per-store
-// breakdown ("BAL: due within a day • MPL: new DM note to answer") so both stores'
-// progress is visible at once, and finishing one store drops it (see
-// _agRefreshStorePopup). Stamps the covered stores for MSM click-routing. No
+// Render the store-side aging bubble for the given awaiting items: the tier's
+// full sentence. Stamps the covered stores on data-stores for the feed. No
 // guards here — callers own the session/ack gates.
 function _agBuildStoreBubble(mine) {
     const byStore = {};
     mine.forEach(it => { const s = (it.store || '').toUpperCase(); (byStore[s] = byStore[s] || []).push(it); });
     const stores = Object.keys(byStore);
-    const multi = _agMyStores().length > 1;
     // Overall tier = worst across every pending store → drives the title/icon.
     let top = 'plain';
     stores.forEach(s => { const t = _agStoreTierOf(byStore[s]); if (_AG_TIER_RANK[t] > _AG_TIER_RANK[top]) top = t; });
     const [icon, title] = _AG_TIER_HEAD[top];
-    let body;
-    if (multi && stores.length > 1) {
-        const ordered = stores.slice().sort((a, b) => _AG_TIER_RANK[_agStoreTierOf(byStore[b])] - _AG_TIER_RANK[_agStoreTierOf(byStore[a])]);
-        body = ordered.map(s => `${s}: ${_AG_TIER_PHRASE[_agStoreTierOf(byStore[s])]}`).join('  •  ');
-    } else if (multi && stores.length === 1) {
-        body = `${stores[0]}: ${_AG_TIER_BODY[top]}`;
-    } else {
-        body = _AG_TIER_BODY[top];
-    }
+    const body = _AG_TIER_BODY[top];
     _agRenderBubble(icon, title, body);
     const agTextEl = document.getElementById('agingAlertBubbleText');
     if (agTextEl) {
@@ -48924,9 +48567,8 @@ function _agBuildStoreBubble(mine) {
     }
 }
 
-// Store-side popup: shows on every sign-in until acknowledged. Single-store users
-// see the most-urgent tier's message; a multi-store manager sees a per-store
-// breakdown (see _agBuildStoreBubble).
+// Store-side popup: shows on every sign-in until acknowledged, with the
+// most-urgent tier's message (see _agBuildStoreBubble).
 function _agMaybePopup() {
     const mine = _agMyItemsCache.filter(_agAwaitingStore);
     if (!mine.length) return;
@@ -48940,8 +48582,7 @@ function _agMaybePopup() {
     _agBuildStoreBubble(mine);
 }
 
-// After a store posts a reply, keep the live store bubble in step: drop a store
-// that just finished (so an MSM who clears BAL still gets nagged for MPL), and
+// After a store posts a reply, keep the live store bubble in step, and
 // hide the bubble once nothing is left awaiting. Only touches a store bubble that
 // is currently up — an acked/hidden one is not resurrected.
 function _agRefreshStorePopup() {
@@ -49968,22 +49609,14 @@ function _qpBlocks(main) {
     });
 }
 function _qpKey(b) { return b.getAttribute('data-qp-block'); }
+// One layout per person. (The per-store "@STORE" layouts went with the MSM role,
+// 2026-11-08: one store per manager, so there is nothing to keep apart.)
 function _qpStoreKey() {
-    const store = _qpLayoutStore();
-    return QP_LAYOUT_KEY + String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase() + (store ? '@' + store.toLowerCase() : '');
-}
-// A MULTI-STORE MANAGER keeps a layout per store (Ethan, 2026-10-26: "saved by
-// user, by store"): BAL and MPL each remember their own page. Everyone else has
-// one. A store with nothing saved yet starts from the person's single layout,
-// here (the browser copy) and in qp-layout (the record).
-function _qpLayoutStore() {
-    return typeof isMultiStoreManager === 'function' && isMultiStoreManager()
-        ? String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase() : '';
+    return QP_LAYOUT_KEY + String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase();
 }
 function _qpSaved() {
     try {
-        const own = localStorage.getItem(_qpStoreKey());
-        const v = JSON.parse(own || (_qpLayoutStore() ? localStorage.getItem(QP_LAYOUT_KEY + _qpUser().toLowerCase()) : null) || 'null');
+        const v = JSON.parse(localStorage.getItem(_qpStoreKey()) || 'null');
         return v && v.v === 2 && Array.isArray(v.rows) ? v.rows : null;
     } catch (e) { return null; }
 }
@@ -49995,10 +49628,8 @@ function _qpSaved() {
 // layout saved before this up the first time. Writes are debounced: a drag
 // session of several drops is one save. On the localhost test login the write
 // is blocked like every other write, so the test page keeps its browser copy.
-// The save is pinned to WHO and WHICH STORE it was made on, when it is made —
-// not when the debounce fires (Ethan, 2026-10-26: a multi-store manager edited
-// BAL, switched to MPL inside the half-second, and the BAL layout was saved as
-// MPL's too). Switching stores also sends a waiting save at once (_qpFlushSave).
+// The save is pinned to WHO made it, when it is made — not when the debounce
+// fires.
 let _qpPending = null;
 function _qpSave(rows) {
     _qpSaveLocal(rows);
@@ -50012,7 +49643,7 @@ function _qpFlushSave() {
     _qpPending = null;
     if (p) _qpPush(p.body, p.who);
 }
-function _qpWho() { return { user: _qpUser(), store: _qpLayoutStore() }; }
+function _qpWho() { return { user: _qpUser() }; }
 function _qpSaveLocal(rows) {
     try {
         if (rows) localStorage.setItem(_qpStoreKey(), JSON.stringify({ v: 2, rows: rows }));
@@ -50023,10 +49654,10 @@ let _qpSaveTimer = null;
 const _qpUser = () => String(sessionStorage.getItem('speeksUserName') || '').trim();
 function _qpPush(body, who) {
     who = who || _qpWho();
-    const user = who.user, store = who.store;
+    const user = who.user;
     if (!user || user.toLowerCase() === 'unknown') return Promise.resolve();
-    // keepalive: a save sent as the page reloads (a store switch) still lands.
-    return fetch(QP_LAYOUT_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, store ? { store: store } : {}, body)) })
+    // keepalive: a save sent as the page unloads still lands.
+    return fetch(QP_LAYOUT_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ user: user }, body)) })
         .catch(function () {});
 }
 // Once per page load, after the layout is drawn from the browser's copy. The
@@ -50037,8 +49668,7 @@ async function _qpLayoutSync() {
     const main = _qpMain(), user = _qpUser();
     if (!main || !user || (typeof _tvIsBoardRole === 'function' && _tvIsBoardRole())) return;
     let j = null;
-    const store = _qpLayoutStore();
-    try { j = await fetch(QP_LAYOUT_URL + '?user=' + encodeURIComponent(user) + (store ? '&store=' + store : '') + '&v=' + Date.now()).then(function (r) { return r.json(); }); } catch (e) { return; }
+    try { j = await fetch(QP_LAYOUT_URL + '?user=' + encodeURIComponent(user) + '&v=' + Date.now()).then(function (r) { return r.json(); }); } catch (e) { return; }
     if (!j || !j.success) return;
     _qpSeenLocal(Array.isArray(j.seen) ? j.seen : []);
     const local = _qpSaved();
@@ -50405,6 +50035,8 @@ function _qpAnchor(main) {
 }
 
 function _qpCurrentRows(main) {
+    // On the tabs page the rows are the ones the tabs hold (QUICKPORTAL TABS).
+    if (_qptRowsNow && _qptRoot(main)) return _qptRowsNow.map(function (r) { return { items: r.items.slice(), w: null }; });
     return Array.from(main.querySelectorAll(':scope > .qp-row')).map(function (row) {
         const cells = Array.from(row.querySelectorAll(':scope > .qp-cell'));
         return {
@@ -50471,7 +50103,10 @@ function _qpSyncHidden(main) {
 function _qpLayout(main) {
     _qpDiscover(main);
     const board = typeof _tvIsBoardRole === 'function' && _tvIsBoardRole();
-    const saved = board ? null : _qpSaved();
+    // A tabs-page layout (QUICKPORTAL TABS, "qpt:" rows) is not a row layout:
+    // on a phone or tablet the page is the default stack.
+    let saved = board ? null : _qpSaved();
+    if (saved && saved[0] && saved[0].items[0] === 'qpt:v1') saved = null;
     // Before the keys: a widget the layout names has to exist as a block, or
     // _qpResolve drops it as a card this page does not have — and its pieces
     // have to be found, which the _qpDiscover above ran too early to do.
@@ -50620,6 +50255,41 @@ function _qpKpiTag(word, fig, cls) {
     return '<span class="qp-kpi-tag' + (cls ? ' ' + cls : '') + '">' + escapeHtml(word) + ' <b>' + escapeHtml(fig) + '</b></span>';
 }
 const _QP_KPI_NAME = { 'Trans. Time': 'Transaction Time', 'Listed Dev.': 'Listed' };
+// MY KPIs, WIDE — design A, "Scorecard Tiles" (Ethan, 2026-11-08, artifact
+// Jf3zLScCBEui37vb8R7pqv: "I don't really like it right now"). An employee's
+// Store Health tab is this one card, so it gets the room: a header with the
+// on-target / to-work-on pills, a ring of one slice a judged KPI, then a tile
+// a KPI — misses first — with my number big and coloured and the goal and the
+// store's figure under it. The two with no goal (Buying Value, Listed) sit in a
+// quieter row. Same figures and the same checkRule as the narrow card
+// (_qpSetHeadline('kpis')), so the two can never disagree.
+function _qpKpiWide(h) {
+    const name = t => _QP_KPI_NAME[t] || t;
+    const unit = (m, v) => m.rule === 'time' && v !== '-' && !/min/i.test(v) ? v + ' min' : v;
+    const judged = h.metrics.filter(m => m.rule && m.has);
+    const misses = judged.filter(m => m.bad), hits = judged.filter(m => !m.bad);
+    const info = h.metrics.filter(m => !m.rule);
+    const period = h.period ? String(h.period).replace(/^Week ending/i, 'Week Ending') : 'This Week';
+    const store = (typeof _qpStoreLabel === 'function' ? _qpStoreLabel().trim() : '') || 'My Store';
+    // One slice a judged KPI, red first (_qptRing's rule).
+    const n = judged.length, step = n ? 360 / n : 360, gap = n > 1 ? 4 : 0;
+    const segs = misses.map(() => 'var(--qs-bad-fill, #ef8b8b)').concat(hits.map(() => 'var(--qs-good-fill, #72c495)'));
+    const ring = '<div class="qp-kw-ring" style="background:' + (n ? 'conic-gradient(' + segs.map((c, i) => c + ' ' + (i * step + gap / 2).toFixed(1) + 'deg ' + ((i + 1) * step - gap / 2).toFixed(1) + 'deg, #fff 0 ' + ((i + 1) * step).toFixed(1) + 'deg').join(', ') + ')' : '#eef1f4')
+        + '"><i><b>' + hits.length + '</b><small>of ' + n + '</small></i></div>';
+    const tile = m => {
+        const g = _QP_KPI_GOAL[m.rule];
+        return '<div class="qp-kw-t ' + (m.bad ? 'bad' : 'good') + '"><span class="qp-kw-st">' + (m.bad ? 'Work On' : 'On Target') + '</span>'
+            + '<span class="qp-kw-k">' + escapeHtml(name(m.t)) + '</span><span class="qp-kw-v">' + escapeHtml(unit(m, m.my)) + '</span>'
+            + '<span class="qp-kw-g"><span>' + (g ? escapeHtml(g[0] + ' ' + g[1]) : '') + '</span><span>Store <b>' + escapeHtml(unit(m, m.st)) + '</b></span></span></div>';
+    };
+    return '<div class="qp-kw-h"><span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>'
+        + '<div><div class="ew-eyebrow">' + escapeHtml(store + ' · ' + period) + '</div><div class="qp-kw-ti">My Weekly KPIs</div></div>'
+        + '<div class="qp-kw-pills"><span class="qpt-vp good">' + hits.length + ' of ' + n + ' On Target</span>'
+        + (misses.length ? '<span class="qpt-vp bad">' + misses.length + ' To Work On</span>' : '') + '</div></div>'
+        + '<div class="qp-kw-b">' + ring + '<div class="qp-kw-tiles">' + misses.concat(hits).map(tile).join('') + '</div></div>'
+        + (info.length ? '<div class="qp-kw-info">' + info.map(m => '<div class="qp-kw-i"><span>' + escapeHtml(name(m.t)) + '</span><span><b>' + escapeHtml(m.my) + '</b>'
+            + (m.st != null && m.st !== '-' ? ' <small>· Store ' + escapeHtml(m.st) + '</small>' : '') + '</span></div>').join('') + '</div>' : '');
+}
 const _QP_HL_BUILD = {
     // WEEKLY KPIs (Ethan, 2026-10-25: option A — "on target, and what missed").
     // How many of the judged KPIs are on target, then only the misses, each with
@@ -50627,6 +50297,7 @@ const _QP_HL_BUILD = {
     // two with no goal (Buying Value, Listed) stay in the full tab — they would
     // push the card past 350px. The card opens nothing, like eBay and Scorecard.
     kpis: function (h) {
+        if (h.wide) return _qpKpiWide(h);
         const period = h.period ? escapeHtml(String(h.period).replace(/^Week ending/i, 'Week Ending')) : 'This Week';
         if (h.none) {
             return '<div class="qp-hl-k">' + period + '</div><div class="qp-hl-big">—<small>no KPIs for you yet</small></div>'
@@ -50943,17 +50614,29 @@ function _qpRenderHeadlinesNow(main, rows) {
             _qpCapLines(hl);
             return;
         }
-        const h = _qpHL[piece] && !single ? Object.assign({}, _qpHL[piece], { compact: true }) : _qpHL[piece];
+        let h = _qpHL[piece] && !single ? Object.assign({}, _qpHL[piece], { compact: true }) : _qpHL[piece];
+        // Alone in its tab (an employee's Store Health): My KPIs gets the wide
+        // scorecard (_qpKpiWide) and the card's own header steps aside for it.
+        const kw = piece === 'kpis' && single && card.classList.contains('qpt-wide') && !!h && !h.none;
+        card.classList.toggle('qpt-kw', kw);
+        if (kw) h = Object.assign({}, h, { wide: true });
         // A headline opens nothing (Ethan, 2026-10-21): eBay and Scorecard show
         // everything their panel did, and Live has its own "Open Full
         // Dashboard" link and Daily Breakdown button.
         hl.innerHTML = h && _QP_HL_BUILD[piece] ? _QP_HL_BUILD[piece](h) : '<div class="status-message">Syncing…</div>';
         _qpCapLines(hl);
     });
+    // Store Health draws from the same headline data (_qptRenderHealth).
+    if (typeof _qptRenderHealth === 'function') try { _qptRenderHealth(main); } catch (e) { console.error('QuickPortal Store Health:', e); }
+    if (typeof _qptRenderSales === 'function') try { _qptRenderSales(main); } catch (e) { console.error('QuickPortal Sales & Goals:', e); }
+    if (typeof _qptRenderInv === 'function') try { _qptRenderInv(main); } catch (e) { console.error('QuickPortal Inventory:', e); }
+    if (typeof _qptRenderWork === 'function') try { _qptRenderWork(main); } catch (e) { console.error('QuickPortal Listings & Deals:', e); }
 }
 function _qpSetHeadline(piece, h) {
     _qpHL[piece] = h;
     try { _qpRenderHeadlines(); } catch (e) { console.error('QuickPortal headline:', e); }
+    // An employee's Lost Deals card shows their week from these (the lost card).
+    if (piece === 'kpis' && typeof _qpIsEmp === 'function' && _qpIsEmp()) try { _qpRenderWidgets(); } catch (e) { /* cosmetic */ }
 }
 
 // --- DISTRICT HEADLINES (part A of the DM design, Ethan 2026-10-29) ---
@@ -51767,6 +51450,8 @@ function _qpRenderActions(rows) {
         // something changed, or an open hover/scroll inside it would keep resetting.
         if (ai._qpHtml !== html) { ai.innerHTML = html; ai._qpHtml = html; _qpCapLines(ai); }
     });
+    // The tabs page's rail draws the same pieces (QUICKPORTAL TABS).
+    _qptRenderAi(main);
 }
 
 // --- ADDED WIDGETS (Ethan, 2026-10-22: "widgets for other tabs on the site",
@@ -51810,7 +51495,8 @@ const QP_WIDGETS = {
         // A store to hold stock (corp has none — same as the feed's match card).
         avail: function () {
             const s = typeof _cbMatchScope === 'function' ? _cbMatchScope() : null;
-            return !!(s && s.length) && _jumpFeatureVisible('widget-ops-callbacks');
+            // Not employees (2026-11-08): managers and ASMs only.
+            return !!(s && s.length) && !_cbStaffOnly() && _jumpFeatureVisible('widget-ops-callbacks');
         },
     },
     b2b: {
@@ -52238,6 +51924,11 @@ function _qpRenderWidgets(rows) {
         try { _qpWidgetCard(el, rows, id); } catch (e) { console.error('QuickPortal widget:', e); }
     });
     try { _qpRenderShelves(main); } catch (e) { console.error('QuickPortal shelf:', e); }
+    try { _qptRenderHealth(main); } catch (e) { console.error('QuickPortal Store Health:', e); }
+    try { _qptRenderSales(main); } catch (e) { console.error('QuickPortal Sales & Goals:', e); }
+    try { _qptRenderFrame(main); } catch (e) { console.error('QuickPortal Customers:', e); }
+    try { _qptRenderInv(main); } catch (e) { console.error('QuickPortal Inventory:', e); }
+    try { _qptRenderWork(main); } catch (e) { console.error('QuickPortal Listings & Deals:', e); }
 }
 // Put a widget on the page: a row of its own at the bottom (Add), or wherever
 // it was dropped (t, from a drag out of the drawer — _qpWireDrag's drop).
@@ -52499,7 +52190,7 @@ function _qpVarianceSample() {
 // like for each role"). Live Claims, Call Backs, B2B and Store KPIs are often
 // empty or all clear, so a test user only ever saw the "All Clear" state.
 // These are made-up reads in each tool's own shape, scoped the way the real
-// read is (the signed-in store, an MSM's two, or all five for DM/CEO/MOCD), so
+// read is (the signed-in store, or all five for DM/CEO/MOCD), so
 // every model, chip and strip runs as it does on a real login. Nothing is
 // written anywhere: _qpWLoad uses one only when _speeksTestSession is set,
 // which only a test login or test account has. Variance, district Variance and SPEEKS Connect keep
@@ -52781,11 +52472,19 @@ function _qpWidgetCard(el, rows, id) {
                 + '<div class="qp-clear-t">' + escapeHtml(it.clear[0]) + '</div><div class="qp-clear-s">' + escapeHtml(it.clear[1]) + '</div>'
                 + (it.clear[2] ? '<div class="qp-clear-l">' + escapeHtml(it.clear[2]) + '</div>' : '')
                 + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
-        } else
+        } else {
+        // WIDE (QUICKPORTAL TABS, Ethan 2026-11-07): a card alone in its tab's
+        // row (.qpt-wide) whose model has a `wide` table draws two columns —
+        // the usual count, strip and lines on the left (wideLines, when the
+        // model has them, in place of its narrow lines), the table on the right.
+        const wideOn = !!(it.wide && el.classList.contains('qpt-wide'));
+        const lines = wideOn && it.wideLines ? it.wideLines : it.lines;
+        const cap = wideOn && it.wideLines ? (it.wideLinesCap || 'Due First') : it.cap;
+        const fit = wideOn ? Math.max(room, 6) : room;
         // dense: a line a store, five of them under the tabs (the district
         // widgets) — tighter lines so the card stays 350.
-        body = tabs + '<div class="qp-ai-body' + (it.room === 5 ? ' qp-ai-dense' : '') + '">'
-            + (it.big == null ? '' : '<div class="qp-ai-top"><div class="qp-hl-big">' + it.big + '<small>' + escapeHtml(it.small) + '</small></div>'
+        const dense = !wideOn && it.room === 5;
+        const inner = (it.big == null ? '' : '<div class="qp-ai-top"><div class="qp-hl-big">' + it.big + '<small>' + escapeHtml(it.small) + '</small></div>'
             + (it.trend ? '<span class="qp-trend ' + it.trend.dir + '">' + escapeHtml(it.trend.text) + '</span>'
                 : it.aside ? '<span class="qp-hl-sub">' + escapeHtml(it.aside) + '</span>' : '') + '</div>')
             + (it.sub ? '<div class="qp-hl-sub">' + it.sub + '</div>' : '')
@@ -52794,10 +52493,13 @@ function _qpWidgetCard(el, rows, id) {
             // (Ethan, 2026-10-26: "align the text and pills").
             // block: a tab that draws its own layout under the cap instead of
             // lines (Store KPIs' tiles, Monthly Breakdown's bars — 2026-10-28).
-            + (it.block ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '') + it.block
-                : it.lines && it.lines.length ? (it.cap ? '<div class="qp-hl-cap">' + escapeHtml(it.cap) + '</div>' : '')
-                + (it.room === 5 ? '<div class="qp-cw-grid">' + it.lines.slice(0, room).join('') + '</div>' : it.lines.slice(0, room).join('')) : '')
+            + (it.block ? (cap ? '<div class="qp-hl-cap">' + escapeHtml(cap) + '</div>' : '') + it.block
+                : lines && lines.length ? (cap ? '<div class="qp-hl-cap">' + escapeHtml(cap) + '</div>' : '')
+                + (it.room === 5 && !(wideOn && it.wideLines) ? '<div class="qp-cw-grid">' + lines.slice(0, fit).join('') + '</div>' : lines.slice(0, fit).join('')) : '');
+        body = tabs + '<div class="qp-ai-body' + (dense ? ' qp-ai-dense' : '') + (wideOn ? ' qpt-wb' : '') + '">'
+            + (wideOn ? '<div class="qpt-wl">' + inner + '</div><div class="qpt-wr">' + (it.wideCap ? '<div class="qp-hl-cap">' + escapeHtml(it.wideCap) + '</div>' : '') + it.wide + '</div>' : inner)
             + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
+        }
     }
     const html = head + body;
     if (box._qpHtml !== html) { box.innerHTML = html; box._qpHtml = html; _qpCapLines(box); }
@@ -53108,6 +52810,10 @@ const _QP_WSPEC = {
                 lines: (function () { const now = it.due.filter(e => { const x = String(e.x.due_on || '').slice(0, 10); return x && x <= today; }); return (now.length ? now : it.due).map(e => _qpClaimsLine(e, today)); })(),
                 room: 2,
                 link: ['Open Claims & Disputes', "openClaimsTool('" + tab + "')"],
+                // Wide (its own tab on the tabs page): every tab of the tool at once.
+                wideCap: 'Every Tab',
+                wide: _qpClaimsTable('Tab', [['mismatch', 'Mismatches'], ['returns', 'Returns'], ['cases', 'Cases & Disputes'], ['payments', 'Payments']]
+                    .map(t => ({ label: escapeHtml(t[1]), on: t[0] === tab, c: _qpClaimsCounts(d._split[t[0]].due, today) }))),
             };
         },
     },
@@ -53204,6 +52910,18 @@ const _QP_WSPEC = {
                 lines: rows.map(k => '<div class="qp-cw-ln qp-mb-ln"><span class="qp-cw-lt">' + escapeHtml((metric(k) || {}).label || k)
                     + '</span><b>' + fmt(k, val(d.mine, d.month, k)) + '</b><span class="qp-mb-d">' + delta(k) + '</span>' + chip(rank(k)) + '</div>'),
                 link: ['Open Monthly Breakdown', "window.location.href='workspace.html#brief'"],
+                // hv: the Sales & Goals card's last-month rows (_qptRenderSales).
+                // Net Margin in place of the GP row, as the switch above does: no GP
+                // on screen since the NP switch (np-means-no-gp-on-screen).
+                hv: { month: _qpMbMonth(d.month), rows: ['net_profit', 'net_sales', 'net_profit_pct', 'return_rate', 'google_reviews'].map(k => {
+                    if (k !== 'net_profit_pct') return metric(k) ? { label: metric(k).label || k, val: fmt(k, val(d.mine, d.month, k)), delta: delta(k), rank: chip(rank(k)) } : null;
+                    const a = val(d.mine, d.month, k), b = d.prev ? val(d.mine, d.prev, k) : null;
+                    if (a == null) return null;
+                    const vals = STORE_CODES.map(s => val(s, d.month, k)).filter(v => v != null);
+                    const ch = b == null ? 0 : a - b;
+                    return { label: 'Net Margin', val: (Math.round(a * 10) / 10) + '%', rank: chip({ place: vals.filter(v => v > a).length + 1, of: vals.length }),
+                        delta: Math.abs(ch) < 0.05 ? '' : '<span class="' + (ch > 0 ? 'good' : 'bad') + '">' + (ch > 0 ? '▲' : '▼') + ' ' + Math.abs(Math.round(ch * 10) / 10) + ' pts</span>' };
+                }).filter(Boolean) },
             };
         },
     },
@@ -53226,7 +52944,8 @@ const _QP_WSPEC = {
         },
         model: function (d, tab) {
             const parts = _kpiCentralParts();
-            const stores = _kpiMyStores();
+            // d._stores: one store's, for the DM's Store Health store tabs (_qptStoreParts).
+            const stores = (d && d._stores) || _kpiMyStores();
             const weekly = tab === 'weekly';
             const link = [weekly ? 'Open Weekly KPIs' : 'Open Monthly KPIs',
                 "sessionStorage.setItem('speeksKpiTab','" + tab + "'); window.location.href='workspace.html#kpis'"];
@@ -53252,12 +52971,15 @@ const _QP_WSPEC = {
                     sub: overdue ? '<span class="bad">Were due ' + day(dueOn) + ' 8:30am' + who + ' — enter them now</span>'
                         : '<span class="warn">Due ' + day(dueOn) + ' by 8:30am' + who + '</span>',
                     cap: '', lines: [], link: [weekly ? 'Enter Weekly KPIs' : 'Enter Monthly KPIs', link[1]],
+                    // hv: the Store Health tab's What Needs Fixing (_qptHealthParts).
+                    hv: { pct: null, fix: [{ t: (weekly ? 'Weekly' : 'Monthly') + ' KPIs ' + (overdue ? 'Overdue' : 'Due'),
+                        s: (overdue ? 'Were due ' : 'Due ') + day(dueOn) + ' by 8:30am' + who, sev: overdue ? 'bad' : 'warn' }] },
                 };
             }
             // Done (or not due yet): the latest period with numbers, judged on
-            // the Store Total — one store's, or the first of an MSM's two.
+            // the Store Total of the first store in scope.
             const p = (d[tab][stores[0]] || []).find(x => (x.saved_count || 0) > 0);
-            if (!p) return { n: 0, badge: '', big: '—', small: 'nothing entered yet', sub: '', cap: '', lines: [], link };
+            if (!p) return { n: 0, badge: '', big: '—', small: 'nothing entered yet', sub: '', cap: '', lines: [], link, hv: { pct: null, fix: [] } };
             const tot = _kpiStoreTotals(p.entries || []);
             const judged = _QP_KPI_JUDGED.map(f => ({ f, cls: _kpiThresholdCls(f[0], tot[f[0]], true), v: tot[f[0]] }))
                 .filter(j => j.v != null && !isNaN(Number(j.v)));
@@ -53284,6 +53006,12 @@ const _QP_WSPEC = {
                 lines: notGreen.map(j => _qpWLine(_qpWChip(j.cls === 'kpi-cell-red' ? 'Red' : 'Close', j.cls === 'kpi-cell-red' ? 'bad' : 'warn'),
                     j.f[1], _kpiFormatComputed(j.f[0], j.v))),
                 link,
+                hv: { pct: judged.length ? green / judged.length * 100 : null,
+                    tiles: judged.map(j => ({ name: _QP_KPI_SHORT[j.f[1]] || j.f[1], val: _kpiFormatComputed(j.f[0], j.v),
+                        sev: j.cls === 'kpi-cell-green' ? 'good' : j.cls === 'kpi-cell-red' ? 'bad' : 'warn' })),
+                    period: label(p.period_end_date),
+                    fix: notGreen.map(j => ({ t: (_QP_KPI_SHORT[j.f[1]] || j.f[1]) + ' ' + _kpiFormatComputed(j.f[0], j.v),
+                        s: (j.cls === 'kpi-cell-red' ? 'In the red' : 'Close to goal') + ' · ' + label(p.period_end_date), sev: j.cls === 'kpi-cell-red' ? 'bad' : 'warn' })) },
             };
         },
     },
@@ -53503,6 +53231,13 @@ const _QP_WSPEC = {
                 lines: rows.map(r => _qpWLineS(r.late ? _qpWChip(r.late + ' Overdue', 'bad') : (_qpWDue(r.next, today) || _qpWChip('Open', 'grey')),
                     r.s, r.n + ' open', r.amt ? _qpHLK(r.amt) : '')),
                 link: ['Open Claims & Disputes', "openClaimsTool('" + tab + "')"],
+                // Wide (its own tab on the tabs page): the claims themselves,
+                // soonest first, on the left; all five stores in a table on the right.
+                wideLines: it.due.map(e => _qpWLineS(_qpWDue(e.x.due_on, today) || _qpWChip('Open', 'grey'), e.x.store_code || '?', _qpClaimsLabel(e),
+                    amt(e) ? _qpHLK(amt(e)) : '')),
+                wideCap: 'By Store',
+                wide: _qpClaimsTable('Store', _CLAIMS_OVERSIGHT_STORES.map(st => ({ label: _qpDot(st) + escapeHtml(st),
+                    c: _qpClaimsCounts(it.due.filter(e => (e.x.store_code || '') === st), today) }))),
             };
         },
     },
@@ -53533,7 +53268,8 @@ const _QP_WSPEC = {
                     const sun = weekly ? open.period_end_date : _kpiFirstSundayAfter(open.period_end_date);
                     if (weekly || parts.date >= sun) {
                         const over = _kpiPastDeadline(sun, parts);
-                        return { s, rank: over ? 0 : 1, chip: over ? _qpWChip('Overdue', 'bad') : _qpWChip('Due', 'warn'), text: 'Not entered yet' };
+                        return { s, rank: over ? 0 : 1, chip: over ? _qpWChip('Overdue', 'bad') : _qpWChip('Due', 'warn'), text: 'Not entered yet',
+                            fix: { t: s + ' · KPIs Not Entered', s: over ? 'Overdue' : 'Due', sev: over ? 'bad' : 'warn' } };
                     }
                 }
                 const p = (d[tab][s] || []).find(x => (x.saved_count || 0) > 0);
@@ -53549,6 +53285,7 @@ const _QP_WSPEC = {
                     mini: pg == null ? '' : green > pg ? '▲' : green < pg ? '▼' : '–', miniCls: pg == null ? '' : green > pg ? 'up' : green < pg ? 'down' : 'flat',
                     chip: _qpWChip(green + ' Of ' + judged.length, red ? 'bad' : (green < judged.length ? 'warn' : 'good')),
                     text: red ? red + ' in the red' : (green < judged.length ? (judged.length - green) + ' close' : 'All in the green'),
+                    fix: green < judged.length ? { t: s + ' · ' + green + ' of ' + judged.length + ' Green', s: red ? red + ' in the red' : (judged.length - green) + ' close to goal', sev: red ? 'bad' : 'warn' } : null,
                 };
             }).sort((a, b) => a.rank - b.rank);
             const pending = rows.filter(r => r.rank < 2).length, late = rows.filter(r => r.rank === 0).length;
@@ -53560,12 +53297,13 @@ const _QP_WSPEC = {
                     : '<span class="good">Every store has entered them</span>',
                 // All five stores, not the usual three lines (Ethan, 2026-10-26).
                 room: 5, cap: 'By Store', lines: rows.map(r => _qpWLineS(r.chip, r.s, r.text, r.mini || '', r.miniCls ? 'qp-mini ' + r.miniCls : '')), link,
+                hv: { pct: rows.length ? allGreen / rows.length * 100 : null, fix: rows.map(r => r.fix).filter(Boolean) },
             };
         },
     },
     // CUSTOMER CALL BACKS — In Stock is the feed card's own rule: a call back
-    // (any store's) with a SUGGESTED match at a store you hold, not completed or
-    // archived (checkCallbackMatchReminders). Open and Contacted are your own
+    // (any store's) with a SUGGESTED match at a store you hold, not contacted,
+    // completed or archived (checkCallbackMatchReminders). Open and Contacted are your own
     // store's list by status. The tool's GET; refreshed by its realtime ping.
     callbacks: {
         when: 'Right Now',
@@ -53577,7 +53315,8 @@ const _QP_WSPEC = {
             const live = (rows || []).filter(e => !e.archived_at && e.status !== 'completed');
             const link = ['Open Call Backs', "window.location.href='operations.html#callbacks'"];
             if (tab === 'instock') {
-                const hits = live.map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
+                // Contacted is answered — same rule as the feed card since 2026-11-06.
+                const hits = live.filter(e => e.status !== 'contacted').map(e => ({ e, m: (e.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code)) }))
                     .filter(h => h.m.length).sort((a, b) => String(a.e.date_of_call).localeCompare(String(b.e.date_of_call)));
                 return {
                     ...(hits.length ? {} : { clear: ['Nothing To Call About', 'Nothing a customer asked for is on your shelf yet'] }),
@@ -53936,7 +53675,6 @@ function _qpSnapSample() {
             let team = split.map(x => ({ name: x.name, processed: Math.max(1, Math.round(proc * x.w / wsum)), value: Math.round(proc * x.w / wsum * between(r('tv' + x.name), 70, 130)) }));
             const topN = Math.max(...team.map(m => m.processed));
             team.forEach(m => { m.top = m.processed === topN && !team.some(o => o !== m && o.top); });
-            if (emp) team = [{ name: me, processed: between(r('me'), 4, 11), value: between(r('mev'), 400, 1100), top: false }];
             const lost = between(r('l'), 1, 6);
             facts.push({
                 store: s, date, est_value: est, total_spent: Math.round(est * (1 - margin)), est_margin_pct: Number(margin.toFixed(3)),
@@ -53946,6 +53684,7 @@ function _qpSnapSample() {
                 reviews_today: reviews, five_star_today: five, five_star_mtd: mtd5,
                 devices_processed: proc, processed_value: Math.round(proc * between(r('pv'), 85, 120)), listed_devices: Math.round(proc * 0.8),
                 queue_count: queue, available_count: Math.round(between(r('ac'), 140, 260) * k), available_cost: Math.round(between(r('aco'), 18000, 42000) * k),
+                available_value: Math.round(between(r('aco'), 18000, 42000) * k * (1.8 + rnd(r('avm')) * 0.6)),
                 live_count: Math.round(between(r('lc'), 320, 560) * k), team_production: team,
             });
             if (date >= lmStart) { const sales = Math.round(between(r('ns2'), 3800, 9800) * k); np.push({ store: s, date, sales, np: Math.round(sales * (0.17 + rnd(r('np')) * 0.1)) }); }
@@ -53972,12 +53711,10 @@ function _qpSnapSample() {
 }
 const _qpRole = () => (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
 const _qpIsDist = () => ['district manager', 'ceo', 'mocd'].includes(_qpRole());
-const _qpIsMgr = () => ['manager', 'owner (manager)', 'multi-store manager'].includes(_qpRole())
-    || (typeof isMultiStoreManager === 'function' && isMultiStoreManager());
+const _qpIsMgr = () => ['manager', 'owner (manager)'].includes(_qpRole());
 const _qpIsAsm = () => _qpRole() === 'assistant manager';
 const _qpIsEmp = () => _qpRole() === 'employee';
-// The store a store-side card is about: the dashboard on screen for a
-// Multi-Store Manager, otherwise the person's own.
+// The store a store-side card is about: the person's own.
 function _qpMyStore() {
     const s = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     return STORE_CODES.includes(s) ? s : (_claimStores()[0] || '');
@@ -53989,6 +53726,22 @@ const _qpMonth1 = d => d.today.slice(0, 8) + '01';
 function _qpThisMonth(d, store) { const m = _qpMonth1(d); return _qpFacts(d, store).filter(f => f.date >= m); }
 // The same days of last month as this month has so far (1st through the day
 // of the latest report), for "vs Last Month".
+// "Nov 1–7", "Oct 30–Nov 5": the days a figure covers, said on the card
+// (Ethan, 2026-11-08: "clarify what that number is for and what range").
+function _qpRange(from, to) {
+    if (!from || !to) return '';
+    const p = iso => { const t = new Date(String(iso).slice(0, 10) + 'T12:00:00Z'); return [t.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short' }), t.getUTCDate()]; };
+    const a = p(from), z = p(to);
+    if (String(from).slice(0, 10) === String(to).slice(0, 10)) return a[0] + ' ' + a[1];
+    return a[0] === z[0] ? a[0] + ' ' + a[1] + '–' + z[1] : a[0] + ' ' + a[1] + '–' + z[0] + ' ' + z[1];
+}
+// The week a Weekly KPIs period covers, from its "Week ending Nov 8, 2026".
+function _qpKpiWeek(period) {
+    const t = Date.parse(String(period || '').replace(/^week ending\s*/i, '') + ' 12:00 UTC');
+    if (!isFinite(t)) return '';
+    const end = new Date(t), start = new Date(t - 6 * 86400000);
+    return _qpRange(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10));
+}
 function _qpLastMonthSoFar(d, store) {
     const cur = _qpThisMonth(d, store);
     if (!cur.length) return [];
@@ -54043,18 +53796,38 @@ function _qpReviewsOf(d, store) {
     return { mtd, prev, goal, track, stars: last ? Number(last.five_star_mtd) || 0 : 0, best,
              days: _qpFacts(d, store).slice(-14).map(r => Number(r.reviews_today) || 0), left: dim - dom };
 }
+// CALENDAR DAYS, AS THE LIVE BOARD COUNTS THEM (Ethan, 2026-11-08: "Are these
+// numbers correct. I show something different on the Live dashboard"). This
+// used to average the open days so far and multiply by the OPEN days left,
+// Sundays off — so the projection assumed the month's remaining Sundays earn
+// nothing, while the webstore sells every Sunday and those Sundays' net profit
+// was already in the average. BAL through Sat, Nov 7: $8,354 so far of $33,000
+// read 94% here and 108% on the Live board's Month view. shopify-live (npFor,
+// monthDays) and the workbook both work it as so far ÷ calendar days gone ×
+// days in month, Sundays included, and the comment there says why: staff
+// compare the screens. So does this now. `thru` is the store's last day with
+// net profit in (yesterday once the night run has banked it), so a day not
+// banked yet is neither counted nor divided by.
+//   avg   net profit a calendar day so far
+//   left  calendar days left, today included
+//   need  what is left of the goal over those days
+//   pct   so far ÷ thru × days in month, over the goal — the Live board's
+//         "tracking to", and pct ≥ 100 exactly when avg ≥ need
 function _qpPaceOf(d, store) {
     const m = _qpMonth1(d);
     const rows = (d.np || []).filter(r => r.store === store && r.date >= m && r.date < d.today);
     const soFar = _qpSum(rows, 'np');
     const goal = (d.goals || {})[store] || 0;
+    const dim = new Date(Date.UTC(+d.today.slice(0, 4), +d.today.slice(5, 7), 0)).getUTCDate();
+    const last = rows.map(r => r.date).sort().pop();
+    const thru = last ? +last.slice(8, 10) : 0;
+    const avg = thru ? soFar / thru : 0;
     const open = rows.filter(r => Number(r.sales) || Number(r.np));
-    const avg = open.length ? soFar / open.length : 0;
     const best = open.reduce((b, r) => Number(r.np) > (b ? Number(b.np) : -Infinity) ? r : b, null);
-    const left = _qpOpenDaysLeft(d.today);
+    const left = dim - thru;
     const need = goal > soFar && left ? (goal - soFar) / left : 0;
-    const pct = goal ? (soFar + avg * left) / goal * 100 : null;
-    return { soFar, goal, avg, best, left, need, pct, hit: goal > 0 && soFar >= goal };
+    const pct = goal && thru ? soFar / thru * dim / goal * 100 : null;
+    return { soFar, goal, avg, best, left, need, pct, thru, dim, hit: goal > 0 && soFar >= goal };
 }
 function _qpTeamOf(d, store) {
     const f = _qpFacts(d, store).filter(r => Array.isArray(r.team_production) && r.team_production.length);
@@ -54098,7 +53871,10 @@ Object.assign(QP_WIDGETS, {
     lost: {
         label: 'Lost Deals', sub: 'Deals and devices that walked out, and what they were worth',
         icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
-        tone: 'r', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        // Employees too since 2026-11-08 (Ethan: "Show the no deal stuff for
+        // employees but maybe show just their stats and the store's total"): the
+        // card draws the store's month and, for an employee, their own week.
+        tone: 'r', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm() || _qpIsEmp()),
     },
     dlost: {
         label: 'Lost Deals', sub: 'Revenue that walked out of every store this month',
@@ -54113,7 +53889,9 @@ Object.assign(QP_WIDGETS, {
     pipeline: {
         label: 'Inventory Pipeline', sub: 'Queue, available and live, and how fast the queue clears',
         icon: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
-        tone: 't', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        // Employees too since 2026-11-08: the Inventory card is the same for the
+        // whole team (Ethan), and its band is this card's figures.
+        tone: 't', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm() || _qpIsEmp()),
     },
     buying: {
         label: 'Buying', sub: 'Yesterday\'s buying against the same day other weeks',
@@ -54146,7 +53924,7 @@ Object.assign(QP_WIDGETS, {
         tone: 'g', avail: () => _qpIsDist(),
     },
     dbuying: {
-        label: 'Buying', sub: 'What every store bought on its latest report, and the margin',
+        label: 'Buying', sub: 'What every store bought on its latest day, and the margin',
         icon: '<svg viewBox="0 0 24 24"><path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6L5 3H2M9 20h.01M18 20h.01"/></svg>',
         tone: 'b', avail: () => _qpIsDist(),
     },
@@ -54160,16 +53938,18 @@ Object.assign(QP_WIDGETS, {
         icon: '<svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>',
         tone: 't', avail: () => _qpIsDist(),
     },
-    // Ethan, 2026-10-29 ("Lets do expense report"). The people the Expense
-    // Report tool is for — the DM and Multi-Store Managers file, the CEO
-    // reviews — through the same Feature Access keys as its Tools entry.
+    // Ethan, 2026-10-29 ("Lets do expense report"). Whoever has the Expense
+    // Report tool, through the same Feature Access key as its Tools entry —
+    // no role check on top (Ethan 2026-11-09: any role can use any tool once
+    // Feature Access switches it on for them).
     exp: {
         label: 'Expense Report', sub: 'This month\'s mileage and expenses, and whether it is filed',
         icon: '<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6M9 13h7M9 17h5"/></svg>',
         tone: 'g', avail: () => {
             const ok = k => typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible(k);
-            if (['district manager', 'ceo'].includes(_qpRole())) return ok('tool-expenses');
-            return typeof isMultiStoreManager === 'function' && isMultiStoreManager() && ok('tool-expenses-mgr');
+            // Either of the tool's two Tools-panel keys (DM / Manager) — Zach and
+            // Colin hold the Manager one.
+            return ok('tool-expenses') || ok('tool-expenses-mgr');
         },
     },
 });
@@ -54201,8 +53981,12 @@ Object.assign(_QP_WSPEC, {
                 + (r.goal ? _qpHLBar(r.mtd / r.goal * 100, [Math.min(100, r.track / r.goal * 100)], band)
                     + '<div class="qp-hl-sub"><span class="' + band + '">Tracking to ' + r.track + '</span> · ' + Math.max(0, r.goal - r.mtd) + ' to go · ' + r.left + ' days left</div>'
                     : '<div class="qp-hl-sub">Tracking to ' + r.track + ' this month</div>')
-                + '<div class="qp-hl-cap">Reviews a Day · Last 14 Reports</div>' + _qpDaysHtml(r.days)
-                + '<div class="qp-hl-sub">' + r.stars + ' five-star this month' + (r.best && Number(r.best.reviews_today) ? ' · best day ' + _qpDayLabel(r.best.date) + ' (' + r.best.reviews_today + ')' : '') + '</div>');
+                + '<div class="qp-hl-cap">Reviews a Day · Last 14 Days</div>' + _qpDaysHtml(r.days)
+                // Two facts, two items (Ethan, 2026-11-08: "better separate the Best Day
+                // and the date, it looks too run-on"): the five-star count on the left,
+                // the best day as its own labelled pair on the right.
+                + '<div class="qp-rv-foot"><span>★ ' + r.stars + ' five-star this month</span>'
+                + (r.best && Number(r.best.reviews_today) ? '<span class="qp-rv-best"><span>Best day</span><b>' + escapeHtml(_qpDayLabel(r.best.date)) + '</b><em>' + r.best.reviews_today + (Number(r.best.reviews_today) === 1 ? ' review' : ' reviews') + '</em></span>' : '') + '</div>');
         },
     },
     dreviews: {
@@ -54216,8 +54000,12 @@ Object.assign(_QP_WSPEC, {
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + tot + '<small>reviews across ' + rows.length + ' stores</small></div>'
                 + _qpTrendHtml(tot - prev, _qpN, true, 'Last Month') + '</div>'
                 + '<div class="qp-hl-cap">Reviews This Month · Five-Star · Reviews a Day</div>'
+                // Each number says what it is (Ethan, 2026-11-08: "We should clarify the
+                // difference" — a bare "★ 7" under "9" read as a second count of the same
+                // thing): the total is "Reviews", the star line "Five-Star".
                 + '<div class="qp-rvc">' + rows.map((r, i) => '<div class="' + (i === 0 && r.mtd ? 'lead' : '') + '"><div class="qp-rvc-s">' + _qpDot(r.s) + escapeHtml(r.s) + '</div>'
-                    + '<div class="qp-rvc-v">' + _qpN(r.mtd) + '</div><div class="qp-rvc-st">★ ' + _qpN(r.stars) + '</div>' + _qpSparkFill(r.days, _qpStoreColor(r.s)) + '</div>').join('') + '</div>');
+                    + '<div class="qp-rvc-v">' + _qpN(r.mtd) + '</div><div class="qp-rvc-w">' + (r.mtd === 1 ? 'Review' : 'Reviews') + '</div>'
+                    + '<div class="qp-rvc-st">★ ' + _qpN(r.stars) + ' Five-Star</div>' + _qpSparkFill(r.days, _qpStoreColor(r.s)) + '</div>').join('') + '</div>');
         },
     },
     pace: {
@@ -54236,7 +54024,7 @@ Object.assign(_QP_WSPEC, {
             const bestN = p.best && Number(p.best.np) > 0 && !p.hit ? Math.ceil((p.goal - p.soFar) / Number(p.best.np)) : 0;
             return _qpBody('<div class="qp-ai-top">' + big + pill + '</div>'
                 + _qpHLBar(p.goal ? p.soFar / p.goal * 100 : 0, [100], band)
-                + '<div class="qp-hl-sub">' + _lvMoney(p.soFar, false) + ' of ' + _lvMoney(p.goal, false) + (p.pct == null ? '' : ' · <span class="' + band + '">Tracking to ' + Math.round(p.pct) + '%</span>') + ' · ' + p.left + ' open days left</div>'
+                + '<div class="qp-hl-sub">' + _lvMoney(p.soFar, false) + ' of ' + _lvMoney(p.goal, false) + (p.pct == null ? '' : ' · <span class="' + band + '">Tracking to ' + Math.round(p.pct) + '%</span>') + ' · ' + p.left + ' days left</div>'
                 + '<div class="qp-hl-boxes">' + box('Averaging', _qpHLK(p.avg), 'a day this month')
                 + box('Best Day', p.best ? _qpHLK(p.best.np) : '—', p.best ? _qpDayLabel(p.best.date).replace(/^\w+, /, '') : '')
                 + box('Needed', p.hit ? 'Done' : _qpHLK(p.need), p.hit ? 'goal reached' : 'a day from today', p.hit ? 'good' : (p.avg >= p.need ? 'good' : 'warn')) + '</div>'
@@ -54251,11 +54039,36 @@ Object.assign(_QP_WSPEC, {
             // Three stat boxes and a red column a day (Ethan, 2026-10-29,
             // prototypes/widget-spruce.html — it was three lines of chips).
             const f = _qpFacts(d, s).slice(-6);
-            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(lost, false) + '</span><small>walked out</small></div>'
-                + _qpTrendHtml(lost - _qpSum(prev, 'lost_revenue'), _qpHLK, false, 'Last Month') + '</div>'
+            // EVERY FIGURE SAYS ITS RANGE (Ethan, 2026-11-08): the store's figures
+            // are this month to the latest Day End report ("Nov 1–7"), the change
+            // is against the same days last month ("vs Oct 1–7"), the no-deal rate
+            // is a share of customers.
+            const mtd = cur.length ? _qpRange(cur[0].date.slice(0, 8) + '01', y.date) : 'this month';
+            const pRng = prev.length ? _qpRange(prev[0].date.slice(0, 8) + '01', prev[prev.length - 1].date) : 'Last Month';
+            const store = '<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(lost, false) + '</span><small>walked out' + (_qpIsEmp() ? ' · the store' : '') + ' · ' + escapeHtml(mtd) + '</small></div>'
+                + _qpTrendHtml(lost - _qpSum(prev, 'lost_revenue'), _qpHLK, false, pRng) + '</div>'
                 + '<div class="qp-box3"><div><b>' + _qpN(_qpSum(cur, 'failed_deals')) + '</b><span>Failed Deals</span></div><div><b>' + _qpN(_qpSum(cur, 'devices_lost')) + '</b><span>Devices Lost</span></div>'
-                + '<div><b>' + (tot ? Math.round(nod / tot * 100) : 0) + '%</b><span><span class="qp-wide-only">Left With </span>No Deal</span></div></div>'
-                + (y ? '<div class="qp-hl-cap">Lost a Day · Last ' + f.length + ' Reports</div>' + _qpDayCols(f.map(r => [_qpDayLabel(r.date).replace(/,.*$/, ''), Number(r.lost_revenue) || 0]), 'red', 50) : ''));
+                + '<div><b>' + (tot ? Math.round(nod / tot * 100) : 0) + '%</b><span>No-Deal Customers</span></div></div>';
+            // AN EMPLOYEE: the store's month above, then their own week below in
+            // place of the store's lost-a-day columns. The Day End report has no
+            // per-person lost deals; the person's own No Deals and Conversion are
+            // their Weekly KPIs (_qpHL.kpis — the My KPIs card's figures, judged
+            // by the same goals), each beside the store's.
+            if (_qpIsEmp()) {
+                const h = _qpHL.kpis;
+                const pick = t => h && !h.none ? (h.metrics || []).find(m => m.t === t && m.has) : null;
+                // Each side says what it is: the store's No Deals is its TOTAL for
+                // the week, its Conversion the store AVERAGE (the KPI page's tags).
+                const tile = (m, label, goal, st) => !m ? '' : '<div class="qp-lmine ' + (m.bad ? 'bad' : 'good') + '"><span>' + label + '</span><b>' + escapeHtml(m.my) + '</b>'
+                    + '<em>' + (goal ? goal + ' · ' : '') + st + ' ' + escapeHtml(m.st) + '</em></div>';
+                // No Deals without its "Max 7" (Ethan, 2026-11-08: "get rid of the max part").
+                const mine = tile(pick('No Deals'), 'My No Deals', '', 'Store Total') + tile(pick('Conversion'), 'My Conversion', 'Goal 85%', 'Store Avg');
+                const wk = h && h.period ? _qpKpiWeek(h.period) : '';
+                return _qpBody(store + '<div class="qp-hl-cap">Mine · One Week' + (wk ? ' · ' + escapeHtml(wk) : '') + '</div>'
+                    + (mine ? '<div class="qp-lmines">' + mine + '</div>' : '<div class="qp-hl-sub">Your numbers show here once this week\'s KPIs are entered.</div>'));
+            }
+            return _qpBody(store
+                + (y ? '<div class="qp-hl-cap">Lost a Day · Last ' + f.length + ' Days · ' + escapeHtml(_qpRange(f[0].date, f[f.length - 1].date)) + '</div>' + _qpDayCols(f.map(r => [_qpDayLabel(r.date).replace(/,.*$/, ''), Number(r.lost_revenue) || 0]), 'red', 50) : ''));
         },
     },
     dlost: {
@@ -54267,9 +54080,12 @@ Object.assign(_QP_WSPEC, {
             // no-deal % beside it (Ethan, 2026-10-29, prototypes/widget-spruce.html).
             const all = _qpSum(rows, 'lost');
             const nd = r => (r.tot ? Math.round(r.nod / r.tot * 100) : 0);
-            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(all, false) + '</span><small>walked out · ' + _qpN(_qpSum(rows, 'failed')) + ' failed deals</small></div></div>'
+            // The range the five stores' month covers (2026-11-08: say the range).
+            const days = STORE_CODES.flatMap(s => _qpThisMonth(d, s).map(f => f.date)).sort();
+            const rng = days.length ? _qpRange(days[0].slice(0, 8) + '01', days[days.length - 1]) : 'this month';
+            return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big"><span class="bad">' + _lvMoney(all, false) + '</span><small>walked out · ' + _qpN(_qpSum(rows, 'failed')) + ' failed deals · ' + escapeHtml(rng) + '</small></div></div>'
                 + '<div class="qp-dn">' + _qpDonut(rows.map(r => [r.lost, _qpStoreColor(r.s)]), _qpHLK(all), 'Walked Out')
-                + '<div class="qp-dn-lg"><div class="qp-dn-h"><span></span><span>Store</span><span>Lost</span><span>No Deal</span></div>'
+                + '<div class="qp-dn-lg"><div class="qp-dn-h"><span></span><span>Store</span><span>Walked Out</span><span>No Deal %</span></div>'
                 + rows.map(r => '<div><i style="background:' + _qpStoreColor(r.s) + '"></i><b>' + escapeHtml(r.s) + '</b><span>' + _qpHLK(r.lost)
                     + '<span class="qp-wide-only"> · ' + (all ? Math.round(r.lost / all * 100) : 0) + '%</span></span>'
                     + '<span class="qp-stile-tag ' + (nd(r) >= 15 ? 'bad' : nd(r) >= 10 ? 'warn' : 'good') + '">' + nd(r) + '%</span></div>').join('') + '</div></div>');
@@ -54283,8 +54099,10 @@ Object.assign(_QP_WSPEC, {
             const t = _qpTeamOf(d, _qpMyStore()), mx = Math.max(1, ...t.team.map(m => m.n));
             const head = '<div class="qp-ai-top"><div class="qp-hl-big">' + t.total + '<small>devices processed · ' + _lvMoney(t.value, false) + ' value</small></div>'
                 + (t.avg ? _qpTrendHtml(Math.round(t.total - t.avg), _qpN, true, 'Same Day Avg') : '') + '</div>';
-            // An employee's snapshot carries their own line only (store-snapshot).
-            if (_qpIsEmp()) {
+            // Employees see the whole team, as a manager does (Ethan, 2026-11-08:
+            // "This is good for the whole team to see") — store-snapshot no longer
+            // trims their line. The old "Your Day" view is kept off.
+            if (false) {
                 const me = t.team[0];
                 return _qpBody(head + '<div class="qp-hl-cap">Your Day</div>'
                     + (me ? '<div class="qp-ai-pp"><span class="qp-ai-pn">' + escapeHtml(_qpShort(me.name)) + '</span>' + _qpHLBar(t.total ? me.n / t.total * 100 : 0, [], 'good') + '<b>' + me.n + '</b><span class="qp-tm-v">' + _lvMoney(me.value, false) + '</span></div>'
@@ -54295,11 +54113,11 @@ Object.assign(_QP_WSPEC, {
             return _qpBody(head + '<div class="qp-hl-cap">Who Processed What</div>'
                 + t.team.slice(0, 5).map(m => '<div class="qp-ai-pp"><span class="qp-ai-pn qp-tm-n">' + escapeHtml(_qpShort(m.name)) + '</span>'
                     + _qpHLBar(m.n / mx * 100, [], m.n >= mx * 0.5 ? 'good' : 'warn') + '<b>' + m.n + '</b><span class="qp-tm-v">' + _qpHLK(m.value) + '</span></div>').join('')
-                + (top ? '<div class="qp-hl-sub" style="margin-top:8px">Top producer: ' + escapeHtml(_qpShort(top.name)) + (t.topRun > 1 ? ' · ' + t.topRun + ' reports running' : '') + '</div>' : ''));
+                + (top ? '<div class="qp-hl-sub" style="margin-top:8px">Top producer: ' + escapeHtml(_qpShort(top.name)) + (t.topRun > 1 ? ' · ' + t.topRun + ' days running' : '') + '</div>' : ''));
         },
     },
     pipeline: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline']], where: () => _qpMyStore(), load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline']], where: () => _qpMyStore(), load: _qpSnapLoad,
         off: d => (_qpLast(d, _qpMyStore()) ? '' : 'No Day End report has come in for this store yet.'),
         card: function (d) {
             const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1], wk = f.filter(r => r.date < y.date).slice(-6)[0];
@@ -54310,7 +54128,7 @@ Object.assign(_QP_WSPEC, {
                 + '<span class="qp-pipe-a">→</span>' + stage(y.live_count, 'Live') + '</div>'
                 + '<div class="qp-hl-sub">' + (qch == null ? '' : '<span class="' + (qch > 10 ? 'warn' : qch < -10 ? 'good' : '') + '">Queue ' + (qch >= 0 ? 'up ' : 'down ') + Math.abs(qch) + '%</span> in a week · ')
                 + _qpHLK(y.available_cost) + ' sitting available</div>'
-                + '<div class="qp-hl-cap">Processed · Last 7 Reports</div>' + _qpDaysHtml(pr)
+                + '<div class="qp-hl-cap">Processed · Last 7 Days</div>' + _qpDaysHtml(pr)
                 + (avg ? '<div class="qp-hl-sub">At ' + Math.round(avg) + ' a day the queue clears in ' + Math.ceil(q / avg) + (Math.ceil(q / avg) === 1 ? ' day' : ' days') + '</div>' : ''));
         },
     },
@@ -54327,7 +54145,7 @@ Object.assign(_QP_WSPEC, {
                 + (avg ? _qpTrendHtml(Math.round(Number(y.est_value) - avg), _qpHLK, true, 'Same Day Avg') : '') + '</div>'
                 // A column a day with its margin on top, the latest in full blue
                 // (Ethan, 2026-10-29, prototypes/widget-spruce.html — five lines of text).
-                + '<div class="qp-hl-cap">Bought a Day · Last ' + Math.min(6, f.length) + ' Reports · Margin on Top</div>'
+                + '<div class="qp-hl-cap">Bought a Day · Last ' + Math.min(6, f.length) + ' Days · Margin on Top</div>'
                 + _qpDayCols(f.slice(-6).map(r => [_qpDayLabel(r.date).replace(/,.*$/, ''), Number(r.est_value) || 0, Number(r.est_margin_pct) ? Math.round(Number(r.est_margin_pct) * (Number(r.est_margin_pct) <= 1 ? 100 : 1)) + '%' : '']), 'blue', 108)
                 + '<div class="qp-hl-sub" style="margin-top:6px">' + _qpHLK(mv) + ' bought this month · ' + (mv ? ((1 - ms / mv) * 100).toFixed(1) + '% margin' : '') + '</div>');
         },
@@ -54434,11 +54252,11 @@ const _qpTag = (text, cls) => '<span class="qp-dhl-tag ' + (cls || '') + '">' + 
 const _qpDistLast = d => STORE_CODES.map(s => ({ s, y: _qpLast(d, s) })).filter(x => x.y);
 const _qpStoreColor = s => STORE_TINTS[s] || '#8a94a3';
 const _qpPct3 = p => (p >= 90 ? 'good' : p >= 80 ? 'warn' : 'bad');
-const _QP_TONE_HEX = { good: '#1f9d57', warn: '#f0a92b', bad: '#e05252' };
+const _QP_TONE_HEX = { good: 'var(--qs-good-fill, #1f9d57)', warn: 'var(--qs-warn-fill, #f0a92b)', bad: 'var(--qs-bad-fill, #e05252)' };
 function _qpRing(s, p, under) {
     const r = 30, c = 2 * Math.PI * r, t = _qpPct3(p || 0);
     return '<div class="qp-dring"><svg viewBox="0 0 74 74" aria-hidden="true"><circle cx="37" cy="37" r="' + r + '" fill="none" stroke="#eef1f4" stroke-width="8"/>'
-        + '<circle cx="37" cy="37" r="' + r + '" fill="none" stroke="' + _QP_TONE_HEX[t] + '" stroke-width="8" stroke-linecap="round" stroke-dasharray="'
+        + '<circle cx="37" cy="37" r="' + r + '" fill="none" style="stroke:' + _QP_TONE_HEX[t] + '" stroke-width="8" stroke-linecap="round" stroke-dasharray="'
         + (c * Math.min(p || 0, 100) / 100).toFixed(1) + ' ' + c.toFixed(1) + '" transform="rotate(-90 37 37)"/>'
         + '<text x="37" y="42" text-anchor="middle" font-size="15" font-weight="900" fill="#1a1c1e">' + Math.round(p || 0) + '%</text></svg>'
         + '<div class="qp-dring-s">' + _qpDot(s) + escapeHtml(s) + '</div><div class="qp-dring-n">' + under + '</div></div>';
@@ -54461,7 +54279,7 @@ function _qpDonut(parts, mid, word) {
             + Math.max(0, len - 2).toFixed(1) + ' ' + C.toFixed(1) + '" stroke-dashoffset="' + (-at).toFixed(1) + '"/>';
         at += len;
         return s;
-    }).join('') + '</g><text x="75" y="72" text-anchor="middle" font-size="20" font-weight="900" fill="#e05252">' + escapeHtml(mid) + '</text>'
+    }).join('') + '</g><text class="qp-dn-mid" x="75" y="72" text-anchor="middle" font-size="20" font-weight="900" fill="#e05252">' + escapeHtml(mid) + '</text>'
         + '<text x="75" y="90" text-anchor="middle" font-size="10" font-weight="800" fill="#8a94a3" letter-spacing=".5">' + escapeHtml(String(word).toUpperCase()) + '</text></svg>';
 }
 // A column a day, [label, value, note-on-top?], the last one in full colour.
@@ -54485,18 +54303,18 @@ Object.assign(_QP_WSPEC, {
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(so, false) + '<small>of ' + _qpHLK(goal) + ' goal · net profit so far</small></div>'
                 + (pct == null ? '' : '<span class="qp-trend ' + (pct >= 100 ? 'up' : 'down') + '">Tracking to ' + Math.round(pct) + '%</span>') + '</div>'
                 // "Needed a day" (Ethan asked what it means): the net profit a store
-                // must average on each open day left to reach its goal — what is left of
-                // the goal over the open days left, Sundays off (_qpPaceOf). Spelled out
+                // must average on each day left to reach its goal — what is left of the
+                // goal over the days left, Sundays included since 2026-11-08 (_qpPaceOf). Spelled out
                 // in the caption it was "a mouth full" people skim (Ethan, same day), so
                 // the line under each ring says it ("Needs $2.9k/Day") and the full
                 // sentence is the hover.
                 + '<div class="qp-hl-cap">Tracking to Goal · ' + (rows[0] ? rows[0].p.left : 0) + ' Days Left</div>'
-                + '<div class="qp-drings" title="Needs: the net profit a store has to average on each open day left this month to hit its goal (Sundays off).">'
+                + '<div class="qp-drings" title="Needs: the net profit a store has to average on each day left this month to hit its goal (Sundays count — the webstore sells on them).">'
                 + rows.map(x => _qpRing(x.s, x.p.pct, x.p.hit ? '<span class="qp-dring-w">Goal</span><b class="good">Hit</b>' : '<span class="qp-dring-w">Needs</span><b>$' + (x.p.need / 1000).toFixed(1) + 'k</b>/Day')).join('') + '</div>');
         },
     },
     dbuying: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Buying', 'Buying by Store']], where: () => 'District', load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Buying', 'Buying by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
             const rows = _qpDistLast(d).sort((a, b) => b.y.est_value - a.y.est_value);
@@ -54505,7 +54323,7 @@ Object.assign(_QP_WSPEC, {
             const mt = m => (m == null ? '' : m >= 40 ? 'good' : m >= 35 ? 'warn' : 'bad');
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _lvMoney(bought, false) + '<small>bought · ' + _lvMoney(paid, false) + ' paid</small></div>'
                 + (bought ? '<span class="qp-trend up">' + ((1 - paid / bought) * 100).toFixed(1) + '% Margin</span>' : '') + '</div>'
-                + '<div class="qp-hl-cap">Share of the District\'s Buying · Latest Report</div>'
+                + '<div class="qp-hl-cap">Share of the District\'s Buying · Latest Day</div>'
                 + '<div class="qp-strip">' + rows.map(x => '<i style="flex:' + (Number(x.y.est_value) || 0) + ';background:' + _qpStoreColor(x.s) + '"></i>').join('') + '</div>'
                 + '<div class="qp-stiles">' + rows.map(x => { const m = pct(x.y.est_margin_pct), sh = bought ? Math.round((Number(x.y.est_value) || 0) / bought * 100) : 0;
                     return '<div class="qp-stile" style="border-left-color:' + _qpStoreColor(x.s) + '"><div class="qp-stile-s">' + escapeHtml(x.s) + ' · ' + sh + '%</div>'
@@ -54514,7 +54332,7 @@ Object.assign(_QP_WSPEC, {
         },
     },
     dteam: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Team', 'Team Production by Store']], where: () => 'District', load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Team', 'Team Production by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
             const rows = STORE_CODES.map(s => ({ s, t: _qpTeamOf(d, s) })).filter(x => x.t);
@@ -54522,7 +54340,7 @@ Object.assign(_QP_WSPEC, {
             const ini = n => String(n || '').split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
             return _qpBody('<div class="qp-ai-top"><div class="qp-hl-big">' + _qpN(rows.reduce((a, x) => a + x.t.total, 0)) + '<small>devices processed · '
                 + _qpHLK(rows.reduce((a, x) => a + x.t.value, 0)) + ' value</small></div></div>'
-                + '<div class="qp-hl-cap">Top Producer at Each Store · Latest Report</div>'
+                + '<div class="qp-hl-cap">Top Producer at Each Store · Latest Day</div>'
                 + '<div class="qp-lb">' + tops.map((x, i) => '<div class="qp-lb-r"><span class="qp-lb-k">' + (i + 1) + '</span>'
                     + '<span class="qp-lb-av" style="background:' + _qpStoreColor(x.s) + '">' + escapeHtml(ini(x.m.name)) + '</span>'
                     + '<div class="qp-lb-nm"><b>' + escapeHtml(x.m.name) + '</b><span>' + escapeHtml(x.s) + ' · store processed ' + _qpN(x.total) + '</span></div>'
@@ -54530,7 +54348,7 @@ Object.assign(_QP_WSPEC, {
         },
     },
     dpipeline: {
-        when: 'Latest Report', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline by Store']], where: () => 'District', load: _qpSnapLoad,
+        when: 'Latest Day', ttl: 600000, tabs: [['main', 'Pipeline', 'Inventory Pipeline by Store']], where: () => 'District', load: _qpSnapLoad,
         off: d => (_qpDistLast(d).length ? '' : 'No Day End report has come in yet.'),
         card: function (d) {
             // Days to clear: the queue over the store's own pace (processed a
@@ -54550,7 +54368,7 @@ Object.assign(_QP_WSPEC, {
     },
 });
 // EXPENSE REPORT (Ethan, 2026-10-29). The tool's own GET (expenses: PIN-gated,
-// test PINs read). The DM and an MSM see their own month — total, mileage and
+// test PINs read). The DM sees their own month — total, mileage and
 // miles, expenses, the latest lines, and whether they marked it filed (only
 // their OWN filed months come back, so that is all it can say). The CEO, who
 // reviews, sees everyone's month instead: a line a person, "Nothing Yet" for
@@ -54625,17 +54443,54 @@ const _qpMI = {
 };
 const _qpStoreSide = () => !!_qpMyStore() && !_qpIsDist();
 const QP_MINIS = {
-    mreviews: { label: 'Google Reviews', sub: 'This month, and how it is tracking', icon: _qpMI.star, tone: 'a', src: 'snap', avail: _qpStoreSide,
+    // ONE REVIEWS MINI (Ethan, 2026-11-10: "just have one review one and just
+    // have it show total 5-star reviews ... just show what they are tracking for.
+    // We shouldn't have things cutoff"). Google Reviews is retired into Five-Star
+    // Reviews: a saved mreviews reads as mstars (_QPT_MINI_ALIAS). Short words and
+    // no sparkline, so nothing on the rail ends in "…".
+    // RETIRED 2026-11-10 — restore by putting back avail: _qpStoreSide.
+    mreviews: { label: 'Google Reviews', sub: 'This month, and how it is tracking', icon: _qpMI.star, tone: 'a', src: 'snap', avail: () => false,
         draw: d => { const r = _qpReviewsOf(d, _qpMyStore()); return { k: 'Google Reviews · This Month', v: r.mtd + (r.goal ? '<small>of ' + r.goal + '</small>' : ''), s: 'Tracking to ' + r.track + ' · ' + r.stars + ' five-star', right: _qpSpark(r.days, '#d68a12') }; } },
-    mstars: { label: 'Five-Star Reviews', sub: 'Five-star reviews this month', icon: _qpMI.star, tone: 'a', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
+    // A store: its five-star reviews this month, and where the month lands at
+    // this rate (so far ÷ days gone × days in the month, as Google Reviews did).
+    // The district: every store's, and which store has the most.
+    mstars: { label: 'Five-Star Reviews', sub: 'Five-star reviews this month, and where the month is tracking', icon: _qpMI.star, tone: 'a', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
         draw: d => {
-            if (_qpIsDist()) { const r = STORE_CODES.map(s => ({ s, n: _qpReviewsOf(d, s).stars })).sort((a, b) => b.n - a.n); return { k: 'Five-Star · This Month', v: String(_qpSum(r, 'n')), s: 'Most at ' + r[0].s + ' (' + r[0].n + ')' }; }
-            const me = _qpReviewsOf(d, _qpMyStore()).stars; return { k: 'Five-Star Reviews', v: String(me), s: 'This month' };
+            if (_qpIsDist()) { const r = STORE_CODES.map(s => ({ s, n: _qpReviewsOf(d, s).stars })).sort((a, b) => b.n - a.n); return { k: 'Five-Star Reviews', v: String(_qpSum(r, 'n')), s: 'Most at ' + r[0].s + ' (' + r[0].n + ')' }; }
+            const r = _qpReviewsOf(d, _qpMyStore()), dim = new Date(Date.UTC(+d.today.slice(0, 4), +d.today.slice(5, 7), 0)).getUTCDate();
+            const gone = dim - (r.left || 0), track = gone ? Math.round(r.stars / gone * dim) : r.stars;
+            return { k: 'Five-Star Reviews', v: String(r.stars), s: 'Tracking to ' + track };
         } },
-    mpace: { label: 'Goal Pace', sub: 'Net profit a day still needed', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+    // RETIRED 2026-11-10 into % to Goal (Ethan: "combine % to Goal and goal pace
+    // into one widget"); a saved mpace reads as mgoal (_QPT_MINI_ALIAS).
+    // Restore by putting back avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()).
+    mpace: { label: 'Goal Pace', sub: 'Net profit a day still needed', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => false,
         draw: d => { const p = _qpPaceOf(d, _qpMyStore()); return p.hit ? { k: 'Goal Pace', v: '<span class="good">Goal Hit</span>', s: _qpHLK(p.soFar) + ' of ' + _qpHLK(p.goal) }
             : { k: 'Needed a Day', v: _qpHLK(p.need), s: 'To hit ' + _qpHLK(p.goal) + ' · ' + p.left + ' days left' }; } },
-    mcash: { label: 'Cash on Hand', sub: 'Drawer and safe from the latest report', icon: _qpMI.cash, tone: 'g', src: 'snap', avail: () => _qpIsMgr() || _qpIsDist(),
+    // % TO GOAL (Ethan, 2026-11-10: "add a % to goal mini widget"). The big
+    // number is the Live board's "% to Goal through yesterday": net profit so far
+    // against the goal pro-rated to the days gone (calendar days, _qpPaceOf) — so
+    // 100% means on pace, the same number the Live board shows beside it. Green
+    // at 100%+, amber within 10%, else red. The DM's is the district, every store summed.
+    // Goal Pace folded in the same day (Ethan: "combine % to Goal and goal pace
+    // into one widget? Just % to goal and how much per day needed and how many
+    // days left"): the line under the % is what a day still needs and the days
+    // left, or Goal Hit. Nothing else (he'd asked for "only the %" before that).
+    mgoal: { label: '% to Goal', sub: 'Net profit against the goal, what a day still needs, and days left', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => _qpIsDist() || (!!_qpMyStore() && (_qpIsMgr() || _qpIsAsm())),
+        draw: d => {
+            const ps = (_qpIsDist() ? STORE_CODES : [_qpMyStore()]).map(s => _qpPaceOf(d, s));
+            const soFar = _qpSum(ps, 'soFar'), goal = _qpSum(ps, 'goal');
+            if (!goal) return { k: '% to Goal', v: '—', s: 'No goal set this month' };
+            const proj = ps.reduce((a, p) => a + (p.thru ? p.soFar / p.thru * p.dim : 0), 0);
+            const pace = Math.round(proj / goal * 100);
+            const tone = pace >= 100 ? 'good' : pace >= 90 ? 'warn' : 'bad';
+            // Days left from the latest day any store has reported — a store with
+            // no rows yet would otherwise say the whole month is left.
+            const need = _qpSum(ps, 'need'), left = Math.max(0, ps[0].dim - Math.max(0, ...ps.map(p => p.thru || 0)));
+            const s = soFar >= goal ? 'Goal hit' : need && left ? _qpHLK(need) + ' a day · ' + left + (left === 1 ? ' day left' : ' days left') : '';
+            return { k: '% to Goal' + (_qpIsDist() ? ' · District' : ''), v: '<span class="' + tone + '">' + pace + '%</span>', s };
+        } },
+    mcash: { label: 'Cash on Hand', sub: 'Drawer and safe from the latest day', icon: _qpMI.cash, tone: 'g', src: 'snap', avail: () => _qpIsMgr() || _qpIsDist(),
         draw: d => {
             const c = (d.cash || []).slice().sort((a, b) => a.day.localeCompare(b.day));
             if (_qpIsDist()) {
@@ -54644,69 +54499,304 @@ const QP_MINIS = {
                 return { k: 'Cash in Stores · ' + (lastDay ? _qpDayLabel(lastDay).replace(/,.*$/, '') : ''), v: _qpHLK(_qpSum(on, 'total')), s: lo ? 'Lowest ' + lo.store + ' ' + _qpHLK(lo.total) : '' };
             }
             const mine = c.filter(x => x.store === _qpMyStore()), l = mine[mine.length - 1];
-            return l ? { k: 'Cash on Hand · ' + _qpDayLabel(l.day).replace(/,.*$/, ''), v: _lvMoney(l.total, false), s: 'Drawer ' + _qpHLK(l.drawer) + ' · Safe ' + _qpHLK(l.safe), right: _qpSpark(mine.map(x => Number(x.total)), '#1f9d57') }
+            // No chart (Ethan, 2026-11-10: "lose the chart and try and show drawer
+            // and safe as well as the main total") — the chart is what squeezed the
+            // label and the drawer/safe line to "…".
+            return l ? { k: 'Cash on Hand · ' + _qpDayLabel(l.day).replace(/,.*$/, ''), v: _lvMoney(l.total, false), s: 'Drawer ' + _qpHLK(l.drawer) + ' · Safe ' + _qpHLK(l.safe) }
                 : { k: 'Cash on Hand', v: '—', s: 'No cash count yet' };
         } },
-    mqueue: { label: 'Waiting to Process', sub: 'The processing queue and what is available', icon: _qpMI.box, tone: 'b', src: 'snap', avail: _qpStoreSide,
-        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; return y ? { k: 'Waiting to Process', v: _qpN(y.queue_count), s: _qpN(y.available_count) + ' available · ' + _qpHLK(y.available_cost) + ' cost', right: _qpSpark(f.slice(-7).map(r => Number(r.queue_count)), '#2563b8') } : { k: 'Waiting to Process', v: '—', s: 'No report yet' }; } },
-    mdue: { label: 'Next Due', sub: 'The nearest deadline from Your Feed', icon: _qpMI.clock, tone: 'r', src: 'page', avail: () => true,
+    // IN STOCK, not the processing queue (Ethan, 2026-11-08) — the Day End
+    // Available card, its value once stored (available_value). Key kept: saved rails hold it.
+    mqueue: { label: 'In Stock', sub: 'What is in stock, and what it is worth', icon: _qpMI.box, tone: 'b', src: 'snap', avail: _qpStoreSide,
+        // Just the total value and the items in stock (Ethan, 2026-11-10: "doesn't
+        // need the chart and should just show total value and items in stock") —
+        // the value big, the items under it; no chart, no live count.
+        draw: d => { const y = _qpLast(d, _qpMyStore()), n = Number(y && y.available_count) || 0;
+            if (!y) return { k: 'In Stock', v: '—', s: 'No Day End Yet' };
+            const items = _qpN(n) + (n === 1 ? ' item in stock' : ' items in stock');
+            return y.available_value != null ? { k: 'In Stock', v: _qpHLK(y.available_value), s: items } : { k: 'In Stock', v: _qpN(n), s: 'items in stock' }; } },
+    mdue: { label: 'Due', sub: 'How many deadlines from Your Feed are due, and how many are overdue', icon: _qpMI.clock, tone: 'r', src: 'page', avail: () => true,
         draw: () => {
             const order = ['over', 'today', 'week', 'later', 'none'];
             const due = (typeof _samGatherReminders === 'function' ? _samGatherReminders() : []).filter(x => x.kind === 'due')
                 .sort((a, b) => order.indexOf(a.dueGroup || 'none') - order.indexOf(b.dueGroup || 'none') || String(a.dueOn || '9').localeCompare(String(b.dueOn || '9')));
+            // HOW MANY are due, big (Ethan, 2026-11-10: "show how many things are
+            // due instead"), and under it just how many are overdue and due today
+            // — no "Next:" line (Ethan, same day: "what does Next: mean? Shouldn't
+            // we just show due and overdue?"). Red when any is overdue, amber when
+            // one is due today. A click still opens the nearest.
             const n = due[0];
-            if (!n) return { k: 'Next Due', v: '<span class="good">All Clear</span>', s: 'Nothing due' };
-            const v = n.dueGroup === 'over' ? '<span class="bad">Overdue</span>' : n.dueGroup === 'today' ? '<span class="warn">Today</span>' : escapeHtml(String(n.due || '').replace(/^Due /, '') || 'Due');
-            return { k: 'Next Due' + (due.length > 1 ? ' · ' + due.length + ' Deadlines' : ''), v, s: n.title, go: n.action || '' };
+            if (!n) return { k: 'Due', v: '<span class="good">All Clear</span>', s: 'Nothing due' };
+            const over = due.filter(x => x.dueGroup === 'over').length, today = due.filter(x => x.dueGroup === 'today').length;
+            const tone = over ? 'bad' : today ? 'warn' : '';
+            const split = [over + ' overdue', today ? today + ' due today' : ''].filter(Boolean).join(' · ');
+            return { k: 'Due', v: (tone ? '<span class="' + tone + '">' + due.length + '</span>' : String(due.length)) + '<small>due</small>',
+                s: split, go: n.action || '' };
         } },
-    mmix: { label: 'Customer Mix', sub: 'New, returning, recycle and no-deal customers', icon: _qpMI.users, tone: 'b', src: 'snap', double: true, avail: () => _qpStoreSide() || _qpIsDist(),
+    // ONE ROW like every other mini (Ethan, 2026-11-09: "redesign them to
+    // fit"): the total, and under it what matters most — who came back, and
+    // conversion. The four-colour bar went 2026-11-10 (Ethan: "we don't need the
+    // bar anymore").
+    mmix: { label: 'Customer Mix', sub: 'New, returning, recycle and no-deal customers', icon: _qpMI.users, tone: 'b', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
         draw: d => {
             const rows = _qpIsDist() ? [].concat(...STORE_CODES.map(s => _qpThisMonth(d, s))) : _qpThisMonth(d, _qpMyStore());
             const v = { n: _qpSum(rows, 'new_customers'), r: _qpSum(rows, 'return_customers'), c: _qpSum(rows, 'recycle_customers'), x: _qpSum(rows, 'no_deal_customers') };
             const tot = _qpSum(rows, 'total_customers') || (v.n + v.r + v.c + v.x);
             const conv = _qpSum(rows, 'cust_conv_den') ? Math.round(_qpSum(rows, 'cust_conv_num') / _qpSum(rows, 'cust_conv_den') * 100) : null;
-            const seg = (n, c) => n ? '<i style="flex:' + n + ';background:' + c + '"></i>' : '';
-            const li = (lab, n, c) => '<span><i class="qp-sw" style="background:' + c + '"></i>' + lab + '<b>' + _qpN(n) + '</b></span>';
-            return { html: '<div class="qp-mn-head">' + _qpMiniIco(_qpMI.users, 'b') + '<div class="qp-mn-b"><div class="qp-mn-k">Customers · This Month</div><div class="qp-mn-v">' + _qpN(tot) + '<small>through the door</small></div></div></div>'
-                + '<div class="qp-mix">' + seg(v.n, '#2563b8') + seg(v.r, '#1f9d57') + seg(v.c, '#f0a92b') + seg(v.x, '#e05252') + '</div>'
-                + '<div class="qp-mix-l">' + li('New', v.n, '#2563b8') + li('Returning', v.r, '#1f9d57') + li('Recycle', v.c, '#f0a92b') + li('No Deal', v.x, '#e05252') + '</div>'
-                + '<div class="qp-mn-s">' + (tot ? Math.round(v.r / tot * 100) + '% came back' : '') + (conv != null ? ' · conversion ' + conv + '%' : '') + '</div>' };
+            return { k: 'Customers · This Month', v: _qpN(tot),
+                s: (tot ? Math.round(v.r / tot * 100) + '% came back' : 'No customers yet') + (conv != null ? ' · ' + conv + '% conversion' : '') };
         } },
     mrecycle: { label: 'Recycle Requests', sub: 'Requests waiting on a verdict', icon: _qpMI.recycle, tone: 'g', src: 'recycle', avail: () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('tool-recycle-inventory') && (_qpStoreSide() || _qpIsDist()),
         draw: d => { const open = (d.rows || []).filter(r => !r.reviewed_at && !r.deleted_at); return { k: 'Recycle Requests', v: String(open.length), s: open.length ? (_qpIsDist() ? 'Waiting on your verdict' : 'Waiting on the DM') : 'Nothing waiting', go: 'openRecycleFocused()' }; } },
-    mnews: { label: 'What\'s New', sub: 'The latest patch notes', icon: _qpMI.spark, tone: 'b', src: 'page', avail: () => true,
+    // RETIRED 2026-11-10 with SPEEKSNET Use and Live Listings (Ethan: "get rid
+    // of the What's New, SPEEKSNET Use, and Live listings widget"): avail() is
+    // false, so no drawer, rail or shelf offers or draws it, and a saved one is
+    // skipped. To bring one back, restore the avail in its /* was */ note.
+    mnews: { label: 'What\'s New', sub: 'The latest patch notes', icon: _qpMI.spark, tone: 'b', src: 'page', avail: () => false /* was () => true */,
         draw: () => { const k = (typeof _latestPatchKey === 'string' && _latestPatchKey) ? _latestPatchKey.split('|') : null;
             return { k: 'What\'s New', v: k ? 'v' + String(k[0]).replace(/^\s*v/i, '') : '—', s: k ? 'Released ' + escapeHtml(k[1] || '') : 'No patch notes yet', go: 'openHubToPatch()' }; } },
-    mlive: { label: 'Live Listings', sub: 'Listings live on the online store', icon: _qpMI.tag, tone: 'g', src: 'snap', avail: () => _qpStoreSide() || _qpIsDist(),
+    // RETIRED 2026-11-10 — see mnews.
+    mlive: { label: 'Live Listings', sub: 'Listings live on the online store', icon: _qpMI.tag, tone: 'g', src: 'snap', avail: () => false /* was () => _qpStoreSide() || _qpIsDist() */,
         draw: d => {
-            if (_qpIsDist()) { const t = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean); return { k: 'Live Listings · District', v: _qpN(_qpSum(t, 'live_count')), s: _qpN(_qpSum(t, 'listed_devices')) + ' listed on the latest report' }; }
+            if (_qpIsDist()) { const t = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean); return { k: 'Live Listings · District', v: _qpN(_qpSum(t, 'live_count')), s: _qpN(_qpSum(t, 'listed_devices')) + ' listed on the latest day' }; }
             const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-            return y ? { k: 'Live Listings', v: _qpN(y.live_count), s: _qpN(y.listed_devices) + ' listed on the latest report', right: _qpSpark(f.slice(-7).map(r => Number(r.live_count)), '#1f9d57') } : { k: 'Live Listings', v: '—', s: 'No report yet' };
+            return y ? { k: 'Live Listings', v: _qpN(y.live_count), s: _qpN(y.listed_devices) + ' listed on the latest day', right: _qpSpark(f.slice(-7).map(r => Number(r.live_count)), '#1f9d57') } : { k: 'Live Listings', v: '—', s: 'No Day End Yet' };
         } },
-    musage: { label: 'SPEEKSNET Use', sub: 'Who signed in this week, and who did not', icon: _qpMI.pulse, tone: 'b', src: 'snap', avail: () => _qpIsDist(),
+    // RETIRED 2026-11-10 — see mnews.
+    musage: { label: 'SPEEKSNET Use', sub: 'Who signed in this week, and who did not', icon: _qpMI.pulse, tone: 'b', src: 'snap', avail: () => false /* was () => _qpIsDist() */,
         draw: d => { const u = d.usage; if (!u) return { k: 'SPEEKSNET Use', v: '—', s: '' };
             return { k: 'SPEEKSNET Use · 7 Days', v: u.week + '<small>of ' + u.roster + ' signed in</small>', s: u.quiet.length ? 'Not yet: ' + u.quiet.slice(0, 2).map(q => _qpShort(q.name)).join(', ') + (u.quiet.length > 2 ? ' +' + (u.quiet.length - 2) : '') : 'Everyone signed in',
                      right: _qpSpark(u.days.map(x => x.people), '#2563b8') }; } },
-    mavail: { label: 'Available Inventory', sub: 'Cost of stock sitting available, every store', icon: _qpMI.layers, tone: 't', src: 'snap', avail: () => _qpIsDist(),
-        draw: d => { const t = STORE_CODES.map(s => ({ s, f: _qpLast(d, s) })).filter(x => x.f); const top = t.slice().sort((a, b) => b.f.available_cost - a.f.available_cost)[0];
-            return { k: 'Available Inventory', v: _qpHLK(t.reduce((a, x) => a + (Number(x.f.available_cost) || 0), 0)), s: top ? top.s + ' holds ' + _qpHLK(top.f.available_cost) : '' }; } },
-    mbuy: { label: 'Buying', sub: 'What the store bought on the latest report', icon: _qpMI.cart, tone: 'b', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
-        draw: d => { const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; if (!y) return { k: 'Buying', v: '—', s: 'No report yet' };
-            const m = Number(y.est_margin_pct); return { k: 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _lvMoney(y.est_value, false), s: (m ? (m * (m <= 1 ? 100 : 1)).toFixed(1) + '% margin · ' : '') + _lvMoney(y.total_spent, false) + ' paid', right: _qpSpark(f.slice(-7).map(r => Number(r.est_value)), '#2563b8') }; } },
-    mlost: { label: 'Lost Deals', sub: 'What walked out on the latest report', icon: _qpMI.x, tone: 'r', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
-        draw: d => { const y = _qpLast(d, _qpMyStore()); return y ? { k: 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span>', s: (Number(y.failed_deals) || 0) + ' failed · ' + (Number(y.devices_lost) || 0) + ' devices lost' } : { k: 'Lost Deals', v: '—', s: 'No report yet' }; } },
-    mtop: { label: 'Top Producer', sub: 'Who processed the most on the latest report', icon: _qpMI.trophy, tone: 'a', src: 'snap', avail: () => _qpStoreSide() && !_qpIsEmp(),
-        draw: d => { const t = _qpTeamOf(d, _qpMyStore()); const top = t && (t.team.find(m => m.top) || t.team[0]);
-            return top ? { k: 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), v: escapeHtml(_qpShort(top.name)), s: top.n + ' devices · ' + _qpHLK(top.value) + (t.topRun > 1 ? ' · ' + t.topRun + ' running' : '') } : { k: 'Top Producer', v: '—', s: 'No report yet' }; } },
-    mcal: { label: 'Coming Up', sub: 'The next three events on the Store Calendar', icon: _qpMI.cal, tone: 'b', src: 'cal', double: true, avail: () => typeof toggleCalendar === 'function' && (!!_qpMyStore() || _qpIsDist()),
+    // In stock by its VALUE, not its cost (Ethan, 2026-11-08); until a store's
+    // value is stored (available_value) its count stands in, said as devices.
+    // The number of items too (Ethan, 2026-11-10: "add number of items for in
+    // stock"), beside the value.
+    mavail: { label: 'In Stock', sub: 'What every store has in stock, and what it is worth', icon: _qpMI.layers, tone: 't', src: 'snap', avail: () => _qpIsDist(),
+        draw: d => { const t = _qpStockList(d), val = t.every(x => x.v != null), n = _qpSum(t, 'c');
+            // Total value and items in stock, as the store's reads (2026-11-10).
+            return val ? { k: 'In Stock · District', v: _qpHLK(_qpSum(t, 'v')), s: _qpN(n) + (n === 1 ? ' item in stock' : ' items in stock') }
+                : { k: 'In Stock · District', v: _qpN(n), s: 'items in stock' }; } },
+    // BUYING (Ethan, 2026-11-10: "store based for managers and ASM's, for
+    // employees it can be personal based stats. ... get rid of the chart line and
+    // just have value, margin and conversion rate"). A manager or ASM: the store's
+    // latest Day End — value bought, its margin, customer conversion. An
+    // employee: their own row of last week's Weekly KPIs (the 'wkpi' read) —
+    // value, margin (1 − cost ÷ value) and conversion (converted ÷ transactions).
+    // Corp (DM / CEO / MOCD) gets the district (Ethan, 2026-11-10: "a district
+    // wide buying widget like the manager one"): every store's Day End on the
+    // latest day any store reported — value bought summed, margin weighted by
+    // value, conversion from the summed customer counts.
+    mbuy: { label: 'Buying', sub: 'Value bought, margin and conversion — the district\'s, the store\'s, or yours for an employee', icon: _qpMI.cart, tone: 'b', src: 'snap', avail: () => _qpIsDist() || (!!_qpMyStore() && (_qpIsMgr() || _qpIsAsm() || _qpIsEmp())),
+        draw: d => {
+            const pct = (n, dd) => dd > 0 ? Math.round(n / dd * 100) + '%' : null;
+            const frac = m => { m = Number(m) || 0; return m > 1 ? m / 100 : m; };
+            if (_qpIsDist()) {
+                const last = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean);
+                const day = last.map(y => y.date).sort().pop();
+                const on = last.filter(y => y.date === day);
+                if (!on.length) return { k: 'Buying · District', v: '—', s: 'No Day End Yet' };
+                const val = _qpSum(on, 'est_value');
+                const m = val ? on.reduce((a, y) => a + (Number(y.est_value) || 0) * frac(y.est_margin_pct), 0) / val : 0;
+                const conv = pct(_qpSum(on, 'cust_conv_num'), _qpSum(on, 'cust_conv_den'));
+                return { k: 'Bought · District · ' + _qpDayLabel(day).replace(/,.*$/, ''), v: _qpHLK(val),
+                    s: [m ? Math.round(m * 100) + '% margin' : '', conv ? conv + ' conversion' : ''].filter(Boolean).join(' · ') };
+            }
+            if (_qpIsEmp()) {
+                const w = _qpMiniData('wkpi');
+                if (!w) return { k: 'Your Buying', v: '—', s: 'Syncing…' };
+                const me = String(sessionStorage.getItem('speeksUserName') || '').toLowerCase().trim();
+                const r = (w.emps || []).find(e => String(e.employee_name || '').toLowerCase().trim() === me);
+                const bv = Number(r && r.buying_value) || 0, bc = Number(r && r.buying_cost) || 0;
+                if (!bv) return { k: 'Your Buying · Last Week', v: '—', s: 'No buys on last week\'s KPIs' };
+                const conv = pct(Number(r.transaction_converted) || 0, Number(r.transaction_count) || 0);
+                return { k: 'Your Buying · Last Week', v: _lvMoney(bv, false), s: Math.round((1 - bc / bv) * 100) + '% margin' + (conv ? ' · ' + conv + ' conversion' : '') };
+            }
+            const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1]; if (!y) return { k: 'Buying', v: '—', s: 'No Day End Yet' };
+            const m = Number(y.est_margin_pct), conv = pct(Number(y.cust_conv_num) || 0, Number(y.cust_conv_den) || 0);
+            return { k: 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _lvMoney(y.est_value, false),
+                s: [m ? Math.round(m * (m <= 1 ? 100 : 1)) + '% margin' : '', conv ? conv + ' conversion' : ''].filter(Boolean).join(' · ') };
+        } },
+    mlost: { label: 'Lost Deals', sub: 'What walked out on the latest day', icon: _qpMI.x, tone: 'r', src: 'snap', avail: () => !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => { const y = _qpLast(d, _qpMyStore()); return y ? { k: 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span>', s: (Number(y.failed_deals) || 0) + ' failed · ' + (Number(y.devices_lost) || 0) + ' devices lost' } : { k: 'Lost Deals', v: '—', s: 'No Day End Yet' }; } },
+    // TOP LISTER, not Top Producer (Ethan, 2026-11-10): who listed the most last
+    // week, from the Weekly KPIs (listed_count) — the number Stats & Awards' Lister
+    // board ranks by, with its one exclusion (the owner's own listings). Key kept
+    // 'mtop' so saved rails keep it.
+    mtop: { label: 'Top Lister', sub: 'Who listed the most last week', icon: _qpMI.trophy, tone: 'a', src: 'wkpi', avail: () => _qpStoreSide() && !_qpIsEmp(),
+        draw: w => {
+            const top = (w.emps || []).filter(e => (Number(e.listed_count) || 0) > 0 && String(e.employee_name || '').toLowerCase().trim() !== 'ethan kushnir')
+                .sort((a, b) => (Number(b.listed_count) || 0) - (Number(a.listed_count) || 0))[0];
+            if (!top) return { k: 'Top Lister · Last Week', v: '—', s: 'No listings on last week\'s KPIs' };
+            const n = Number(top.listed_count) || 0, val = Number(top.listed_retail_price) || 0;
+            return { k: 'Top Lister · Last Week', v: escapeHtml(_qpShort(top.employee_name)), s: n + ' listed' + (val ? ' · ' + _qpHLK(val) + ' retail' : '') };
+        } },
+    // ONE ROW (Ethan, 2026-11-09): the NEXT event big — its day, then what it
+    // is — and how many more follow in the next 30 days. Was two rows listing
+    // three; the calendar itself is a click away.
+    mcal: { label: 'Coming Up', sub: 'The next event on the Store Calendar', icon: _qpMI.cal, tone: 'b', src: 'cal', avail: () => typeof toggleCalendar === 'function' && (!!_qpMyStore() || _qpIsDist()),
         draw: () => {
             const today = _scalTodayISO(), store = _qpIsDist() ? 'ALL' : _qpMyStore();
-            const occ = _scalOccurrences(today, _scalISO(_scalAddDays(new Date(), 30)), store).filter(o => o.first || o.day === today).slice(0, 3);
-            return { go: 'toggleCalendar()', html: '<div class="qp-mn-head">' + _qpMiniIco(_qpMI.cal, 'b') + '<div class="qp-mn-b"><div class="qp-mn-k">Coming Up</div><div class="qp-mn-v">' + occ.length + '<small>' + (occ.length === 1 ? 'event' : 'events') + ' · next 30 days</small></div></div></div>'
-                + (occ.length ? '' : '<div class="qp-mn-s">Nothing on the calendar yet</div>')
-                + occ.map(o => '<div class="qp-mn-ev"><b>' + (o.day === today ? 'Today' : escapeHtml(_qpDayLabel(o.day).replace(/^\w+, /, ''))) + '</b><span>' + escapeHtml(o.ev.title) + '</span></div>').join('') };
+            const occ = _scalOccurrences(today, _scalISO(_scalAddDays(new Date(), 30)), store).filter(o => o.first || o.day === today);
+            const n = occ[0];
+            if (!n) return { k: 'Coming Up · Next 30 Days', v: '—', s: 'Nothing on the calendar yet', go: 'toggleCalendar()' };
+            const more = occ.length - 1;
+            return { k: 'Coming Up' + (more ? ' · ' + more + ' More' : ''), v: n.day === today ? '<span class="warn">Today</span>' : escapeHtml(_qpDayLabel(n.day).replace(/^\w+, /, '')),
+                s: n.ev.title, go: 'toggleCalendar()' };
         } },
+
+    // ===== 2026-11-10: QUICK FACTS, a role at a time (Ethan: "quick data points
+    // we can track ... rather than having to go searching for them"). One line
+    // each, no charts — nothing on the rail or in the drawer preview is cut off.
+
+    // --- MANAGERS AND ASMs ---
+    // Yesterday's sales over their cost: net sales big, the cost and the gross
+    // margin under it — the Live board's own Yesterday figures (_lvData, its
+    // store row's prev: netToday, gpToday; Ethan, 2026-11-10: "we can't pull it
+    // from live dashboard?"), so the two never disagree. Syncing until the
+    // Live board has loaded; the rail redraws every 15s.
+    msales: { label: 'Sales', sub: 'Yesterday\'s net sales, their cost and the gross margin, as the Live board shows them', icon: _qpMI.cash, tone: 'g', src: 'page', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()),
+        draw: () => {
+            const row = _qpLiveRow(_qpMyStore()), p = row && row.prev, day = typeof _lvData === 'object' && _lvData && _lvData.prev && _lvData.prev.date;
+            if (!p || p.netToday == null) return { k: 'Sales · Yesterday', v: '—', s: 'Syncing…' };
+            const net = Number(p.netToday) || 0, gp = Number(p.gpToday) || 0;
+            return { k: 'Sold · ' + (day ? _qpDayLabel(day).replace(/,.*$/, '') : 'Yesterday'), v: _lvMoney(net, false),
+                s: net > 0 ? 'Cost ' + _qpHLK(net - gp) + ' · ' + Math.round(gp / net * 100) + '% gross margin' : 'No sales' };
+        } },
+    // Devices listed on the latest day, against the store's own last-7-reports average.
+    mlisted: { label: 'Listed', sub: 'Devices listed on the latest day, and the 7-day average', icon: _qpMI.tag, tone: 'b', src: 'snap', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()),
+        draw: d => {
+            const f = _qpFacts(d, _qpMyStore()).filter(r => r.listed_devices != null), y = f[f.length - 1];
+            if (!y) return { k: 'Listed', v: '—', s: 'No Day End Yet' };
+            const last7 = f.slice(-7).map(r => Number(r.listed_devices) || 0);
+            return { k: 'Listed · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), v: _qpN(y.listed_devices), s: _qpAvg(last7).toFixed(0) + ' a day, last ' + last7.length + ' days' };
+        } },
+    // CALL BACK MATCHES (Ethan, 2026-11-10: "change it to matches instead"):
+    // the big number is how many customers asked for something that is on this
+    // store's shelf now — calls to make — the Call Backs card's In Stock rule
+    // (a suggested match at this store, not yet contacted). Under it, how many
+    // call backs are open in all. The Call Backs card's read.
+    mcb: { label: 'Call Back Matches', sub: 'Customers who asked for something that is in stock now', icon: '', tone: 'a', src: 'w:callbacks', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('callbacks'),
+        draw: rows => {
+            const scope = (typeof _cbMatchScope === 'function' && _cbMatchScope()) || [];
+            const all = (rows || []).filter(e => !e.archived_at && e.status !== 'completed');
+            const hits = all.filter(e => e.status !== 'contacted' && (e.matches || []).some(m => m.state === 'suggested' && scope.includes(m.store_code))).length;
+            const open = all.filter(e => scope.includes(e.store)).length;
+            return { k: 'Call Back Matches', v: (hits ? '<span class="good">' + hits + '</span>' : '0') + '<small>' + (hits === 1 ? 'match' : 'matches') + '</small>',
+                s: open + (open === 1 ? ' call back open' : ' call backs open'), go: "window.location.href='operations.html#callbacks'" };
+        } },
+    // How many are OPEN — waiting on us or on someone else — as three numbers
+    // side by side, in Ethan's order (2026-11-10: "returns, then cases, then
+    // claims"): Returns; Cases (eBay cases, Item Not Received, disputes); Claims
+    // (refund mismatches and unpaid orders). A number is red when one of its own
+    // that we owe is overdue; under them, the total open and how many are late.
+    // The Claims & Disputes card's read.
+    mclaims: { label: 'Open Claims', sub: 'Open returns, cases and INRs, and claims (mismatches, unpaid orders)', icon: '', tone: 'r', src: 'w:claims', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('claims'),
+        draw: d => {
+            if (!d._split) d._split = _qpClaimsSplit(d);
+            const today = String(d.today || '').slice(0, 10), sp = d._split;
+            const open = ts => ts.reduce((a, t) => a + sp[t].due.length + sp[t].waiting, 0);
+            const lateN = ts => ts.reduce((a, t) => a + sp[t].due.filter(e => e.x.due_on && String(e.x.due_on).slice(0, 10) < today).length, 0);
+            const groups = [[['returns'], 'Returns'], [['cases'], 'Cases'], [['mismatch', 'payments'], 'Claims']];
+            const v = groups.map((g, i) => { const n = open(g[0]), late = lateN(g[0]);
+                return '<span' + (i ? ' style="margin-left:12px"' : '') + '>' + (late ? '<span class="bad">' + n + '</span>' : n) + '<small>' + (n === 1 ? g[1].slice(0, -1) : g[1]) + '</small></span>'; }).join('');
+            const total = open(['returns', 'cases', 'mismatch', 'payments']), late = lateN(['returns', 'cases', 'mismatch', 'payments']);
+            return { k: 'Claims & Disputes', v, s: total ? total + ' open' + (late ? ' · ' + late + ' overdue' : ' · nothing overdue') : 'Nothing open', go: "openClaimsTool('returns')" };
+        } },
+    // SPEEKS Connect fixes waiting at this store, by kind (the Connect card's read).
+    mconn: { label: 'SPEEKS Connect', sub: 'Listings waiting on pictures, a category or a title', icon: '', tone: 'g', src: 'w:connect', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('connect'),
+        draw: d => {
+            const s = _qpMyStore(), ok = _QP_WSPEC.connect.has, num = o => Number(o && o[s]) || 0;
+            const c = { p: ok('photos') ? num(d.photos) : 0, c: ok('category') ? num(d.other) + num(d.unmatched) + num(d.misfiled) : 0, t: ok('titles') ? num(d.lt && d.lt.titles) : 0 };
+            const all = c.p + c.c + c.t;
+            return { k: 'SPEEKS Connect', v: (c.p ? '<span class="bad">' + all + '</span>' : String(all)) + '<small>to fix</small>',
+                s: all ? [[c.p, 'Pictures'], [c.c, 'Categories'], [c.t, 'Titles']].filter(x => x[0]).map(x => x[0] + ' ' + x[1]).join(' · ') : 'All clear',
+                go: "window.location.href='operations.html#" + (c.p ? 'photos' : c.c ? 'categories' : 'titles') + "'" };
+        } },
+    // B2B deals that need this store — to price, or waiting on it — and the units
+    // it still has to list (the B2B card's read, the Listings & Deals rules).
+    mb2b: { label: 'B2B', sub: 'Deals to price, deals waiting on you, and units to list', icon: '', tone: 't', src: 'w:b2b', avail: () => _qpStoreSide() && (_qpIsMgr() || _qpIsAsm()) && _qpWidgetOk('b2b'),
+        draw: d => {
+            const bday = _b2bCentralDay(new Date());
+            const price = (d.deals || []).filter(x => x.stage === 'pricing' && _b2bActionFor(x)).map(x => _b2bPricingDue(x, bday)).filter(Boolean);
+            const need = (d.deals || []).filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor).length;
+            // Deals still being LISTED count too (Ethan, 2026-11-10: WSP showed
+            // "0 deals · 261 to list" — all eleven of its deals were at listing).
+            const unl = (d.unl || []).filter(r => Number(r.unlisted_units) > 0);
+            const units = unl.reduce((a, r) => a + (Number(r.unlisted_units) || 0), 0), listing = new Set(unl.map(r => r.deal_id || r.ref)).size;
+            const todo = price.length + need + listing, late = price.some(e => e.late);
+            // Just the deals and the units (Ethan, 2026-11-10: "just keep it #
+            // deals and # units"): the deals that need the store big, the units
+            // it still has to list under them.
+            return { k: 'B2B', v: (late ? '<span class="bad">' + todo + '</span>' : String(todo)) + '<small>' + (todo === 1 ? 'deal' : 'deals') + '</small>',
+                s: units ? _qpN(units) + (units === 1 ? ' unit to list' : ' units to list') : 'No units to list',
+                go: "window.location.href='b2b.html'" };
+        } },
+
+    // --- CORP ---
+    // COMPANY SNAPSHOT — the company in one line (renamed from "Company",
+    // 2026-11-10). % to goal (the Live board's, through yesterday) big; under it:
+    //   Buy  — the latest Day End's buying margin, all stores, weighted by value
+    //   Conv — the latest Day End's customer conversion, all stores
+    // (A GM — the Live board's month-to-date gross margin — sat between them for
+    // a day; Ethan took it out, 2026-11-10.)
+    mcompany: { label: 'Company Snapshot', sub: '% to goal, buying margin and conversion, all stores', icon: _qpMI.pulse, tone: 'g', src: 'snap', avail: () => _qpIsDist(),
+        draw: d => {
+            const g = _qpGoalSum(d, STORE_CODES), day = _qpDistDay(d);
+            const val = _qpSum(day.on, 'est_value');
+            const buyM = val ? day.on.reduce((a, y) => a + (Number(y.est_value) || 0) * _qpFrac(y.est_margin_pct), 0) / val : null;
+            const den = _qpSum(day.on, 'cust_conv_den'), conv = den ? _qpSum(day.on, 'cust_conv_num') / den : null;
+            const pc = x => x == null ? '—' : Math.round(x * 100) + '%';
+            return { k: 'Company Snapshot', v: g.goal ? '<span class="' + g.tone + '">' + g.pace + '%</span><small>to goal</small>' : '—',
+                s: 'Buy ' + pc(buyM) + ' · Conv ' + pc(conv) };
+        } },
+    // Every store's B2B value still to list, and the units.
+    mb2bunl: { label: 'Unlisted B2B', sub: 'B2B value and items still waiting to be listed, all stores', icon: '', tone: 't', src: 'w:b2b', avail: () => _qpIsDist() && _qpWidgetOk('b2b'),
+        draw: d => {
+            const rows = (d.unl || []).filter(r => Number(r.unlisted_units) > 0);
+            const units = _qpSum(rows, 'unlisted_units'), val = _qpSum(rows, 'unlisted_value'), deals = new Set(rows.map(r => r.deal_id || r.ref)).size;
+            return { k: 'Unlisted B2B', v: val ? _qpHLK(val) : '—', s: units ? _qpN(units) + ' items · ' + deals + (deals === 1 ? ' deal' : ' deals') : 'Everything is listed', go: "window.location.href='b2b.html'" };
+        } },
+
+    // --- EMPLOYEES (their own row of last week's Weekly KPIs; Buying is mbuy) ---
+    mnodeal: { label: 'Your No Deals', sub: 'Your no-deal items and their value, last week', icon: _qpMI.x, tone: 'r', src: 'wkpi', avail: () => _qpIsEmp() && !!_qpMyStore(),
+        draw: w => { const r = _qpMyWkpi(w), n = Number(r && r.no_deal_count) || 0, v = Number(r && r.no_deal_value) || 0;
+            if (!r) return { k: 'Your No Deals · Last Week', v: '—', s: 'Not on last week\'s KPIs' };
+            return { k: 'Your No Deals · Last Week', v: String(n), s: v ? _lvMoney(v, false) + ' in value' : 'Nothing walked out' }; } },
+    mylist: { label: 'Your Listings', sub: 'What you listed last week, its value and how much sold', icon: _qpMI.tag, tone: 'b', src: 'wkpi', avail: () => _qpIsEmp() && !!_qpMyStore(),
+        draw: w => { const r = _qpMyWkpi(w), n = Number(r && r.listed_count) || 0, val = Number(r && r.listed_retail_price) || 0;
+            if (!r || !n) return { k: 'Your Listings · Last Week', v: '—', s: 'None on last week\'s KPIs' };
+            const sold = r.listed_sold_pct != null ? Math.round(Number(r.listed_sold_pct)) : (val ? Math.round((Number(r.listed_sold_value) || 0) / val * 100) : null);
+            return { k: 'Your Listings · Last Week', v: String(n), s: (val ? _qpHLK(val) + ' listed' : '') + (sold != null ? (val ? ' · ' : '') + sold + '% sold' : '') }; } },
 };
+// Icons borrowed from the widgets these minis read (set after QP_WIDGETS exists).
+['mcb:callbacks', 'mclaims:claims', 'mconn:connect', 'mb2b:b2b', 'mb2bunl:b2b'].forEach(p => { const [m, w] = p.split(':'); if (QP_MINIS[m] && QP_WIDGETS[w]) QP_MINIS[m].icon = QP_WIDGETS[w].icon; });
+// Helpers for the quick-fact minis (2026-11-10).
+const _qpFrac = m => { m = Number(m) || 0; return m > 1 ? m / 100 : m; };
+// A store's row on the Live board's last read (_lvData), or null before it loads.
+function _qpLiveRow(code) {
+    const st = typeof _lvData === 'object' && _lvData && _lvData.stores;
+    return (st || []).find(s => s && !s.error && String(s.code).toUpperCase() === String(code || '').toUpperCase()) || null;
+}
+function _qpMyWkpi(w) {
+    const me = String(sessionStorage.getItem('speeksUserName') || '').toLowerCase().trim();
+    return ((w && w.emps) || []).find(e => String(e.employee_name || '').toLowerCase().trim() === me) || null;
+}
+// Every store's Day End on the latest day any store reported.
+function _qpDistDay(d) {
+    const last = STORE_CODES.map(s => _qpLast(d, s)).filter(Boolean);
+    const day = last.map(y => y.date).sort().pop() || '';
+    return { day, on: last.filter(y => y.date === day) };
+}
+// % to goal over a set of stores — the Live board's, through yesterday — with
+// what a day still needs and the days left (% to Goal and Company share it).
+function _qpGoalSum(d, stores) {
+    const ps = stores.map(s => _qpPaceOf(d, s));
+    const soFar = _qpSum(ps, 'soFar'), goal = _qpSum(ps, 'goal');
+    const proj = ps.reduce((a, p) => a + (p.thru ? p.soFar / p.thru * p.dim : 0), 0);
+    const pace = goal ? Math.round(proj / goal * 100) : 0;
+    const left = ps.length ? Math.max(0, ps[0].dim - Math.max(0, ...ps.map(p => p.thru || 0))) : 0;
+    return { soFar, goal, pace, need: _qpSum(ps, 'need'), left, tone: pace >= 100 ? 'good' : pace >= 90 ? 'warn' : 'bad' };
+}
 const _QP_MINI_ADDED = '2026-10-29';
 
 // ---- TWO-ROW MINIS (Ethan, 2026-10-29: picked "all of them" from
@@ -54745,7 +54835,7 @@ Object.assign(QP_MINIS.mreviews, { draw2: d => {
     const m = QP_MINIS.mreviews, r = _qpReviewsOf(d, _qpMyStore());
     return _qpX2.head(m, 'Google Reviews · This Month', r.mtd + '<small>' + (r.goal ? 'of ' + r.goal + (r.mtd >= r.goal ? ' · goal hit' : ' · tracking to ' + r.track) : 'tracking to ' + r.track) + '</small>')
         + (r.goal ? _qpX2.bar(r.mtd / r.goal * 100, r.track >= r.goal ? '' : 'warn', Math.min(99, r.track / r.goal * 100)) : '')
-        + _qpDaysHtml(r.days) + _qpX2.cap('Reviews a Day · Last 14 Reports · ' + r.stars + ' Five-Star');
+        + _qpDaysHtml(r.days) + _qpX2.cap('Reviews a Day · Last 14 Days · ' + r.stars + ' Five-Star');
 } });
 Object.assign(QP_MINIS.mstars, { draw2: d => {
     const m = QP_MINIS.mstars;
@@ -54761,7 +54851,7 @@ Object.assign(QP_MINIS.mstars, { draw2: d => {
     const s = _qpMyStore(), f = _qpFacts(d, s).slice(-14), me = _qpReviewsOf(d, s).stars;
     const prev = _qpSum(_qpLastMonthSoFar(d, s), 'five_star_today');
     return _qpX2.head(m, 'Five-Star Reviews · This Month', me + '<small>' + (!prev ? 'this month' : me === prev ? 'same as last month' : (me > prev ? '▲ ' : '▼ ') + Math.abs(me - prev) + ' vs last month') + '</small>')
-        + _qpDaysHtml(f.map(r => Number(r.five_star_today) || 0)) + _qpX2.cap('Five-Star a Day · Last 14 Reports');
+        + _qpDaysHtml(f.map(r => Number(r.five_star_today) || 0)) + _qpX2.cap('Five-Star a Day · Last 14 Days');
 } });
 Object.assign(QP_MINIS.mpace, { draw2: d => {
     const m = QP_MINIS.mpace, p = _qpPaceOf(d, _qpMyStore());
@@ -54794,12 +54884,12 @@ Object.assign(QP_MINIS.mcash, { draw2: d => {
 } });
 Object.assign(QP_MINIS.mqueue, { draw2: d => {
     const m = QP_MINIS.mqueue, f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Waiting to Process', '—') + _qpX2.cap('No report yet');
-    const wk = f.filter(r => r.date < y.date).slice(-6)[0], q = Number(y.queue_count) || 0;
-    const ch = wk && Number(wk.queue_count) ? Math.round((q - wk.queue_count) / wk.queue_count * 100) : null;
-    return _qpX2.head(m, 'Waiting to Process', _qpN(q) + '<small>in queue' + (ch == null ? '' : ' · ' + (ch >= 0 ? '▲ ' : '▼ ') + Math.abs(ch) + '% in a week') + '</small>')
-        + _qpX2.split([[_qpN(q), 'In Queue'], [_qpN(y.available_count), 'Available'], [_qpN(y.live_count), 'Live']])
-        + _qpX2.wide(f.slice(-14).map(r => r.queue_count), '#2563b8') + _qpX2.cap('Queue a Day · Last 14 Reports');
+    if (!y) return _qpX2.head(m, 'In Stock', '—') + _qpX2.cap('No Day End Yet');
+    const wk = f.filter(r => r.date < y.date).slice(-6)[0], q = Number(y.available_count) || 0;
+    const ch = wk && Number(wk.available_count) ? Math.round((q - wk.available_count) / wk.available_count * 100) : null;
+    return _qpX2.head(m, 'In Stock', _qpN(q) + '<small>in stock' + (ch == null ? '' : ' · ' + (ch >= 0 ? '▲ ' : '▼ ') + Math.abs(ch) + '% in a week') + '</small>')
+        + _qpX2.split([[_qpN(q), 'In Stock'], [y.available_value != null ? _qpHLK(y.available_value) : '—', 'Value'], [_qpN(y.live_count), 'Live']])
+        + _qpX2.wide(f.slice(-14).map(r => r.available_count), '#2563b8') + _qpX2.cap('In Stock a Day · Last 14 Days');
 } });
 Object.assign(QP_MINIS.mdue, { draw2: () => {
     const m = QP_MINIS.mdue, order = ['over', 'today', 'week', 'later', 'none'];
@@ -54832,37 +54922,37 @@ Object.assign(QP_MINIS.mlive, { draw2: d => {
         const list = t.map(x => ({ k: x.s, n: Number(x.f.live_count) || 0 })).sort((a, b) => b.n - a.n);
         // Columns in each store's colour (Ethan, 2026-10-29, widget-spruce.html).
         const mx = Math.max(1, ...list.map(x => x.n));
-        return _qpX2.head(m, 'Live Listings · District', _qpN(_qpSum(list, 'n')) + '<small>live · ' + _qpN(t.reduce((a, x) => a + (Number(x.f.listed_devices) || 0), 0)) + ' listed on the latest report</small>')
+        return _qpX2.head(m, 'Live Listings · District', _qpN(_qpSum(list, 'n')) + '<small>live · ' + _qpN(t.reduce((a, x) => a + (Number(x.f.listed_devices) || 0), 0)) + ' listed on the latest day</small>')
             + '<div class="qp-x2-cols">' + list.map(x => '<div><b>' + _qpN(x.n) + '</b><i style="height:' + Math.max(3, Math.round(x.n / mx * 52)) + 'px;background:' + _qpStoreColor(x.k) + '"></i><span>' + escapeHtml(x.k) + '</span></div>').join('') + '</div>';
     }
     const f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Live Listings', '—') + _qpX2.cap('No report yet');
-    return _qpX2.head(m, 'Live Listings', _qpN(y.live_count) + '<small>' + _qpN(y.listed_devices) + ' listed on the latest report</small>')
+    if (!y) return _qpX2.head(m, 'Live Listings', '—') + _qpX2.cap('No Day End Yet');
+    return _qpX2.head(m, 'Live Listings', _qpN(y.live_count) + '<small>' + _qpN(y.listed_devices) + ' listed on the latest day</small>')
         + _qpX2.wide(f.slice(-14).map(r => r.live_count), '#1f9d57') + _qpDaysHtml(f.slice(-14).map(r => Number(r.listed_devices) || 0))
-        + _qpX2.cap('Live (line) and Listed (bars) a Day · Last 14 Reports');
+        + _qpX2.cap('Live (line) and Listed (bars) a Day · Last 14 Days');
 } });
 Object.assign(QP_MINIS.mbuy, { draw2: d => {
     const m = QP_MINIS.mbuy, f = _qpFacts(d, _qpMyStore()), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Buying', '—') + _qpX2.cap('No report yet');
+    if (!y) return _qpX2.head(m, 'Buying', '—') + _qpX2.cap('No Day End Yet');
     const mg = Number(y.est_margin_pct), avg = _qpAvg(_qpSameWeekday(f, y, 'est_value')), diff = Math.round(Number(y.est_value) - avg);
     return _qpX2.head(m, 'Bought · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), _lvMoney(y.est_value, false) + '<small>' + (mg ? (mg * (mg <= 1 ? 100 : 1)).toFixed(1) + '% margin' : '') + '</small>')
         + _qpDaysHtml(f.slice(-7).map(r => Number(r.est_value) || 0))
-        + _qpX2.cap('Bought a Day · Last 7 Reports' + (avg && diff ? ' · ' + (diff > 0 ? '▲ ' : '▼ ') + _qpHLK(Math.abs(diff)) + ' vs same day avg' : ''));
+        + _qpX2.cap('Bought a Day · Last 7 Days' + (avg && diff ? ' · ' + (diff > 0 ? '▲ ' : '▼ ') + _qpHLK(Math.abs(diff)) + ' vs same day avg' : ''));
 } });
 Object.assign(QP_MINIS.mlost, { draw2: d => {
     const m = QP_MINIS.mlost, s = _qpMyStore(), f = _qpFacts(d, s), y = f[f.length - 1];
-    if (!y) return _qpX2.head(m, 'Lost Deals', '—') + _qpX2.cap('No report yet');
+    if (!y) return _qpX2.head(m, 'Lost Deals', '—') + _qpX2.cap('No Day End Yet');
     const cur = _qpThisMonth(d, s), tot = _qpSum(cur, 'total_customers');
     return _qpX2.head(m, 'Walked Out · ' + _qpDayLabel(y.date).replace(/,.*$/, ''), '<span class="bad">' + _lvMoney(y.lost_revenue, false) + '</span><small>' + _qpHLK(_qpSum(cur, 'lost_revenue')) + ' this month</small>')
         + _qpX2.split([[_qpN(y.failed_deals), 'Failed Deals'], [_qpN(y.devices_lost), 'Devices Lost'], [(tot ? Math.round(_qpSum(cur, 'no_deal_customers') / tot * 100) : 0) + '%', 'No Deal This Month']])
-        + _qpDaysHtml(f.slice(-7).map(r => Number(r.lost_revenue) || 0)) + _qpX2.cap('Lost a Day · Last 7 Reports');
+        + _qpDaysHtml(f.slice(-7).map(r => Number(r.lost_revenue) || 0)) + _qpX2.cap('Lost a Day · Last 7 Days');
 } });
 Object.assign(QP_MINIS.mtop, { draw2: d => {
     const m = QP_MINIS.mtop, t = _qpTeamOf(d, _qpMyStore()), top = t && (t.team.find(x => x.top) || t.team[0]);
-    if (!top) return _qpX2.head(m, 'Top Producer', '—') + _qpX2.cap('No report yet');
+    if (!top) return _qpX2.head(m, 'Top Producer', '—') + _qpX2.cap('No Day End Yet');
     return _qpX2.head(m, 'Top Producer · ' + _qpDayLabel(t.last.date).replace(/,.*$/, ''), escapeHtml(_qpShort(top.name)) + '<small>' + top.n + ' devices · ' + _qpHLK(top.value) + '</small>')
         + _qpX2.rows(t.team.slice(0, 4).map(x => ({ k: String(x.name).split(' ')[0], n: x.n })), _qpN, _qpX2.tone, true)
-        + (t.topRun > 1 ? _qpX2.cap('Top ' + t.topRun + ' reports running') : '');
+        + (t.topRun > 1 ? _qpX2.cap('Top ' + t.topRun + ' days running') : '');
 } });
 Object.assign(QP_MINIS.musage, { draw2: d => {
     const m = QP_MINIS.musage, u = d.usage;
@@ -54872,17 +54962,35 @@ Object.assign(QP_MINIS.musage, { draw2: d => {
         + (u.quiet.length ? _qpX2.line('Not Yet', 'warn', u.quiet.map(q => _qpShort(q.name) + (q.store ? ' (' + q.store + ')' : '')).join(' · ')) : _qpX2.line('', '', 'Everyone signed in this week'));
 } });
 Object.assign(QP_MINIS.mavail, { draw2: d => {
-    const m = QP_MINIS.mavail, list = STORE_CODES.map(s => ({ k: s, f: _qpLast(d, s) })).filter(x => x.f).map(x => ({ k: x.k, n: Number(x.f.available_cost) || 0 })).sort((a, b) => b.n - a.n);
+    const m = QP_MINIS.mavail, t = _qpStockList(d), val = t.every(x => x.v != null);
+    const list = t.map(x => ({ k: x.k, n: val ? x.v : x.c })), fmt = val ? _qpHLK : _qpN;
     // A share strip and a legend (Ethan, 2026-10-29, widget-spruce.html).
-    return _qpX2.head(m, 'Available Inventory', _qpHLK(_qpSum(list, 'n')) + '<small>at cost · latest report</small>')
+    return _qpX2.head(m, 'In Stock · District', fmt(_qpSum(list, 'n')) + '<small>' + (val ? 'value' : 'devices') + ' · latest day</small>')
         + '<div class="qp-strip qp-x2-strip">' + list.map(x => '<i style="flex:' + x.n + ';background:' + _qpStoreColor(x.k) + '"></i>').join('') + '</div>'
-        + '<div class="qp-mix-l">' + list.map(x => '<span><i class="qp-sw" style="background:' + _qpStoreColor(x.k) + '"></i>' + escapeHtml(x.k) + '<b>' + _qpHLK(x.n) + '</b></span>').join('') + '</div>';
+        + '<div class="qp-mix-l">' + list.map(x => '<span><i class="qp-sw" style="background:' + _qpStoreColor(x.k) + '"></i>' + escapeHtml(x.k) + '<b>' + fmt(x.n) + '</b></span>').join('') + '</div>';
 } });
+// Every store's latest in stock: count, and value when stored. Most first.
+function _qpStockList(d) {
+    return STORE_CODES.map(s => ({ k: s, f: _qpLast(d, s) })).filter(x => x.f)
+        .map(x => ({ k: x.k, c: Number(x.f.available_count) || 0, v: x.f.available_value == null ? null : Number(x.f.available_value) }))
+        .sort((a, b) => (b.v != null && a.v != null ? b.v - a.v : b.c - a.c));
+}
 function _qpMiniOk(id) { const m = QP_MINIS[_qpTokId(id)]; try { return !!m && !!m.avail(); } catch (e) { return false; } }
 function _qpMiniIco(icon, tone) { return '<span class="sam-mico qp-cw-ico ' + tone + '" aria-hidden="true">' + icon + '</span>'; }
 
 // The data a mini draws from, loading it once if it is missing or stale.
-const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: false, data: null } };
+const _qpMiniSrcState = { cal: { at: 0, busy: false }, recycle: { at: 0, busy: false, data: null }, wkpi: { at: 0, busy: false, data: null } };
+// 'wkpi' (2026-11-10): the store's Weekly KPIs, a row a person for the last
+// week entered — what Stats & Awards ranks its Lister and Buyer boards from.
+// Top Lister and an employee's own Buying read it. { end, emps } or null.
+function _qpWkpiSample() {
+    const me = sessionStorage.getItem('speeksUserName') || 'Test Employee';
+    const end = (() => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 7) % 7 || 7)); return d.toISOString().slice(0, 10); })();
+    // No-deal and sold figures too (2026-11-10), for Your No Deals / Your Listings.
+    const p = (n, l, r, bv, bc, tc, tco) => ({ employee_name: n, listed_count: l, listed_retail_price: r, buying_value: bv, buying_cost: bc, transaction_count: tc, transaction_converted: tco,
+        no_deal_count: Math.max(0, tc - tco), no_deal_value: Math.max(0, tc - tco) * 425, listed_sold_value: Math.round(r * 0.41), listed_sold_pct: 41 });
+    return { end, emps: [p('Zach Marchesano', 45, 13200, 1703, 670, 6, 5), p('Nathan Zimmer', 38, 9100, 2410, 1150, 9, 8), p(me, 22, 5400, 1980, 860, 8, 7), p('Colin Davis', 17, 3900, 0, 0, 0, 0)] };
+}
 function _qpMiniData(src) {
     if (src === 'page') return {};
     if (src === 'snap') {
@@ -54915,6 +55023,26 @@ function _qpMiniData(src) {
         }
         return st.data;
     }
+    // 'w:<widget id>' (2026-11-10): a mini that reads a widget's own load —
+    // Claims, Call Backs, B2B, Connect — shares it (_qpWLoad's cache and TTL,
+    // and the test login's samples), so a card and its mini never fetch twice.
+    if (String(src).indexOf('w:') === 0) {
+        const id = String(src).slice(2);
+        if (_QP_WSPEC[id]) _qpWLoad(id);
+        return _qpWState(id).data;
+    }
+    if (src === 'wkpi') {
+        const st = _qpMiniSrcState.wkpi, store = _qpMyStore();
+        if (window._speeksTestSession) return _qpWkpiSample();
+        if (!store) return null;
+        if (!st.busy && Date.now() - st.at > 600000) {
+            st.busy = true;
+            fetch(`${WEEKLY_KPI_URL}?store=${encodeURIComponent(store)}&v=${Date.now()}`).then(r => r.json())
+                .then(j => { if (j && Array.isArray(j.employees)) st.data = { end: j.period_end_date || '', emps: j.employees }; })
+                .catch(() => {}).finally(() => { st.busy = false; st.at = Date.now(); _qpRenderWidgets(); });
+        }
+        return st.data;
+    }
     return null;
 }
 
@@ -54928,7 +55056,13 @@ const _qpShelfKey = ids => 'shelf:' + ids.join(',');
 // like everything else about it. Customer Mix and Coming Up are always two.
 const _qpTokId = tok => String(tok || '').split('~')[0];
 const _qpTokTwo = tok => /~2$/.test(String(tok || ''));
-const _qpMiniSize = tok => { const m = QP_MINIS[_qpTokId(tok)]; return m && (m.double || (_qpTokTwo(tok) && m.draw2)) ? 2 : 1; };
+// ONE SIZE (Ethan, 2026-11-09: "keep all mini widgets the 1 size and get rid of
+// the bigger size"): a saved "id~2" now draws at one row too, and the 1 | 2
+// switch is gone (_qpMiniHtml). Customer Mix and Coming Up, the two that only
+// came in two rows (double), were redrawn as one-row minis the same day, so no
+// mini sets double now. The draw2 layouts stay in the code, unused, in case
+// the bigger size comes back.
+const _qpMiniSize = tok => { const m = QP_MINIS[_qpTokId(tok)]; return m && m.double ? 2 : 1; };
 const _qpShelfUsed = ids => ids.filter(_qpMiniOk).reduce((a, id) => a + _qpMiniSize(id), 0);
 function _qpShelves(main) { return Array.from(main.querySelectorAll('[data-qp-shelf]')); }
 function _qpMiniShelf(main, id) { id = _qpTokId(id); return _qpShelves(main).find(b => _qpShelfIds(_qpKey(b)).some(t => _qpTokId(t) === id)) || null; }
@@ -54969,6 +55103,7 @@ function _qpShelfRekey(main, oldKey, ids) {
 // Add a mini: on the first shelf with room for it, or a new shelf where a ⅓
 // card would go. t: a drop from the drawer (onto a shelf, or anywhere).
 function qpAddMini(id, t) {
+    if (_qptRowsNow && _qptRoot(_qpMain())) return qptMiniAdd(id);   // the tabs page's rail
     const main = _qpMain();
     if (!main || !_qpMiniOk(id) || _qpMiniShelf(main, id)) return;
     const need = _qpMiniSize(id);
@@ -55060,6 +55195,7 @@ function _qpMiniGrips(main) {
     });
 }
 function qpRemoveMini(id) {
+    if (_qptRowsNow && _qptRoot(_qpMain())) return qptMiniRemove(id);   // the tabs page's rail
     const main = _qpMain();
     const b = main && _qpMiniShelf(main, id);
     if (!b) return;
@@ -55075,6 +55211,7 @@ const _qpMiniRoom = () => _qpShelfFreeNow > 0;
 // The 1 Row / 2 Rows switch: the same mini in the same place, its token
 // renamed. Two rows needs a free row on its shelf; the switch says so instead.
 function qpMiniRows(id, rows) {
+    if (_qptRowsNow && _qptRoot(_qpMain())) { if (QP_MINIS[id] && QP_MINIS[id].draw2) _qptMiniRows(id, rows); return; }
     const main = _qpMain();
     const b = main && _qpMiniShelf(main, id);
     if (!b || !QP_MINIS[id] || !QP_MINIS[id].draw2) return;
@@ -55095,13 +55232,9 @@ function _qpMiniHtml(tok) {
     // its page ("go") — so they stop there (Ethan, 2026-10-29: × "ends up
     // getting rid of it then taking me to that place on the site").
     const x = '<button type="button" class="qp-mn-x" data-qp-edit-ok title="Remove ' + escapeHtml(m.label) + '" aria-label="Remove ' + escapeHtml(m.label) + '" onclick="event.stopPropagation(); qpRemoveMini(\'' + id + '\')">'
-        + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'
-        // Customize only, beside the ×: 1 Row / 2 Rows, on every mini that has
-        // both. Two is greyed out when the shelf has no free row for it.
-        + (m.draw2 && !m.double ? '<span class="qp-mn-sz">'
-            + '<button type="button" data-qp-edit-ok class="' + (two ? '' : 'on') + '" title="One Row" onclick="event.stopPropagation(); qpMiniRows(\'' + id + '\', 1)">1</button>'
-            + '<button type="button" data-qp-edit-ok class="' + (two ? 'on' : '') + '" title="' + (two || _qpMiniRoom(tok) ? 'Two Rows' : 'No Free Row on This Shelf') + '"'
-            + (two || _qpMiniRoom(tok) ? '' : ' disabled') + ' onclick="event.stopPropagation(); qpMiniRows(\'' + id + '\', 2)">2</button></span>' : '');
+        + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+        // (The 1 | 2 row switch that sat beside the × was removed 2026-11-09 —
+        // every mini is one size now; see _qpMiniSize.)
     const go = r && r.go ? ' data-go="1" role="button" tabindex="0" onclick="' + escapeHtml(r.go) + '"' : '';
     if (!r) return '<div class="qp-mn' + (m.double || two ? ' x2' : '') + '" data-qp-mini="' + id + '">' + _qpMiniIco(m.icon, m.tone)
         + '<div class="qp-mn-b"><div class="qp-mn-k">' + escapeHtml(m.label) + '</div><div class="qp-mn-s">Syncing…</div></div>' + x + '</div>';
@@ -55115,6 +55248,7 @@ function _qpMiniHtml(tok) {
 // every 15s. A redraw that changes nothing touches nothing (_qpHtml).
 let _qpShelfTimer = null;
 function _qpRenderShelves(main) {
+    _qptRenderRail(main);   // the tabs page's rail (QUICKPORTAL TABS)
     if (!_qpShelfTimer && _qpShelves(main).length) _qpShelfTimer = setInterval(function () { const m = _qpMain(); if (m) _qpRenderShelves(m); }, 15000);
     _qpShelves(main).forEach(function (b) {
         const ids = _qpShelfIds(_qpKey(b)).filter(_qpMiniOk);
@@ -55188,12 +55322,15 @@ function _qpClaimsStrip(b) {
     return '<div class="qp-tls">' + cell('r', b.late, 'Overdue') + cell('a', b.today, 'Today') + cell('y', b.week, 'This Week') + cell('n', b.later, 'Later') + '</div>';
 }
 function _qpClaimsSplit(d) {
-    const need = x => _HOLD_VIEWS.due.states.includes(x.state);
-    const wait = x => _HOLD_VIEWS.waiting.states.includes(x.state) && !_HOLD_DONE.includes(x.state);
+    // Hushed items (claims-disputes hushOf) count as waiting, not due.
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush;
+    const wait = x => (_HOLD_VIEWS.waiting.states.includes(x.state) && !_HOLD_DONE.includes(x.state))
+        || (_HOLD_VIEWS.due.states.includes(x.state) && !!x.hush);
     const cases = (d.cases || []);
     const by = {
         mismatch: (d.mismatches || []).map(x => ({ x, type: 'mismatch' })),
-        returns: cases.filter(_holdIsReturn).map(x => ({ x, type: 'return' })),
+        // Returns waiting on the buyer are not counted as due (_holdReturnNeedsUs).
+        returns: cases.filter(c => _holdIsReturn(c) && (!need(c) || _holdReturnNeedsUs(c))).map(x => ({ x, type: 'return' })),
         cases: cases.filter(c => !_holdIsReturn(c)).map(x => ({ x, type: _holdIsInr(x) ? 'inr' : 'case' }))
             .concat((d.disputes || []).map(x => ({ x, type: x.source === 'shopify' ? 'chargeback' : 'dispute' }))),
         payments: (d.payments || []).map(x => ({ x, type: 'payment' })),
@@ -55207,18 +55344,1580 @@ function _qpClaimsSplit(d) {
     });
     return out;
 }
-function _qpClaimsLine(e, today) {
+function _qpClaimsLabel(e) {
     const x = e.x;
     const what = { mismatch: 'Refund Mismatch', return: 'Return', inr: 'Item Not Received', case: 'eBay Case',
         dispute: 'Payment Dispute', chargeback: 'Chargeback', payment: 'Unpaid Order' }[e.type];
     const name = _qpClaimsText(x.item_title) || x.shopify_order_name || x.order_name || x.order_no || x.ebay_order_id || '';
+    return what + (name ? ' · ' + name : '');
+}
+function _qpClaimsLine(e, today) {
+    const x = e.x;
     const amt = Number(x.amount || x.outstanding || x.total) || 0;
-    return _qpWLine(_qpWDue(x.due_on, today), what + (name ? ' · ' + name : ''), amt ? _qpHLK(amt) : '');
+    return _qpWLine(_qpWDue(x.due_on, today), _qpClaimsLabel(e), amt ? _qpHLK(amt) : '');
+}
+// THE WIDE CLAIMS CARD (Ethan, 2026-11-07: option C of the Action Items &
+// Claims designs). On the tabs page Claims & Disputes has a tab of its own, so
+// its card is full width (_qpWidgetCard's wide branch): the count, strip and
+// due-first claims on the left, and on the right a table — every store for the
+// DM, every tab of the tool for a store — so the whole picture reads without
+// clicking through the tabs. The same "due" set the card counts (_qpClaimsSplit).
+function _qpClaimsCounts(due, today) {
+    const c = { late: 0, now: 0, open: due.length, sum: 0 };
+    due.forEach(function (e) {
+        const d = String(e.x.due_on || '').slice(0, 10);
+        if (d && d < today) c.late++; else if (d && d === today) c.now++;
+        c.sum += Number(e.x.amount || e.x.outstanding || e.x.total) || 0;
+    });
+    return c;
+}
+function _qpClaimsTable(first, rows) {
+    return '<table class="qpt-ctab"><thead><tr><th>' + first + '</th><th class="r">Overdue</th><th class="r">Today</th><th class="r">Open</th><th class="r">On Them</th></tr></thead><tbody>'
+        + rows.map(function (r) {
+            return '<tr' + (r.on ? ' class="on"' : '') + '><td>' + r.label + '</td>'
+                + '<td class="r">' + (r.c.late ? _qpWChip(String(r.c.late), 'bad') : '<span class="qpt-z">0</span>') + '</td>'
+                + '<td class="r">' + (r.c.now ? _qpWChip(String(r.c.now), 'warn') : '<span class="qpt-z">0</span>') + '</td>'
+                + '<td class="r">' + (r.c.open || '<span class="qpt-z">0</span>') + '</td>'
+                + '<td class="r"><b>' + (r.c.sum ? _qpHLK(r.c.sum) : '<span class="qpt-z">$0</span>') + '</b></td></tr>';
+        }).join('') + '</tbody></table>';
+}
+
+// ============================================================================
+// QUICKPORTAL TABS — Your Feed on top, the dashboard as tabs, minis on a rail
+// ============================================================================
+// Ethan, 2026-11-06: the Customize page of rows "feels very chaotic, clunky,
+// and makes people not want to use it". He sketched the replacement and picked
+// it from a rendering of the local site (artifact BNhYqLVvodVRRbJoRYfrKP):
+//   · Your Feed, full width, on top.
+//   · Under it the dashboard as TABS of widgets and widget combinations we
+//     chose. People HIDE the tabs they don't want (× on the tab, or the Tabs ▾
+//     menu) instead of adding cards from a drawer, and drag tabs into the order
+//     that suits them.
+//   · On the right a rail of mini widgets, added from a tile drawer that
+//     previews a mini when you point at it, and removed with a Remove pill in
+//     the same place as + Add (or the × on the rail in Customize).
+// Fewer tabs, all one width, so the strip never scrolls sideways; related cards
+// share a tab. Performance is the pre-QuickPortal card again: the chart with the
+// Leaderboard in its pale-green right-hand column, one card.
+//
+// BUILT ON THE ROW ENGINE, NOT BESIDE IT. Each tab's cards are ordinary rows of
+// .qp-row / .qp-cell (so ONE CARD HEIGHT, the headline views and every widget
+// rule apply unchanged), and the keys are the engine's own: "command:ebay" is a
+// split-out Command Center card made by _qpDistribute, "pace" a drawer widget
+// made by _qpEnsureWidgets. _qpCurrentRows answers with the rows the tabs hold,
+// so every renderer that asks "which card holds what" still gets an answer.
+// Blocks no tab shows (the original Command Center left holding Live, the
+// Leaderboard whose column moved into the chart card, a role's hidden card) sit
+// in a hidden stash, still filled by their renderers, still found by id.
+//
+// WHO: the people who have Customize (_qpHeadlinesOn), on desktop. Phones and
+// tablets keep the stacked page (the compact tier never had Customize), and the
+// store board / Training keep theirs. Crossing into the compact tier tears the
+// tabs down (_qptTeardown) and the row engine takes the page back.
+//
+// SAVED in the same place a row layout was — localStorage at once, qp_layouts
+// through qp-layout after — as rows of "qpt:" keys, which the function already
+// accepts (≤6 items a row, [a-z0-9:_,.-]), so nothing server-side changed. A
+// row layout saved before this is simply not read here: the tabs start from
+// their defaults. Hidden tabs build nothing, so their widgets cost no reads.
+// The open tab is remembered in this browser only — a click is not a save.
+const QPT_TABS = [
+    { k: 'live', l: 'Live Dashboard', live: true },
+    { k: 'perf', l: 'Performance', perf: true },
+    // Action Items live on the rail (_qptRenderAi), so Claims has the tab to
+    // itself, full width (Ethan, 2026-11-07: option C). Was 'todo', "Action
+    // Items & Claims" — a saved 'todo' reads as this tab (_qptRead).
+    { k: 'claims', l: 'Claims & Disputes', keys: ['claims', 'dclaims'] },
+    // One card, not three (Ethan, 2026-11-07: "the same redesign for store
+    // health tab for all roles"): merge draws the tab's cards inside one frame
+    // under one header, split by rules (_qptMerge).
+    { k: 'health', l: 'Store Health', merge: 'health', keys: ['command:ebay', 'command:score', 'command:kpis', 'district:watch', 'district:ebay', 'district:score', 'kpis', 'dkpis'] },
+    // One card too: design B, the Scoreboard (Ethan, 2026-11-08 — _qptRenderSales).
+    { k: 'sales', l: 'Sales & Goals', merge: 'sales', keys: ['pace', 'dpace', 'buying', 'dbuying', 'monthly'] },
+    // One frame (Ethan, 2026-11-08: design A of artifact W5cUaNGHUjtHchnGaRkTwb):
+    // the cards as they are, in one card under one header (_qptMergeFrame).
+    { k: 'customers', l: 'Customers', merge: 'frame', keys: ['reviews', 'dreviews', 'lost', 'dlost', 'callbacks'] },
+    // JUST INVENTORY (Ethan, 2026-11-08: "Make this tab just inventory"): one
+    // card, the pipeline and who is clearing it (_qptRenderInv) — the DM's Pace
+    // Board, a store's Person Tiles.
+    { k: 'inventory', l: 'Inventory', merge: 'inv', keys: ['pipeline', 'dpipeline', 'team', 'dteam'] },
+    // LISTINGS & DEALS replaces Company & Tools (Ethan, 2026-11-08: design B of
+    // artifact 9jz7JGawrggijNciHztmKu, "I like Listings and Deals better"). Only
+    // the three tools that are work waiting on someone — B2B, Variance, SPEEKS
+    // Connect — as ONE work list, soonest first (_qptRenderWork). Stats & Awards,
+    // Processes & Policies, Store Calendar, Hotkeys, Quick Messages and Expense
+    // Report are off the tabs page entirely ("you can just get rid of entirely").
+    // A new key, not 'company': a saved layout had Company & Tools hidden, and
+    // this tab starts shown for everyone (_qptRead appends a tab it doesn't know).
+    { k: 'deals', l: 'Listings & Deals', merge: 'work', keys: ['b2b', 'variance', 'dvariance', 'connect', 'dconnect'] },
+];
+const QPT_HIDDEN_DEFAULT = [];
+// The rail a person starts with: the first five of these they can see.
+// mgoal (% to Goal) added 2026-11-10; musage, mlive, mnews, mpace and mreviews
+// were retired the same day, so they are not in the default any more.
+const QPT_MINI_DEFAULT = ['mdue', 'mgoal', 'mstars', 'mcash', 'mtop', 'mavail', 'mqueue'];
+// A retired mini that was folded into another reads as that one from a saved
+// rail (2026-11-10), so nobody's rail just loses a place: Goal Pace → % to Goal,
+// Google Reviews → Five-Star Reviews. A duplicate it makes is dropped.
+const _QPT_MINI_ALIAS = { mpace: 'mgoal', mreviews: 'mstars' };
+// THE FIRST TAB ON SIGN-IN (Ethan, 2026-11-08: "whatever their first tab is, is
+// what shows up upon sign in"). The open tab is remembered for this sign-in
+// only (sessionStorage), so moving between pages comes back to it, but signing
+// in — or a fresh browser tab — opens the person's first tab. It used to be
+// localStorage, which reopened whatever this browser last had open. The order
+// and hidden tabs themselves follow the person (qp-layout); this never did.
+const QPT_TAB_KEY = 'speeksQptTab';
+
+let _qptState = null;     // { order, hidden, minis } as saved (minis null = default)
+let _qptRowsNow = null;   // the rows the tabs hold, for _qpCurrentRows
+let _qptHave = [];        // the tabs this person has: [{ k, l, rows }]
+let _qptTab = null;       // the open tab
+let _qptEdit = false;     // the rail's Customize
+let _qptMenuOpen = false;
+let _qptPrevId = null;    // the drawer's preview
+let _qptDrag = null;      // { dz: 'tabs' | 'minis', k }
+
+function _qptOn() { return _qpHeadlinesOn() && !_isMobileLayout(); }
+function _qptRoot(main) { return main ? main.querySelector(':scope > .qpt') : null; }
+
+// --- the saved state ---
+const _qptTok = t => String(t).replace('~', '.');     // "~" is not a key character
+const _qptUntok = t => String(t).replace('.', '~');
+function _qptDefaults() {
+    return { order: QPT_TABS.map(t => t.k), hidden: QPT_HIDDEN_DEFAULT.slice(), minis: null };
+}
+function _qptDefaultMinis() { return QPT_MINI_DEFAULT.filter(_qpMiniOk).slice(0, 5); }
+function _qptRead() {
+    const s = _qptDefaults();
+    const rows = _qpSaved();
+    if (!rows || !rows[0] || rows[0].items[0] !== 'qpt:v1') return s;
+    const got = { order: [], hidden: [], minis: [] }, seen = {};
+    rows.forEach(r => {
+        const tag = String(r.items[0] || ''), m = /^qpt:(order|hidden|minis)$/.exec(tag);
+        if (!m) return;
+        seen[m[1]] = true;
+        r.items.slice(1).forEach(v => got[m[1]].push(m[1] === 'minis' ? _qptUntok(v) : (String(v) === 'todo' ? 'claims' : String(v))));
+    });
+    const known = QPT_TABS.map(t => t.k);
+    if (seen.order) {
+        s.order = got.order.filter((k, i, a) => known.indexOf(k) !== -1 && a.indexOf(k) === i);
+        // A tab a release added after this was saved goes on the end, shown.
+        known.forEach(k => { if (s.order.indexOf(k) === -1) s.order.push(k); });
+    }
+    if (seen.hidden) s.hidden = got.hidden.filter(k => known.indexOf(k) !== -1);
+    if (seen.minis) s.minis = got.minis.map(t => _QPT_MINI_ALIAS[_qpTokId(t)] || t)
+        .filter((t, i, a) => QP_MINIS[_qpTokId(t)] && a.findIndex(x => _qpTokId(x) === _qpTokId(t)) === i);
+    return s;
+}
+function _qptEncode(s) {
+    const rows = [{ items: ['qpt:v1'], w: null }];
+    const put = (tag, list) => {
+        if (!list.length) { rows.push({ items: [tag], w: null }); return; }
+        for (let i = 0; i < list.length; i += 5) rows.push({ items: [tag].concat(list.slice(i, i + 5)), w: null });
+    };
+    put('qpt:order', s.order);
+    put('qpt:hidden', s.hidden);
+    if (s.minis) put('qpt:minis', s.minis.map(_qptTok));
+    return rows;
+}
+function _qptSave() {
+    const s = _qptState, d = _qptDefaults();
+    const minis = s.minis && s.minis.join(',') !== _qptDefaultMinis().join(',') ? s.minis : null;
+    const same = s.order.join(',') === d.order.join(',') && s.hidden.slice().sort().join(',') === d.hidden.slice().sort().join(',') && !minis;
+    _qpSave(same ? null : _qptEncode({ order: s.order, hidden: s.hidden, minis: minis }));
+}
+function _qptMinis() { return (_qptState && _qptState.minis) || _qptDefaultMinis(); }
+// EIGHT AT MOST (Ethan, 2026-11-09: "cap the mini widgets to 8 total at one
+// time"). Counted over the minis this person can actually see (_qpMiniOk) —
+// a saved one whose tool was taken away is not on the rail, so it doesn't use
+// a place. At eight the drawer's tiles and the rail's + Add say so and add nothing.
+const QPT_MINI_MAX = 8;
+const _qptRailToks = () => _qptMinis().filter(_qpMiniOk).slice(0, QPT_MINI_MAX);
+const _qptRailFull = () => _qptRailToks().length >= QPT_MINI_MAX;
+
+// --- which cards this person has ---
+function _qptShown(main, k) {
+    const o = _qpParse(k);
+    if (o && o.shell) {
+        const home = main.querySelector('[data-qp-block="' + o.fam + '"]:not([data-qp-shell])');
+        return !!home && _qpVisible(home) && o.pieces.every(p => _qpPieceShown(main, o.fam, p));
+    }
+    if (QP_WIDGETS[k]) return _qpWidgetOk(k);
+    const b = main.querySelector('[data-qp-block="' + k + '"]');
+    return !!b && _qpVisible(b);
+}
+// Rows of at most three, as even as they go: 4 → 2·2, 5 → 3·2, 7 → 3·2·2.
+function _qptChunk(keys) {
+    const n = keys.length, out = [];
+    if (n <= 3) return n ? [keys] : [];
+    const r = Math.ceil(n / 3);
+    for (let i = 0, j = 0; j < r; j++) { const size = Math.ceil((n - i) / (r - j)); out.push(keys.slice(i, i + size)); i += size; }
+    return out;
+}
+// The Live tab: the store's board in a card of its own, or the district's.
+function _qptLiveKind(main) {
+    const dc = main.querySelector('[data-qp-block="district"]:not([data-qp-shell])');
+    if (dc && _qpVisible(dc) && _qpPieceShown(main, 'district', 'live') && document.getElementById('dc-panel-live')) return 'district';
+    const cc = main.querySelector('[data-qp-block="command"]:not([data-qp-shell])');
+    if (cc && _qpVisible(cc) && _qpPieceShown(main, 'command', 'live')) return 'store';
+    return null;
+}
+
+// --- build ---
+function _qptApply(main) {
+    if (_qpEditing) _qpSetEditing(main, false);
+    _qpDiscover(main);
+    _qptState = _qptRead();
+    const liveKind = _qptLiveKind(main);
+    _qptHave = [];
+    QPT_TABS.forEach(t => {
+        let rows = [];
+        if (t.live) { if (liveKind) rows = [['@live']]; }
+        else if (t.perf) { if (_qptShown(main, 'chart')) rows = [['chart']]; }
+        else rows = _qptChunk(t.keys.filter(k => _qptShown(main, k)));
+        if (rows.length) _qptHave.push({ k: t.k, l: t.l, rows: rows });
+    });
+    const have = k => _qptHave.find(t => t.k === k);
+    const vis = _qptState.order.filter(k => have(k) && _qptState.hidden.indexOf(k) === -1);
+    let tab = null;
+    try { tab = sessionStorage.getItem(QPT_TAB_KEY); } catch (e) { /* private mode */ }
+    _qptTab = vis.indexOf(_qptTab) !== -1 ? _qptTab : (vis.indexOf(tab) !== -1 ? tab : (vis[0] || null));
+
+    // The rows: the feed, every shown tab's cards, then the stash (all else).
+    const placed = { feed: true };
+    const rows = [{ items: ['feed'], w: null }];
+    vis.forEach(k => have(k).rows.forEach(r => {
+        const items = r.filter(x => x !== '@live');
+        if (!items.length) return;
+        items.forEach(x => { placed[x] = true; });
+        rows.push({ items: items, w: null });
+    }));
+    // Performance shows the Leaderboard inside the chart card; its own block
+    // stays (emptied) in the stash so its ids and role gates are where they were.
+    const stashKeys = _qpBlocks(main).map(_qpKey).filter(k => !placed[k] && !main.querySelector('[data-qp-block="' + k + '"]').hasAttribute('data-qp-shell')
+        && !(main.querySelector('[data-qp-block="' + k + '"]').hasAttribute('data-qp-widget')) && !_qpIsShelfKey(k));
+    if (stashKeys.length) rows.push({ items: stashKeys, w: null });
+    _qptRowsNow = rows;
+    _qpEnsureWidgets(main, rows);
+    _qpDistribute(main, rows);
+
+    // The frame, made once per <main> (the router rebuilds <main> on a hop).
+    let root = _qptRoot(main);
+    if (!root) {
+        root = document.createElement('div');
+        root.className = 'qpt';
+        root.innerHTML = '<div class="qpt-left"><div class="qpt-feed"></div>'
+            + '<div class="qpt-tabs"><div class="qpt-strip" role="tablist" aria-label="Dashboard tabs"></div><div class="qpt-menuslot"></div>'
+            + '<div class="qpt-panel"><div class="qpt-ph" hidden></div><div class="qpt-panes"></div>'
+            + '<div class="qpt-none" hidden>Every tab is hidden. Open Tabs ▾ to bring one back.</div></div></div></div>'
+            + '<aside class="qpt-rail" aria-label="Mini widgets"><div class="qpt-ai" hidden></div><div class="qpt-rhead"><h3>At a Glance</h3>'
+            + '<button type="button" class="qpt-redit" onclick="qptRailEdit()">Customize</button></div>'
+            + '<div class="qpt-mlist"></div><button type="button" class="qpt-add" onclick="qptDrawerOpen()">+ Add Mini Widget</button>'
+            + '<button type="button" class="qpt-reset-all" hidden onclick="qptResetAsk()">Reset Dashboard</button></aside>';
+        main.insertBefore(root, _qpAnchor(main));
+        const stash = document.createElement('div');
+        stash.className = 'qpt-stash';
+        stash.hidden = true;
+        main.insertBefore(stash, root.nextSibling);
+        _qptWire(main);
+    }
+    main.classList.add('qp-tabs-on');
+    const stash = main.querySelector(':scope > .qpt-stash');
+    const byKey = {};
+    _qpBlocks(main).concat(Array.from(main.querySelectorAll('.qpt-stash .qp-cell > [data-qp-block]'))).forEach(b => { byKey[_qpKey(b)] = b; });
+    const rowEl = keys => {
+        const row = document.createElement('div');
+        row.className = 'qp-row';
+        keys.forEach(k => {
+            const b = byKey[k];
+            if (!b) return;
+            const cell = document.createElement('div');
+            cell.className = 'qp-cell';
+            // Alone in its row: a widget with a wide layout uses it (Claims).
+            b.classList.toggle('qpt-wide', keys.length === 1);
+            cell.appendChild(b);
+            row.appendChild(cell);
+        });
+        return row;
+    };
+    const sig = JSON.stringify([vis, _qptHave.map(t => [t.k, t.rows]), stashKeys, liveKind]);
+    const loose = _qpBlocks(main).some(b => b.parentElement === main || !root.contains(b) && !stash.contains(b));
+    if (root._qptSig !== sig || loose) {
+        root._qptSig = sig;
+        const feed = root.querySelector('.qpt-feed');
+        feed.textContent = '';
+        feed.appendChild(rowEl(['feed']));
+        const panes = root.querySelector('.qpt-panes');
+        const frag = document.createDocumentFragment();
+        vis.forEach(k => {
+            const pane = document.createElement('section');
+            pane.className = 'qpt-pane';
+            pane.setAttribute('data-tab', k);
+            pane.setAttribute('role', 'tabpanel');
+            have(k).rows.forEach(r => {
+                if (r[0] === '@live') { pane.appendChild(_qptLiveCard(main, liveKind)); return; }
+                pane.appendChild(rowEl(r));
+            });
+            const merge = (QPT_TABS.find(t => t.k === k) || {}).merge;
+            if (merge) _qptMerge(pane, merge);
+            frag.appendChild(pane);
+        });
+        // The district Live panel goes home before its card is thrown away.
+        if (liveKind !== 'district') _qptRestoreDist();
+        panes.textContent = '';
+        panes.appendChild(frag);
+        stash.textContent = '';
+        stash.appendChild(rowEl(stashKeys));
+        main.querySelectorAll(':scope > .qp-row').forEach(r => { if (!r.querySelector('[data-qp-block]')) r.remove(); });
+        if (liveKind === 'store' && typeof renderLiveDashboard === 'function') renderLiveDashboard();
+        _qpRenderWidgets(rows);   // a card that turned wide (or narrow) redraws
+        _qpRenderHeadlines(rows); // the headline cards too (My KPIs' wide scorecard, _qpKpiWide)
+    }
+    _qptPerf(main, vis.indexOf('perf') !== -1);
+    _qpSyncHidden(main);
+    root.querySelectorAll('.qp-row').forEach(r => r.classList.toggle('qp-solo', r.querySelectorAll(':scope > .qp-cell').length === 1));
+    _qptPaint(main);
+    _qptRenderRail(main);
+    _qptRenderAi(main);
+    _qptRenderHealth(main);
+    _qptRenderSales(main);
+    _qptRenderFrame(main);
+    _qptRenderInv(main);
+    _qptRenderWork(main);
+}
+// STORE HEALTH AS ONE CARD (Ethan, 2026-11-07: picked design C of artifact
+// TmBQECFLJkeFUYUysrttDa, "but segmenting out the scorecard vs. the ebay
+// metrics to differentiate what needs work"). The pane is the card: a header
+// with a verdict pill a part; on the left a ring a part (its headline number);
+// on the right What Needs Fixing, a box a part, worst first inside each, the
+// part's own link on its box.
+// The eBay / Scorecard / KPI cards stay in the pane's rows, hidden: their
+// renderers still find and fill them, and their data is what this draws from
+// (_qpHL, _qpDistrictHL, the KPI widgets' models — hv), so there is no second
+// read and the view cannot disagree with the cards. It redraws whenever they
+// do (_qpRenderHeadlinesNow, _qpRenderWidgets).
+// A tab left with one card is just that card (it goes wide, as Claims does).
+//
+// THE DM SEES ONE STORE AT A TIME (Ethan, 2026-11-07: "for DM, we have store
+// tabs within this tab so the user can see each store. I don't think we need a
+// district view as it makes things look a bit empty and overwhelming"). A tab a
+// store (its dot = its worst item), and under it that store as a manager sees
+// it: Matrix, eBay, Scorecard & Audit, Store KPIs — read from what the district
+// board already holds (_dcWatch, _dccRows, the dkpis widget), so still no new
+// read. Opens on the store with the worst items; a pick is remembered here.
+const QPT_HSTORE_KEY = 'speeksQptHealthStore';
+let _qptHStore = null;
+function qptHealthStore(s) {
+    _qptHStore = s;
+    try { localStorage.setItem(QPT_HSTORE_KEY, s); } catch (e) { /* private mode */ }
+    _qptRenderHealth(_qpMain());
+}
+function _qptMerge(pane, kind) {
+    const blocks = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]'));
+    if (kind === 'inv' && blocks.length) return _qptMergeInv(pane, blocks);
+    if (kind === 'work' && blocks.length) return _qptMergeWork(pane, blocks);
+    if (blocks.length < 2) return;
+    if (kind === 'sales') return _qptMergeSales(pane, blocks);
+    if (kind === 'frame') return _qptMergeFrame(pane, blocks);
+    const dist = blocks.some(b => /^(district:|dkpis)/.test(_qpKey(b)));
+    const who = dist ? 'District' : (_qpStoreLabel().trim() || 'Your Store');
+    const head = document.createElement('div');
+    head.className = 'qpt-mh';
+    head.innerHTML = '<span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>'
+        + '<div><div class="ew-eyebrow">' + escapeHtml(who) + ' · Store Health</div><div class="qpt-mt">How ' + escapeHtml(who) + ' Is Running</div></div>'
+        + '<div class="qpt-mparts"></div>';
+    const view = document.createElement('div');
+    view.className = 'qpt-hv';
+    pane.classList.add('qpt-merge');
+    pane.setAttribute('data-merge', 'health');
+    pane.toggleAttribute('data-qpt-dist', dist);
+    pane.insertBefore(view, pane.firstChild);
+    if (dist) {
+        const tabs = document.createElement('div');
+        tabs.className = 'qpt-stabs';
+        tabs.setAttribute('role', 'tablist');
+        tabs.setAttribute('aria-label', 'Store');
+        pane.insertBefore(tabs, view);
+    }
+    pane.insertBefore(head, pane.firstChild);
+}
+// EACH PART IN ITS OWN SHAPE (Ethan, 2026-11-07: "organize the ebay metrics
+// better so the seller level and performance metrics aren't jumbled together",
+// "Lots of bullet points making it feel hard to read. Maybe different sections
+// are designed differently"). So a part is not a list of bullets but its own
+// layout, from its own data:
+//   eBay       Seller Level — the four rates as a status grid, clear ones too;
+//              then Performance — the flagged category levels as tag + names.
+//   Scorecard  the audits and the scorecard as tiles; the categories as chips.
+//   Store KPIs the six KPIs as coloured tiles (or the Due / Overdue banner).
+//   Matrix     its three metrics as tiles, each with its miss run.
+// A part: { kind, name, big, bigSev, small, segs | pct, fix, link, ... }.
+// fix is everything not good — it is the "N to fix" count and the part's dot.
+//
+// THE RINGS ARE SLICES NOW (Ethan: "why is LEE who only has 1 at risk the
+// closest circle to being closed"). They filled by the share CLEAR, so 1 of 8
+// off drew a ring 7/8 closed — in red, which read as nearly failed. A count
+// part's ring is now one slice a metric, each its own colour (eBay 8, KPIs 6,
+// Matrix 3); only an audit, which IS a percentage, fills.
+const _QPT_SEV = { bad: 0, warn: 1, good: 2 };
+const _qptBandSev = b => b === 'good' ? 'good' : b === 'warn' ? 'warn' : 'bad';
+const _qptWorst = list => list.slice().sort((a, b) => (_QPT_SEV[a] == null ? 3 : _QPT_SEV[a]) - (_QPT_SEV[b] == null ? 3 : _QPT_SEV[b]))[0];
+const _QPT_EBAY_TOP = [['defect', 'Defect Rate'], ['late', 'Late Shipment'], ['cases', 'Cases Closed'], ['track', 'Tracking']];
+const _QPT_EBAY_CAT = { 'Active · very high': 'Current Very High', 'Active · high': 'Current High', 'Projected · very high': 'Projected Very High', 'Projected · high': 'Projected High' };
+const _QPT_RATE_WORD = { bad: 'At Limit', warn: 'Near Limit', good: 'Clear' };
+// The parts every builder ends with: fix and sev worked out the same way.
+function _qptPart(out, name, o) {
+    if (!o) { out.push({ name, wait: true }); return; }
+    o.fix = (o.fix || []).filter(Boolean).sort((a, b) => _QPT_SEV[a.sev] - _QPT_SEV[b.sev]);
+    o.sev = o.fix.length ? o.fix[0].sev : 'good';
+    out.push(Object.assign({ name }, o));
+}
+// eBay from its pieces: rates [{ name, val, sev }] (four) and cats [{ label, list, sev }].
+function _qptEbayPart(rates, cats, link) {
+    const flagged = rates.filter(r => r.sev !== 'good').length + cats.length;
+    const crit = rates.filter(r => r.sev === 'bad').length + cats.filter(c => c.sev === 'bad').length;
+    return {
+        kind: 'ebay', rates, cats, link,
+        big: crit || flagged || '✓', bigSev: crit ? 'bad' : flagged ? 'warn' : 'good',
+        small: crit ? 'At eBay’s limit' : flagged ? 'Near the limit' : 'All 8 clear',
+        // Eight slices: the four rates, the four category levels (unflagged = clear).
+        segs: rates.map(r => r.sev).concat(cats.map(c => c.sev), Array(Math.max(0, 4 - cats.length)).fill('good')),
+        fix: rates.filter(r => r.sev !== 'good').map(r => ({ sev: r.sev })).concat(cats.map(c => ({ sev: c.sev }))),
+    };
+}
+// Scorecard & Audit from audits [{ name, val, sub, sev }] (the lead first) and cats [{ name, val, sev }].
+function _qptScorePart(lead, audits, cats, link) {
+    return {
+        kind: 'score', audits, cats, link,
+        big: lead ? lead.pct + '%' : '—', bigSev: lead ? _qpHLBand(lead.pct) : '',
+        small: lead ? lead.name + ' · ' + _auStanding(lead.pct) : 'No audit yet', pct: lead ? lead.pct : null,
+        // The scorecard tile (noFix) is shown, not counted: its categories are.
+        fix: audits.filter(a => !a.noFix && (a.sev === 'bad' || a.sev === 'warn')).map(a => ({ sev: a.sev }))
+            .concat(cats.filter(c => c.sev === 'bad' || c.sev === 'warn').map(c => ({ sev: c.sev }))),
+    };
+}
+// Store KPIs from the kpis widget model (hv): six tiles, or the Due banner.
+function _qptKpiPart(m) {
+    if (!m || !m.hv) return null;
+    const tiles = m.hv.tiles || [];
+    return {
+        kind: 'kpis', tiles, due: tiles.length ? null : (m.hv.fix || [])[0] || null, period: m.hv.period || '', link: m.link,
+        // Not entered: "!" in a whole ring of the Due / Overdue colour — the word
+        // itself does not fit inside a ring.
+        big: tiles.length ? m.big : '!', bigSev: tiles.length ? (m.hv.pct === 100 ? 'good' : '') : ((m.hv.fix || [])[0] || {}).sev || '',
+        small: tiles.length ? String(m.small || '').split(' · ')[0] : (m.big === 'Overdue' ? 'Overdue · not entered' : m.big === 'Due' ? 'Due · not entered' : String(m.small || '')),
+        segs: tiles.length ? tiles.map(t => t.sev) : (m.hv.fix || []).length ? [m.hv.fix[0].sev] : null,
+        fix: tiles.length ? tiles.filter(t => t.sev !== 'good').map(t => ({ sev: t.sev })) : (m.hv.fix || []),
+    };
+}
+
+// ONE FRAME (Customers — Ethan, 2026-11-08, design A of artifact
+// W5cUaNGHUjtHchnGaRkTwb: "Build A"). The least change: the tab's cards stay
+// exactly as they are and stay visible — Google Reviews, Lost Deals, Call Backs
+// — but inside one card under one header, their own frames, icons and eyebrows
+// lifted and hairlines between them; each card's title becomes its section
+// caption. The header's pills come from the same store snapshot the cards read
+// (_qptRenderFrame), equal width as every pill row is.
+function _qptMergeFrame(pane, blocks) {
+    const dist = blocks.some(b => /^d[a-z]+$/.test(_qpKey(b)) && QP_WIDGETS[_qpKey(b).slice(1)]);
+    const label = (QPT_TABS.find(t => t.k === pane.getAttribute('data-tab')) || {}).l || '';
+    const head = document.createElement('div');
+    head.className = 'qpt-mh';
+    head.innerHTML = '<span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M22 20c0-2.6-1.9-4.8-4.5-5.6"/></svg></span>'
+        + '<div><div class="ew-eyebrow">' + escapeHtml((dist ? 'District' : (_qpStoreLabel().trim() || 'Your Store')) + ' · This Month') + '</div><div class="qpt-mt">' + escapeHtml(label) + '</div></div>'
+        + '<div class="qpt-spills qpt-fpills"></div>';
+    pane.classList.add('qpt-merge', 'qpt-frame');
+    pane.setAttribute('data-merge', 'frame');
+    pane.toggleAttribute('data-qpt-dist', dist);
+    pane.insertBefore(head, pane.firstChild);
+}
+function _qptRenderFrame(main) {
+    const pane = main && main.querySelector('.qpt-pane.qpt-merge[data-merge="frame"][data-tab="customers"]');
+    if (!pane) return;
+    const d = _qpSnap.data, pp = pane.querySelector('.qpt-fpills');
+    if (!d || !pp) return;
+    const dist = pane.hasAttribute('data-qpt-dist');
+    const stores = dist ? STORE_CODES : [_qpMyStore()].filter(Boolean);
+    const rv = stores.map(s => _qpReviewsOf(d, s));
+    const mtd = rv.reduce((a, r) => a + (r.mtd || 0), 0), goal = rv.reduce((a, r) => a + (r.goal || 0), 0), track = rv.reduce((a, r) => a + (r.track || 0), 0);
+    const lost = stores.reduce((a, s) => a + _qpSum(_qpThisMonth(d, s), 'lost_revenue'), 0);
+    const band = goal ? _qpBand(track / goal * 100) : 'good';
+    // "of goal" for the district too (Ethan, 2026-11-08: a red "32 Reviews" read
+    // as if reviews were bad news — the colour is the goal pace, so say the goal).
+    // A pill only for a card the tab holds: an employee has no Lost Deals card
+    // (managers and ASMs only), so no "Walked Out" pill either.
+    const keys = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(_qpKey);
+    const has = k => keys.indexOf(k) !== -1 || keys.indexOf('d' + k) !== -1;
+    const pills = (has('reviews') ? '<span class="qpt-vp ' + band + '">' + (goal ? mtd + ' of ' + goal + ' Reviews' : mtd + ' Reviews') + '</span>' : '')
+        + (has('lost') ? '<span class="qpt-vp bad">' + _qpHLK(lost) + ' Walked Out · MTD</span>' : '');
+    if (pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
+}
+
+// One store's parts, for the DM (see THE DM SEES ONE STORE AT A TIME), from
+// the district board's reads. eBay categories are judged as the store's own
+// card judges them (any very-high is red — Ethan, "Match store card").
+function _qptStoreParts(store, part) {
+    const r = (typeof _dccRows !== 'undefined' ? _dccRows : []).find(x => x.store === store);
+    // Matrix: the nightly verdicts on this store's three metrics.
+    const w = typeof _dcWatch !== 'undefined' && _dcWatch ? (_dcWatch.flags || []).filter(f => f.store === store) : null;
+    if (w) {
+        const word = { critical: 'Critical', warn: 'Warning', watch: 'Watch', ok: 'On Target' };
+        const metrics = [['conversion', 'Conversion'], ['margin', 'Buy Margin'], ['listing', 'Listing']].map(([k, name]) => {
+            const f = w.find(x => x.metric === k);
+            const sev = !f ? 'good' : f.state === 'critical' ? 'bad' : f.state === 'warn' ? 'warn' : 'good';
+            const n = f ? Number(f.miss_run) || 0 : 0;
+            return { name, sev, word: f ? word[f.state] || 'On Target' : 'No Data',
+                val: !f || f.value == null ? '—' : k === 'listing' ? Math.round(Number(f.value)) + '% of goal' : Number(f.value).toFixed(1) + '%',
+                sub: sev !== 'good' && n ? (n === 1 ? 'Missed 1 day' : 'Missed ' + n + ' days in a row') : '' };
+        });
+        const off = metrics.filter(m => m.sev !== 'good');
+        part('Matrix', { kind: 'matrix', metrics, link: ['Open Full Matrix', "openDistrictFull('watch')"],
+            big: off.length || '✓', bigSev: _qptWorst(metrics.map(m => m.sev)), small: off.length ? 'of 3 metrics off target' : 'all 3 on target',
+            segs: metrics.map(m => m.sev), fix: off.map(m => ({ sev: m.sev })) });
+    } else part('Matrix', null);
+    if (r) {
+        const sevOf = s => s === 'b' ? 'bad' : s === 'w' ? 'warn' : 'good';
+        part('eBay', _qptEbayPart(
+            _QPT_EBAY_TOP.map(k => ({ name: k[1], val: _dccEbayPct(r[k[0]]) || '—', sev: sevOf(_dccSev(k[0], r[k[0]])) })),
+            (r.cats || []).map(c => ({ label: _QPT_EBAY_CAT[c.k] || c.k, list: String(c.v || '').split(',').map(x => x.trim()).filter(Boolean), sev: /very high/i.test(c.k) ? 'bad' : 'warn' })),
+            ['Open Full eBay', "openDistrictFull('ebay')"]));
+        const auSub = x => [x.earned != null && x.possible ? x.earned + '/' + x.possible : '', x.date ? _dcShortDay(x.date) : '', x.auditor || ''].filter(Boolean).join(' · ');
+        const pa = r.official ? { name: 'PayMore Audit', pct: Number(r.official.pct), val: r.official.pct + '%', sub: r.official.date ? _dcShortDay(r.official.date) : '', sev: _qptBandSev(_qpHLBand(Number(r.official.pct))) } : null;
+        const sa = r.audit ? { name: 'SPEEKS Audit', pct: Number(r.audit.pct), val: r.audit.pct + '%', sub: auSub(r.audit), sev: _qptBandSev(_qpHLBand(Number(r.audit.pct))) } : null;
+        const score = Number(r.score) || 0;
+        const scCell = { name: 'SPEEKS Scorecard', val: score.toFixed(1) + ' / 10', sub: r.week && r.week !== 'Recent' ? 'Week of ' + r.week : '', sev: score >= 8 ? 'good' : score >= 6 ? 'warn' : 'bad', noFix: true };
+        part('Scorecard & Audit', _qptScorePart(pa || sa, [pa, sa, scCell].filter(Boolean),
+            (r.scCats || []).filter(c => isFinite(c.score)).map(c => ({ name: c.name, val: c.score * 2, sev: c.score * 2 >= 8 ? 'good' : c.score * 2 >= 6 ? 'warn' : 'bad' })),
+            r.audit ? ['SPEEKS Audit Breakdown', "openAuditBreakdown('" + store + "')"] : ['Open Full Scorecard', "openDistrictFull('scorecard')"]));
+    } else { part('eBay', null); part('Scorecard & Audit', null); }
+    const ks = _qpWState('dkpis');
+    part('Store KPIs', _qptKpiPart(ks.data && _QP_WSPEC.kpis.model(Object.assign({}, ks.data, { _stores: [store] }), 'weekly')));
+}
+// The parts the pane holds, in its card order (a store), or one store's (the DM).
+function _qptHealthParts(pane, store) {
+    const out = [];
+    const part = (name, o) => _qptPart(out, name, o);
+    if (store) { _qptStoreParts(store, part); return out; }
+    Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(_qpKey).forEach(k => {
+        if (k === 'command:ebay') {
+            const h = _qpHL.ebay;
+            part('eBay', h && _qptEbayPart(
+                h.rates || (h.chips || []).map(c => ({ name: c.name, val: c.val, sev: c.cls === 'crit' ? 'bad' : 'warn' })),
+                (h.perfChips || []).map(c => ({ label: c.name, list: String(c.val || '').split(' · ').filter(Boolean), sev: c.cls === 'crit' ? 'bad' : 'warn' })), null));
+        } else if (k === 'command:score') {
+            const h = _qpHL.score;
+            if (!h) { part('Scorecard & Audit', null); return; }
+            const auSub = a => [a.earned != null && a.possible ? a.earned + '/' + a.possible : '', a.date ? _dcShortDay(a.date) : '', a.auditor || ''].filter(Boolean).join(' · ');
+            const cell = (a, name) => a ? { name, pct: Number(a.pct), val: a.pct + '%', sub: auSub(a), sev: _qptBandSev(_qpHLBand(Number(a.pct))) } : null;
+            const pa = cell(h.paudit, 'PayMore Audit'), sa = cell(h.audit, 'SPEEKS Audit');
+            const score = Number(h.score) || 0;
+            const week = h.week ? String(h.week).replace(/^(week of\s*)?/i, 'Week of ') : '';
+            part('Scorecard & Audit', _qptScorePart(pa || sa,
+                [pa, sa, { name: 'SPEEKS Scorecard', val: score.toFixed(1) + ' / 10', sub: week, sev: score >= 8 ? 'good' : score >= 6 ? 'warn' : 'bad', noFix: true }].filter(Boolean),
+                (h.cats || []).map(c => ({ name: c.name, val: c.val, sev: c.cls === 'ok' ? 'good' : c.cls === 'crit' ? 'bad' : c.cls === 'warn' ? 'warn' : '' })),
+                h.audit && h.store ? ['SPEEKS Audit Breakdown', "openAuditBreakdown('" + escapeHtml(h.store) + "')"] : null));
+        } else if (k === 'command:kpis') {
+            // My KPIs (a person's own): the same tiles, one a judged KPI.
+            const h = _qpHL.kpis;
+            const judged = h && !h.none ? h.metrics.filter(m => m.rule && m.has) : [];
+            const tiles = judged.map(m => ({ name: _QP_KPI_NAME[m.t] || m.t, val: m.my, sev: m.bad ? 'bad' : 'good' }));
+            part('My KPIs', h && { kind: 'kpis', tiles, due: null, period: h.period || '',
+                big: h.none ? '—' : tiles.filter(t => t.sev === 'good').length, bigSev: tiles.length && tiles.every(t => t.sev === 'good') ? 'good' : '',
+                small: h.none ? 'No KPIs yet' : 'of ' + tiles.length + ' on target', segs: tiles.length ? tiles.map(t => t.sev) : null,
+                fix: tiles.filter(t => t.sev !== 'good').map(t => ({ sev: t.sev })) });
+        } else if (k === 'kpis' || k === 'dkpis') {
+            // Weekly, whatever the hidden card's own tab is on.
+            const st = _qpWState(k);
+            part('Store KPIs', _qptKpiPart(st.data && _QP_WSPEC[k].model(st.data, 'weekly')));
+        }
+    });
+    return out;
+}
+// The tabs page's fills (styles.css, ONE PALETTE): the rings, bars and dots in
+// the same soft family as the tiles (Ethan, 2026-11-08: the rings' colour was
+// "too dark" beside the tints).
+const _QPT_COL = { bad: 'var(--qs-bad-fill, #ef8b8b)', warn: 'var(--qs-warn-fill, #f2c464)', good: 'var(--qs-good-fill, #72c495)' };
+// A ring: slices (segs, red first so they sit together from the top) or a fill (pct).
+function _qptRing(p) {
+    let bg;
+    if (p.segs && p.segs.length) {
+        const s = p.segs.slice().sort((a, b) => _QPT_SEV[a] - _QPT_SEV[b]), n = s.length, gap = n > 1 ? 3 : 0, step = 360 / n;
+        bg = 'conic-gradient(' + s.map((v, i) => (_QPT_COL[v] || '#c9d2dc') + ' ' + (i * step + gap / 2).toFixed(1) + 'deg ' + ((i + 1) * step - gap / 2).toFixed(1) + 'deg, #fff 0 ' + ((i + 1) * step).toFixed(1) + 'deg').join(', ') + ')';
+    } else if (p.pct != null) {
+        const c = _QPT_COL[_qptBandSev(p.bigSev || 'good')];
+        bg = 'conic-gradient(' + c + ' ' + Math.max(1, Math.min(100, p.pct)) + '%, #eef1f4 0)';
+    } else bg = '#eef1f4';
+    return '<div class="qpt-ring" style="background:' + bg + '"><i class="' + (p.bigSev || '') + '">' + escapeHtml(String(p.big)) + '</i></div>';
+}
+// A part's box body, in its own shape.
+function _qptBody(p) {
+    const cell = (c, cls) => '<div class="qpt-cell ' + (c.sev || '') + (cls ? ' ' + cls : '') + '"><span class="qpt-ck">' + escapeHtml(c.name) + '</span><b>' + escapeHtml(String(c.val)) + '</b>'
+        + (c.word || c.sub ? '<em>' + escapeHtml(c.word || c.sub) + '</em>' : '') + '</div>';
+    if (p.kind === 'ebay') {
+        return '<div class="qpt-sub">Seller Level</div><div class="qpt-cells c4">'
+            + p.rates.map(r => cell(Object.assign({ word: _QPT_RATE_WORD[r.sev] }, r))).join('') + '</div>'
+            + '<div class="qpt-sub">Performance · Categories</div>'
+            + (p.cats.length ? '<div class="qpt-cats">' + p.cats.map(c => '<div class="qpt-crow"><span class="qpt-tag ' + c.sev + '">' + escapeHtml(c.label) + '</span>'
+                + '<span class="qpt-cl">' + c.list.map(escapeHtml).join('<i>·</i>') + '</span></div>').join('') + '</div>'
+              : '<div class="qpt-none">No category at or near eBay’s limit.</div>');
+    }
+    if (p.kind === 'score') {
+        return '<div class="qpt-cells c' + p.audits.length + '">' + p.audits.map(a => cell(a)).join('') + '</div>'
+            + (p.cats.length ? '<div class="qpt-sub">Scorecard Categories</div><div class="qpt-chips">'
+                + p.cats.slice().sort((a, b) => (_QPT_SEV[a.sev] == null ? 3 : _QPT_SEV[a.sev]) - (_QPT_SEV[b.sev] == null ? 3 : _QPT_SEV[b.sev]))
+                    .map(c => '<span class="qpt-chip ' + c.sev + '">' + escapeHtml(c.name) + ' <b>' + escapeHtml(String(c.val)) + '</b></span>').join('') + '</div>' : '');
+    }
+    if (p.kind === 'kpis') {
+        if (p.due) return '<div class="qpt-due ' + p.due.sev + '"><b>' + escapeHtml(p.due.t) + '</b><span>' + escapeHtml(p.due.s || '') + '</span></div>';
+        return (p.period ? '<div class="qpt-sub">' + escapeHtml(String(p.period).replace(/^Week ending/i, 'Week Ending')) + '</div>' : '')
+            + '<div class="qpt-cells c3">' + p.tiles.map(t => cell(t, 'tile')).join('') + '</div>';
+    }
+    if (p.kind === 'matrix') return '<div class="qpt-cells c3">' + p.metrics.map(m => cell({ name: m.name, val: m.val, sev: m.sev, word: m.sub || m.word })).join('') + '</div>';
+    return '';
+}
+function _qptRenderHealth(main) {
+    const pane = main && main.querySelector('.qpt-pane.qpt-merge[data-merge="health"]');
+    if (!pane) return;
+    let store = null;
+    const stabs = pane.querySelector('.qpt-stabs');
+    if (stabs) {
+        // Every store's worst item, for its tab's dot and for where it opens.
+        const worst = _QP_D_STORES.map(s => {
+            const live = _qptHealthParts(pane, s).filter(p => !p.wait);
+            return { s, sev: live.length ? _qptWorst(live.map(p => p.sev)) : 'wait', n: live.reduce((a, p) => a + p.fix.length, 0) };
+        });
+        if (!_qptHStore) { try { _qptHStore = localStorage.getItem(QPT_HSTORE_KEY); } catch (e) { /* private mode */ } }
+        // Not picked yet: the worst store, worked out again on every draw — the
+        // first draw comes before the reads, when every store is still waiting.
+        store = _QP_D_STORES.indexOf(_qptHStore) !== -1 ? _qptHStore
+            : worst.slice().sort((a, b) => (_QPT_SEV[a.sev] == null ? 9 : _QPT_SEV[a.sev]) - (_QPT_SEV[b.sev] == null ? 9 : _QPT_SEV[b.sev]) || b.n - a.n)[0].s;
+        const tabsHtml = worst.map(w => '<button type="button" role="tab" class="qpt-stab' + (w.s === store ? ' on' : '') + '" aria-selected="' + (w.s === store)
+            // The store's name only (Ethan, 2026-11-08: "drop the dot and leave it
+            // the store name") — every store had a red item somewhere, so the dot
+            // was always red and told the stores apart by nothing. The worst-first
+            // work above still picks the store the tab opens on.
+            + '" onclick="qptHealthStore(\'' + w.s + '\')">' + w.s + '</button>').join('');
+        if (stabs._qptHtml !== tabsHtml) { stabs.innerHTML = tabsHtml; stabs._qptHtml = tabsHtml; }
+        const t = pane.querySelector('.qpt-mt');
+        if (t) t.textContent = 'How ' + store + ' Is Running';
+    }
+    const parts = _qptHealthParts(pane, store);
+    const dot = s => '<span class="qpt-hd ' + s + '"></span>';
+    const link = l => l ? '<button type="button" class="qp-hl-link" onclick="' + l[1] + '">' + escapeHtml(l[0]) + ' →</button>' : '';
+    const pills = parts.map(p => '<span class="qpt-vp ' + (p.wait ? 'wait' : p.sev) + '">' + (p.wait ? '' : dot(p.sev)) + escapeHtml(p.name) + '</span>').join('');
+    const n = parts.reduce((a, p) => a + (p.fix ? p.fix.length : 0), 0);
+    const html = '<div class="qpt-hl"><div class="qp-hl-cap">By Part</div>'
+        + parts.map(p => '<div class="qpt-g">' + (p.wait ? '<div class="qpt-ring"><i>…</i></div>' : _qptRing(p))
+            + '<div><h4>' + escapeHtml(p.name) + '</h4><p>' + escapeHtml(p.wait ? 'Syncing…' : p.small) + '</p></div></div>').join('') + '</div>'
+        + '<div class="qpt-hr"><div class="qpt-hcap"><span class="qp-hl-cap">Needs Fixing · ' + n + '</span></div>'
+        + parts.map(p => '<section class="qpt-grp qpt-k-' + (p.kind || 'wait') + '"><div class="qpt-grph"><h4>' + escapeHtml(p.name) + '</h4>'
+            + '<span class="qpt-cnt ' + (p.wait ? '' : p.sev) + '">' + (p.wait ? 'Syncing…' : p.fix.length ? p.fix.length + ' to fix' : 'All clear') + '</span>' + link(p.link) + '</div>'
+            + (p.wait ? '' : _qptBody(p)) + '</section>').join('') + '</div>';
+    const view = pane.querySelector('.qpt-hv'), pp = pane.querySelector('.qpt-mparts');
+    if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
+    if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
+}
+// SALES & GOALS AS ONE CARD — design B, "Scoreboard" (Ethan, 2026-11-08, from
+// artifact Mih223v8gbXEpZfhYefQ44). Built like Store Health: the Goal Pace /
+// Buying / Monthly Breakdown cards (or the DM's two) stay in the pane's rows,
+// hidden and still loading, and this draws from what they read — the shared
+// store snapshot (_qpSnap: daily NP, goals, Day End rows) and the Monthly
+// Breakdown widget's model (hv) — so there is no second read.
+//   DM     the district totals as four tiles, then a row a store: tracking to
+//          goal, needs per day (NP), bought, margin (Ethan, 2026-11-08:
+//          header names; the Buying Share column dropped the same day) — worst pace
+//          first, so "who is behind, and are they buying" is one read across.
+//   Store  pace as one wide band (so far against goal, averaging / needed /
+//          best day), then the last six Day End reports and last month's key
+//          rows as two plain lists.
+function _qptMergeSales(pane, blocks) {
+    const dist = blocks.some(b => /^d(pace|buying)$/.test(_qpKey(b)));
+    const head = document.createElement('div');
+    head.className = 'qpt-mh';
+    head.innerHTML = '<span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span>'
+        + '<div><div class="ew-eyebrow qpt-seb"></div><div class="qpt-mt">How ' + (dist ? 'the District' : escapeHtml(_qpStoreLabel().trim() || 'Your Store')) + ' Is Pacing</div></div>'
+        + '<div class="qpt-spills"></div>';
+    const view = document.createElement('div');
+    view.className = 'qpt-sv';
+    pane.classList.add('qpt-merge');
+    pane.setAttribute('data-merge', 'sales');
+    pane.toggleAttribute('data-qpt-dist', dist);
+    pane.insertBefore(view, pane.firstChild);
+    pane.insertBefore(head, view);
+}
+// A bar with the goal at its right-hand end (pct of goal, capped at 100).
+const _qptGoalBar = (pct, band, thin) => '<div class="qpt-gbar' + (thin ? ' thin' : '') + '"><i class="' + (band || '') + '" style="width:' + Math.max(1, Math.min(100, Number(pct) || 0)) + '%"></i></div>';
+const _qptPct = v => { v = Number(v); return v ? v * (v <= 1 ? 100 : 1) : null; };
+// Buy margin bands, as the Buying cards colour them.
+const _qptMarginBand = m => m == null ? '' : m >= 40 ? 'good' : m >= 35 ? 'warn' : 'bad';
+function _qptRenderSales(main) {
+    const pane = main && main.querySelector('.qpt-pane.qpt-merge[data-merge="sales"]');
+    if (!pane) return;
+    const keys = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(_qpKey);
+    const d = _qpSnap.data, dist = pane.hasAttribute('data-qpt-dist');
+    const cell = (k, v, s, cls) => '<div class="qpt-cell ' + (cls || '') + '"><span class="qpt-ck">' + k + '</span><b>' + v + '</b>' + (s ? '<em>' + s + '</em>' : '') + '</div>';
+    const pill = (t, cls) => '<span class="qpt-vp ' + cls + '">' + t + '</span>';
+    let eb = '', pills = '', html = '';
+    if (!d) {
+        eb = dist ? 'District · This Month' : (_qpMyStore() || 'Your Store') + ' · This Month';
+        html = '<div class="qpt-sec"><div class="status-message">Syncing…</div></div>';
+    } else if (dist) {
+        const last = (d.np || []).filter(r => r.date < d.today).map(r => r.date).sort().pop();
+        eb = 'District · ' + (last ? 'Through ' + _qpDayLabel(last) : 'This Month');
+        const rows = STORE_CODES.map(s => {
+            const p = _qpPaceOf(d, s), y = _qpLast(d, s);
+            return { s, p, y, bought: y ? Number(y.est_value) || 0 : 0, m: y ? _qptPct(y.est_margin_pct) : null };
+        });
+        const paced = rows.filter(r => r.p.goal);
+        const so = paced.reduce((a, r) => a + r.p.soFar, 0), goal = paced.reduce((a, r) => a + r.p.goal, 0);
+        const track = goal ? paced.reduce((a, r) => a + r.p.soFar + r.p.avg * r.p.left, 0) / goal * 100 : null;
+        const bought = rows.reduce((a, r) => a + r.bought, 0), paid = rows.reduce((a, r) => a + (r.y ? Number(r.y.total_spent) || 0 : 0), 0);
+        const margin = bought ? (1 - paid / bought) * 100 : null;
+        const left = paced.length ? Math.max.apply(null, paced.map(r => r.p.left)) : 0;
+        pills = (track == null ? '' : pill('Tracking to ' + Math.round(track) + '%', _qpBand(track))) + (margin == null ? '' : pill(margin.toFixed(1) + '% Buy Margin', _qptMarginBand(margin)));
+        html = '<div class="qpt-sec qpt-sec-b"><div class="qpt-cells c4">'
+            + cell('Net Profit So Far', _lvMoney(so, false), goal ? 'of ' + _qpHLK(goal) + ' goal' : 'no goals set')
+            + cell('Tracking', track == null ? '—' : Math.round(track) + '%', left + ' days left', _qpBand(track))
+            + cell('Bought', _lvMoney(bought, false), 'latest day')
+            + cell('Paid', _lvMoney(paid, false), margin == null ? '' : margin.toFixed(1) + '% margin') + '</div></div>'
+            + '<div class="qpt-sec"><div class="qpt-tw"><table class="qpt-sb qpt-sb-d"><thead><tr><th class="qpt-sb-s">Store</th><th class="qpt-sb-bar">Tracking to Goal</th><th class="r">Needs Per Day (NP)</th><th class="r">Bought</th><th class="r">Margin</th></tr></thead><tbody>'
+            // Worst pace first; a store with no goal set goes last.
+            + rows.slice().sort((a, b) => (a.p.goal ? (a.p.pct == null ? 0 : a.p.pct) : 1e9) - (b.p.goal ? (b.p.pct == null ? 0 : b.p.pct) : 1e9)).map(r => {
+                const band = r.p.hit ? 'good' : _qpBand(r.p.pct);
+                return '<tr><td><span class="qpt-sb-st">' + _qpDot(r.s) + escapeHtml(r.s) + '</span></td>'
+                    + '<td>' + (r.p.goal ? '<div class="qpt-sb-tr">' + _qptGoalBar(r.p.hit ? 100 : r.p.pct, band, true) + '<b class="' + band + '">' + (r.p.hit ? 'Hit' : Math.round(r.p.pct || 0) + '%') + '</b></div>' : '<span class="qpt-none-g">No goal set</span>') + '</td>'
+                    + '<td class="r"><b>' + (!r.p.goal ? '—' : r.p.hit ? 'Done' : _qpHLK(r.p.need)) + '</b></td>'
+                    + '<td class="r">' + (r.y ? _qpHLK(r.bought) : '—') + '</td>'
+                    + '<td class="r">' + (r.m == null ? '—' : '<span class="qpt-cnt ' + _qptMarginBand(r.m) + '">' + r.m.toFixed(0) + '%</span>') + '</td>'
+                    + '</tr>';
+            }).join('') + '</tbody></table></div></div>';
+    } else {
+        const s = _qpMyStore();
+        eb = (s || 'Your Store') + ' · This Month';
+        const parts = [];
+        if (keys.indexOf('pace') !== -1) {
+            const p = _qpPaceOf(d, s);
+            if (!p.goal) parts.push('<div class="qpt-sec qpt-sec-b"><div class="qpt-none-g">No net profit goal is set for this month yet.</div></div>');
+            else {
+                const band = p.hit ? 'good' : _qpBand(p.pct);
+                pills = p.hit ? pill('Goal Hit', 'good') : (p.pct == null ? '' : pill('Tracking to ' + Math.round(p.pct) + '%', band));
+                parts.push('<div class="qpt-sec qpt-sec-b"><div class="qpt-pace"><div class="qpt-pace-l">'
+                    + '<div class="qpt-big"><b>' + _lvMoney(p.soFar, false) + '</b><span>of ' + _lvMoney(p.goal, false) + ' net profit · ' + p.left + ' days left</span></div>'
+                    + _qptGoalBar(p.soFar / p.goal * 100, band) + '</div>'
+                    + '<div class="qpt-cells c3">' + cell('Averaging', _qpHLK(p.avg), 'per day')
+                    + cell('Needed', p.hit ? 'Done' : _qpHLK(p.need), p.hit ? 'goal reached' : 'a day from today', p.hit || p.avg >= p.need ? 'good' : 'warn')
+                    + cell('Best Day', p.best ? _qpHLK(p.best.np) : '—', p.best ? _qpDayLabel(p.best.date).replace(/^\w+, /, '') : '') + '</div></div></div>');
+            }
+        }
+        const lists = [];
+        // SELLING BY DAY, NOT BUYING (Ethan, 2026-11-08: "selling numbers would
+        // probably be more impactful. but maybe we still show total buying
+        // numbers somewhere"). The last six days off the NP tab (daily_np, the
+        // same rows the pace above is worked from): net sales, net profit and the
+        // net margin between them — no GP on screen. Sundays are in it when the
+        // webstore sold something. Buying stays as one line under it: the month's
+        // total and margin, and the latest Day End report.
+        if (keys.indexOf('buying') !== -1 || keys.indexOf('pace') !== -1) {
+            const m1 = _qpMonth1(d);
+            const days = (d.np || []).filter(r => r.store === s && r.date < d.today && r.sales != null && r.np != null)
+                .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+            const mSales = _qpSum((d.np || []).filter(r => r.store === s && r.date >= m1 && r.date < d.today), 'sales');
+            let buy = '';
+            if (keys.indexOf('buying') !== -1) {
+                const cur = _qpThisMonth(d, s), y = _qpLast(d, s);
+                const mv = _qpSum(cur, 'est_value'), ms = _qpSum(cur, 'total_spent');
+                buy = '<div class="qpt-buy"><span class="qp-hl-cap">Buying This Month</span><b>' + _lvMoney(mv, false) + '</b>'
+                    + (mv ? '<span class="qpt-cnt ' + _qptMarginBand((1 - ms / mv) * 100) + '">' + ((1 - ms / mv) * 100).toFixed(1) + '% Margin</span>' : '')
+                    + (y ? '<span class="qpt-buy-l">Latest Day ' + escapeHtml(_qpDayLabel(y.date)) + ' · ' + _lvMoney(Number(y.est_value) || 0, false) + ' bought</span>' : '') + '</div>';
+            }
+            lists.push('<div class="qpt-sec"><div class="qp-hl-cap">Selling · Last ' + days.length + ' Days</div>'
+                + (days.length ? '<table class="qpt-sb qpt-sb-sm qpt-sb-sell"><thead><tr><th>Day</th><th class="r">Net Sales</th><th class="r">Net Profit</th><th class="r">Net Margin</th></tr></thead><tbody>'
+                    + days.map(r => { const sa = Number(r.sales) || 0, np = Number(r.np) || 0, nm = sa > 0 ? np / sa * 100 : null;
+                        return '<tr><td>' + escapeHtml(_qpDayLabel(r.date)) + '</td><td class="r"><b>' + _lvMoney(sa, false) + '</b></td>'
+                            + '<td class="r' + (np < 0 ? ' qpt-neg' : '') + '">' + _lvMoney(np, false) + '</td><td class="r">' + (nm == null ? '—' : nm.toFixed(1) + '%') + '</td></tr>'; }).join('')
+                    + '</tbody></table><div class="qpt-foot">' + _lvMoney(mSales, false) + ' net sales this month</div>'
+                  : '<div class="qpt-none-g">No net profit days in yet this month.</div>')
+                + buy + '</div>');
+        }
+        if (keys.indexOf('monthly') !== -1) {
+            const st = _qpWState('monthly'), m = st.data && st.data.month && _QP_WSPEC.monthly.model(st.data);
+            lists.push('<div class="qpt-sec"><div class="qpt-grph qpt-sh"><span class="qp-hl-cap">Monthly Breakdown' + (m && m.hv ? ' · ' + escapeHtml(m.hv.month) : '') + '</span>'
+                + '<button type="button" class="qp-hl-link" onclick="window.location.href=\'workspace.html#brief\'">Open Monthly Breakdown →</button></div>'
+                + (!st.data ? '<div class="status-message">Syncing…</div>' : !m || !m.hv ? '<div class="qpt-none-g">No monthly numbers have been entered yet.</div>'
+                    : m.hv.rows.map(r => '<div class="qpt-krow"><span>' + escapeHtml(r.label) + '</span><b>' + r.val + '</b><span class="qpt-kd">' + r.delta + '</span>' + r.rank + '</div>').join('')) + '</div>');
+        }
+        html = parts.join('') + (lists.length ? '<div class="qpt-ssplit' + (lists.length === 1 ? ' one' : '') + '">' + lists.join('') + '</div>' : '');
+    }
+    const view = pane.querySelector('.qpt-sv'), pp = pane.querySelector('.qpt-spills'), e = pane.querySelector('.qpt-seb');
+    if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
+    if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
+    if (e && e.textContent !== eb) e.textContent = eb;
+}
+// INVENTORY AS ONE CARD (Ethan, 2026-11-08, artifact 24AE7LWPxDGPJXjiSpVeqx).
+// The pipeline and the people clearing it are one story — what is waiting,
+// and who is working it down — so Inventory Pipeline and Team Production are
+// one card, drawn from the store snapshot the hidden cards already read.
+//   DM     the PACE BOARD: a row a store, most in stock first — in stock and
+//          its value, processed for each of the last 7 days, the latest
+//          against the store's own average (amber under 60%), who led.
+//   Store  PERSON TILES: the band (available devices / available value / processed),
+//          then a tile a person — latest, their last 7 days, average, total,
+//          value. Employees see the same card, whole team (Ethan, 2026-11-08).
+// IN STOCK, NOT IN QUEUE (Ethan, 2026-11-08, on the queue column: "These
+// numbers are wrong. These should be instock numbers" — he picked the Day End
+// email's Available card). So the stock is available_count / available_value,
+// and with no queue there is no "days to clear" either.
+// DAYS, NOT REPORTS (Ethan, same day: "Every report is one day, so that makes
+// more sense"). "Last 7 Days" is the store's last seven Day End days; a closed
+// Sunday has no report, so it is not one of them.
+const _QPT_PERSON_TINTS = ['#7b61d9', '#3b82d6', '#1f9d57', '#d68a12', '#d9675f', '#0f9fb0', '#b5487a', '#5b6675'];
+function _qptMergeInv(pane, blocks) {
+    const dist = blocks.some(b => /^d(pipeline|team)$/.test(_qpKey(b)));
+    const head = document.createElement('div');
+    head.className = 'qpt-mh';
+    head.innerHTML = '<span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg></span>'
+        + '<div><div class="ew-eyebrow qpt-ieb"></div><div class="qpt-mt">Pipeline &amp; Production</div></div>'
+        + '<div class="qpt-spills qpt-ipills"></div>';
+    const view = document.createElement('div');
+    view.className = 'qpt-iv';
+    pane.classList.add('qpt-merge');
+    pane.setAttribute('data-merge', 'inv');
+    pane.toggleAttribute('data-qpt-dist', dist);
+    pane.insertBefore(view, pane.firstChild);
+    pane.insertBefore(head, view);
+}
+// A store's last 7 Day End days: processed a day, the average over the days it
+// processed anything, and what is in stock on the latest.
+function _qptInvStore(d, s) {
+    const f = _qpFacts(d, s).slice(-7), y = f[f.length - 1];
+    if (!y) return null;
+    const p7 = f.map(r => Number(r.devices_processed) || 0), avg = _qpAvg(p7.filter(Boolean));
+    // VALUE, NOT COST (Ethan, 2026-11-08: "Show the value here not the cost"): the
+    // Available card's Projection column, stored as available_value. Rows from
+    // before it was stored have none, and then no money is shown at all.
+    const v = y.available_value;
+    return { s, f, y, p7, avg, stock: Number(y.available_count) || 0, value: v == null || v === '' ? null : Number(v), latest: Number(y.devices_processed) || 0 };
+}
+// Bars a day, the latest in full colour; a day with nothing is a flat stub.
+function _qptBars(vals, color) {
+    const mx = Math.max(1, ...vals);
+    return '<div class="qpt-bars">' + vals.map((n, i) => '<i style="height:' + (n ? Math.round(5 + n / mx * 25) : 3) + 'px;background:'
+        + (n ? color + (i === vals.length - 1 ? '' : '88') : '#e6ebf1') + '"></i>').join('') + '</div>';
+}
+function _qptRenderInv(main) {
+    const pane = main && main.querySelector('.qpt-pane.qpt-merge[data-merge="inv"]');
+    if (!pane) return;
+    const keys = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(_qpKey);
+    const d = _qpSnap.data, dist = pane.hasAttribute('data-qpt-dist');
+    const pill = (t, cls) => '<span class="qpt-vp ' + cls + '">' + t + '</span>';
+    const ini = n => String(n || '').split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+    const av = (n, c) => '<span class="qpt-av" style="background:' + c + '">' + escapeHtml(ini(n)) + '</span>';
+    const dayWord = n => n + (n === 1 ? ' Day' : ' Days');
+    let eb = '', pills = '', html = '';
+    if (!d) {
+        eb = (dist ? 'District' : (_qpMyStore() || 'Your Store')) + ' · Last 7 Days';
+        html = '<div class="qpt-sec"><div class="status-message">Syncing…</div></div>';
+    } else if (dist) {
+        const rows = STORE_CODES.map(s => _qptInvStore(d, s)).filter(Boolean);
+        const last = rows.map(r => r.y.date).sort().pop();
+        eb = 'District · Last 7 Days' + (last ? ' · Through ' + _qpDayLabel(last) : '');
+        const stock = _qpSum(rows, 'stock'), lat = _qpSum(rows, 'latest'), most = Math.max(1, ...rows.map(r => r.stock));
+        const vals = rows.filter(r => r.value != null);
+        pills = pill(_qpN(stock) + ' In Stock' + (vals.length ? ' · ' + _qpHLK(_qpSum(vals, 'value')) : ''), '') + pill(_qpN(lat) + ' Processed · Latest Day', 'good');
+        html = '<div class="qpt-sec">' + (!rows.length ? '<div class="qpt-none-g">No Day End report has come in yet.</div>'
+            : '<div class="qpt-pb qpt-pb-h"><span>Store</span><span>In Stock · Value</span><span>Processed · Last 7 Days</span><span class="c">Latest / Avg</span><span>Top Producer · Latest Day</span></div>'
+            // Most in stock first.
+            + rows.slice().sort((a, b) => b.stock - a.stock).map(r => {
+                const lo = r.avg && r.latest < r.avg * 0.6;
+                const t = _qpTeamOf(d, r.s), m = t && (t.team.find(x => x.top) || t.team[0]);
+                return '<div class="qpt-pb"><span class="qpt-sb-st">' + _qpDot(r.s) + escapeHtml(r.s) + '</span>'
+                    + '<span class="qpt-pb-q"><span class="qpt-sbar"><i style="width:' + Math.max(2, r.stock / most * 100).toFixed(1) + '%;background:' + _qpStoreColor(r.s) + '"></i></span>'
+                    + '<b class="qpt-pb-n">' + _qpN(r.stock) + '</b><span class="qpt-pb-a qpt-pb-n">' + (r.value == null ? '' : _qpHLK(r.value)) + '</span></span>'
+                    + _qptBars(r.p7, _qpStoreColor(r.s))
+                    + '<span class="c"><b class="' + (lo ? 'warn' : '') + '">' + _qpN(r.latest) + '</b> <span class="qpt-pb-a">/ ' + Math.round(r.avg) + '</span></span>'
+                    + (m ? '<span class="qpt-who">' + av(m.name, _qpStoreColor(r.s)) + '<span class="qpt-who-n"><b>' + escapeHtml(m.name) + '</b><small>' + _qpN(m.n) + ' Devices</small></span></span>' : '<span class="qpt-none-g">—</span>')
+                    + '</div>';
+            }).join('') + '<div class="qpt-foot">Amber Latest = Under 60% of the Store\'s Own Average. In Stock = the Day End Report\'s Available Card.</div>')
+            + '</div>';
+    } else {
+        const s = _qpMyStore(), r = s && _qptInvStore(d, s);
+        eb = (s || 'Your Store') + ' · Last 7 Days' + (r ? ' · Through ' + _qpDayLabel(r.y.date) : '');
+        if (!r) html = '<div class="qpt-sec"><div class="qpt-none-g">No Day End report has come in for this store yet.</div></div>';
+        else {
+            const cell = (k, v, sub, cls) => '<div class="qpt-cell ' + (cls || '') + '"><span class="qpt-ck">' + k + '</span><b>' + v + '</b>' + (sub ? '<em>' + sub + '</em>' : '') + '</div>';
+            const pipe = keys.indexOf('pipeline') !== -1;
+            if (pipe) pills = pill(_qpN(r.stock) + ' In Stock' + (r.value == null ? '' : ' · ' + _qpHLK(r.value)), '');
+            pills += pill(_qpN(r.latest) + ' Processed · Latest Day', 'good');
+            const cells = pipe
+                // Available devices and their value, no Live box (Ethan, 2026-11-08:
+                // "I don't think we need the Live card" — "both are available devices
+                // and available value").
+                ? cell('Available Devices', _qpN(r.stock), 'In Stock')
+                    + cell('Available Value', r.value == null ? '—' : _qpHLK(r.value), r.value == null ? 'Fills From the Next Day End' : 'What It Is Worth')
+                    + cell('Processed · Latest Day', _qpN(r.latest), 'Avg ' + r.avg.toFixed(1) + ' a Day')
+                : cell('Store Processed · Latest Day', _qpN(r.latest), 'Avg ' + r.avg.toFixed(1) + ' a Day');
+            // Everyone on any of the 7 days, latest first then the week's total.
+            const ppl = {};
+            r.f.forEach((day, i) => (day.team_production || []).forEach(m => {
+                const p = ppl[m.name] || (ppl[m.name] = { name: m.name, n7: [0, 0, 0, 0, 0, 0, 0].slice(0, r.f.length), value: 0, top: false });
+                p.n7[i] = Number(m.processed) || 0;
+                if (i === r.f.length - 1) { p.value = Number(m.value) || 0; p.top = !!m.top; }
+            }));
+            const t = _qpTeamOf(d, s);
+            const people = Object.values(ppl).map(p => Object.assign(p, { latest: p.n7[p.n7.length - 1], total: p.n7.reduce((a, b) => a + b, 0), avg: _qpAvg(p.n7.filter(Boolean)), worked: p.n7.filter(Boolean).length }))
+                .sort((a, b) => b.latest - a.latest || b.total - a.total);
+            html = '<div class="qpt-sec qpt-sec-b"><div class="qpt-cells ' + (pipe ? 'c3' : 'c1') + '">' + cells + '</div></div>'
+                + '<div class="qpt-sec">' + (!people.length ? '<div class="qpt-none-g">No one is on the Day End report\'s team production yet.</div>'
+                    : '<div class="qpt-pts">' + people.map((p, i) => {
+                        const c = _QPT_PERSON_TINTS[i % _QPT_PERSON_TINTS.length], lo = p.avg && p.latest < p.avg * 0.6;
+                        return '<div class="qpt-pt" style="--c:' + c + '"><div class="qpt-pt-top"><span class="qpt-who">' + av(p.name, c) + '<span class="qpt-who-n"><b>' + escapeHtml(p.name) + '</b></span></span>'
+                            + (p.top ? '<span class="qpt-cnt good">' + (t && t.topRun > 1 ? 'Top · ' + t.topRun + ' Days Running' : 'Top') + '</span>' : '') + '</div>'
+                            + '<div class="qpt-pt-n' + (lo ? ' warn' : '') + '"><b>' + _qpN(p.latest) + '</b><span>Latest Day</span></div>'
+                            + '<div class="qp-hl-cap">Last ' + r.f.length + ' Days</div>' + _qptBars(p.n7, c)
+                            + '<div class="qpt-pt-kv"><span>Daily Average</span><b>' + p.avg.toFixed(1) + '</b></div>'
+                            + '<div class="qpt-pt-kv"><span>Total · ' + dayWord(p.worked) + ' Worked</span><b>' + _qpN(p.total) + '</b></div>'
+                            + '<div class="qpt-pt-kv"><span>Value · Latest Day</span><b>' + _qpHLK(p.value) + '</b></div></div>';
+                    }).join('') + '</div>') + '</div>';
+        }
+    }
+    const view = pane.querySelector('.qpt-iv'), pp = pane.querySelector('.qpt-ipills'), e = pane.querySelector('.qpt-ieb');
+    if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
+    if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
+    if (e && e.textContent !== eb) e.textContent = eb;
+}
+// LISTINGS & DEALS AS ONE WORK LIST (Ethan, 2026-11-08, design B of artifact
+// 9jz7JGawrggijNciHztmKu). B2B, Variance and SPEEKS Connect melted into one
+// to-do list, soonest first: Overdue, Due Today, This Week, Later, No Set Date.
+// A coloured tag says which tool a line is from and a click opens that tool;
+// a cell a tool across the top gives its total. Drawn from the hidden cards'
+// own reads (_qpWState: b2b, variance / dvariance, connect / dconnect), so no
+// second fetch, and only the tools this person's cards hold are in it.
+function _qptMergeWork(pane, blocks) {
+    const dist = blocks.some(b => /^d(variance|connect)$/.test(_qpKey(b)));
+    const head = document.createElement('div');
+    head.className = 'qpt-mh';
+    head.innerHTML = '<span class="sam-mico qp-cw-ico g" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>'
+        + '<div><div class="ew-eyebrow">' + escapeHtml((dist ? 'District' : (_qpStoreLabel().trim() || 'Your Store')) + ' · Right Now') + '</div><div class="qpt-mt">Listings &amp; Deals</div></div>'
+        + '<div class="qpt-spills qpt-wpills"></div>';
+    const view = document.createElement('div');
+    view.className = 'qpt-wv';
+    pane.classList.add('qpt-merge');
+    pane.setAttribute('data-merge', 'work');
+    pane.toggleAttribute('data-qpt-dist', dist);
+    pane.insertBefore(view, pane.firstChild);
+    pane.insertBefore(head, view);
+}
+const _qptDayOf = iso => iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) : '';
+function _qptRenderWork(main) {
+    const pane = main && main.querySelector('.qpt-pane.qpt-merge[data-merge="work"]');
+    if (!pane) return;
+    const keys = Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(_qpKey);
+    const has = k => keys.indexOf(k) !== -1;
+    const today = _qpWToday(), week = (() => { const d = new Date(today + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); })();
+    const short = day => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+    // Top cells read B2B · SPEEKS Connect · Variance (Ethan, 2026-11-09): the
+    // Variance cell is held back in varCell and goes on the end.
+    const items = [], cells = [];
+    let syncing = false, varCell = '';
+    // Header pills, one a thing that is waiting, each saying exactly what it
+    // counts (Ethan, 2026-11-09) — not one lump "10 Waiting". [count, words, tone].
+    const hp = [];
+    const go = { b2b: "window.location.href='b2b.html'", var: "window.location.href='workspace.html#vreplies'",
+        photos: "window.location.href='operations.html#photos'", category: "window.location.href='operations.html#categories'", titles: "window.location.href='operations.html#titles'" };
+    const cell = (k, v, sub, cls) => '<div class="qpt-cell ' + (cls || '') + '"><span class="qpt-ck">' + k + '</span><b>' + v + '</b>' + (sub ? '<em>' + sub + '</em>' : '') + '</div>';
+    // --- Business-to-Business: deals to price (with their due day) and deals waiting on this person.
+    if (has('b2b')) {
+        const d = _qpWState('b2b').data;
+        if (!d) syncing = true;
+        else {
+            const bday = _b2bCentralDay(new Date());
+            const price = d.deals.filter(x => x.stage === 'pricing' && (_b2bIsCorp() || _b2bActionFor(x))).map(x => ({ x, due: _b2bPricingDue(x, bday) })).filter(e => e.due);
+            const need = d.deals.filter(x => x.stage !== 'pricing' && x.stage !== 'listing').filter(_b2bActionFor);
+            const unl = (d.unl || []).filter(r => Number(r.unlisted_units) > 0).reduce((a, r) => a + (Number(r.unlisted_value) || 0), 0);
+            // The store(s) a deal is assigned to — the B2B board's own rule
+            // (_b2bDealStoreTag): listing_stores once split, else listing_store,
+            // else the pricing store. Nothing assigned → the Store column is blank.
+            const bst = x => { const ls = x.listing_stores || []; return ls.length ? ls.slice() : [x.listing_store || x.pricing_store].filter(Boolean); };
+            price.forEach(e => items.push({ tag: 'b2b', tl: 'B2B', due: e.due.dueOn, open: go.b2b, stores: bst(e.x),
+                text: e.x.ref + (e.x.company ? ' · ' + e.x.company : ''), sub: 'Price' + (e.x.total_units ? ' ' + e.x.total_units + (Number(e.x.total_units) === 1 ? ' Unit' : ' Units') : ''),
+                when: e.due.late ? Math.abs(e.due.left) + 'd Overdue' : e.due.left === 0 ? 'Due Today' : 'Due ' + short(e.due.dueOn).replace(/^\w+, /, '') }));
+            need.forEach(x => { const n = _b2bDaysIn(x);
+                items.push({ tag: 'b2b', tl: 'B2B', due: null, rank: -n, open: go.b2b, stores: bst(x), text: x.ref + (x.company ? ' · ' + x.company : ''),
+                    sub: (B2B_STAGE[x.stage] || {}).label || x.stage, when: n + (n === 1 ? ' Day Waiting' : ' Days Waiting'), tone: _b2bAgeTone(n) === 'crit' ? 'bad' : _b2bAgeTone(n) === 'warn' ? 'warn' : '' }); });
+            // TO LIST (Ethan, 2026-11-09: "for stores with B2B to list, shouldn't we
+            // show that as well"): one line a deal a store from the same unlisted
+            // read the Unlisted Value card uses (b2b_unlisted_value), after the
+            // deals to price and the ones waiting on you, largest value first.
+            // The pill says how long since it went to listing (listing_since).
+            // Corp gets ONE LINE A STORE (WSP alone had 11 deals on 11-09), the
+            // pill its oldest; a store gets a line a deal — that is its own work.
+            const toList = (d.unl || []).filter(r => Number(r.unlisted_units) > 0);
+            const daysSince = iso => iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : null;
+            const listLine = (stores, text, u, v, since, pre) => items.push({ tag: 'b2b', tl: 'B2B', due: null, rank: 1e9 - v, open: go.b2b, stores,
+                text, sub: 'List ' + u + (u === 1 ? ' Unit' : ' Units') + (v ? ' · ' + _qpHLK(v) : ''),
+                when: since === null ? 'To List' : (pre || '') + since + (since === 1 ? ' Day' : ' Days') + (pre ? '' : ' Listing') });
+            if (_b2bIsCorp()) {
+                const by = new Map();
+                toList.forEach(r => { const s = String(r.store || '').toUpperCase(), g = by.get(s) || { n: 0, u: 0, v: 0, since: null };
+                    const dd = daysSince(r.listing_since);
+                    g.n++; g.u += Number(r.unlisted_units) || 0; g.v += Number(r.unlisted_value) || 0;
+                    if (dd !== null && (g.since === null || dd > g.since)) g.since = dd;
+                    by.set(s, g); });
+                by.forEach((g, s) => listLine(s ? [s] : [], g.n + (g.n === 1 ? ' Deal to List' : ' Deals to List'), g.u, g.v, g.since, g.n > 1 ? 'Oldest ' : ''));
+            } else toList.forEach(r => listLine(r.store ? [String(r.store).toUpperCase()] : [], r.ref + (r.company ? ' · ' + r.company : ''),
+                Number(r.unlisted_units) || 0, Number(r.unlisted_value) || 0, daysSince(r.listing_since)));
+            const toListUnits = toList.reduce((a, r) => a + (Number(r.unlisted_units) || 0), 0);
+            const late = price.filter(e => e.due.late).length;
+            cells.push(cell('Business-to-Business', price.length + need.length,
+                price.length + ' to Price · ' + need.length + ' Need You' + (unl ? ' · ' + _qpHLK(unl) + ' Unlisted' : ''), late ? 'bad' : price.length + need.length ? 'warn' : 'good'));
+            if (price.length) hp.push([price.length, 'B2B To Price', late ? 'bad' : 'warn']);
+            if (need.length) hp.push([need.length, 'B2B Waiting On You', 'warn']);
+            if (toListUnits) hp.push([toListUnits, toListUnits === 1 ? 'B2B Unit To List' : 'B2B Units To List', 'warn']);
+        }
+    }
+    // --- Variance: a store's lines to explain and DM notes to answer; the DM's reports to review.
+    if (has('variance')) {
+        const d = _qpWState('variance').data;
+        if (!d) syncing = true;
+        else {
+            let n = 0, first = '';
+            d.periods.filter(p => !p.all_clear && (p.items || 0) > (p.answered || 0)).forEach(p => {
+                const due = _qptDayOf(p.manager_due_at), lines = (d.items[p.id] || []).filter(x => x.needs_reply && !x.gm_note);
+                n += p.items - (p.answered || 0);
+                if (!first || due < first) first = due;
+                if (lines.length) lines.forEach(x => items.push({ tag: 'var', tl: 'Variance', due, open: go.var, stores: [_qpMyStore()].filter(Boolean), text: _qpClaimsText(x.item_title),
+                    sub: (x.buyer_name ? _qpWWho(x.buyer_name) + ' · ' : '') + Math.round(Number(x.variance_pct)) + '%' }));
+                else items.push({ tag: 'var', tl: 'Variance', due, open: go.var, stores: [_qpMyStore()].filter(Boolean), text: (p.items - (p.answered || 0)) + ' Lines to Explain', sub: 'Variance Report' });
+            });
+            d.periods.filter(p => (p.awaiting_reply || 0) > 0).forEach(p => {
+                const due = _qptDayOf(new Date(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000).toISOString());
+                (d.items[p.id] || []).filter(x => x.dm_note && x.dm_reply_requested && !x.mgr_reply).forEach(x => {
+                    n++;
+                    if (!first || due < first) first = due;
+                    items.push({ tag: 'var', tl: 'Variance', due, open: go.var, stores: [_qpMyStore()].filter(Boolean), text: _qpClaimsText(x.item_title), sub: 'DM Note · Reply Needed' });
+                });
+            });
+            varCell = cell('Variance', n, n ? (first ? 'Due ' + short(first) : 'Replies Needed') : 'Caught Up', n ? (first && first < today ? 'bad' : 'warn') : 'good');
+            if (n) hp.push([n, n === 1 ? 'Variance Reply Due' : 'Variance Replies Due', first && first < today ? 'bad' : 'warn']);
+        }
+    }
+    if (has('dvariance')) {
+        const d = _qpWState('dvariance').data;
+        if (!d) syncing = true;
+        else {
+            const t = _vrDmTriage(d.data), st = p => (p.store || '').toUpperCase();
+            t.ready.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, stores: [st(p)], text: 'Variance Report',
+                sub: p.answered >= p.items ? 'Ready for Your Notes' : 'Late · ' + p.answered + ' of ' + p.items + ' Replied', when: p.answered >= p.items ? 'Ready' : 'Late', tone: p.answered >= p.items ? 'warn' : 'bad' }));
+            t.closed.forEach(p => items.push({ tag: 'var', tl: 'Variance', due: today, open: go.var, stores: [st(p)], text: 'Variance Report',
+                sub: t.replied.has(st(p)) ? 'A Manager Replied' : 'Reply Window Closed', when: 'Wrap Up' }));
+            const n = t.ready.length + t.closed.length;
+            varCell = (cell('Variance', n, n ? 'To Review' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : '') : 'Caught Up' + (t.waiting.length ? ' · ' + t.waiting.length + (t.waiting.length === 1 ? ' Store Writing' : ' Stores Writing') : ''), n ? 'warn' : 'good'));
+            if (n) hp.push([n, n === 1 ? 'Variance Report To Review' : 'Variance Reports To Review', t.ready.some(p => p.answered < p.items) ? 'bad' : 'warn']);
+        }
+    }
+    // --- SPEEKS Connect: no set date — a line a kind for a store, a line a store for the DM.
+    const conKey = has('dconnect') ? 'dconnect' : has('connect') ? 'connect' : '';
+    if (conKey) {
+        const d = _qpWState(conKey).data, ok = _QP_WSPEC[conKey].has;
+        if (!d) syncing = true;
+        else {
+            const stores = (d.scope && d.scope.stores && d.scope.stores.length) ? d.scope.stores : (conKey === 'dconnect' ? _DMX_STORES : [_qpMyStore()]);
+            const num = (o, s) => Number(o && o[s]) || 0;
+            const per = s => ({ photos: ok('photos') ? num(d.photos, s) : 0, category: ok('category') ? num(d.other, s) + num(d.unmatched, s) + num(d.misfiled, s) : 0,
+                titles: ok('titles') ? num(d.lt && d.lt.titles, s) : 0 });
+            const tot = { photos: 0, category: 0, titles: 0 };
+            const word = { photos: ['Listing With No Pictures', 'Listings With No Pictures'], category: ['Listing to Sort', 'Listings to Sort'], titles: ['Title to Check', 'Titles to Check'] };
+            stores.forEach(s => { const c = per(s); Object.keys(tot).forEach(k => { tot[k] += c[k]; });
+                if (conKey === 'dconnect') {
+                    const all = c.photos + c.category + c.titles;
+                    if (all) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -all, open: go[c.photos ? 'photos' : c.category ? 'category' : 'titles'], stores: [s], text: all + (all === 1 ? ' Listing Fix' : ' Listing Fixes'),
+                        sub: ['photos', 'category', 'titles'].filter(k => c[k]).map(k => c[k] + ' ' + { photos: 'Pictures', category: 'Categories', titles: 'Titles' }[k]).join(' · '), noWhen: true });
+                } else ['photos', 'category', 'titles'].forEach(k => { if (c[k]) items.push({ tag: 'con', tl: 'Connect', due: null, rank: -c[k], open: go[k], stores: [s], text: c[k] + ' ' + word[k][c[k] === 1 ? 0 : 1], sub: '', noWhen: true }); });
+            });
+            const n = tot.photos + tot.category + tot.titles;
+            cells.push(cell('SPEEKS Connect', n, n ? ['photos', 'category', 'titles'].filter(k => ok(k)).map(k => tot[k] + ' ' + { photos: 'Pictures', category: 'Categories', titles: 'Titles' }[k]).join(' · ') : 'All Clear', tot.photos ? 'bad' : n ? 'warn' : 'good'));
+            if (n) hp.push([n, n === 1 ? 'Listing Fix' : 'Listing Fixes', tot.photos ? 'bad' : 'warn']);
+        }
+    }
+    // --- group and draw: BY TOOL, then soonest first inside each (Ethan,
+    // 2026-11-09: "group by category — B2B, then SPEEKS Connect, then Variance
+    // if applicable — by date within"). Date order inside a tool is the old
+    // bucket order (Overdue, Due Today, This Week, Later, No Set Date), so the
+    // pill on the right still says how soon; a dateless line sorts by rank.
+    const tools = [['b2b', 'Business-To-Business'], ['con', 'SPEEKS Connect'], ['var', 'Variance']];
+    const bucket = { over: 0, today: 1, week: 2, later: 3, none: 4 };
+    const grp = it => !it.due ? 'none' : it.due < today ? 'over' : it.due === today ? 'today' : it.due <= week ? 'week' : 'later';
+    const dist = pane.hasAttribute('data-qpt-dist');
+    // A row is five COLUMNS (Ethan, 2026-11-09: "evenly spaced and formatted
+    // columns"): Tool · Store · Item · Detail · When, the same widths on every
+    // row so they line up down the list, and the When pill one width for all.
+    // The Store column is dropped when no line has a store (a store's own view).
+    const anyStore = items.some(it => it.stores && it.stores.length);
+    const row = it => '<div class="qpt-wl" role="link" tabindex="0" onclick="' + it.open + '" onkeydown="if(event.key===\'Enter\'){' + it.open + '}">'
+        + '<span class="qpt-src ' + it.tag + '">' + it.tl + '</span>'
+        + (anyStore ? '<span class="qpt-wl-s">' + (it.stores || []).map(s => '<span>' + _qpDot(s) + escapeHtml(s) + '</span>').join('') + '</span>' : '')
+        + '<span class="qpt-wl-t">' + escapeHtml(it.text) + '</span>'
+        + '<span class="qpt-wl-d">' + escapeHtml(it.sub || '') + '</span>'
+        // SPEEKS Connect has no date to show (Ethan, 2026-11-09: "we don't need
+        // this due date pill") — an empty cell keeps the columns lined up.
+        + (it.noWhen ? '<span class="qpt-when-none"></span>' : '<span class="qpt-when ' + (it.tone || (grp(it) === 'over' ? 'bad' : grp(it) === 'none' ? '' : 'warn')) + '">'
+        + escapeHtml(it.when || (grp(it) === 'over' ? 'Overdue' : it.due === today ? 'Due Today' : 'Due ' + short(it.due).replace(/,.*$/, ''))) + '</span>') + '</div>';
+    let list = '';
+    tools.forEach(([tag, label]) => {
+        const these = items.filter(it => it.tag === tag).sort((a, b) => bucket[grp(a)] - bucket[grp(b)]
+            || (a.due || '').localeCompare(b.due || '') || (a.rank || 0) - (b.rank || 0));
+        if (these.length) list += '<div class="qpt-wgrp">' + label + ' · ' + these.length + '</div>' + these.map(row).join('');
+    });
+    const waiting = items.length;
+    if (varCell) cells.push(varCell);
+    const html = (cells.length ? '<div class="qpt-sec qpt-sec-b"><div class="qpt-cells c' + cells.length + '">' + cells.join('') + '</div></div>' : '')
+        + '<div class="qpt-sec">' + (list ? '<div class="qpt-wlist' + (anyStore ? '' : ' nos') + '">' + list + '</div>' : (syncing ? '<div class="status-message">Syncing…</div>'
+            : '<div class="qp-clear"><div class="qp-clear-t">Nothing Waiting</div><div class="qp-clear-s">No deals, variance or listing fixes need ' + (dist ? 'anyone' : 'you') + ' right now</div></div>')) + '</div>';
+    // Pills in the tiles' order: B2B, then SPEEKS Connect, then Variance.
+    const hpRank = w => /^B2B/.test(w) ? 0 : /^Listing/.test(w) ? 1 : 2;
+    hp.sort((a, b) => hpRank(a[1]) - hpRank(b[1]));
+    const pills = hp.length ? hp.map(([n, words, tone]) => '<span class="qpt-vp ' + tone + '">' + n + ' ' + words + '</span>').join('')
+        : waiting ? '<span class="qpt-vp warn">' + waiting + ' Waiting</span>' : (syncing ? '' : '<span class="qpt-vp good">All Clear</span>');
+    const view = pane.querySelector('.qpt-wv'), pp = pane.querySelector('.qpt-wpills');
+    if (view && view._qptHtml !== html) { view.innerHTML = html; view._qptHtml = html; _qpCapLines(view); }
+    if (pp && pp._qptHtml !== pills) { pp.innerHTML = pills; pp._qptHtml = pills; }
+}
+function _qptLiveCard(main, kind) {
+    const card = document.createElement('div');
+    card.className = 'lv-fs-card qpt-live';
+    if (kind === 'district') {
+        const panel = document.getElementById('dc-panel-live');
+        if (panel) {
+            if (!panel._qptBack || !panel._qptBack.mark.isConnected) {
+                const mark = document.createComment('qpt-live');
+                panel.parentNode.insertBefore(mark, panel);
+                panel._qptBack = { mark: mark, was: panel.classList.contains('cc-active') };
+            }
+            card.classList.add('qpt-live-dist');
+            card.appendChild(panel);
+            panel.classList.add('cc-active');
+        }
+    } else {
+        // Fresh mounts, as the full-screen view makes: renderLiveDashboard fills
+        // every .lv-strip / .lv-detail it finds, so this is the same board.
+        card.innerHTML = '<div class="lv-strip"></div><div class="lv-detail"><div class="status-message">Syncing live sales…</div></div>';
+    }
+    return card;
+}
+function _qptRestoreDist() {
+    const panel = document.getElementById('dc-panel-live');
+    const b = panel && panel._qptBack;
+    if (!b) return;
+    if (b.mark.isConnected) {
+        b.mark.parentNode.insertBefore(panel, b.mark);
+        b.mark.remove();
+        panel.classList.toggle('cc-active', b.was);
+    }
+    panel._qptBack = null;
+}
+// The Leaderboard back in the chart card's right-hand column (on), or home in
+// its own card (off) — the markup is the old card's (b8dbb73), so styles.css
+// already has the two-column look; .qpt-perf only lifts the one-column rule.
+function _qptPerf(main, on) {
+    const chart = main.querySelector('[data-qp-block="chart"]');
+    const lb = main.querySelector('[data-qp-block="leaderboard"]');
+    const st = chart && lb && (lb.querySelector('.ew-standings') || chart.querySelector('.ew-standings'));
+    if (!st) return;
+    const into = (on ? chart : lb).querySelector('.ew-perf-body');
+    if (into && st.parentElement !== into) into.appendChild(st);
+    chart.classList.toggle('qpt-perf', !!on);
+}
+function _qptTeardown(main) {
+    const root = _qptRoot(main);
+    if (!root) return;
+    _qptPerf(main, false);
+    _qptRestoreDist();
+    const stash = main.querySelector(':scope > .qpt-stash');
+    [root, stash].forEach(c => {
+        if (!c) return;
+        c.querySelectorAll('.qp-cell > [data-qp-block]').forEach(b => main.insertBefore(b, root));
+    });
+    main.querySelectorAll('.qpt-wide').forEach(b => b.classList.remove('qpt-wide'));
+    root.remove();
+    if (stash) stash.remove();
+    _qptRowsNow = null;
+    main.classList.remove('qp-tabs-on');
+    qptDrawerClose();
+}
+
+// --- the strip, the panes, the menu ---
+function _qptPaint(main) {
+    const root = _qptRoot(main);
+    if (!root) return;
+    const vis = _qptState.order.filter(k => _qptHave.find(t => t.k === k) && _qptState.hidden.indexOf(k) === -1);
+    const label = k => (QPT_TABS.find(t => t.k === k) || {}).l || k;
+    const strip = root.querySelector('.qpt-strip');
+    const hiddenN = _qptState.hidden.filter(k => _qptHave.find(t => t.k === k)).length;
+    strip.style.gridTemplateColumns = vis.length ? 'repeat(' + vis.length + ', minmax(0, 1fr)) auto' : 'auto';
+    strip.innerHTML = vis.map(k => '<div class="qpt-tab' + (k === _qptTab ? ' on' : '') + '" role="tab" tabindex="0" aria-selected="' + (k === _qptTab) + '" draggable="true"'
+        + ' data-qpt-tab="' + k + '" title="' + escapeHtml(label(k)) + ' · Drag to Reorder" onclick="qptTab(\'' + k + '\')">'
+        + '<span class="qpt-tl">' + escapeHtml(label(k)) + '</span>'
+        + '<span class="qpt-hx" role="button" tabindex="-1" aria-label="Hide ' + escapeHtml(label(k)) + '" title="Hide This Tab" onclick="event.stopPropagation(); qptHide(\'' + k + '\')">×</span></div>').join('')
+        + '<button type="button" class="qpt-mbtn" aria-expanded="' + _qptMenuOpen + '" onclick="event.stopPropagation(); qptMenu()">Tabs' + (hiddenN ? ' · ' + hiddenN + ' Hidden' : '') + ' ▾</button>';
+    const slot = root.querySelector('.qpt-menuslot');
+    slot.innerHTML = _qptMenuOpen ? '<div class="qpt-menu" role="dialog" aria-label="Dashboard tabs"><h5>Dashboard Tabs</h5><p>Untick a tab to hide it. Drag tabs on the strip to reorder them.</p>'
+        + _qptState.order.filter(k => _qptHave.find(t => t.k === k)).map(k => {
+            // No "N Widgets" count beside a tab (Ethan, 2026-11-09: get rid of
+            // it) — every tab is one card now, so the count meant nothing.
+            const t = _qptHave.find(x => x.k === k);
+            return '<label><input type="checkbox" onchange="qptShow(\'' + k + '\', this.checked)"' + (_qptState.hidden.indexOf(k) === -1 ? ' checked' : '') + '>'
+                + escapeHtml(t.l) + '</label>';
+        }).join('')
+        // Reset moved out of this menu to the rail's Customize (Reset Dashboard,
+        // 2026-11-10): it resets the minis too, so it isn't a tabs-only thing.
+        + '</div>' : '';
+    root.querySelectorAll('.qpt-pane').forEach(p => { p.hidden = p.getAttribute('data-tab') !== _qptTab; });
+    root.querySelector('.qpt-none').hidden = !!_qptTab;
+    // "Combines …" over a tab of several cards, so it is plain what is in it.
+    const ph = root.querySelector('.qpt-ph'), pane = root.querySelector('.qpt-pane:not([hidden])');
+    const parts = pane ? Array.from(pane.querySelectorAll('.qp-cell > [data-qp-block]')).map(b => b.getAttribute('data-qp-label')).filter(Boolean) : [];
+    ph.hidden = parts.length < 2 || pane.classList.contains('qpt-merge');   // its header says it
+    ph.textContent = parts.length > 1 ? 'Combines ' + parts.join(' · ') : '';
+    if (typeof _eqTabsRun === 'function') try { _eqTabsRun(); } catch (e) { /* cosmetic */ }
+}
+function qptTab(k) {
+    const main = _qpMain();
+    if (!main || k === _qptTab) return;
+    _qptTab = k;
+    try { sessionStorage.setItem(QPT_TAB_KEY, k); } catch (e) { /* private mode */ }
+    _qptPaint(main);
+    const t = main.querySelector('.qpt-tab[data-qpt-tab="' + k + '"]');
+    if (t && document.activeElement && document.activeElement.classList.contains('qpt-tab')) t.focus();
+}
+function _qptRebuild() { _qptSave(); _qpKeepScroll(_qpApplyLayout); }
+function qptHide(k) {
+    if (!_qptState || _qptState.hidden.indexOf(k) !== -1) return;
+    _qptState.hidden.push(k);
+    if (_qptTab === k) _qptTab = null;
+    _qptRebuild();
+}
+function qptShow(k, on) {
+    if (!_qptState) return;
+    _qptState.hidden = _qptState.hidden.filter(x => x !== k);
+    if (!on) _qptState.hidden.push(k);
+    else { _qptTab = k; try { sessionStorage.setItem(QPT_TAB_KEY, k); } catch (e) { /* private mode */ } }
+    _qptRebuild();
+}
+function qptMenu() {
+    _qptMenuOpen = !_qptMenuOpen;
+    const main = _qpMain();
+    if (main) _qptPaint(main);
+}
+// RESET DASHBOARD asks first (Ethan, 2026-11-10: "make the reset tabs button red
+// and have it popup with an HTML warning", then "make the mini widgets also be a
+// part of that reset ... move that reset button to something more central"). It
+// lives at the foot of the rail while Customize is on, and resets the tab order,
+// hidden tabs AND the minis. The same dialog as the layout's Reset to Default
+// (qpReset, .qp-ask) — never confirm(), which is banned here and dead in the
+// Claude pane. Cancel has the focus; Escape and the dim background cancel.
+function qptResetAsk() {
+    if (document.getElementById('qptResetAsk')) return;
+    const ov = document.createElement('div');
+    ov.id = 'qptResetAsk';
+    ov.className = 'qp-ask';
+    ov.innerHTML = '<div class="qp-ask-card" role="alertdialog" aria-modal="true" aria-labelledby="qptResetAskT" aria-describedby="qptResetAskD">'
+        + '<div class="qp-ask-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></div>'
+        + '<div class="qp-ask-t" id="qptResetAskT">Reset Your Dashboard?</div>'
+        + '<div class="qp-ask-d" id="qptResetAskD">Your tabs go back to their starting order and any tab you hid comes back. Your mini widgets go back to the starting set. This can\'t be undone.</div>'
+        + '<div class="qp-ask-btns"><button type="button" class="qp-ask-no" onclick="qptResetClose()">Cancel</button>'
+        + '<button type="button" class="qp-ask-yes" onclick="qptResetClose(); qptResetTabs()">Reset Dashboard</button></div></div>';
+    ov.addEventListener('click', function (e) { e.stopPropagation(); if (e.target === ov) qptResetClose(); });
+    ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); qptResetClose(); } });
+    document.body.appendChild(ov);
+    ov.querySelector('.qp-ask-no').focus();
+}
+function qptResetClose() {
+    const ov = document.getElementById('qptResetAsk');
+    if (ov) ov.remove();
+}
+function qptResetTabs() {
+    if (!_qptState) return;
+    const d = _qptDefaults();
+    _qptState.order = d.order;
+    _qptState.hidden = d.hidden;
+    _qptState.minis = null;   // the starting set (_qptDefaultMinis), since 2026-11-10
+    _qptTab = null;
+    try { sessionStorage.removeItem(QPT_TAB_KEY); } catch (e) { /* private mode */ }
+    _qptRebuild();
+}
+
+// --- the rail ---
+function _qptRenderRail(main) {
+    const root = _qptRoot(main);
+    if (!root || !_qptState) return;
+    const rail = root.querySelector('.qpt-rail'), list = root.querySelector('.qpt-mlist');
+    rail.classList.toggle('edit', _qptEdit);
+    const btn = rail.querySelector('.qpt-redit');
+    btn.textContent = _qptEdit ? 'Done' : 'Customize';
+    btn.classList.toggle('on', _qptEdit);
+    btn.setAttribute('aria-pressed', String(_qptEdit));
+    const reset = rail.querySelector('.qpt-reset-all');
+    if (reset) reset.hidden = !_qptEdit;
+    _qpShelfFreeNow = 3;   // the rail has no row limit: 2 Rows is always open
+    // At most QPT_MINI_MAX (8) on the rail. A layout saved before the cap with
+    // more keeps them saved; the rail shows the first eight.
+    const toks = _qptRailToks();
+    const full = toks.length >= QPT_MINI_MAX, add = rail.querySelector('.qpt-add');
+    if (add) {
+        // Full, it still opens the drawer — the other minis preview there, and
+        // the rail's own minis can be removed from it (2026-11-10).
+        add.disabled = false;
+        add.classList.toggle('full', full);
+        add.textContent = full ? QPT_MINI_MAX + ' of ' + QPT_MINI_MAX + ' Minis · Customize' : '+ Add Mini Widget';
+    }
+    const html = toks.length ? toks.map(t => '<div class="qpt-mwrap" data-qpt-mini="' + _qpTokId(t) + '"' + (_qptEdit ? ' draggable="true"' : '') + '>' + _qpMiniHtml(t) + '</div>').join('')
+        : '<div class="qpt-empty">No Mini Widgets Yet</div>';
+    if (list._qpHtml !== html) { list.innerHTML = html; list._qpHtml = html; _qpCapLines(list); }
+    if (!_qpShelfTimer) _qpShelfTimer = setInterval(function () { const m = _qpMain(); if (m) _qpRenderShelves(m); }, 15000);
+}
+function qptRailEdit() {
+    _qptEdit = !_qptEdit;
+    const main = _qpMain();
+    if (main) _qptRenderRail(main);
+}
+function qptMiniAdd(id) {
+    if (!_qptState || !_qpMiniOk(id)) return;
+    const list = _qptMinis().slice();
+    if (list.some(t => _qpTokId(t) === id)) return;
+    if (_qptRailFull()) return;   // eight on the rail is the most (QPT_MINI_MAX)
+    list.push(id);
+    _qptState.minis = list;
+    _qptSave();
+    _qptAfterMini(id);
+}
+function qptMiniRemove(id) {
+    if (!_qptState) return;
+    // A layout saved before the cap can hold more than eight; the ones past
+    // the eighth aren't on the rail. They go now, so the place this frees stays
+    // free instead of the ninth sliding up into it. A mini hidden because its
+    // tool was taken away (not _qpMiniOk) is kept — it is not using a place.
+    let seen = 0;
+    _qptState.minis = _qptMinis().filter(t => !_qpMiniOk(t) || ++seen <= QPT_MINI_MAX).filter(t => _qpTokId(t) !== id);
+    _qptSave();
+    _qptAfterMini(id);
+}
+function _qptMiniRows(id, rows) {
+    _qptState.minis = _qptMinis().map(t => (_qpTokId(t) === id ? (rows === 2 ? id + '~2' : id) : t));
+    _qptSave();
+    _qptAfterMini(id);
+}
+function _qptAfterMini(id) {
+    const main = _qpMain();
+    if (main) _qptRenderRail(main);
+    if (document.getElementById('qptDrawer')) { _qptTiles(); _qptPreview(id, true); }
+}
+
+// --- ACTION ITEMS ON THE RAIL (Ethan, 2026-11-07: option C of the Action
+// Items & Claims designs) ---
+// The checklists are progress you glance at, so they sit at the top of the
+// rail, in view whatever tab is open: each piece the Action Items card would
+// show (the same pieces, the same builders — _qpAiBuild — so the counts can't
+// disagree), as a line with its count, a bar and the next task. A line opens
+// its tool the way its row in the old rail did (that row is still on the page,
+// in the stashed card, and is what gets clicked). The card itself is no longer
+// in any tab.
+function _qptRenderAi(main) {
+    const root = _qptRoot(main);
+    const box = root && root.querySelector('.qpt-ai');
+    if (!box) return;
+    const card = main.querySelector('[data-qp-block="actions"]:not([data-qp-shell])');
+    if (!card || !_qpVisible(card)) { box.hidden = true; return; }
+    if (window._speeksTestSession && !_qpAiSwapping) return _qpAiWithSample(() => _qptRenderAi(main));
+    const pieces = _qpShownPieces(main, _qpCurrentRows(main), 'actions').filter(p => _QP_AI_PIECES[p]);
+    if (!pieces.length) { box.hidden = true; return; }
+    const tmp = document.createElement('div');
+    const lines = pieces.map(function (p) {
+        const b = _qpAiBuild(p, 3, 'qpt-rail') || {};
+        const m = /^(\d+)\/(\d+)$/.exec(String(b.count || ''));
+        const pct = m && +m[2] ? Math.min(100, Math.round(m[1] / m[2] * 100)) : null;
+        tmp.innerHTML = b.body || '';
+        const next = tmp.querySelector('.qp-ai-li span:last-child');
+        const row = card.querySelector('[data-qp-piece="actions/' + p + '"][data-qp-piece-main]');
+        const sub = row && row.querySelector('.sam-m-s') ? row.querySelector('.sam-m-s').textContent.trim() : '';
+        const full = row && row.querySelector('.sam-m-t') ? row.querySelector('.sam-m-t').textContent.trim() : _QP_AI_PIECES[p].short;
+        const note = next ? 'Next: ' + next.textContent.trim() : sub;
+        // EVERY LINE THE SAME SHAPE (Ethan, 2026-11-08: "make each block the same
+        // size"): name + count, a bar, a line under it — always all three. A
+        // piece with no count gets an empty (hidden) track, one with nothing to
+        // say gets its "when", so Cleaning, Goals and Listing stand the same
+        // height instead of one, two and three lines.
+        const when = _QP_AI_PIECES[p].when;
+        const say = note || (when ? (when === 'Today' ? 'For today' : when) : 'Open ' + full);
+        return '<button type="button" class="qpt-ai-it" title="Open ' + escapeHtml(full) + '" onclick="event.stopPropagation(); qptAiOpen(\'' + p + '\')">'
+            + '<span class="qpt-ai-l"><b>' + escapeHtml(_QP_AI_PIECES[p].short) + '</b><span class="qpt-ai-n">' + escapeHtml(b.count || '') + '</span></span>'
+            + '<span class="qpt-ai-bar' + (pct == null ? ' none' : '') + '"><i style="width:' + (pct == null ? 0 : Math.max(pct, 2)) + '%"></i></span>'
+            + '<span class="qpt-ai-s">' + escapeHtml(say) + '</span></button>';
+    });
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const where = pieces.some(p => _QP_AI_PIECES[p].district) ? 'District' : (store && store !== 'ALL' ? store : '');
+    const html = '<div class="qpt-ai-h"><b>Action Items</b><span>' + escapeHtml((where ? where + ' · ' : '') + 'Today') + '</span></div>' + lines.join('');
+    box.hidden = false;
+    if (box._qpHtml !== html) { box.innerHTML = html; box._qpHtml = html; _qpCapLines(box); }
+}
+// The line's own click stops where it is (onclick above): a click that reached
+// the document would hit the side panels' click-outside-to-close and shut the
+// panel this just opened.
+function qptAiOpen(piece) {
+    const main = _qpMain();
+    const row = main && main.querySelector('[data-qp-block="actions"]:not([data-qp-shell]) [data-qp-piece="actions/' + piece + '"][data-qp-piece-main]');
+    if (row) row.click();
+}
+
+// --- the mini drawer: tiles, a preview of the one you point at ---
+function qptDrawerOpen() {
+    if (document.getElementById('qptDrawer')) return;
+    const scrim = document.createElement('div');
+    scrim.id = 'qptScrim';
+    scrim.className = 'qpt-scrim';
+    scrim.onclick = qptDrawerClose;
+    const d = document.createElement('aside');
+    d.id = 'qptDrawer';
+    d.className = 'qpt-drawer';
+    d.setAttribute('role', 'dialog');
+    d.setAttribute('aria-label', 'Mini Widgets');
+    d.innerHTML = '<div class="qpt-dh"><h2>Mini Widgets</h2><button type="button" class="modal-close-btn" aria-label="Close" onclick="qptDrawerClose()">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>'
+        + '<div class="qpt-db"><div class="qpt-prev"></div><div class="qpt-tiles"></div></div>';
+    document.body.appendChild(scrim);
+    document.body.appendChild(d);
+    _qptPrevId = null;
+    _qptPreview(null, true);
+    _qptTiles();
+    d.addEventListener('mouseover', e => { const t = e.target.closest('[data-qpt-prev]'); if (t) _qptPreview(t.getAttribute('data-qpt-prev')); });
+    d.addEventListener('focusin', e => { const t = e.target.closest('[data-qpt-prev]'); if (t) _qptPreview(t.getAttribute('data-qpt-prev')); });
+    d.addEventListener('keydown', e => {
+        const t = e.target.classList && e.target.classList.contains('qpt-tile') ? e.target : null;
+        if (t && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            const id = t.getAttribute('data-qpt-prev');
+            qptMiniAdd(id);   // does nothing on a full rail (_qptRailFull)
+            const again = document.querySelector('.qpt-tile[data-qpt-prev="' + id + '"]');
+            if (again) again.focus();
+        }
+    });
+    requestAnimationFrame(() => { scrim.classList.add('on'); d.classList.add('on'); });
+}
+// A FULL RAIL (Ethan, 2026-11-10, after trying a Swap option the same day: "get
+// rid of the swap stuff ... add the Add pill back to all non added widgets once
+// the user is at max, but gray it out"). The other tiles still preview on
+// hover; their + Add is greyed and a click adds nothing until one is removed.
+function qptDrawerClose() {
+    const d = document.getElementById('qptDrawer'), s = document.getElementById('qptScrim');
+    if (d) d.remove();
+    if (s) s.remove();
+}
+function _qptTiles() {
+    const box = document.querySelector('#qptDrawer .qpt-tiles');
+    if (!box) return;
+    const on = {}, toks = _qptRailToks(), full = toks.length >= QPT_MINI_MAX;
+    toks.forEach(t => { on[_qpTokId(t)] = true; });
+    // How many places are used, in the drawer's header.
+    const h = document.querySelector('#qptDrawer .qpt-dh h2');
+    if (h) h.textContent = 'Mini Widgets · ' + toks.length + ' of ' + QPT_MINI_MAX;
+    box.innerHTML = Object.keys(QP_MINIS).filter(_qpMiniOk).map(id => {
+        const m = QP_MINIS[id], has = !!on[id], shut = !has && full;
+        return '<div role="button" tabindex="0" class="qpt-tile' + (has ? ' added' : '') + (shut ? ' full' : '') + (_qptPrevId === id ? ' pv' : '') + '" data-qpt-prev="' + id + '"'
+            + (has || shut ? '' : ' onclick="qptMiniAdd(\'' + id + '\')"') + ' aria-label="' + escapeHtml(has ? m.label + ' Is on Your Rail' : shut ? m.label + ' · Your Rail Is Full' : 'Add ' + m.label) + '"' + (shut ? ' aria-disabled="true"' : '') + '>'
+            + (has ? '<button type="button" class="qpt-pill qpt-pill-rm" aria-label="Remove ' + escapeHtml(m.label) + ' From Your Rail" onclick="event.stopPropagation(); qptMiniRemove(\'' + id + '\')">Remove</button>'
+                : '<span class="qpt-pill' + (shut ? ' qpt-pill-off' : '') + '">+ Add</span>')
+            + _qpMiniIco(m.icon, m.tone) + '<span class="qpt-tname">' + escapeHtml(m.label) + '</span>'
+            + '<span class="qpt-tfoot">' + (m.double ? '<small>Two Rows</small>' : '') + '</span></div>';
+    }).join('');
+}
+function _qptPreview(id, force) {
+    const box = document.querySelector('#qptDrawer .qpt-prev');
+    if (!box || (!force && _qptPrevId === id)) return;
+    _qptPrevId = id;
+    document.querySelectorAll('#qptDrawer .qpt-tile').forEach(t => t.classList.toggle('pv', t.getAttribute('data-qpt-prev') === id));
+    if (!id || !QP_MINIS[id]) {
+        box.innerHTML = '<div class="qpt-pslot"><div class="qpt-empty">Point at a Mini to Preview It</div></div>'
+            + '<div><div class="qpt-pk">Preview</div><div class="qpt-pd">Point at any tile below to see exactly how it will look on your rail.</div></div>';
+        return;
+    }
+    const m = QP_MINIS[id], has = _qptMinis().some(t => _qpTokId(t) === id);
+    box.innerHTML = '<div class="qpt-pslot">' + _qpMiniHtml(id) + '</div>'
+        + '<div><div class="qpt-pk">Preview</div><div class="qpt-pt">' + escapeHtml(m.label) + '</div>'
+        + '<div class="qpt-pd">' + escapeHtml(m.sub || '') + (m.double ? ' · Takes Two Rows' : '') + '</div>'
+        + '<div class="qpt-pd qpt-pstate' + (has ? ' on' : '') + '">' + (has ? 'On Your Rail.' : !_qptRailFull() ? 'Click the Tile to Add It.'
+            : 'Your Rail Has ' + QPT_MINI_MAX + ' — Remove One to Add This.') + '</div></div>';
+    _qpCapLines(box.querySelector('.qpt-pslot'));
+}
+
+// --- dragging tabs and minis; Escape; clicks in the rail's Customize ---
+function _qptWire() {
+    if (_qptWire.done) return;
+    _qptWire.done = true;
+    document.addEventListener('dragstart', function (e) {
+        const el = e.target.closest && e.target.closest('.qpt-tab[draggable="true"], .qpt-rail.edit .qpt-mwrap[draggable="true"]');
+        if (!el) return;
+        _qptDrag = el.classList.contains('qpt-tab') ? { dz: 'tabs', k: el.getAttribute('data-qpt-tab') } : { dz: 'minis', k: el.getAttribute('data-qpt-mini') };
+        el.classList.add('dragging');
+        try { e.dataTransfer.setData('text/plain', _qptDrag.k); e.dataTransfer.effectAllowed = 'move'; } catch (x) { /* old browsers */ }
+    });
+    const target = e => {
+        if (!_qptDrag) return null;
+        const el = e.target.closest && e.target.closest(_qptDrag.dz === 'tabs' ? '.qpt-tab' : '.qpt-mwrap');
+        return el && el.closest('.qpt') ? el : null;
+    };
+    document.addEventListener('dragover', function (e) {
+        const el = target(e);
+        if (!el) return;
+        e.preventDefault();
+        document.querySelectorAll('.qpt .over').forEach(x => { if (x !== el) x.classList.remove('over'); });
+        el.classList.add('over');
+    });
+    document.addEventListener('drop', function (e) {
+        const el = target(e);
+        if (!el) return;
+        e.preventDefault();
+        const to = el.getAttribute(_qptDrag.dz === 'tabs' ? 'data-qpt-tab' : 'data-qpt-mini');
+        if (_qptDrag.dz === 'tabs') {
+            const arr = _qptState.order, f = arr.indexOf(_qptDrag.k), t = arr.indexOf(to);
+            if (f > -1 && t > -1 && f !== t) { arr.splice(f, 1); arr.splice(t, 0, _qptDrag.k); _qptSave(); }
+            _qptDrag = null;
+            const main = _qpMain();
+            if (main) _qptPaint(main);
+        } else {
+            const arr = _qptMinis().slice(), f = arr.findIndex(x => _qpTokId(x) === _qptDrag.k), t = arr.findIndex(x => _qpTokId(x) === to);
+            if (f > -1 && t > -1 && f !== t) { const m = arr.splice(f, 1)[0]; arr.splice(t, 0, m); _qptState.minis = arr; _qptSave(); }
+            _qptDrag = null;
+            const main = _qpMain();
+            if (main) _qptRenderRail(main);
+        }
+    });
+    document.addEventListener('dragend', function () {
+        _qptDrag = null;
+        document.querySelectorAll('.qpt .dragging, .qpt .over').forEach(x => x.classList.remove('dragging', 'over'));
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            if (document.getElementById('qptDrawer')) { qptDrawerClose(); return; }
+            if (_qptMenuOpen) { qptMenu(); return; }
+        }
+        const t = e.target.closest && e.target.closest('.qpt-tab');
+        if (t && e.target === t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); qptTab(t.getAttribute('data-qpt-tab')); }
+    });
+    document.addEventListener('click', function (e) {
+        // A click off the Tabs menu shuts it (its own button toggles it itself).
+        if (_qptMenuOpen && !(e.target.closest && e.target.closest('.qpt-menu, .qpt-mbtn'))) { qptMenu(); }
+        // In the rail's Customize a mini is something you arrange, not a link.
+        const mn = e.target.closest && e.target.closest('.qpt-rail.edit .qp-mn');
+        if (mn && !e.target.closest('[data-qp-edit-ok]')) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
 }
 
 function _qpApplyLayout() {
     const main = _qpMain();
     if (!main) return;
+    // The tabs (QUICKPORTAL TABS, above) for everyone with Customize on desktop;
+    // the rows for everyone else, and on phones and tablets.
+    if (_qptOn()) { _qptApply(main); return; }
+    _qptTeardown(main);
     _qpBuild(main, _qpLayout(main));
     main.classList.toggle('qp-custom', !!_qpSaved());
     // Feature overrides re-run applyRoleBasedUI in the background; that must not
@@ -56291,6 +57990,12 @@ try { window.matchMedia(_compactMediaQuery()).addEventListener('change', _qpComp
 // ...and on a resize while customizing, in case a browser crosses the line
 // without the query's change event (the pane's device emulation did).
 window.addEventListener('resize', function () { if (_qpEditing && _isMobileLayout()) _qpCompactCheck(); });
+// ...and the tabs page (QUICKPORTAL TABS) comes and goes with the same line,
+// so a resize across it swaps the tabs and the stacked rows.
+window.addEventListener('resize', function () {
+    const main = _qpMain();
+    if (main && !!_qptRoot(main) !== _qptOn()) _qpCompactCheck();
+});
 
 // UNDO (Ethan, 2026-10-25). A drop can move other cards now — one bumped
 // down, a lone one joining a row, at worst the whole page re-fitted — so every
@@ -56429,10 +58134,6 @@ function _samAnnRead(item) {
     const localRead = new Set(JSON.parse(localStorage.getItem('speeksLocalRead_' + cleanUser) || '[]'));
     const inReadBy = !!(item.readBy && item.readBy.some(u => String(u).trim().toLowerCase() === cleanUser));
     return inReadBy || localRead.has(item.rowId);
-}
-
-function _samIsMSM() {
-    try { return typeof _isMSMChecklist === 'function' && _isMSMChecklist(); } catch (_) { return false; }
 }
 
 // --- UNIFIED FEED (announcements + store notes + reminders/due dates) ---
@@ -56617,7 +58318,7 @@ function _samRenderFeedNow(rows) {
     // mark-all — each item must be read individually.
     const activeCount = rems.length + notes.length + anns.filter(a => !a.read).length + (patchUnseen ? 1 : 0);
 
-    const ctx = { all, patchRow, patchUnseen, activeCount, tabsOn: _samFeedTabsOn(), showStoreChip: _samIsMSM() };
+    const ctx = { all, patchRow, patchUnseen, activeCount, tabsOn: _samFeedTabsOn() };
     cards.forEach(c => _samPaintFeedCard(c, ctx));
     _samAddReadFull();
     _samSyncRailFill();
@@ -56751,11 +58452,10 @@ function _samPaintFeedCard(c, ctx) {
             return;
         }
         if (it.type === 'note') {
-            const chip = (ctx.showStoreChip && it.store) ? `<span class="sam-schip">${_samEsc(it.store)}</span>` : '';
             desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}','unread')">
                 <span class="sam-adot"></span>
                 <div class="sam-a-body">
-                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}</div>
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span></div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                     <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) : 'Store note'}</div>
                 </div>
@@ -57190,8 +58890,7 @@ function samSetProgress(kind, data) {
 // element only ever reads "Goal: 190 Listings" — no slash — so the match always
 // failed and the bar and value silently stayed blank. Read the same elements the
 // modal itself fills instead: #goals-total-actual is the week's summed goals, and
-// the weekly target comes from targetFor(). MSM stacks two stores, so its totals
-// live in per-store elements and both sides get summed.
+// the weekly target comes from targetFor().
 // Role class for the current user (mirrors applyRoleBasedUI's derivation).
 function _speeksRoleClass() {
     const r = sessionStorage.getItem('speeksUserRole') || 'employee';
@@ -57258,21 +58957,11 @@ function samRefreshListing() {
     };
     const targetOf = s => { try { return targetFor(s) || 0; } catch (_) { return 0; } };
 
-    let done = 0, target = 0, label = '';
-
-    if (_samIsMSM()) {
-        MULTISTORE_MANAGER_STORES.forEach(s => {
-            done += num(document.getElementById(`goals-total-actual-${s}`));
-            target += targetOf(s);
-        });
-        label = MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetOf(s)}`).join(' · ');
-    } else {
-        done = num(document.getElementById('goals-total-actual'));
-        target = (typeof _weekTargetTotal === 'number' && _weekTargetTotal)
-            ? _weekTargetTotal
-            : targetOf(sessionStorage.getItem('speeksUserStore'));
-        label = target ? `Goal: ${target} listings this week` : '';
-    }
+    const done = num(document.getElementById('goals-total-actual'));
+    const target = (typeof _weekTargetTotal === 'number' && _weekTargetTotal)
+        ? _weekTargetTotal
+        : targetOf(sessionStorage.getItem('speeksUserStore'));
+    const label = target ? `Goal: ${target} listings this week` : '';
 
     // Nothing loaded yet — leave the card's default subtitle rather than flashing 0/0.
     if (!target) return;
@@ -57496,6 +59185,11 @@ function _samReminderCfg() {
     // as its summary. The tab is one of a fixed four, never free text.
     const _cdT = document.getElementById('claimsDueAlertBubbleText');
     const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
+    // "Due Today" only when the earliest item really is due today (or has no
+    // date); a card whose soonest deadline is Dec 3 is just "Due" — the badge
+    // beside it carries the date (2026-11-06).
+    const _cdDueOn = (_cdT && _cdT.dataset && _cdT.dataset.dueOn) || '';
+    const _cdIsToday = !_cdDueOn || _b2bDayDiff(_kpiCentralToday(), _cdDueOn) <= 0;
     const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
         ? _cdT.dataset.tab : 'cases';
     // kind: 'due' marks a card that answers to a DEADLINE, which is what puts it
@@ -57526,8 +59220,14 @@ function _samReminderCfg() {
         // resolved in the tool, and only then. Overdue once a deadline on it
         // has passed — it stays after that too, until somebody records what
         // happened.
+        // 0164: resolutions the sites don't back up, waiting on the DM
+        // (checkClaimsConfirmAlerts). State-based: no snooze, gone when the
+        // queue is.
+        { key: 'claimsConfirm', id: 'claimsConfirmAlertBubble', text: 'claimsConfirmAlertBubbleText',
+          title: 'Resolutions to Confirm', urgency: 2, due: 'Confirm', cls: 'sam-due-amber', noSnooze: true,
+          action: "openClaimsTool('confirm')" },
         { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
-          title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
+          title: _cdOver ? 'Claims & Disputes Overdue' : _cdIsToday ? 'Claims & Disputes Due Today' : 'Claims & Disputes Due',
           urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true, kind: 'due',
           action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
@@ -57639,7 +59339,7 @@ function _samReminderCfg() {
     // the saved rows, so whoever sets them clears it for the manager AND the ASM.
     // noSnooze: the goals have to actually be entered — there is no "later" for
     // this one, so the card stays put until the roles are in.
-    // DM + MSM, monthly. The app cannot tell whether the report was actually
+    // DM, monthly. The app cannot tell whether the report was actually
     // emailed (mailto hands it to their own mail client), so this one is cleared
     // by the person saying so — Snooze quiets it for today, "Mark filed" is what
     // ends it, and that assertion is stored server-side per person + month.
@@ -57654,7 +59354,8 @@ function _samReminderCfg() {
     // a deadline, so it is amber and snoozeable: nothing is late, somebody just
     // has a phone call worth making. It clears itself once the match is answered
     // or the unit sells, and a NEW match breaks through the snooze (data-sig).
-    cfg.push({ key: 'cbMatch', id: 'cbMatchAlertBubble', text: 'cbMatchAlertBubbleText',
+    // Managers and ASMs only (2026-11-08) — not an employee's feed.
+    if (!_cbStaffOnly()) cfg.push({ key: 'cbMatch', id: 'cbMatchAlertBubble', text: 'cbMatchAlertBubbleText',
         title: 'Call Back Item In Stock', urgency: 2, due: 'Action', cls: 'sam-due-amber',
         action: "window.location.href='operations.html#callbacks'" });
     // Listings with no category, or on a shelf their own title disagrees with.
@@ -57942,22 +59643,15 @@ function _samGatherReminders() {
         // So the map is not consulted for them at all — including any entry
         // written before this was fixed.
         if (!c.noSnooze && _samIsHidden(c.key, sig)) return;
-        // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
-        // covered stores on data-stores), clicking it opens that store's tool even
-        // while he's on the other store's dashboard — without switching dashboards.
-        // A both-store alert stamps two, so nothing is set and the tool opens on the
-        // active dashboard store (the user's chosen rule).
+        // The bubble stamps the stores an alert covers on data-stores. The DM lands
+        // on the first store that needs review (the bubble lists them attention-first).
         let action = _samDestDead(c.action) ? '' : (c.action || '');
         if (action && t && t.dataset && t.dataset.stores) {
             const stores = t.dataset.stores.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
             const roleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
             let target = '';
-            // MSM: only route a single-store alert; a both-store one opens the active
-            // dashboard store. DM: land on the first store that needs review (the
-            // bubble lists them attention-first).
-            if (isMultiStoreManager()) { if (stores.length === 1) target = stores[0]; }
-            else if (roleLc === 'district manager' && stores.length) target = stores[0];
-            if (target) action = `sessionStorage.setItem('speeksMsmToolStore','${target}');` + action;
+            if (roleLc === 'district manager' && stores.length) target = stores[0];
+            if (target) action = `sessionStorage.setItem('speeksAlertToolStore','${target}');` + action;
         }
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
@@ -58012,7 +59706,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', '_qpClaimsReload'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts', 'checkClaimsConfirmAlerts', '_qpClaimsReload'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders', '_qpWReloadVariance'],
     comments:      ['fetchAndDisplayStoreComment'],
@@ -58480,7 +60174,7 @@ async function openVersionPatchNotes() {
    ========================================================= */
 const _PL_OWNER_ROLES = new Set(['owner (manager)', 'owner manager']);
 // ASMs included: they are the ones handling the supplies day to day.
-const _PL_REQ_ROLES = new Set(['manager', 'assistant manager', 'district manager', 'multi-store manager']);
+const _PL_REQ_ROLES = new Set(['manager', 'assistant manager', 'district manager']);
 
 let _plRequests = [];      // rows for whichever view is open
 let _plTab = 'new';
@@ -62197,10 +63891,10 @@ function _dcwListingTab(rows, cfg) {
 }
 
 // ============================================================================
-// MODULE: EXPENSE REPORT  (DM / MSM file, CEO reviews)
+// MODULE: EXPENSE REPORT  (DM files, CEO reviews)
 // ============================================================================
 // One report per person per month, holding two kinds of line: mileage and
-// ordinary expenses. The DM and MSM see only their own report; the CEO sees
+// ordinary expenses. The DM sees only their own report; the CEO sees
 // everyone's via a person picker. Submitting is the site-standard "email
 // generator" — a To/Subject/Body preview plus a mailto: draft and a clipboard
 // failsafe (same shape as Box Order and the recycle report), so the report
@@ -62401,15 +64095,23 @@ function _expControlsHtml() {
         + '<label class="exp-ctl"><span>Month</span><select class="kpi-select" onchange="expSetMonth(this.value)">' + monthOpts + '</select></label>'
         + personSel + rateCtl
         + '<span class="exp-controls-sp"></span>' + cats
+        // Export and Email are one group so a narrow row wraps them together and
+        // they stay on the right, rather than Email Report dropping alone to the
+        // left edge of a second line.
+        + '<span class="exp-actions">'
+        // Export works from "All" too — one workbook of everyone's lines for the
+        // month, which is what a reviewer files when the whole month is approved.
+        + '<button type="button" class="btn-secondary exp-btn-mail exp-btn-xls" onclick="expExportExcel(this)">'
+            + 'Export Excel<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><polyline points="7 10 12 15 17 10"/><line x1="5" y1="20" x2="19" y2="20"/></svg></button>'
         // A report is filed by one person for one month, so there is nothing to
         // email from the "All" overview.
         + (_expIsAll() ? ''
             : '<button type="button" class="btn-primary exp-btn-mail" onclick="expShowPreview()">'
               + 'Email Report<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>')
-        + '</div>';
+        + '</span></div>';
 }
 
-// A DM/MSM may only edit their own report; the CEO may edit anyone's.
+// A DM may only edit their own report; the CEO may edit anyone's.
 function _expCanEdit() {
     // "All" is a read-only overview — a line has to belong to one person, so
     // there is nothing sensible to add or edit against the aggregate.
@@ -62831,21 +64533,149 @@ function expCopyReport(button) {
 }
 window.expCopyReport = expCopyReport;
 
+// ---- Excel export -------------------------------------------------------------
+// The email is still how a report is filed. This is for AFTER Paul approves it:
+// he wants the approved months kept as files in a Drive folder (Ethan,
+// 2026-11-02), so the same lines the email carries come out as a workbook the
+// person drops in there. It reads _expRows like the email does, so the file can
+// never disagree with what was sent.
+//
+// One sheet laid out like the email — Mileage, then Expenses, then Total Due —
+// rather than a sheet per kind, because the file stands in for the email in the
+// folder and should read the same way. Dates are real dates and money is real
+// numbers (with SUM formulas on the totals), so the file can be added up in a
+// spreadsheet instead of retyped. In "All" every line gets a Person column and
+// the file is named for the month alone.
+//
+// SheetJS is only on the Workspace page, so this borrows the Variance tool's
+// on-demand loader rather than adding a 900 KB script to every page.
+const _expXlsDate = s => {
+    const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000;
+};
+
+function _expWorkbook() {
+    const all = _expIsAll();
+    const who = all ? 'Everyone' : _expPerson;
+    const monthLabel = _expMonthLabel(_expMonth);
+    const mileageRows = _expRows('mileage');
+    const expenseRows = _expRows('expense');
+    const enc = (r, c) => XLSX.utils.encode_cell({ r, c });
+
+    const aoa = [];
+    const money = [], dates = [], sums = [];   // [row, col] cells to format after the sheet exists
+    const push = row => { aoa.push(row); return aoa.length - 1; };
+    const p = all ? 1 : 0;                     // the Person column shifts everything right by one
+
+    push(['Expense Report — ' + who + ' — ' + monthLabel]);
+    push([]);
+
+    let mileageTotalRow = null, expenseTotalRow = null;
+    if (mileageRows.length) {
+        push(['MILEAGE']);
+        push(['Date'].concat(all ? ['Person'] : [], ['From', 'To', 'Purpose', 'Miles', 'Rate', 'Amount']));
+        const first = aoa.length;
+        mileageRows.forEach(e => {
+            const r = push([_expXlsDate(e.entry_date)].concat(all ? [e.person || ''] : [],
+                [e.from_loc || '', e.to_loc || '', e.description || '',
+                 Number(e.miles) || 0, Number(e.rate) || 0, Number(e.amount) || 0]));
+            dates.push([r, 0]); money.push([r, 5 + p], [r, 6 + p]);
+        });
+        const last = aoa.length - 1;
+        const miles = mileageRows.reduce((a, e) => a + (Number(e.miles) || 0), 0);
+        mileageTotalRow = push(['Total'].concat(all ? [''] : [], ['', '', '', Math.round(miles * 10) / 10, '', _expTotal('mileage')]));
+        sums.push([mileageTotalRow, 4 + p, first, last], [mileageTotalRow, 6 + p, first, last]);
+        money.push([mileageTotalRow, 6 + p]);
+        push([]);
+    }
+
+    if (expenseRows.length) {
+        push(['EXPENSES']);
+        push(['Date'].concat(all ? ['Person'] : [], ['Category', 'Description', 'Amount']));
+        const first = aoa.length;
+        expenseRows.forEach(e => {
+            const r = push([_expXlsDate(e.entry_date)].concat(all ? [e.person || ''] : [],
+                [e.category || '', e.description || '', Number(e.amount) || 0]));
+            dates.push([r, 0]); money.push([r, 3 + p]);
+        });
+        const last = aoa.length - 1;
+        expenseTotalRow = push(['Total'].concat(all ? [''] : [], ['', '', _expTotal('expense')]));
+        sums.push([expenseTotalRow, 3 + p, first, last]);
+        money.push([expenseTotalRow, 3 + p]);
+        push([]);
+    }
+
+    if (!mileageRows.length && !expenseRows.length) {
+        push(['No expenses or mileage were logged for this month.']);
+        push([]);
+    }
+
+    const dueRow = push(['TOTAL DUE', _expTotal('mileage') + _expTotal('expense')]);
+    money.push([dueRow, 1]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    dates.forEach(([r, c]) => { const cell = ws[enc(r, c)]; if (cell && cell.t === 'n') cell.z = 'mm/dd/yyyy'; });
+    money.forEach(([r, c]) => { const cell = ws[enc(r, c)]; if (cell) cell.z = '$#,##0.00'; });
+    // The cached value stays in each cell, so a viewer that ignores formulas
+    // (Drive's preview) still shows the right total.
+    sums.forEach(([r, c, a, b]) => {
+        const cell = ws[enc(r, c)];
+        if (cell) cell.f = 'SUM(' + enc(a, c) + ':' + enc(b, c) + ')';
+    });
+    const due = [mileageTotalRow != null ? enc(mileageTotalRow, 6 + p) : null,
+                 expenseTotalRow != null ? enc(expenseTotalRow, 3 + p) : null].filter(Boolean);
+    if (due.length) ws[enc(dueRow, 1)].f = due.join('+');
+
+    // Widths from the content, because Mileage and Expenses share columns with
+    // different things in them. Row 0 (the title) is skipped — it is meant to
+    // run across the top, not to widen the Date column.
+    const widths = [];
+    aoa.slice(1).forEach(row => row.forEach((v, c) => {
+        const len = typeof v === 'number' ? 12 : String(v == null ? '' : v).length + 2;
+        widths[c] = Math.min(Math.max(widths[c] || 10, len), 50);
+    }));
+    ws['!cols'] = widths.map(w => ({ wch: w }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Expense Report');
+    // Plain hyphens: an em dash in a filename survives Windows but not every
+    // Drive sync client.
+    const name = 'Expense Report - ' + (all ? '' : who.replace(/[\\/:*?"<>|]/g, '') + ' - ') + monthLabel + '.xlsx';
+    return { wb, name };
+}
+
+async function expExportExcel(btn) {
+    if (btn) btn.disabled = true;
+    try {
+        await _vrEnsureXlsx();
+        const { wb, name } = _expWorkbook();
+        XLSX.writeFile(wb, name);
+    } catch (e) {
+        alert('Could not build the Excel file — check your connection and try again.');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+window.expExportExcel = expExportExcel;
+
 // ---- monthly "file your expense report" reminder ------------------------------
-// DM and MSM only (the CEO receives the reports, they don't file one). Unlike the
+// DM only (the CEO receives the reports, they don't file one). Unlike the
 // KPI nags this cannot be data-derived — the report leaves as a mailto handed to
 // the person's mail client, so the app never sees it sent. "Filed" is therefore
 // an assertion the person makes, stored server-side (expense_submissions) so it
 // survives filing from another machine and shows leadership who has filed.
-const _EXP_REMIND_ROLES = new Set(['district manager']);
 let _expRemindStarted = false;
 
+// Everyone who has the tool files a report, so everyone who has it gets the
+// reminder — except the CEO, who receives the reports rather than filing one.
+// Was DM-only by role; since any role can be given the tool (2026-11-09) the
+// filer list is Feature Access's, not a role list.
 function _expRemindApplies() {
     const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    if (_EXP_REMIND_ROLES.has(r)) return true;
-    // An MSM signs in with the effective role 'manager', so the flag is the only
-    // way to tell them apart from a store manager.
-    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+    if (r === 'ceo') return false;
+    return typeof _jumpFeatureVisible !== 'function'
+        || _jumpFeatureVisible('tool-expenses') || _jumpFeatureVisible('tool-expenses-mgr');
 }
 
 // The month being chased is the one that just CLOSED — you file August in
@@ -68147,7 +69977,7 @@ function _lhUpdateNag(d, stores) {
         // no image_count" is a database sentence; an empty picture box is the
         // thing that costs the sale, and it tells the reader why to care.
         // "BAL & MPL has" is wrong; the verb follows the SUBJECT (the stores),
-        // not the count. A two-store MSM reads this line every day.
+        // not the count.
         t.dataset.summary = where + (stores.length > 1 ? ' have ' : ' has ')
             + n + ' listing' + (n === 1 ? '' : 's')
             + ' live on the online store with no pictures — a shopper sees an empty box, so '

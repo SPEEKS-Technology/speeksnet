@@ -136,21 +136,19 @@ t('a name that differs by surname still matches its shift', function () {
     return g === 11 || 'loose name match scored ' + g + ', expected 11';
 });
 
-t('a Multi-Store Manager keeps a full day, so their goal does not move', function () {
+t('an 8-hour shift is a full day, so a part-time WEEK does not move the goal', function () {
     lgReset();
-    // The server sends 8 for an MSM: they are stored as part_time because that is
-    // how their WEEK is split across two stores (20h at each), not because they
-    // work short days. The board bears that out -- Joseph Ortega is marked OFF at
-    // one store and given a full seat at the other, in runs of days. Which store
-    // varies week to week with what each needs (user, 2026-09-17), which is
-    // exactly why a fixed day count is the wrong shape for him.
+    // A shift of 8 is a full day whatever the person's week looks like: being
+    // part_time describes how the WEEK is split, not the length of a day. (This
+    // was written for the Multi-Store Manager, whose week was split 20h across
+    // two stores; that role went 2026-11-08, but the engine rule is the same.)
     //
     // If this ever comes back as 12, the part-time DAY default has leaked onto
-    // the part-time WEEK flag again, and BAL and MPL have both silently lost a
-    // third of their Staffed For.
-    ListingGoalsEngine.applyConfig(lgPayload({ store: 'BAL', shifts: { 'Joseph Ortega': 8 } }));
-    var g = ListingGoalsEngine.goalFor('L1', LG_THU, { employee: 'Joseph Ortega', store: 'BAL' });
-    return g === 18 || 'the MSM scored ' + g + ' on a lister day, expected an unchanged 18';
+    // the part-time WEEK flag again, and the store has silently lost a third of
+    // its Staffed For.
+    ListingGoalsEngine.applyConfig(lgPayload({ store: 'BAL', shifts: { 'Pat Example': 8 } }));
+    var g = ListingGoalsEngine.goalFor('L1', LG_THU, { employee: 'Pat Example', store: 'BAL' });
+    return g === 18 || 'an 8h shift scored ' + g + ' on a lister day, expected an unchanged 18';
 });
 
 t('Off carries no goal whatever the shift', function () {

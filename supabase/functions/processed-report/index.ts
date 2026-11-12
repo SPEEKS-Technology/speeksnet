@@ -63,10 +63,17 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //     capacity model, so a daily goal read then was a number that moved a week
 //     later.
 //
-// SUNDAY IS CLOSED, so the week runs Tue–Sat yesterday, nothing on Sunday, and
-// Monday reports SATURDAY — the same rule and the same reasoning as cash-report:
-// retargeting Sunday's send at Saturday would make Monday's run hit the
-// already-sent guard and go silent, and a missing Monday is the worse failure.
+// SATURDAY GOES OUT SUNDAY (Ethan, 2026-11-08). The week runs Tue–Sun, each
+// morning reporting yesterday, and Monday normally sends nothing. This used to
+// hold Saturday for Monday like cash-report does; Ethan wanted this one email on
+// Sunday and accepted that it and the cash email now land on different days.
+// Cash-report is deliberately untouched.
+//
+// Monday is not special-cased. lastOpenDay() still steps Monday back over the
+// closed Sunday to Saturday, and the already-sent guard below then skips it
+// because Sunday sent it. That keeps the guard as the net: if Sunday's send
+// failed, or went out short a store whose Day End came in late, Monday mails
+// Saturday (marked as an update) instead of leaving a gap.
 //
 // TIMING — LAST IN THE CHAIN, NEVER ALONGSIDE IT. Ethan asked for this to land
 // with the rest of the morning mail. The sales import and Net Profit share an
@@ -332,13 +339,8 @@ Deno.serve(async (req: Request) => {
   // than as a report that failed to refresh.
   const carried = !asked && day !== addDays(today, -1);
 
-  // Sunday: send nothing. Saturday's figures go out tomorrow instead. dryRun and
-  // force still render and send, so this stays testable on any day.
-  if (!dryRun && !force && !asked && dowOf(today) === 0) {
-    return new Response(JSON.stringify({
-      ok: true, skipped: 'sunday — stores closed; Saturday goes out Monday', today, day,
-    }, null, 2), { headers: cors });
-  }
+  // No Sunday skip any more: Sunday reports Saturday like any other morning
+  // (see the SATURDAY GOES OUT SUNDAY note at the top).
 
   try {
     const { data, error } = await sb.from('day_end_facts')

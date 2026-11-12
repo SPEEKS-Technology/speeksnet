@@ -275,18 +275,21 @@ t('audit §1: .ws-panel sizes from a measured offset, not a guess', function () 
 
 t('audit §2: tab labels do not wrap, and the strip can scroll', function () {
     var host = stage(700,
-        '<div class="mb-view-toggle b2b-view-toggle" role="tablist">'
-        + '<button class="mb-view-btn" role="tab">Needs You</button>'
-        + '<button class="mb-view-btn" role="tab">Pipeline</button>'
-        + '<button class="mb-view-btn" role="tab">Completed</button>'
-        + '<button class="mb-view-btn" role="tab">Evaluations</button>'
-        + '<button class="mb-view-btn" role="tab">Clients</button>'
-        // Five tabs, which is the real set since the Overview went on 2026-09-10.
-        + '</div>');
-    var strip = host.querySelector('.b2b-view-toggle');
-    var first = host.querySelector('.mb-view-btn');
-    if (getComputedStyle(first).whiteSpace !== 'nowrap') return '"Needs You" can still wrap to two lines';
-    if (getComputedStyle(strip).overflowX !== 'auto') return 'the strip cannot scroll, so the last tab is unreachable';
+        // Since 2026-10-31 the views are the page's .ws-subtabs row (the same as
+        // Operations and Workspace) rather than a pill strip in the card head.
+        '<div class="b2b-wrap"><div class="ws-subtabs b2b-view-tabs" role="tablist">'
+        + '<button class="ws-tab" role="tab">Pipeline</button>'
+        + '<button class="ws-tab" role="tab">Completed</button>'
+        + '<button class="ws-tab" role="tab">Evaluations</button>'
+        + '<button class="ws-tab" role="tab">Clients</button>'
+        + '</div></div>');
+    var strip = host.querySelector('.b2b-view-tabs');
+    var tabs = host.querySelectorAll('.ws-tab');
+    if (getComputedStyle(tabs[0]).whiteSpace !== 'nowrap') return 'a tab label can wrap to two lines';
+    // Every tab must be reachable: inside the strip, or the strip scrolls to it.
+    var sr = strip.getBoundingClientRect(), last = tabs[tabs.length - 1].getBoundingClientRect();
+    if (last.right > sr.right + 1 && getComputedStyle(strip).overflowX !== 'auto')
+        return 'the last tab runs past the strip and the strip cannot scroll';
     // The strip itself must not exceed the frame -- that was the clipping.
     return strip.getBoundingClientRect().width <= host.clientWidth + 1
         || 'strip is ' + Math.round(strip.getBoundingClientRect().width) + 'px in ' + host.clientWidth + 'px';

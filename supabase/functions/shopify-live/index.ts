@@ -109,9 +109,6 @@ const STORE_NAMES: Record<string, string> = {
 // Everyone at CORP sees the district. Kept as a role list too, because role and
 // store have drifted apart before.
 const DISTRICT_ROLES = ["ceo", "district manager", "tom"];
-// The Multi-Store Manager runs BAL and MPL — the same scoping the checklist,
-// audit panel and Listing Goals still use.
-const MSM_STORES = ["BAL", "MPL"];
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {

@@ -13,7 +13,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // WHO MAY WRITE is resolved from body.pin against users — never from a role
 // or store the browser sends (CLAUDE.md, Identity). Ethan, 2026-10-01:
-//   * store events: only that store's manager. An MSM manages both BAL and MPL.
+//   * store events: only that store's manager.
 //     ASMs, buyers, employees and the store TV account read only.
 //   * company events: the district roles — DM, CEO, MOCD.
 // Corporate does not edit a store's own events; they see them in the district
@@ -32,9 +32,6 @@ const json = (body: unknown, status = 200) =>
   });
 
 const STORE_CODES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
-// Mirrors MULTISTORE_MANAGER_STORES in speeks.js — the MSM's users.store is
-// only their home store, so the second one has to be known here too.
-const MULTISTORE_MANAGER_STORES = ["BAL", "MPL"];
 const STORE_MANAGER_ROLES = ["manager", "owner (manager)"];
 const DISTRICT_ROLES = ["district manager", "ceo", "mocd"];
 // Event types live in store_calendar_categories (0128), managed by the DM.
@@ -64,7 +61,6 @@ function powersOf(user: { role?: string; store?: string } | null) {
   const role = String(user.role || "").toLowerCase().trim();
   const home = String(user.store || "").toUpperCase().trim();
   if (DISTRICT_ROLES.includes(role) || role === "tom") return { stores: [], company: true };
-  if (role === "multi-store manager") return { stores: MULTISTORE_MANAGER_STORES.slice(), company: false };
   if (STORE_MANAGER_ROLES.includes(role) && STORE_CODES.includes(home)) return { stores: [home], company: false };
   return { stores: [], company: false };
 }
