@@ -161,10 +161,16 @@ async function pushToSheet(
   month: string,
   goals: Record<string, number>,
   buyDays: number | null,
+  closedDays: number[] | null,
 ): Promise<string> {
   const url = Deno.env.get("MONTH_ROLLOVER_URL");
-  const secret = Deno.env.get("SYNC_SECRET");
-  if (!url || !secret) return "not configured";
+  // The same fallback every other sync function carries (np-sync, ebay-alert…).
+  // SYNC_SECRET has never been set as a project secret, and without this the
+  // push quietly returned "not configured" on every save: the NP goals only
+  // reached the tab because np-sync re-pushes them, and the buying days —
+  // which nothing re-pushes — never reached the Buy tab at all (2026-11-02).
+  const secret = Deno.env.get("SYNC_SECRET") || "sp33ks-sync-k3y-2026-x9mq";
+  if (!url) return "not configured";
   // An NP month sends its goals as `npGoals` with an empty `goals`, so a
   // month-rollover script published before NP goals existed writes nothing,
   // rather than putting a Net Profit goal in the Sales tab's GP Goal cell.
@@ -174,11 +180,16 @@ async function pushToSheet(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: "goals", secret, month, goals: np ? {} : goals, npGoals: np ? goals : undefined, buyDays,
+        // closedDays: the whole list, so the Buy tab can $0 those rows like a
+        // Sunday (and lift the 0 off a future day taken back off the list). A
+        // script published before this ignores the key.
+        action: "goals", secret, month, goals: np ? {} : goals, npGoals: np ? goals : undefined, buyDays, closedDays,
       }),
       redirect: "follow",
     });
-    const txt = (await res.text()).slice(0, 300);
+    // 1500, not 300: the site now reads this answer (_gpSheetNote), and four
+    // write results (closed days list every cell) cut short lose the last one.
+    const txt = (await res.text()).slice(0, 1500);
     return res.ok ? "ok " + txt : "HTTP " + res.status + " " + txt;
   } catch (e) {
     return "failed: " + String((e as Error)?.message || e);
@@ -292,6 +303,7 @@ Deno.serve(async (req: Request) => {
       // the difference matters, because the second must be able to clear a
       // closure that was added by mistake.
       let buyDays: number | null = null;
+      let closedDays: number[] | null = null;
       if (Array.isArray(body.closed)) {
         const seen = new Set<number>();
         const shut: { ym: string; day: number; label: string; set_by: string }[] = [];
@@ -312,9 +324,10 @@ Deno.serve(async (req: Request) => {
           if (insErr) throw insErr;
         }
         buyDays = buyingDays(month, shut.map((s) => s.day));
+        closedDays = shut.map((s) => s.day);
       }
 
-      const sheet = await pushToSheet(month, Object.fromEntries(rows.map((r) => [r.store, Number(r[col])])), buyDays);
+      const sheet = await pushToSheet(month, Object.fromEntries(rows.map((r) => [r.store, Number(r[col])])), buyDays, closedDays);
       await broadcastChange("gpGoals");
 
       const missing = STORES.filter((s) => !rows.some((r) => r.store === s));

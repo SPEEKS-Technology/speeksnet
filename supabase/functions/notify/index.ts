@@ -51,8 +51,6 @@ const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
 const SITE = "https://speeksnet.com";
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
-// Kept in step with MULTISTORE_MANAGER_STORES in speeks.js.
-const MSM_STORES = ["BAL", "MPL"];
 
 const STORE_NAME: Record<string, string> = {
   OVL: "Overland Park", LEE: "Lee's Summit", WSP: "Westport",
@@ -68,6 +66,7 @@ const corsHeaders = {
 const CATEGORIES = [
   "announcements", "store_messages", "requests", "b2b",
   "claims", "variance_aging", "deadlines", "scores", "categories", "listing_photos",
+  "callbacks",
 ] as const;
 type Category = typeof CATEGORIES[number];
 
@@ -94,7 +93,7 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // Monday's unlisted-value report. The two reminders are due-date slugs from
   // collectDue; the stage events are queued rows. Same switch either way.
   b2b:            { label: "B2B Deals",                  blurb: "Deals waiting on you, a daily pricing reminder, and Monday's unlisted value." },
-  claims:         { label: "Insurance Claims",           blurb: "A claim that has gone unresolved past a week." },
+  claims:         { label: "Insurance Claims",           blurb: "Claims left without an update past a week, and the DM's review reminders." },
   // While Aging Inventory is paused the category is Variance alone. The KEY stays
   // variance_aging so every saved preference still lines up when aging returns.
   variance_aging: AGING_PAUSED
@@ -104,7 +103,10 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   scores:         { label: "Scores & Audits"  ,            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
   // Named for the queue, not the mechanism: a manager knows what "a listing
   // with no category" is and has never heard of the `other` collection.
-  categories:     { label: "Listing Categories",         blurb: "Online-store listings with no category, or on a shelf that looks wrong." },
+  // "Listing Health" since 2026-11-03, named for the tool both of its alerts
+  // live in: the category queue, and a title the DM sent back with a note.
+  // The KEY stays `categories` so every saved cat_categories still lines up.
+  categories:     { label: "Listing Health",             blurb: "Listings with no category or on the wrong shelf, and titles the DM sent back." },
   // ITS OWN SWITCH, NOT PART OF "categories", even though both queues live on
   // the same page. Two reasons, and either alone would be enough: the audience
   // differs (this one includes ASMs, who are absent from the categories set),
@@ -112,6 +114,8 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // no photo cannot be bought. Folding them together would mean muting the
   // storefront-tidiness nag also silences the one that costs a sale.
   listing_photos: { label: "Listings With No Pictures",  blurb: "A listing live on the online store with no photo at all. This should always be none." },
+  // callback-match, one mail per sweep that finds a NEW pair (migration 0163).
+  callbacks:      { label: "Customer Call Backs",        blurb: "A customer on the call back list wants something your store has in stock." },
 };
 
 // PER-ROLE LABEL OVERRIDES.
@@ -120,9 +124,11 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
 // the override has to exist: a label naming somebody else's half of the tool is
 // worse than a generic one, because it promises things that can never arrive and
 // the silence then reads as a bug.
+// "My Requests", not "My Recycle Requests", since purchase verdicts started
+// coming back too (2026-11-03): managers and ASMs both file purchase requests.
 const STORE_REQUESTS = {
-  label: "My Recycle Requests",
-  blurb: "The DM's verdict, notes and replies on recycle requests you sent up.",
+  label: "My Requests",
+  blurb: "The answer on purchase and recycle requests you sent up, and the DM's notes.",
 };
 
 const STORE_SCORES = {
@@ -159,6 +165,11 @@ const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { lab
         blurb: "Setting the day's buying and listing roles.",
       },
       scores: STORE_SCORES,
+      // The category queue is the manager's; an ASM gets the title half only.
+      categories: {
+        label: "Titles Sent Back",
+        blurb: "A listing title the DM sent back to your store with a note.",
+      },
     },
   },
   {
@@ -172,6 +183,17 @@ const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { lab
   {
     roles: new Set(["owner (manager)", "owner manager"]),
     meta: { requests: OWNER_REQUESTS, scores: STORE_SCORES },
+  },
+  {
+    // Corp receives the scorecard only -- PayMore audits go to the store.
+    roles: new Set(["district manager", "ceo"]),
+    meta: { scores: { label: "SPEEKS Scorecard", blurb: "The Online & Marketing categories being scored." } },
+  },
+  {
+    // The DM SENDS the review reminders, so their claims row is the weekly
+    // unresolved sweep alone.
+    roles: new Set(["district manager"]),
+    meta: { claims: { label: "Insurance Claims", blurb: "A store's claims left without an update past a week." } },
   },
 ];
 
@@ -230,8 +252,11 @@ const SUBS: Record<Category, Sub[]> = {
     { key: "req_in",  label: "Requests Coming In", blurb: "Purchase and recycle requests, and delete requests, waiting on a verdict.",
       kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request"],
       roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
-    { key: "req_out", label: "Verdicts And Replies", blurb: "The DM's answer on something you sent up.",
-      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
+    // Neutral wording: this sub reaches BOTH ends -- the store hears the DM's
+    // verdict, the DM hears the store's reply -- so "the DM's answer" was wrong
+    // for the one person most likely to read it.
+    { key: "req_out", label: "Verdicts And Replies", blurb: "Verdicts, notes and replies on purchase and recycle requests already sent.",
+      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply", "purchase_verdict"] },
   ],
   b2b: [
     // The stage events, moved here from `requests` with the same key, so a
@@ -259,7 +284,14 @@ const SUBS: Record<Category, Sub[]> = {
       blurb: "Monday's total of B2B value still waiting to be listed. Corp sees every store.",
       kinds: ["b2bUnlistedWeekly"], roles: B2B_REMINDER_ROLES },
   ],
-  claims: [],
+  // Split 2026-11-03 when the DM's pushed reminder started mailing: a weekly
+  // sweep and a person asking you directly are different enough to mute apart.
+  claims: [
+    { key: "claims_aging", label: "Unresolved Past A Week", blurb: "Claims that have gone a week with no update.",
+      kinds: ["claimsAging"] },
+    { key: "claims_nudge", label: "Review Reminders From The DM", blurb: "When the DM asks you to review your store's claims.",
+      kinds: ["claim_review_reminder"], roles: new Set(STORE_SIDE_ROLES) },
+  ],
   variance_aging: [
     // The per-note kinds (variance_dm_note / variance_mgr_reply / aging_dm_note /
     // aging_store_reply) were retired 2026-08-14 in favour of the *Review slugs
@@ -280,21 +312,31 @@ const SUBS: Record<Category, Sub[]> = {
       kinds: ["kpiWeekly", "kpiMonthly"], roles: new Set(STORE_SIDE_ROLES) },
     { key: "listing",  label: "Listing Goals", blurb: "The day's buying and listing roles, and the weekly totals.",
       kinds: ["listingGoalsDaily", "listingGoalsWeek"] },
-    { key: "goals",    label: "Store Goals", blurb: "The month's gross-profit target.",
+    { key: "goals",    label: "Store Goals", blurb: "The month's net-profit target.",
       kinds: ["gpGoals"], roles: new Set(["district manager"]) },
     { key: "expenses", label: "Expense Report", blurb: "Filing the month that just closed.",
       kinds: ["expenseFile"], roles: new Set(["district manager"]) },
   ],
   scores: [
+    // Store side only: scorecard queues both audit kinds to the walked store's
+    // manager / owner / ASM, never up to corp.
     { key: "audits",    label: "PayMore Audits", blurb: "Practice walkthroughs and the official corporate audit.",
-      kinds: ["audit_practice_submitted", "audit_official_submitted"] },
+      kinds: ["audit_practice_submitted", "audit_official_submitted"],
+      roles: new Set([...STORE_SIDE_ROLES, "assistant manager"]) },
     { key: "scorecard", label: "SPEEKS Scorecard", blurb: "The Online & Marketing categories being scored.",
-      kinds: ["scorecard_submitted"], roles: new Set(["district manager", "ceo", "mocd"]) },
+      kinds: ["scorecard_submitted"], roles: new Set(["district manager", "ceo"]) },
   ],
-  // One reminder, one toggle. Splitting "no category" from "wrong shelf" would
-  // be two switches over one weekly email — subsFor hides a single-sub split
-  // for that reason.
-  categories: [],
+  // "No category" and "wrong shelf" stay ONE sub: two switches over one weekly
+  // email would be noise. Titles sent back are a separate thing a person acts
+  // on, and reach ASMs, who get no category queue — so they get their own.
+  categories: [
+    { key: "recat",  label: "Listings To Categorize", blurb: "Weekly: listings with no category, or on a shelf that looks wrong.",
+      kinds: ["recatQueue"], roles: new Set(STORE_SIDE_ROLES) },
+    { key: "titles", label: "Titles Sent Back", blurb: "A listing title the DM sent back to your store with a note.",
+      kinds: ["title_sent_back"] },
+  ],
+  listing_photos: [],
+  callbacks: [],
 };
 
 // The subs worth showing this role. Fewer than two is not a split worth drawing.
@@ -334,6 +376,8 @@ const KIND_LABEL: Record<string, string> = {
   b2b_pricing_location: "B2B Deal", b2b_pricing: "B2B Deal", b2b_quote_ready: "B2B Deal",
   b2b_sendback: "B2B Deal", b2b_listing_location: "B2B Deal", b2b_listing: "B2B Deal",
   b2b_delete_request: "B2B Delete Request",
+  purchase_verdict: "Purchase Request", claim_review_reminder: "Claims Review",
+  title_sent_back: "Title Sent Back", callback_match: "Call Back",
 };
 
 // WHICH ROLES CAN ACTUALLY RECEIVE EACH CATEGORY.
@@ -404,6 +448,10 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // Two directions, like requests. The SPEEKS scorecard reports UP to corp; both
   // PayMore audits report DOWN to the store that was walked, because the store is
   // who acts on a score. So the store roles are in, under their own label.
+  //
+  // MOCD stays out: scorecard used to queue scorecard_submitted to "mocd" by
+  // name, mailing them with no switch to stop it. Ethan (2026-11-03): they
+  // don't need it, so the audience dropped them rather than this set gaining them.
   scores: new Set([
     "district manager", "ceo",
     "manager", "owner (manager)", "owner manager", "assistant manager",
@@ -411,19 +459,26 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // The store roles that own their own storefront tidiness. Corp is out on
   // purpose: the DM lives in this panel and their queue is a standing backlog
   // across five stores, which is not news once a week.
-  categories: new Set(["manager", "owner (manager)", "owner manager"]),
+  //
+  // ASMs joined 2026-11-03 for "Titles Sent Back" only (the recat sub stays
+  // store-side), relabelled for them in META_OVERRIDES.
+  categories: new Set(["manager", "owner (manager)", "owner manager", "assistant manager"]),
   // ASMs ARE IN, unlike categories above: they already hold the tool (the
   // ec-view-categories role override grants Listing Health to assistant
   // manager), and photographing an item is squarely their work.
   //
-  // ⚠️ MULTI-STORE MANAGER IS IN, AND HAS TO BE. MPL has no Manager row at all
-  // and BAL's manager IS the MSM, so a set that omits the role leaves two of the
-  // five stores with no manager-level recipient — the mail simply never arrives
-  // and nothing says so. `categories` above has that gap today; left alone here
-  // rather than widened silently, because that is a different tool's audience.
+  // (Multi-Store Manager was in this set while it was a real role; the role was
+  // retired 2026-11-08 and every store now has its own Manager row.)
   listing_photos: new Set([
-    "manager", "owner (manager)", "owner manager", "multi-store manager",
+    "manager", "owner (manager)", "owner manager",
     "assistant manager",
+  ]),
+  // Every store role, Employees and Training included: the Call Backs tab
+  // defaults to `all`, and anyone on the floor can ring the customer. Corp is
+  // out by construction — the queue row is store-scoped and corp holds no store.
+  callbacks: new Set([
+    "manager", "owner (manager)", "owner manager", "assistant manager",
+    "employee", "training",
   ]),
 };
 
@@ -514,14 +569,10 @@ function weekStamp(s: string) {
 // ============================================================================
 // PEOPLE
 // ----------------------------------------------------------------------------
-// ROLE NOTES — the login rewrites two roles on its way into the session, and
+// ROLE NOTES — the login rewrites a role on its way into the session, and
 // every role gate on the site therefore tests the REWRITTEN value. Resolving
 // audiences against the raw users.role would quietly disagree with the site:
 //
-//   Multi-Store Manager -> effective role 'manager', covering BOTH BAL and MPL.
-//     (speeks.js stores 'manager' in speeksUserRole and flags speeksMultiStore
-//     separately, so an MSM passes every 'manager' check there is. That is why
-//     they get the manager reminders for two stores rather than none.)
 //   TOM -> 'mocd', homed at OVL rather than CORP.
 //
 // 'Store' accounts are the unattended shop-floor TVs (tv.html). They are dropped
@@ -532,8 +583,7 @@ type Person = {
   role: string;            // effective, lowercased
   rawRole: string;
   store: string;           // home store
-  stores: string[];        // every store they answer for (MSM: two)
-  isMsm: boolean;
+  stores: string[];        // every store they answer for (one, or none for corp)
 };
 
 async function loadPeople(sb: any): Promise<Person[]> {
@@ -544,15 +594,12 @@ async function loadPeople(sb: any): Promise<Person[]> {
     if (raw === "store") continue;                       // TV boards
     let role = raw;
     let store = String(u.store || "").toUpperCase();
-    let isMsm = false;
-    if (role === "multi-store manager") { role = "manager"; isMsm = true; store = MSM_STORES[0]; }
     if (role === "tom") role = "mocd";
     if (role === "mocd") store = "OVL";
     out.push({
       name: String(u.name || ""), key: nameKey(u.name),
       role, rawRole: raw, store,
-      stores: isMsm ? MSM_STORES.slice() : (store && store !== "ALL" && store !== "CORP" ? [store] : []),
-      isMsm,
+      stores: store && store !== "ALL" && store !== "CORP" ? [store] : [],
     });
   }
   return out;
@@ -585,11 +632,10 @@ async function loadFeatureOverrides(sb: any, keys: string[]): Promise<Map<string
 }
 
 // ⚠️ Matches the role on rawRole, NOT role. `role` is the EFFECTIVE role —
-// loadPeople flattens a Multi-Store Manager to "manager" and TOM to "mocd" so
+// loadPeople flattens TOM to "mocd" so
 // the rest of this file can reason about them uniformly — while the Feature
 // Access tool writes the slug of whatever is literally in users.role. Matching
-// the flattened one would silently apply every manager's override to the MSM,
-// and never match a TOM's own row at all.
+// the flattened one would never match a TOM's own row.
 function featureAllows(rows: any[], person: Person, byRole: boolean): boolean {
   if (!rows.length) return byRole;
   const lc = (v: unknown) => String(v || "").toLowerCase().trim();
@@ -737,8 +783,8 @@ function itemCard(title: string, body: string, link: string, tone: "red" | "ambe
 //
 // Everything they are mailed is about the store they work at, so "— WSP" in the
 // headline and "WESTPORT" under it are the same fact they already knew, twice.
-// Multi-store people are the opposite case: for the DM, the CEO and the
-// multi-store manager, the store is the most useful word in the line, and an
+// Multi-store people are the opposite case: for the DM and the CEO, the store
+// is the most useful word in the line, and an
 // email that dropped it would be unreadable. So the test is coverage, not role.
 const oneStore = (p: Person | null | undefined) => !!p && p.stores.length === 1;
 
@@ -1035,8 +1081,7 @@ type Due = {
   store?: string;
   // The feature_overrides key of the surface this chases, so somebody the tool
   // has been hidden from stops being nagged about it. A function where the
-  // answer depends on the reader: an expense reminder is tool-expenses for the
-  // DM and tool-expenses-mgr for the MSM, and a claim is the oversight tool for
+  // answer depends on the reader: a claim is the oversight tool for
   // one and the store tool for the other.
   //
   // REVOKE-ONLY, unlike the queue path. The `for` predicate above has already
@@ -1065,8 +1110,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // ---- Store KPIs, weekly + monthly -------------------------------------
   // Gate: _KPI_DUE_ROLES = manager / owner (manager) / owner manager. Assistant
   // Managers are deliberately NOT included (ASM KPI entry is switched off; the
-  // comment at speeks.js:5513 says to add them here when it comes back). An MSM
-  // reaches this as 'manager' and therefore owes both stores.
+  // comment at speeks.js:5513 says to add them here when it comes back).
   const KPI_ROLES = new Set(["manager", "owner (manager)", "owner manager"]);
   const wkEnd = lastSunday(t.date);
   const { data: wkRows } = await sb.from("kpi_entries")
@@ -1138,7 +1182,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
 
   // ---- Listing goals: today's roles, per store ---------------------------
   // Gate: _LG_DAILY_ROLES = manager / owner (manager) / owner manager /
-  // assistant manager / multi-store manager. Stores are closed Sunday, and the
+  // assistant manager. Stores are closed Sunday, and the
   // card only appears from 8:30am — so neither does this.
   if (t.dow !== 0 && t.minutes >= 8 * 60 + 30) {
     const LG_ROLES = new Set(["manager", "owner (manager)", "owner manager", "assistant manager"]);
@@ -1188,7 +1232,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   }
 
   // ---- Expense report ----------------------------------------------------
-  // Gate: _EXP_REMIND_ROLES plus any MSM. The month being chased is the one that
+  // Gate: _EXP_REMIND_ROLES (the DM). The month being chased is the one that
   // just CLOSED — you file August in September (_expRemindMonth).
   {
     const filedMonth = fmtDate(new Date(Date.UTC(t.year, t.month - 2, 1)));
@@ -1200,8 +1244,8 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       title: "File your expense report",
       body: `${label} has closed and your expense report hasn't been marked filed.`,
       link: "index.html", tone: "amber",
-      for: (p) => (p.role === "district manager" || p.isMsm) && !done.has(p.key),
-      feature: (p: Person) => p.isMsm ? "tool-expenses-mgr" : "tool-expenses",
+      for: (p) => p.role === "district manager" && !done.has(p.key),
+      feature: "tool-expenses",
     });
   }
 
@@ -1596,7 +1640,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // can alarm on. See migration 0065.
   {
     const PHOTO_ROLES = new Set([
-      "manager", "owner (manager)", "owner manager", "multi-store manager",
+      "manager", "owner (manager)", "owner manager",
       "assistant manager",
     ]);
     const { data: noPhoto } = await sb
@@ -1875,11 +1919,8 @@ async function whoAmI(sb: any, pin: string, reading = false) {
   if (!data) return null;
   const raw = String(data.role || "").toLowerCase().trim();
   if (raw === "store") return null;             // TV board: no settings, no mail
-  // Normalised the same way loadPeople does it, and for the same reason: a
-  // Multi-Store Manager signs in AS a manager, so the categories they can receive
-  // are a manager's. Filtering on the raw role would show them the wrong list.
+  // Normalised the same way loadPeople does it (TOM signs in as MOCD).
   let role = raw;
-  if (role === "multi-store manager") role = "manager";
   if (role === "tom") role = "mocd";
   return { name: String(data.name || ""), key: nameKey(data.name), role, rawRole: raw };
 }
@@ -1989,7 +2030,7 @@ Deno.serve(async (req: Request) => {
     // hands it back per person. Somebody without the tab gets no B2B mail (the
     // digest checks widget-ops-b2b), so they get no B2B switches either.
     const b2bRows = (await loadFeatureOverrides(sb, ["widget-ops-b2b"])).get("widget-ops-b2b") || [];
-    const hasB2b = featureAllows(b2bRows, { ...me, store: "", stores: [], isMsm: false } as Person,
+    const hasB2b = featureAllows(b2bRows, { ...me, store: "", stores: [] } as Person,
       !!CATEGORY_ROLES.b2b?.has(me.role));
     const isCorp = FEED_ROLES.has(me.role);
     return json({

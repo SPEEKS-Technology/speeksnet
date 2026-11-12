@@ -8,7 +8,7 @@ const corsHeaders = {
 
 // Shopify Insurance Claims / Item-Not-Received refund cases that store managers
 // open. Stored in `shopify_claims`; scoped by store so a manager only sees their
-// own store's cases and a Multi-Store Manager sees every store they manage.
+// own store's cases (?stores= still takes a comma list).
 const STATUSES = ["in_progress", "recovered", "denied"];
 
 function parseMoney(v: unknown): number | null {
@@ -197,6 +197,22 @@ Deno.serve(async (req: Request) => {
         });
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("claims", store);
+        // Emailed too since 2026-11-03: the red card only ever reached a manager
+        // who happened to be on the site. Same people the card goes to
+        // (_CLAIM_ALERT_ROLES), so the switch and the card can't disagree.
+        const from = body.from ? String(body.from).trim() : "";
+        await queueNotification({
+          category: "claims",
+          kind: "claim_review_reminder",
+          title: `${from || "The DM"} asked you to review your claims`,
+          body: body.message ? String(body.message).trim().slice(0, 300) : undefined,
+          link: "workspace.html#claims",
+          store,
+          audienceStores: [store],
+          audienceRoles: ["manager", "owner (manager)", "owner manager"],
+          audienceFeature: "tool-claims-store",
+          excludeUser: from || null,
+        });
         return jsonResponse({ success: true });
       }
 

@@ -154,6 +154,27 @@ const CASES = [
       specs: { Brand: 'Kingston', Model: 'HyperX Fury', MPN: 'HX424C15FB/4',
                'Memory Size': '8GB (2x4GB) RAM' },
       field: 'Memory Size' },
+    // 2026-11-05: three name-wrong one-clicks that overruled the listing's own
+    // field. A capacity field and a one-character part-code tie both dispute now.
+    { what: 'PS5 Slim 825GB',
+      title: 'Sony PlayStation 5 Slim Digital PS5 825GB White Console Gaming System CFI-2115',
+      v: { verdict: 'wrong', wrong_text: '825GB', correct_text: '1TB',
+           why: 'PS5 Slim Digital models have a 1TB SSD' },
+      specs: { Brand: 'Sony', Model: 'PlayStation 5 Slim Digital PS5', MPN: 'CFI-2115',
+               'Storage Capacity': '825GB', Color: 'White' },
+      field: 'Storage Capacity' },
+    { what: 'Samsung T7 2TB',
+      title: 'Samsung 2.5" T7 2TB USB-C to USB-C SSD MU-PE1T0S/AM',
+      v: { verdict: 'wrong', wrong_text: '2TB', correct_text: '1TB',
+           why: 'Part number MU-PE1T0S/AM designates a 1TB drive' },
+      specs: { Brand: 'Samsung', Model: 'T7', MPN: 'MU-PE1T0S/AM', Capacity: '2TB' },
+      field: 'Capacity' },
+    { what: 'ADATA 38 vs 28',
+      title: 'ADATA AD4U266638G19-B 8GB (1x8GB) RAM DDR4 2666MHz AD4U266628G19-B',
+      v: { verdict: 'wrong', wrong_text: 'AD4U266638G19-B', correct_text: 'AD4U266628G19-B',
+           why: 'Title part number contradicts the MPN field', evidence_field: 'MPN' },
+      specs: { Brand: 'ADATA', Model: 'AD4U266638G19-B', MPN: 'AD4U266628G19-B' },
+      field: 'Model' },
 ];
 for (const c of CASES) {
     const r = run(c.title, c.v, c.specs);

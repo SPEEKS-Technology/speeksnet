@@ -46,12 +46,12 @@ function _seed() {
     _scalSetTypes(_SCAL_TYPE_SEED.map(function (r) { return { key: r[0], label: r[1], color: r[2], sort: r[3] }; }));
 }
 
-function _as(role, store, multi) {
+// (The `multi` flag that set speeksMultiStore went with the MSM role, 2026-11-08.)
+function _as(role, store) {
     closeAllModals();
     sessionStorage.setItem('speeksUserRole', role);
     sessionStorage.setItem('speeksUserStore', store);
     sessionStorage.setItem('speeksUserPin', 'test-pin');
-    if (multi) sessionStorage.setItem('speeksMultiStore', 'true'); else sessionStorage.removeItem('speeksMultiStore');
     _seed();
     toggleCalendar();
     return document.getElementById('scalRoot');
@@ -119,47 +119,6 @@ t('ASM / employee / store TV: read-only', function () {
     _as('employee', 'OVL'); _scalOpenDetail('s-ovl');
     if (document.querySelector('#calendarDropdown .scal-pfoot')) bad.push('employee got actions on a store event');
     return bad.length ? bad.join('; ') : true;
-});
-
-t('MSM: All / BAL / MPL chips like the DM, opens on All, can add to both, not OVL', function () {
-    // 2026-10-05: no header toggle — the same chip row corporate has, with
-    // only the MSM's two stores.
-    var root = _as('manager', 'BAL', true);
-    if (Array.from(document.querySelectorAll('#scalHeadExtra button')).some(function (b) { return /^(BAL|MPL)$/.test(b.textContent.trim()); })) return 'the old BAL/MPL header toggle is still there';
-    var chips = Array.from(root.querySelectorAll('.scal-fchip')).map(function (b) { return b.textContent.trim(); });
-    if (chips.join() !== 'All,BAL,MPL') return 'chips: ' + chips.join();
-    if (_scal.store !== 'ALL') return 'opened on ' + _scal.store + ', not All';
-    var txt = _text(root);
-    if (txt.indexOf('BAL only notice') < 0 || txt.indexOf('MPL floor reset') < 0) return 'All is missing a BAL or MPL event';
-    if (txt.indexOf('LEE truck') >= 0 || txt.indexOf('Window cleaning') >= 0) return 'All shows another store\'s events';
-    if (!/Add event/.test(txt)) return 'cannot add from All';
-    // Adding: the DM-style "Show on" picker (2026-10-05), ticked to both from All.
-    _scalOpenEdit(null, _day(6));
-    var boxes = Array.from(document.querySelectorAll('input[name="scalEStores"]'));
-    if (boxes.map(function (b) { return b.value + (b.checked ? '+' : '-'); }).join() !== 'BAL+,MPL+') return 'from All the picker should tick BAL and MPL: ' + boxes.map(function (b) { return b.value + b.checked; }).join();
-    if (document.getElementById('scalEStore')) return 'the old Store dropdown is still there';
-    if (document.getElementById('scalESave').textContent !== 'Save to Both Stores') return 'save button: ' + document.getElementById('scalESave').textContent;
-    boxes[0].checked = false; _scalSyncStoreSave();
-    if (document.getElementById('scalESave').textContent !== 'Save to MPL') return 'one store ticked, button reads ' + document.getElementById('scalESave').textContent;
-    document.getElementById('scalETitle').value = 'MPL from All';
-    var before = __scalPosts.length;
-    _scalSaveStore();
-    if (!__scalPosts[before] || __scalPosts[before].payload.event.store !== 'MPL') return 'the store picked was not the one posted';
-    _scal.saving = false; _scalClosePanel();
-    _scalSetStore('BAL');
-    _scalOpenEdit(null, _day(6));
-    var b2 = Array.from(document.querySelectorAll('input[name="scalEStores"]')).filter(function (b) { return b.checked; }).map(function (b) { return b.value; });
-    if (b2.join() !== 'BAL') return 'from the BAL view only BAL should be ticked: ' + b2.join();
-    _scalClosePanel(); _scalSetStore('ALL');
-    _scalSetStore('BAL');
-    root = document.getElementById('scalRoot');
-    if (!/Add event/.test(_text(root))) return 'cannot add at BAL';
-    if (_text(root).indexOf('BAL only notice') < 0) return 'BAL company notice missing';
-    _scalSetStore('MPL');
-    root = document.getElementById('scalRoot');
-    if (_text(root).indexOf('MPL floor reset') < 0) return 'MPL event missing after switching';
-    if (!/Add event/.test(_text(root))) return 'cannot add at MPL';
-    return !_scalCanWriteStore('OVL') || 'MSM can write OVL';
 });
 
 t('district: all stores, tagged, with tabs and store filter, no Add', function () {
@@ -481,13 +440,13 @@ t('types: 18 seeded, every word of every name starts with a capital', function (
     return _scalActiveTypes()[_scalActiveTypes().length - 1] === 'other' || 'Other is not last';
 });
 
-t('types tab: DM, CEO and MOCD get it; managers and the MSM do not', function () {
+t('types tab: DM, CEO and MOCD get it; managers do not', function () {
     // Widened from DM-only on 2026-10-05: "CEO and MOCD can have access to event types too".
     var bad = [];
-    [['district manager', 'CORP', true, false], ['ceo', 'CORP', true, false], ['mocd', 'OVL', true, false], ['manager', 'OVL', false, false], ['manager', 'BAL', false, true]].forEach(function (c) {
-        _as(c[0], c[1], c[3]);
+    [['district manager', 'CORP', true], ['ceo', 'CORP', true], ['mocd', 'OVL', true], ['manager', 'OVL', false], ['manager', 'BAL', false]].forEach(function (c) {
+        _as(c[0], c[1]);
         var has = /Event Types/.test(_text(document.getElementById('scalHeadExtra')));
-        if (has !== c[2]) bad.push(c[0] + (c[3] ? ' (MSM)' : '') + (has ? ' sees' : ' does not see') + ' the tab');
+        if (has !== c[2]) bad.push(c[0] + ' at ' + c[1] + (has ? ' sees' : ' does not see') + ' the tab');
     });
     _as('manager', 'OVL'); _scalSetTab('types');
     if (/Add a Type/.test(_text(document.getElementById('scalRoot')))) bad.push('a manager can open the types tab by calling it');
@@ -796,36 +755,20 @@ t('types: no explanation under the Name field when adding', function () {
     return !hint || !hint.textContent.trim() || 'still says: ' + hint.textContent;
 });
 
-t('MSM: ticking both stores saves one copy to each', function () {
-    _as('manager', 'BAL', true);
-    _scalOpenEdit(null, _day(6));
-    document.getElementById('scalETitle').value = 'Both stores';
-    var before = __scalPosts.length;
-    // The first copy posts synchronously; the second only after the first
-    // resolves, which in this runner is after every test — so check it then.
-    var done = _scalSaveStore();
-    if (!__scalPosts[before] || __scalPosts[before].payload.event.store !== 'BAL') return 'first copy did not go to BAL';
-    return done.then(function () {
-        var sent = __scalPosts.slice(before).filter(function (p) { return p.payload.event && p.payload.event.title === 'Both stores'; })
-            .map(function (p) { return p.payload.event.store; });
-        return sent.join() === 'BAL,MPL' || 'copies posted to: ' + sent.join();
-    });
-});
-
 // ---- 2026-10-05: everyone sees Company Events read-only; end date required ----
-t('company events: every non-corporate role gets a view-only tab for its own store(s)', function () {
+t('company events: every non-corporate role gets a view-only tab for its own store', function () {
     var bad = [];
-    [['manager', 'OVL', false], ['assistant manager', 'OVL', false], ['employee', 'OVL', false], ['store', 'OVL', false], ['manager', 'BAL', true]].forEach(function (c) {
-        _as(c[0], c[1], c[2]);
-        var who = c[0] + (c[2] ? ' (MSM)' : '');
+    [['manager', 'OVL'], ['assistant manager', 'OVL'], ['employee', 'OVL'], ['store', 'OVL'], ['manager', 'BAL']].forEach(function (c) {
+        _as(c[0], c[1]);
+        var who = c[0] + ' at ' + c[1];
         if (!/Company Events/.test(_text(document.getElementById('scalHeadExtra')))) { bad.push(who + ' has no Company Events tab'); return; }
         _scalSetTab('company');
         var root = document.getElementById('scalRoot');
         if (root.querySelector('form, .scal-cform')) bad.push(who + ' got the post form');
         if (root.querySelector('.scal-crow button')) bad.push(who + ' got edit/delete buttons');
         var txt = _text(root);
-        if (c[2]) {
-            if (txt.indexOf('BAL only notice') < 0) bad.push('MSM is missing the BAL notice');
+        if (c[1] === 'BAL') {
+            if (txt.indexOf('BAL only notice') < 0) bad.push(who + ' is missing the BAL notice');
         } else {
             if (txt.indexOf('District meeting') < 0 && _day(8) >= _scalTodayISO()) bad.push(who + ' is missing an all-store company event');
             if (txt.indexOf('BAL only notice') >= 0) bad.push(who + ' sees a BAL-only company event');

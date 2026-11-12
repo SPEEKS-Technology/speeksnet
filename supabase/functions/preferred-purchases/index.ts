@@ -167,9 +167,9 @@ Deno.serve(async (req: Request) => {
 
         await broadcastChange("preferred", store);
         // The request lands in the owner's queue, so the owner roles hear about
-        // it. Only this direction is emailed: the ANSWER coming back to the
-        // requester stays feed-only (it's information, not a task — which is why
-        // its card carries no due badge and offers "Mark read" instead of Snooze).
+        // it. The ANSWER coming back is emailed too since 2026-11-03 (see
+        // "decide" below) — it was feed-only, which left a requester who was not
+        // on the site waiting on a verdict that had already been given.
         //
         // ⚠️ The audience is the APPROVE tool's, and it must stay that way. It
         // was district manager / ceo / mocd, which does not overlap the tool's
@@ -210,10 +210,24 @@ Deno.serve(async (req: Request) => {
           // A fresh decision is unseen news for the requester, so clear any
           // previous stamp — otherwise a re-decided request would never nag.
           requester_seen_at: null,
-        }).eq("id", id).select("store").maybeSingle();
+        }).eq("id", id).select("store, requested_by, item_name, owner_note").maybeSingle();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
 
         await broadcastChange("preferred", data?.store ?? null);
+        // The verdict goes to the one person who asked, by name — the same
+        // audience_user the feed's "Purchase Request Answered" card answers to.
+        if (data?.requested_by) {
+          await queueNotification({
+            category: "requests",
+            kind: "purchase_verdict",
+            title: `Purchase request ${verdict}: ${String(data.item_name || "").slice(0, 80)}`,
+            body: data.owner_note ? String(data.owner_note).slice(0, 300) : undefined,
+            link: "operations.html",
+            store: data.store ?? null,
+            audienceUser: String(data.requested_by),
+            excludeUser: s(body.decided_by, 120) || null,
+          });
+        }
         return jsonResponse({ success: true });
       }
 

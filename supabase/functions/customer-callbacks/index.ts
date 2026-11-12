@@ -28,7 +28,6 @@ const corsHeaders = {
 };
 
 const STORES = new Set(["OVL", "LEE", "WSP", "MPL", "BAL"]);
-const MSM_STORES = new Set(["BAL", "MPL"]);
 // 'tom' was in this list and is not a role anybody holds; 'mocd' IS one and was
 // missing, so the MOCD could create a call back for another store in the UI and
 // be refused by the server. Kept in step with CB_CORP_ROLES in speeks.js.
@@ -36,7 +35,7 @@ const CORP_ROLES = new Set(["district manager", "ceo", "mocd"]);
 // Who may answer a match. The store that HAS the item decides, because they are
 // the ones who would ring the customer and sell it.
 const DECIDER_ROLES = new Set([
-  "manager", "assistant manager", "multi-store manager", "owner (manager)",
+  "manager", "assistant manager", "owner (manager)",
 ]);
 // WHO MAY DELETE. A delete takes the customer's request and its whole note
 // thread with it, and there is no undo — a different weight of action from
@@ -44,7 +43,7 @@ const DECIDER_ROLES = new Set([
 // posts `delete_request` instead, which lands in the note thread.
 // Mirrored by CB_DELETE_ROLES in speeks.js; THIS is what enforces it.
 const DELETE_ROLES = new Set([
-  "manager", "owner (manager)", "owner manager", "multi-store manager",
+  "manager", "owner (manager)", "owner manager",
   "district manager", "ceo", "mocd",
 ]);
 const STATUSES = new Set(["open", "contacted", "completed"]);
@@ -66,14 +65,12 @@ function todayCentral(): string {
 }
 
 // Role gate mirrors cbCanModify in speeks.js: edit/delete/restore are scoped to
-// the caller's own store; the MSM (role 'manager' + multi flag) covers BAL+MPL;
-// corp roles cover everything. Status changes and notes are deliberately NOT
+// the caller's own store; corp roles cover everything. Status changes and notes are deliberately NOT
 // gated — any store acting on a callback is the cross-store signal.
-function canModify(entryStore: string, role: string, store: string, multi: boolean): boolean {
+function canModify(entryStore: string, role: string, store: string): boolean {
   const r = (role || "").toLowerCase().trim();
   const s = (store || "").toUpperCase();
   if (CORP_ROLES.has(r) || s === "ALL") return true;
-  if (multi && MSM_STORES.has(entryStore)) return true;
   return entryStore === s;
 }
 
@@ -81,12 +78,11 @@ function canModify(entryStore: string, role: string, store: string, multi: boole
 // store holding the item, once for the store that logged the customer — because
 // either of them may veto a pairing. An employee can see the green row and ring
 // the customer; a permanent change to what the sweep offers needs a manager.
-function canDecideMatch(holdingStore: string, role: string, store: string, multi: boolean): boolean {
+function canDecideMatch(holdingStore: string, role: string, store: string): boolean {
   const r = (role || "").toLowerCase().trim();
   const s = (store || "").toUpperCase();
   if (CORP_ROLES.has(r) || s === "ALL") return true;
   if (!DECIDER_ROLES.has(r)) return false;
-  if (multi && MSM_STORES.has(holdingStore)) return true;
   return holdingStore === s;
 }
 
@@ -133,10 +129,26 @@ async function computeNeedsDetail(
 // The sweep runs three times a day, but a manager who has just logged "iPhone 15"
 // should not wait until 12:30 to be told WSP has one. Fired without awaiting so
 // the add stays instant; the pane re-fetches a few seconds later and finds it.
+//
+// ⚠️ STOCK FIRST, THEN MATCH — added 2026-11-06. The matcher reads ebay_catalog,
+// and that cache is only refreshed at 9:28 / 12:28 / 3:28 Central. A call back
+// logged at 2:14pm was matched against 12:28 stock: BAL was told it had a Switch
+// 2 that had sold in the meantime. So the kick now runs the cheap incremental
+// catalog sweep for every store (products touched since the last run, usually one
+// page each — Shopify reads, nothing paid) and only then matches. A store whose
+// refresh fails is matched on what we had, which is the old behaviour.
+async function refreshStockThenMatch(): Promise<void> {
+  const stores = ["OVL", "LEE", "WSP", "MPL", "BAL"];
+  await Promise.all(stores.map((s) =>
+    fetch(`${SB_URL}/functions/v1/ebay-catalog?store=${s}&sweep=1&secret=${MATCH_SECRET}`)
+      .then((r) => r.text()).catch(() => {})));
+  await fetch(`${SB_URL}/functions/v1/callback-match?sweep=1&secret=${MATCH_SECRET}`)
+    .then((r) => r.text()).catch(() => {});
+}
+
 function kickMatchSweep(): void {
   try {
-    const p = fetch(`${SB_URL}/functions/v1/callback-match?sweep=1&secret=${MATCH_SECRET}`)
-      .catch(() => {});
+    const p = refreshStockThenMatch().catch(() => {});
     // deno-lint-ignore no-explicit-any
     const rt = (globalThis as any).EdgeRuntime;
     if (rt?.waitUntil) rt.waitUntil(p);
@@ -233,7 +245,6 @@ Deno.serve(async (req: Request) => {
     const { action, id } = body;
     const role = (body.role || "").toLowerCase().trim();
     const store = (body.store || "").toUpperCase();
-    const multi = body.multi === true;
 
     // Fetch the target row once for actions that need it.
     async function getEntry() {
@@ -282,9 +293,9 @@ Deno.serve(async (req: Request) => {
       const e = body.entry || {};
       const targetStore = String(e.store || "").toUpperCase();
       if (!STORES.has(targetStore)) return json({ error: "Invalid store" }, 400);
-      // Creation scoping: corp roles pick any store, MSM picks BAL/MPL, everyone else own store.
+      // Creation scoping: corp roles pick any store, everyone else own store.
       const canCreate = CORP_ROLES.has(role) || store === "ALL"
-        || (multi ? MSM_STORES.has(targetStore) : targetStore === store);
+        || targetStore === store;
       if (!canCreate) return json({ error: "You can only log call backs for your own store" }, 403);
 
       const name = String(e.customer_name || "").trim();
@@ -365,7 +376,7 @@ Deno.serve(async (req: Request) => {
       if (!id) return json({ error: "Missing id" }, 400);
       const entry = await getEntry();
       if (!entry) return json({ error: "Not found" }, 404);
-      if (!canModify(entry.store, role, store, multi)) {
+      if (!canModify(entry.store, role, store)) {
         return json({ error: "You can only edit your own store's call backs" }, 403);
       }
       const f = body.fields || {};
@@ -415,7 +426,7 @@ Deno.serve(async (req: Request) => {
       if (!id) return json({ error: "Missing id" }, 400);
       const entry = await getEntry();
       if (!entry) return json({ error: "Not found" }, 404);
-      if (!canModify(entry.store, role, store, multi)) {
+      if (!canModify(entry.store, role, store)) {
         return json({ error: "You can only delete your own store's call backs" }, 403);
       }
       // Store scope is not enough on its own here: an ASM at the right store
@@ -457,7 +468,7 @@ Deno.serve(async (req: Request) => {
       if (!id) return json({ error: "Missing id" }, 400);
       const entry = await getEntry();
       if (!entry) return json({ error: "Not found" }, 404);
-      if (!canModify(entry.store, role, store, multi)) {
+      if (!canModify(entry.store, role, store)) {
         return json({ error: "You can only restore your own store's call backs" }, 403);
       }
       const { error } = await supabase
@@ -499,8 +510,8 @@ Deno.serve(async (req: Request) => {
         ? await supabase.from("customer_callbacks").select("store").eq("id", m.callback_id).maybeSingle()
         : { data: null };
       const loggedBy = owner?.store ?? null;
-      const allowed = canDecideMatch(m.store_code, role, store, multi)
-        || (!!loggedBy && canDecideMatch(loggedBy, role, store, multi));
+      const allowed = canDecideMatch(m.store_code, role, store)
+        || (!!loggedBy && canDecideMatch(loggedBy, role, store));
       if (!allowed) {
         return json({ error: loggedBy && loggedBy !== m.store_code
           ? `Only ${m.store_code}'s or ${loggedBy}'s managers can answer this match`

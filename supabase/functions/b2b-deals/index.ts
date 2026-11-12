@@ -484,7 +484,7 @@ function storeList(raw: unknown, allowed: string[]): string[] {
 // check, the Completed list) sees the store's part with no change of its own.
 // listing_stores is left whole: a store still needs to know the deal IS split.
 //
-// `stores` is the caller's scope -- one store, or a multi-store manager's
+// `stores` is the caller's scope -- one store, or a comma list of
 // several. A deal whose every store is in scope is left whole: nothing on it
 // belongs to anyone else.
 async function narrowSplitRows(sb: any, rows: any[], stores: string[]) {
@@ -3376,8 +3376,8 @@ Deno.serve(async (req: Request) => {
     // Corp passes no store, or ALL, and sees the deal whole.
     const dealId = url.searchParams.get("deal_id");
     if (dealId) {
-      // A list, for the multi-store manager: their own stores' lines and
-      // nobody else's, rather than the whole deal.
+      // A store list scopes to those stores' lines and nobody else's,
+      // rather than the whole deal.
       const scopeItems = storeList(url.searchParams.get("store"), STORES);
       let itemQ = supabase.from("b2b_deal_items")
         .select(ITEM_COLS).eq("deal_id", dealId);
@@ -3421,9 +3421,8 @@ Deno.serve(async (req: Request) => {
     // unbounded half, so only the recent tail rides along; ?archive=N pages
     // deeper and the response says when it truncated.
     //
-    // A comma list scopes to several stores at once -- the multi-store manager,
-    // who used to ask for ALL for want of a way to say "these two" and so was
-    // sent every store's deals and every client's contact details. Codes are
+    // A comma list scopes to several stores at once (built for the old
+    // Multi-Store Manager role, retired 2026-11-08; kept as generic scoping). Codes are
     // checked against the known list, which also means nothing from the query
     // string reaches the filter below unvetted.
     const rawStore = String(url.searchParams.get("store") || "ALL").toUpperCase();

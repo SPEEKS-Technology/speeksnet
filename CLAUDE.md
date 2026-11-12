@@ -38,8 +38,8 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
    numbered from the same base, so there are two each of `0004`–`0009` and
-   `0044`–`0054`. **The current max is `0149`** (2026-10-16) — new migrations
-   start at `0150`.
+   `0044`–`0054`. **The current max is `0162`** (2026-11-02) — new migrations
+   start at `0163`.
    **The checkout is not the authority any more — the database is.** Unmerged
    branches apply migrations too: on 2026-10-16 pre-release's highest file was
    `0140` while Ethan's `Main-November-Update-2` had already applied `0141`–`0147`,
@@ -83,8 +83,9 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
   odd — read the banner before changing code under it, and when you make a
   non-obvious call, add to it in the same voice.
 - **Store codes:** `['OVL','LEE','WSP','MPL','BAL']` (`speeks.js:118`), `CORP`
-  added for tints and for B2B pricing locations. Multi-store managers:
-  `['BAL','MPL']` (`speeks.js:24721`).
+  added for tints and for B2B pricing locations. There is no Multi-Store
+  Manager role any more (removed from the front end 2026-11-08): one store per
+  manager. Some edge functions still carry dead MSM branches.
 - **Edge function URLs** are all declared together at `speeks.js:63-113`.
 - **Roles:** CEO / MOCD / DM / manager / store. `0028_tom_to_mocd_cutover.sql`
   records the TOM→MOCD rename.

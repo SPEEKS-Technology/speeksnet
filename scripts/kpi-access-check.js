@@ -22,24 +22,31 @@ function _srcOf(fn) {
 
 // Every test below moves the signed-in identity around, so put it back after —
 // otherwise a later test inherits whatever the last one left.
-function asUser(role, store, msm, fn) {
+//
+// The store "on screen" is whatever _kpiResolveStore answers: the picker's value
+// when the picker is visible, the user's own store otherwise. These checks are
+// about _kpiCanEditNumbers, not about the picker's visibility, so onScreen()
+// pins that answer for the duration of one asUser call. (This used to set
+// _kpiViewStore, the MSM-routed store; that went with the MSM role, 2026-11-08.)
+var _onScreen = null;
+function onScreen(store) { _onScreen = store; }
+function asUser(role, store, fn) {
     var keep = {
         role:  sessionStorage.getItem('speeksUserRole'),
         store: sessionStorage.getItem('speeksUserStore'),
-        msm:   sessionStorage.getItem('speeksMultiStore'),
-        view:  (typeof _kpiViewStore !== 'undefined') ? _kpiViewStore : null,
     };
+    var realResolve = _kpiResolveStore;
     try {
         sessionStorage.setItem('speeksUserRole', role);
         sessionStorage.setItem('speeksUserStore', store);
-        if (msm) sessionStorage.setItem('speeksMultiStore', 'true');
-        else sessionStorage.removeItem('speeksMultiStore');
+        _onScreen = null;
+        _kpiResolveStore = function () { return _onScreen !== null ? _onScreen : realResolve(); };
         return fn();
     } finally {
+        _kpiResolveStore = realResolve;
+        _onScreen = null;
         if (keep.role  === null) sessionStorage.removeItem('speeksUserRole');   else sessionStorage.setItem('speeksUserRole', keep.role);
         if (keep.store === null) sessionStorage.removeItem('speeksUserStore');  else sessionStorage.setItem('speeksUserStore', keep.store);
-        if (keep.msm   === null) sessionStorage.removeItem('speeksMultiStore'); else sessionStorage.setItem('speeksMultiStore', keep.msm);
-        try { _kpiViewStore = keep.view; } catch (e) {}
     }
 }
 
@@ -85,15 +92,15 @@ t('the picker still lists all five stores', function () {
 // ---- who may still SAVE ----------------------------------------------------
 
 t('a DM may edit any store', function () {
-    return asUser('district manager', 'ALL', false, function () {
-        _kpiViewStore = 'OVL';
+    return asUser('district manager', 'ALL', function () {
+        onScreen('OVL');
         return _kpiCanEditNumbers() || 'the DM lost the Edit button on OVL';
     });
 });
 
 t('a manager may edit their own store', function () {
-    return asUser('manager', 'LEE', false, function () {
-        _kpiViewStore = 'LEE';
+    return asUser('manager', 'LEE', function () {
+        onScreen('LEE');
         return _kpiCanEditNumbers() || 'a manager lost Edit on their OWN store — the regression that matters most';
     });
 });
@@ -101,37 +108,24 @@ t('a manager may edit their own store', function () {
 t('a manager lent the picker gets NO Edit button on another store', function () {
     // The 403 this exists to prevent: kpi-manage answers a cross-store save with
     // "Cannot submit for another store", so offering the button is a dead end.
-    return asUser('manager', 'LEE', false, function () {
-        _kpiViewStore = 'OVL';
+    return asUser('manager', 'LEE', function () {
+        onScreen('OVL');
         return _kpiCanEditNumbers() === false || 'Edit offered on OVL to the LEE manager — that save comes back 403';
     });
 });
 
 t('an ASM is scoped the same way', function () {
-    return asUser('assistant manager', 'WSP', false, function () {
-        _kpiViewStore = 'MPL';
+    return asUser('assistant manager', 'WSP', function () {
+        onScreen('MPL');
         if (_kpiCanEditNumbers()) return 'ASM offered Edit on a store that is not theirs';
-        _kpiViewStore = 'WSP';
+        onScreen('WSP');
         return _kpiCanEditNumbers() || 'ASM lost Edit on their own store';
     });
 });
 
-t('an MSM covers both managed stores and neither of the others', function () {
-    // An MSM signs in as role 'manager' with speeksMultiStore set, so a check
-    // written against the role string would silently test a plain manager.
-    return asUser('manager', 'BAL', true, function () {
-        _kpiViewStore = 'MPL';
-        if (!_kpiCanEditNumbers()) return 'MSM lost Edit on MPL, which they manage';
-        _kpiViewStore = 'BAL';
-        if (!_kpiCanEditNumbers()) return 'MSM lost Edit on BAL, which they manage';
-        _kpiViewStore = 'OVL';
-        return _kpiCanEditNumbers() === false || 'MSM offered Edit on OVL, which they do not manage';
-    });
-});
-
 t('an employee is offered nothing', function () {
-    return asUser('employee', 'OVL', false, function () {
-        _kpiViewStore = 'OVL';
+    return asUser('employee', 'OVL', function () {
+        onScreen('OVL');
         return _kpiCanEditNumbers() === false || 'an employee was offered the Edit button';
     });
 });
@@ -147,8 +141,7 @@ t('_kpiSyncHeaderBtns asks the store-aware check, not a role list', function () 
 
 t('a manager lent the picker opens on their own store, not OVL', function () {
     var sel = document.getElementById('kpiModalStoreSelect');
-    return asUser('manager', 'WSP', false, function () {
-        _kpiViewStore = null;
+    return asUser('manager', 'WSP', function () {
         sel.value = 'OVL';
         _kpiSeedStorePicker();
         return sel.value === 'WSP' || 'opened on ' + sel.value + ' — their own store is the one they would have to go looking for';
@@ -157,20 +150,9 @@ t('a manager lent the picker opens on their own store, not OVL', function () {
 
 t('a DM keeps whatever store was selected', function () {
     var sel = document.getElementById('kpiModalStoreSelect');
-    return asUser('district manager', 'ALL', false, function () {
-        _kpiViewStore = null;
+    return asUser('district manager', 'ALL', function () {
         sel.value = 'MPL';
         _kpiSeedStorePicker();
         return sel.value === 'MPL' || 'the DM was moved to ' + sel.value + ' — ALL matches no option, so nothing should have happened';
-    });
-});
-
-t('an MSM routed here by a store card opens on THAT store', function () {
-    var sel = document.getElementById('kpiModalStoreSelect');
-    return asUser('manager', 'BAL', true, function () {
-        _kpiViewStore = 'MPL';
-        sel.value = 'OVL';
-        _kpiSeedStorePicker();
-        return sel.value === 'MPL' || 'opened on ' + sel.value + ' — the feed card asked for MPL';
     });
 });
