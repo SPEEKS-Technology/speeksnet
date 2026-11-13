@@ -203,29 +203,52 @@
 
   function render() {
     const r = panel();
-    const rows = view.steps.map((s) => `<li class="${s.state}"><span class="dot"></span><span><b>${esc(s.label)}</b> ${esc(s.text || '')}</span></li>`).join('');
+    const mark = { ok: '✓', todo: '!', bad: '×', run: '' };
+    const rows = view.steps.map((s) => `<li class="${s.state}"><span class="ic">${mark[s.state] || ''}</span><span><b>${esc(s.label)}</b> <span class="tx">${esc(s.text || '')}</span></span></li>`).join('');
     const warn = (job?.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join('');
+    let logo = '';
+    try { logo = chrome.runtime.getURL('logo-white.png'); } catch (_) {}
+    // SPEEKSNET's look (see popup.css for where each colour comes from): the
+    // dark top nav, emerald actions, B2B lines, and the --qs-* status palette.
     r.innerHTML = `
       <style>
-        .box{width:330px;font:13px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#1c1e21;background:#fff;
-             border:1px solid #d0d4d9;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);overflow:hidden}
-        .hd{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#0b1f3a;color:#fff}
-        .hd b{flex:1;font-size:13px}.hd button{background:none;border:0;color:#fff;font-size:18px;cursor:pointer;line-height:1}
-        .bd{padding:10px 12px;max-height:60vh;overflow:auto}
-        .it{font-weight:600;margin-bottom:2px}.sku{color:#65676b;font-size:12px;margin-bottom:8px}
-        ul{list-style:none;margin:0 0 8px;padding:0}li{display:flex;gap:6px;align-items:baseline;padding:3px 0}
-        .dot{width:8px;height:8px;border-radius:50%;flex:none;background:#bcc0c4;transform:translateY(-1px)}
-        li.ok .dot{background:#2e7d32}li.todo .dot{background:#ed6c02}li.bad .dot{background:#c62828}li.run .dot{background:#1877f2}
-        .warn{background:#fff4e5;color:#663c00;border-radius:6px;padding:6px 8px;margin:0 0 6px;font-size:12px}
-        .next{background:#e7f3ff;border-radius:6px;padding:8px;font-size:12px;margin-top:6px}
-        .grp{border-top:1px solid #eef0f2;margin-top:8px;padding-top:8px;font-size:12px}
-        .grp b{display:block;margin-bottom:4px;font-size:13px}.grp .why{color:#65676b}
+        :host{all:initial}
+        .box{width:340px;font:13px/1.45 Inter,'Segoe UI',-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;color:#334155;background:#fff;
+             border:1px solid #e6ebf1;border-radius:14px;box-shadow:0 12px 32px rgba(15,23,42,.18),0 2px 6px rgba(15,23,42,.06);overflow:hidden}
+        .hd{display:flex;align-items:center;gap:9px;padding:10px 12px;background:#181b20;color:#fff}
+        .hd img{width:20px;height:21px;flex:none}
+        .hd .br{flex:1;display:flex;flex-direction:column;line-height:1.1}
+        .hd .ey{font-size:9px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8}
+        .hd .ti{font-size:13.5px;font-weight:800;letter-spacing:-.01em}
+        .hd button{width:28px;height:28px;border-radius:8px;border:0;background:rgba(255,255,255,.08);color:#cbd5e1;font-size:16px;cursor:pointer;line-height:1}
+        .hd button:hover{background:#fcecec;color:#c43d3d}
+        .bd{padding:12px;max-height:62vh;overflow:auto}
+        .it{color:#0f172a;font-weight:750;font-size:13.5px;line-height:1.3;margin-bottom:3px}
+        .sku{color:#8a94a3;font-size:11.5px;font-weight:600;margin-bottom:10px}
+        ul{list-style:none;margin:0 0 4px;padding:0;border:1px solid #eef2f6;border-radius:10px;overflow:hidden}
+        li{display:flex;gap:9px;align-items:flex-start;padding:7px 10px;border-bottom:1px solid #eef2f6}
+        li:last-child{border-bottom:0}
+        li b{color:#0f172a;font-weight:650}.tx{color:#647082}
+        .ic{width:18px;height:18px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:11px;font-weight:800;margin-top:1px;
+            background:#f1f5f9;color:#94a3b8;box-shadow:inset 0 0 0 1px #e6ebf1}
+        li.ok .ic{background:#f2faf5;color:#146c3c;box-shadow:inset 0 0 0 1px #dcefe3}
+        li.todo .ic{background:#fdf7ec;color:#a5660f;box-shadow:inset 0 0 0 1px #f5e3c2}
+        li.bad .ic{background:#fdf2f2;color:#c43d3d;box-shadow:inset 0 0 0 1px #f6d4d4}
+        li.run .ic{background:#e8f7ee;box-shadow:inset 0 0 0 2px #1f9d57;animation:p 1s ease-in-out infinite}
+        @keyframes p{50%{opacity:.4}}
+        .warn{background:#fdf7ec;border:1px solid #f5e3c2;color:#a5660f;font-weight:600;border-radius:9px;padding:7px 10px;margin:0 0 8px;font-size:12px}
+        .next{background:#e8f7ee;border:1px solid #cfeada;color:#14532d;border-radius:10px;padding:9px 11px;font-size:12px;margin-top:10px;line-height:1.5}
+        .next b{color:#0f3d22}
+        .grp{margin-top:12px;font-size:12px}
+        .grp b{display:block;margin:0 0 6px;padding-bottom:6px;border-bottom:1px solid #eef2f6;font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#8a94a3}
+        .grp div{padding:2px 0;color:#0f172a}.grp .why{color:#8a94a3}
         .ft{display:flex;gap:6px;padding:0 12px 12px}
-        .ft button{flex:1;padding:7px;border-radius:6px;border:1px solid #d0d4d9;background:#f0f2f5;cursor:pointer;font:inherit}
-        .ft button:disabled{opacity:.5;cursor:default}
+        .ft button{flex:1;height:36px;border-radius:9px;border:1px solid #e6ebf1;background:#fff;color:#647082;cursor:pointer;font:inherit;font-size:12.5px;font-weight:750;transition:border-color .16s,color .16s}
+        .ft button:hover:not(:disabled){border-color:#5a8d3b;color:#178048}
+        .ft button:disabled{opacity:.45;cursor:not-allowed}
       </style>
       <div class="box">
-        <div class="hd"><b>SPEEKS Lister</b><button id="x" title="Close this panel">×</button></div>
+        <div class="hd">${logo ? `<img src="${logo}" alt="">` : ''}<div class="br"><span class="ey">SPEEKSNET</span><span class="ti">Marketplace Lister</span></div><button id="x" title="Close this panel">×</button></div>
         <div class="bd">
           <div class="it">${esc(view.head)}</div>
           <div class="sku">${esc(view.sub)}</div>
@@ -235,8 +258,8 @@
           ${view.note ? `<div class="next">${view.note}</div>` : ''}
         </div>
         ${view.buttons ? `<div class="ft">
-          <button id="again" ${busy ? 'disabled' : ''}>Fill again</button>
-          <button id="copy">Copy description</button>
+          <button id="again" ${busy ? 'disabled' : ''}>Fill Again</button>
+          <button id="copy">Copy Description</button>
         </div>` : ''}
       </div>`;
     r.getElementById('x').onclick = () => { closePanel(); send({ type: 'done' }); };
@@ -446,7 +469,7 @@
     const all = [...decided.entries()];
     const picked = all.filter(([, d]) => d.ticked);
     const skipped = all.filter(([, d]) => !d.ticked);
-    view.extra = `<div class="grp"><b>Groups — ticked ${picked.length} of ${all.length}</b>
+    view.extra = `<div class="grp"><b>Groups — Ticked ${picked.length} Of ${all.length}</b>
       ${picked.map(([n, d]) => `<div>✓ ${esc(n)} <span class="why">(${esc(d.why)})</span></div>`).join('') || '<div class="why">None fit this item. Tick any you want yourself — or join more local buy/sell groups (the extension\'s Groups tab has search buttons); it can only use groups you\'re in.</div>'}
       ${skipped.length ? `<div class="why" style="margin-top:4px">Left unticked: ${skipped.map(([n]) => esc(n)).join(', ')}</div>` : ''}
     </div>`;

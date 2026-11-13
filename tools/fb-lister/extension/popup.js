@@ -122,12 +122,12 @@ async function openItem(sku, productId) {
     </div>
     <div class="desc">${esc(fb.description) || '<i>No description on Shopify.</i>'}</div>
     <div class="note">Opens Facebook Marketplace and fills this in. You pick the category, check it, and click Publish yourself.</div>
-    <div class="acts"><button id="back">Back</button><button id="go" class="primary">Fill on Facebook</button></div>`;
+    <div class="acts"><button id="back">Back</button><button id="go" class="primary">Fill On Facebook</button></div>`;
   $('back').onclick = renderResults;
   $('go').onclick = async () => {
     $('go').disabled = true; $('go').textContent = 'Opening Facebook…';
     const s = await send({ type: 'start', sku: item.sku, product_id: item.product_id });
-    if (!s.ok) { $('go').disabled = false; $('go').textContent = 'Fill on Facebook'; d.insertAdjacentHTML('afterbegin', `<div class="warn">${esc(s.error)}</div>`); }
+    if (!s.ok) { $('go').disabled = false; $('go').textContent = 'Fill On Facebook'; d.insertAdjacentHTML('afterbegin', `<div class="warn">${esc(s.error)}</div>`); }
   };
 }
 
@@ -152,7 +152,7 @@ async function renderListed() {
     ? (sold.length ? `${sold.length} sold in Shopify — mark ${sold.length === 1 ? 'it' : 'them'} sold on Facebook, then press Done.${when}` : `Nothing here has sold.${when} Checked again once a day.`)
     : `${listed.length} filled from this computer. Checked against Shopify once a day.`);
   $('markAll').hidden = sold.length < 1;
-  $('markAll').textContent = sold.length > 1 ? `Mark ${sold.length} sold on Facebook` : 'Mark sold on Facebook';
+  $('markAll').textContent = sold.length > 1 ? `Mark ${sold.length} Sold On Facebook` : 'Mark Sold On Facebook';
   // Sold first, so the ones to act on are at the top.
   const rank = (l) => ({ sold: 0, unknown: 1, instock: 2 }[st[l.sku]?.status] ?? 3);
   const rows = [...listed].sort((a, b) => rank(a) - rank(b));
@@ -160,7 +160,7 @@ async function renderListed() {
     const s = st[l.sku];
     return `<div class="item" title="${esc(s?.reason || '')}">
       <div class="t"><b>${esc(l.title)}</b><span>${esc(l.sku)} · ${new Date(l.at).toLocaleDateString()}${l.by ? ' · ' + esc(l.by) : ''}</span></div>
-      ${s ? `<span class="pill ${s.status}">${s.status === 'instock' ? 'in stock' : s.status}</span>` : `<span class="p">${money(l.price)}</span>`}
+      ${s ? `<span class="pill ${s.status}">${{ instock: 'In Stock', sold: 'Sold', unknown: 'Unknown' }[s.status] || s.status}</span>` : `<span class="p">${money(l.price)}</span>`}
       ${s?.status === 'sold' ? `<button class="small" data-find="${n}" title="Open Facebook Selling with this listing outlined">Find</button>` : ''}
       <button class="small" data-forget="${n}" title="${s?.status === 'sold' ? 'Marked sold on Facebook — take it off this list' : 'Take it off this list'}">Done</button>
     </div>`;

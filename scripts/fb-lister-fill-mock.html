@@ -88,7 +88,7 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
   const storage = { groupRules: [{ name: 'Owners USA', mode: 'match', keywords: 'nintendo' }], groupAuto: true };
   window.chrome = {
     storage: { local: { get: async (k) => { const o = {}; [].concat(k).forEach(x => o[x] = storage[x]); return o; } } },
-    runtime: { lastError: null, sendMessage(msg, cb) {
+    runtime: { lastError: null, getURL: (p) => '../tools/fb-lister/extension/' + p, sendMessage(msg, cb) {
       setTimeout(() => {
         if (msg.type === 'job') cb({ ok: true, job: SOLD ? soldJob : job });
         else if (msg.type === 'photos') cb({ ok: true, files: msg.urls.map((u, i) => ({ name: `p${i}.png`, type: 'image/png', b64: PNG })), failed: [] });
@@ -125,7 +125,7 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
         return;
       }
       if (/Your turn/.test(txt) && !groupsShown) { groupsShown = true; showGroupsStep(); return; }
-      if (/Groups — ticked/.test(txt) || Date.now() - t0 > 25000) {
+      if (/Groups — ticked/i.test(txt) || Date.now() - t0 > 25000) {
         clearInterval(iv);
         window.__result = {
           title: $('title').value, price: $('price').value, condition: $('condVal').textContent, description: $('desc').value,

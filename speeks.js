@@ -71727,7 +71727,7 @@ else _eqTabsWatch();
 // FB_LISTER_VERSION must match "version" in tools/fb-lister/extension/
 // manifest.json, and the zip must be rebuilt (tools/fb-lister/build-zip.ps1)
 // whenever the extension changes. It is also the zip's cache-buster.
-const FB_LISTER_VERSION = '1.2.0';
+const FB_LISTER_VERSION = '1.3.0';
 const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
 
 function openFbLister() {

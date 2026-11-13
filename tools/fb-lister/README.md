@@ -16,6 +16,11 @@ the tokens already in `shopify_stores`) plus `ebay_catalog`.
 | `SPEEKS-Marketplace-Lister.zip` | What people download. Built from `extension/`. Served by GitHub Pages. |
 | `build-zip.ps1` | Rebuilds the zip. |
 | `../../scripts/fb-lister-fill-mock.html` | A mock of Facebook's form for testing `content.js` (serve the repo on :8080). |
+| `../../scripts/fb-lister-popup-mock.html` | The popup with canned data, for checking its look without installing it. |
+
+The popup and the Facebook panel use SPEEKSNET's own look, with colours copied
+from `styles.css`: the dark top nav and white SPEEKS mark, the emerald action
+pair, the B2B lines, and the `--qs-*` status palette. Don't add new shades.
 
 ## Who can use it
 Feature Access key **`fb-lister`**. That key controls both the SPEEKS Tools →
