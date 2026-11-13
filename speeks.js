@@ -44178,13 +44178,9 @@ const FEATURE_CATALOG = [
     { key: 'tool-store-comment-drafts', label: 'Daily Store Messages',         tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    // The Chrome extension's download page. THE SAME KEY GATES THE EXTENSION ITSELF:
-    // the fb-lister edge function resolves 'fb-lister' on every call, so turning it
-    // off here cuts off the extension too. Its def is copied into that function as
-    // FB_LISTER_DEF — change one, change both.
-    { key: 'fb-lister',                label: 'Downloads: Facebook Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'System', def: ['district-manager'] },
     // The Downloads link itself: on for everyone (Ethan, 11-13). What is IN it
-    // is gated per download by the keys above (e.g. 'fb-lister').
+    // is gated per download by its own key (e.g. 'fb-lister', listed beside
+    // 'b2b-capture-download' under Widgets → Operations).
     { key: 'tool-downloads',           label: 'Downloads',                     tab: 'tools', group: 'System', def: 'all' },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
     // Delegation tab pairs them the way it already pairs the claims tools.
@@ -44379,6 +44375,15 @@ const FEATURE_CATALOG = [
     // button also carries `role-none` in operations.html, so the role gate
     // denies everyone and a per-user override is the only way to see it.
     { key: 'b2b-capture-download',     label: 'B2B Capture Tool (Download)',   tab: 'widgets', group: 'Operations', def: [] },
+    // The Facebook Marketplace Lister in SPEEKS Tools → Downloads. Listed here,
+    // beside the other download, rather than under Tools (Ethan, 11-13). The B2B
+    // Capture Tool above stays in the B2B header and is NOT in Downloads -- it
+    // isn't ready. THE SAME KEY GATES THE EXTENSION ITSELF: the fb-lister edge
+    // function resolves 'fb-lister' on every call, so turning it off here cuts
+    // off the extension too. Its def is copied into that function as
+    // FB_LISTER_DEF — change one, change both. The key is unchanged by the move,
+    // so per-person and per-role overrides carry over.
+    { key: 'fb-lister',                label: 'Facebook Marketplace Lister (Download)', tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it.
