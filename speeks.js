@@ -44177,7 +44177,7 @@ const FEATURE_CATALOG = [
     // the fb-lister edge function resolves 'fb-lister' on every call, so turning it
     // off here cuts off the extension too. Its def is copied into that function as
     // FB_LISTER_DEF — change one, change both.
-    { key: 'fb-lister',                label: 'Downloads: Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'System', def: ['district-manager'] },
+    { key: 'fb-lister',                label: 'Downloads: Facebook Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'System', def: ['district-manager'] },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
     // Delegation tab pairs them the way it already pairs the claims tools.
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
@@ -71764,6 +71764,9 @@ else _eqTabsWatch();
 // FB_LISTER_VERSION must match "version" in tools/fb-lister/extension/
 // manifest.json, and the zip must be rebuilt (tools/fb-lister/build-zip.ps1)
 // whenever the extension changes. It is also the zip's cache-buster.
+//
+// No "Update" how-to on the card (Ethan, 11-13): he announces each new version
+// in Announcements, with its own instructions. Don't add one back.
 const FB_LISTER_VERSION = '1.3.0';
 const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
 
@@ -71771,7 +71774,7 @@ const _DL_OL = 'style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px"';
 const DOWNLOADS = [
     {
         key: 'fb-lister',
-        name: 'Marketplace Lister',
+        name: 'Facebook Marketplace Lister',
         kind: 'Chrome Extension',
         version: FB_LISTER_VERSION,
         href: `${FB_LISTER_ZIP}?v=${encodeURIComponent(FB_LISTER_VERSION)}`,
@@ -71795,14 +71798,10 @@ const DOWNLOADS = [
                     <li>Open the extension, search your store's in-stock items, pick one and click <b>Fill On Facebook</b>.</li>
                     <li>It fills in the photos, title, price, condition and description, and sets the listing to <b>Public meetup</b> in your <b>store's city</b> — buyers come into the store to buy. <b>You pick the category</b>, read everything, then click <b>Next</b>.</li>
                     <li>On the next screen it ticks the groups that fit the item — your rules from its <b>Groups</b> tab, plus local buy/sell groups. Check them, then click <b>Publish</b> yourself. It never posts for you.</li>
-                    <li>You only ever see your own store's inventory.</li>
                 </ol>
             </div>
             <div class="b2b-note"><span class="b2b-note-k">Sold</span>
                 <span>Once a day it checks everything you listed against Shopify — in-store, online and eBay sales all count. Anything sold puts a red number on its icon and pops up a notification. Click it and Facebook's Selling page opens with those listings outlined; click <b>Mark as sold</b> on each, then <b>Done</b> in the Listed tab.</span>
-            </div>
-            <div class="b2b-note"><span class="b2b-note-k">Update</span>
-                <span>Download the new zip, extract it over the old folder, then click the ↻ on the extension's card in chrome://extensions.</span>
             </div>`,
     },
 ];
