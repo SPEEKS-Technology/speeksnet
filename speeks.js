@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.11.0';
+const APP_VERSION = '3.12.0';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -52497,7 +52497,7 @@ function _qpWidgetCard(el, rows, id) {
                 : lines && lines.length ? (cap ? '<div class="qp-hl-cap">' + escapeHtml(cap) + '</div>' : '')
                 + (it.room === 5 && !(wideOn && it.wideLines) ? '<div class="qp-cw-grid">' + lines.slice(0, fit).join('') + '</div>' : lines.slice(0, fit).join('')) : '');
         body = tabs + '<div class="qp-ai-body' + (dense ? ' qp-ai-dense' : '') + (wideOn ? ' qpt-wb' : '') + '">'
-            + (wideOn ? '<div class="qpt-wl">' + inner + '</div><div class="qpt-wr">' + (it.wideCap ? '<div class="qp-hl-cap">' + escapeHtml(it.wideCap) + '</div>' : '') + it.wide + '</div>' : inner)
+            + (wideOn ? '<div class="qpt-wcl">' + inner + '</div><div class="qpt-wcr">' + (it.wideCap ? '<div class="qp-hl-cap">' + escapeHtml(it.wideCap) + '</div>' : '') + it.wide + '</div>' : inner)
             + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
         }
     }
@@ -54476,7 +54476,11 @@ const QP_MINIS = {
     // into one widget? Just % to goal and how much per day needed and how many
     // days left"): the line under the % is what a day still needs and the days
     // left, or Goal Hit. Nothing else (he'd asked for "only the %" before that).
-    mgoal: { label: '% to Goal', sub: 'Net profit against the goal, what a day still needs, and days left', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => _qpIsDist() || (!!_qpMyStore() && (_qpIsMgr() || _qpIsAsm())),
+    // OFF FOR THE DISTRICT (Ethan, 2026-11-13: "get rid of the % to goal mini
+    // widget since we have the company snapshot mini widget that shows the same
+    // stuff"). Company Snapshot is district-only, so a store still has this one;
+    // a DM's saved % to Goal reads as Company Snapshot (_qptRead).
+    mgoal: { label: '% to Goal', sub: 'Net profit against the goal, what a day still needs, and days left', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => !_qpIsDist() && !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
         draw: d => {
             const ps = (_qpIsDist() ? STORE_CODES : [_qpMyStore()]).map(s => _qpPaceOf(d, s));
             const soFar = _qpSum(ps, 'soFar'), goal = _qpSum(ps, 'goal');
@@ -55455,7 +55459,7 @@ const QPT_HIDDEN_DEFAULT = [];
 // The rail a person starts with: the first five of these they can see.
 // mgoal (% to Goal) added 2026-11-10; musage, mlive, mnews, mpace and mreviews
 // were retired the same day, so they are not in the default any more.
-const QPT_MINI_DEFAULT = ['mdue', 'mgoal', 'mstars', 'mcash', 'mtop', 'mavail', 'mqueue'];
+const QPT_MINI_DEFAULT = ['mdue', 'mgoal', 'mcompany', 'mstars', 'mcash', 'mtop', 'mavail', 'mqueue'];
 // A retired mini that was folded into another reads as that one from a saved
 // rail (2026-11-10), so nobody's rail just loses a place: Goal Pace → % to Goal,
 // Google Reviews → Five-Star Reviews. A duplicate it makes is dropped.
@@ -55505,7 +55509,8 @@ function _qptRead() {
         known.forEach(k => { if (s.order.indexOf(k) === -1) s.order.push(k); });
     }
     if (seen.hidden) s.hidden = got.hidden.filter(k => known.indexOf(k) !== -1);
-    if (seen.minis) s.minis = got.minis.map(t => _QPT_MINI_ALIAS[_qpTokId(t)] || t)
+    // % to Goal is off for the district (2026-11-13): theirs becomes Company Snapshot.
+    if (seen.minis) s.minis = got.minis.map(t => _QPT_MINI_ALIAS[_qpTokId(t)] || (_qpTokId(t) === 'mgoal' && _qpIsDist() ? 'mcompany' : t))
         .filter((t, i, a) => QP_MINIS[_qpTokId(t)] && a.findIndex(x => _qpTokId(x) === _qpTokId(t)) === i);
     return s;
 }
