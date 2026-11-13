@@ -1,16 +1,24 @@
 // SPEEKS Marketplace Lister — runs on facebook.com.
 //
-// It does nothing unless background.js opened THIS tab for a listing (it asks
-// for a job; ordinary Facebook browsing has none). With a job, on the
-// Marketplace "create item" form, it types in the title, price, condition and
-// description, attaches the photos, and shows a small panel saying what it
-// filled and what is left for the person to do.
+// It does nothing unless background.js opened THIS tab for a job (it asks;
+// ordinary Facebook browsing has none). Two kinds of job:
 //
-// IT NEVER CLICKS NEXT OR PUBLISH. Facebook does not allow automated posting,
-// and a listing is a public statement in the store's name — a person reads it
-// and posts it. Category is left to the person too: Facebook's category picker
-// is a search box with suggestions that change, and a wrong guess is worse than
-// an empty field that Facebook refuses to publish without.
+//   list — on Marketplace's "create item" form: types in the title, price,
+//          condition and description, attaches the photos, and shows a panel
+//          saying what it filled and what is left. When the person clicks Next
+//          and Facebook shows the "list in more places" step, it ticks the
+//          groups that fit the item (rules from the popup's Groups tab plus
+//          automatic local-group picks) and says which and why.
+//   sold — on Marketplace → Selling: finds the listings whose item has sold in
+//          Shopify, outlines each one and points at its "Mark as sold" button.
+//
+// IT NEVER CLICKS NEXT, PUBLISH, POST OR MARK AS SOLD. Facebook does not allow
+// automated posting or account actions, and a listing is a public statement in
+// the store's name under someone's personal account — a person makes every
+// final click. Category is left to the person too: Facebook's category picker
+// is a search box with suggestions that change, and a wrong guess is worse
+// than an empty field Facebook refuses to publish without. Ticking a group box
+// is a form choice like any other field, made before the person posts.
 //
 // FACEBOOK'S MARKUP IS NOT OURS AND IT CHANGES. Class names are generated, so
 // nothing here uses them. Fields are found by their visible label or
@@ -23,9 +31,11 @@
   window.__speeksLister = true;
 
   const onCreatePage = () => /^\/marketplace\/create\/item/.test(location.pathname);
+  const onSellingPage = () => /^\/marketplace\/you(\/selling)?\/?$/.test(location.pathname);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const send = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, (r) => res(r || { ok: false, error: chrome.runtime.lastError?.message })));
   const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   // ── finding fields ─────────────────────────────────────────────────────────
 
@@ -130,6 +140,7 @@
   // ── the panel ──────────────────────────────────────────────────────────────
 
   let host = null, root = null, job = null, busy = false;
+  const view = { head: '', sub: '', steps: [], note: '', extra: '', buttons: true };
 
   function panel() {
     if (host) return root;
@@ -139,16 +150,15 @@
     document.documentElement.appendChild(host);
     return root;
   }
+  function closePanel() { if (host) host.remove(); host = root = null; }
 
-  function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-
-  function render(steps, note) {
+  function render() {
     const r = panel();
-    const rows = steps.map((s) => `<li class="${s.state}"><span class="dot"></span><b>${esc(s.label)}</b> ${esc(s.text || '')}</li>`).join('');
+    const rows = view.steps.map((s) => `<li class="${s.state}"><span class="dot"></span><span><b>${esc(s.label)}</b> ${esc(s.text || '')}</span></li>`).join('');
     const warn = (job?.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join('');
     r.innerHTML = `
       <style>
-        .box{width:320px;font:13px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#1c1e21;background:#fff;
+        .box{width:330px;font:13px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#1c1e21;background:#fff;
              border:1px solid #d0d4d9;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);overflow:hidden}
         .hd{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#0b1f3a;color:#fff}
         .hd b{flex:1;font-size:13px}.hd button{background:none;border:0;color:#fff;font-size:18px;cursor:pointer;line-height:1}
@@ -159,6 +169,8 @@
         li.ok .dot{background:#2e7d32}li.todo .dot{background:#ed6c02}li.bad .dot{background:#c62828}li.run .dot{background:#1877f2}
         .warn{background:#fff4e5;color:#663c00;border-radius:6px;padding:6px 8px;margin:0 0 6px;font-size:12px}
         .next{background:#e7f3ff;border-radius:6px;padding:8px;font-size:12px;margin-top:6px}
+        .grp{border-top:1px solid #eef0f2;margin-top:8px;padding-top:8px;font-size:12px}
+        .grp b{display:block;margin-bottom:4px;font-size:13px}.grp .why{color:#65676b}
         .ft{display:flex;gap:6px;padding:0 12px 12px}
         .ft button{flex:1;padding:7px;border-radius:6px;border:1px solid #d0d4d9;background:#f0f2f5;cursor:pointer;font:inherit}
         .ft button:disabled{opacity:.5;cursor:default}
@@ -166,32 +178,37 @@
       <div class="box">
         <div class="hd"><b>SPEEKS Lister</b><button id="x" title="Close this panel">×</button></div>
         <div class="bd">
-          <div class="it">${esc(job?.item?.title)}</div>
-          <div class="sku">${esc(job?.item?.sku)} · ${esc(job?.item?.store)} · $${esc(job?.fb?.price)}</div>
+          <div class="it">${esc(view.head)}</div>
+          <div class="sku">${esc(view.sub)}</div>
           ${warn}
           <ul>${rows}</ul>
-          ${note ? `<div class="next">${note}</div>` : ''}
+          ${view.extra}
+          ${view.note ? `<div class="next">${view.note}</div>` : ''}
         </div>
-        <div class="ft">
+        ${view.buttons ? `<div class="ft">
           <button id="again" ${busy ? 'disabled' : ''}>Fill again</button>
           <button id="copy">Copy description</button>
-        </div>
+        </div>` : ''}
       </div>`;
-    r.getElementById('x').onclick = () => { host.remove(); host = root = null; send({ type: 'done' }); };
-    r.getElementById('again').onclick = () => fill();
-    r.getElementById('copy').onclick = async (e) => {
+    r.getElementById('x').onclick = () => { closePanel(); send({ type: 'done' }); };
+    const again = r.getElementById('again'); if (again) again.onclick = () => fill();
+    const copy = r.getElementById('copy');
+    if (copy) copy.onclick = async (e) => {
       try { await navigator.clipboard.writeText(job.fb.description); e.target.textContent = 'Copied'; }
       catch (_) { e.target.textContent = 'Copy blocked'; }
     };
   }
 
-  // ── fill ───────────────────────────────────────────────────────────────────
+  // ── fill the form ──────────────────────────────────────────────────────────
 
   async function fill() {
     if (busy || !job) return;
     busy = true;
     const fb = job.fb;
-    const steps = [
+    view.head = job.item.title;
+    view.sub = `${job.item.sku} · ${job.item.store} · $${fb.price}`;
+    view.extra = ''; view.buttons = true;
+    view.steps = [
       { key: 'photos', label: 'Photos', state: 'run', text: `fetching ${fb.photos.length}…` },
       { key: 'title', label: 'Title', state: 'run' },
       { key: 'price', label: 'Price', state: 'run' },
@@ -199,14 +216,16 @@
       { key: 'condition', label: 'Condition', state: 'run' },
       { key: 'description', label: 'Description', state: 'run' },
     ];
-    const set = (key, state, text) => { const s = steps.find((x) => x.key === key); s.state = state; s.text = text || ''; render(steps); };
-    render(steps);
+    view.note = '';
+    const set = (key, state, text) => { const s = view.steps.find((x) => x.key === key); s.state = state; s.text = text || ''; render(); };
+    render();
 
     const ready = await waitFor(() => field('Title'));
     if (!ready) {
-      steps.forEach((s) => { if (s.state === 'run') { s.state = 'bad'; s.text = '— form not found'; } });
+      view.steps.forEach((s) => { if (s.state === 'run') { s.state = 'bad'; s.text = '— form not found'; } });
       busy = false;
-      render(steps, "Couldn't find Facebook's listing form. Make sure you're signed in to Facebook and on <b>Marketplace → Create new listing → Item for sale</b>, then press <b>Fill again</b>.");
+      view.note = "Couldn't find Facebook's listing form. Make sure you're signed in to Facebook and on <b>Marketplace → Create new listing → Item for sale</b>, then press <b>Fill again</b>.";
+      render();
       return;
     }
 
@@ -239,25 +258,211 @@
     set('description', d && setValue(d, fb.description) ? 'ok' : 'bad', d ? '' : '— not found; use Copy description');
 
     busy = false;
-    render(steps, '<b>Your turn:</b> pick the category, read every field and the photos, then click <b>Next</b> and <b>Publish</b> yourself. This tool never posts for you.');
+    view.note = '<b>Your turn:</b> pick the category, read every field and the photos, then click <b>Next</b>. On the next screen this panel ticks the groups that fit — check them, then click <b>Publish</b> yourself. This tool never posts for you.';
+    render();
+    watchForGroups();
   }
 
+  // ── groups: the "list in more places" step ─────────────────────────────────
+  //
+  // HOW A GROUP GETS TICKED (first match wins):
+  //   1. A rule from the popup's Groups tab whose name-text is in the group's
+  //      name: "never" skips it; "all items" ticks it; "keywords" ticks it when
+  //      any keyword is in the item's title or collections.
+  //   2. Automatic (on unless switched off in the Groups tab): a LOCAL group —
+  //      the store's own metro area in the name — that is about buying and
+  //      selling or about this kind of item, and isn't about something we
+  //      don't sell (cars, rentals, pets, furniture…). A national group is
+  //      never ticked automatically: Marketplace items are local pickup, and
+  //      plenty of hobby groups ban sales posts.
+  // It only ever TICKS, once per group per listing, and never unticks: a box
+  // the person changed stays the way they left it.
+
+  const LOCAL = {
+    KC: /kansas city|\bkc\b|\bkck\b|kcmo|overland park|olathe|lenexa|shawnee|merriam|mission|leawood|prairie village|johnson county|\bjo ?co\b|lee'?s summit|blue springs|independence|raytown|grandview|belton|westport|midtown|liberty|gladstone|north kc|northland|lawrence/,
+    STL: /st\.? ?louis|saint louis|\bstl\b|ballwin|maplewood|chesterfield|kirkwood|webster groves|manchester|wildwood|ellisville|creve coeur|st\.? ?charles|o'?fallon|brentwood|richmond heights|south county|west county|north county|fenton|arnold|florissant/,
+  };
+  const METRO = { OVL: 'KC', LEE: 'KC', WSP: 'KC', MPL: 'STL', BAL: 'STL' };
+  const BUYSELL = /buy|sell|swap|trade|for sale|marketplace|yard sale|garage sale|classified|b\/s\/t|\bbst\b|deals?\b/;
+  const UNRELATED = /furniture|\bcars?\b|\bauto\b|truck|vehicle|motorcycle|\bboats?\b|\brv\b|real estate|\brent|housing|apartment|\bjobs?\b|\bpets?\b|\bdogs?\b|\bcats?\b|pupp|kitten|horse|livestock|\bbaby\b|kids clothes|clothing|clothes|fashion|shoes|plants?\b|garden|\bfarm|church|free stuff|freecycle|\bfree\b|lost and found|crime|news|events/;
+  const TOPICS = {
+    games: /video ?games?|gaming|gamers?|nintendo|\bswitch\b|playstation|\bps[1-5]\b|xbox|sega|retro games?|\b3ds\b|\bds\b|\bwii\b|game ?boy|game ?cube|steam deck/,
+    phones: /phones?\b|iphone|android|galaxy|pixel|cell/,
+    computers: /laptops?|computers?|\bpcs?\b|macbook|\bmac\b|imac|chromebook|desktop|gpu|graphics card|monitor/,
+    tablets: /tablets?|ipad|kindle|e-?reader/,
+    audio: /audio|headphones?|earbuds?|airpods|speakers?|stereo|turntable|vinyl|record player|receiver|guitars?|music|instruments?|\bdj\b/,
+    cameras: /cameras?|lens|gopro|drones?|photography/,
+    tv: /\btvs?\b|television|projector|home theater/,
+    tools: /\btools?\b|drill|dewalt|milwaukee|makita|ryobi/,
+    watches: /watch(es)?\b|smartwatch|garmin|fitbit/,
+    collectibles: /pokemon|trading cards?|\btcg\b|collectibles?|lego|funko/,
+    electronics: /electronics?|\btech\b|gadgets?/,
+  };
+  const topicsOf = (s) => Object.keys(TOPICS).filter((k) => TOPICS[k].test(s));
+
+  function itemText() {
+    return norm(`${job.item.title} ${(job.item.collections || []).join(' ').replace(/-/g, ' ')}`);
+  }
+
+  function decide(groupName, rules, auto) {
+    const g = norm(groupName);
+    for (const r of rules) {
+      const needle = norm(r.name);
+      if (!needle || !g.includes(needle)) continue;
+      if (r.mode === 'never') return { pick: false, why: 'your rule: never' };
+      if (r.mode === 'all') return { pick: true, why: 'your rule: every item' };
+      const kws = String(r.keywords || '').split(',').map(norm).filter(Boolean);
+      const hit = kws.find((k) => itemText().includes(k));
+      return hit ? { pick: true, why: `your rule: “${hit}”` } : { pick: false, why: 'your rule: no keyword matched' };
+    }
+    if (!auto) return { pick: false, why: '' };
+    const metro = METRO[job.item.store];
+    if (!metro || !LOCAL[metro].test(g)) return { pick: false, why: 'not local' };
+    if (UNRELATED.test(g)) return { pick: false, why: 'not our kind of item' };
+    const gt = topicsOf(g).filter((t) => t !== 'electronics');
+    const it = topicsOf(itemText());
+    if (gt.length) {
+      const both = gt.filter((t) => it.includes(t));
+      return both.length ? { pick: true, why: `local, ${both[0]}` } : { pick: false, why: `local, but about ${gt[0]}` };
+    }
+    if (BUYSELL.test(g) || TOPICS.electronics.test(g)) return { pick: true, why: 'local buy/sell' };
+    return { pick: false, why: 'local, but not a selling group' };
+  }
+
+  // Group rows on the "more places" step: a checkbox whose row text is the
+  // group name. The first step's own checkboxes (hide from friends, pickup
+  // options) are left alone by name.
+  const NOT_A_GROUP = /hide from friends|pickup|pick up|drop ?off|delivery|shipping|boost|public meetup|door/;
+  function groupRows() {
+    const out = [];
+    for (const cb of document.querySelectorAll('[role="checkbox"], input[type="checkbox"]')) {
+      if (!visible(cb) && !(cb.tagName === 'INPUT' && visible(cb.parentElement))) continue;
+      let name = cb.getAttribute('aria-label') || '';
+      if (!name) {
+        let el = cb;
+        for (let i = 0; i < 6 && el && !name; i++) {
+          el = el.parentElement;
+          const t = (el?.innerText || '').trim();
+          if (t && t.length < 160) name = t.split('\n')[0];
+        }
+      }
+      name = name.trim();
+      if (!name || NOT_A_GROUP.test(norm(name)) || /^marketplace$/i.test(name)) continue;
+      const checked = cb.tagName === 'INPUT' ? cb.checked : cb.getAttribute('aria-checked') === 'true';
+      out.push({ cb, name, checked });
+    }
+    return out;
+  }
+  function onGroupsStep() {
+    const t = norm(document.body.innerText.slice(0, 20000));
+    return /list in more places|more places|suggested groups|your groups/.test(t) && groupRows().length > 0;
+  }
+
+  let groupTimer = null;
+  const decided = new Map(); // group name → {pick, why, ticked}
+  function watchForGroups() {
+    clearInterval(groupTimer);
+    decided.clear();
+    groupTimer = setInterval(async () => {
+      if (!job || !onCreatePage()) { clearInterval(groupTimer); return; }
+      if (!onGroupsStep()) return;
+      const { groupRules = [], groupAuto = true } = await chrome.storage.local.get(['groupRules', 'groupAuto']);
+      let changed = false;
+      for (const row of groupRows()) {
+        if (decided.has(row.name)) continue;
+        const d = decide(row.name, groupRules, groupAuto);
+        let ticked = false;
+        if (d.pick && !row.checked) { row.cb.click(); ticked = true; await sleep(150); }
+        decided.set(row.name, { ...d, ticked: ticked || (d.pick && row.checked) });
+        changed = true;
+      }
+      if (changed) showGroups();
+    }, 1000);
+  }
+  function showGroups() {
+    const all = [...decided.entries()];
+    const picked = all.filter(([, d]) => d.ticked);
+    const skipped = all.filter(([, d]) => !d.ticked);
+    view.extra = `<div class="grp"><b>Groups — ticked ${picked.length} of ${all.length}</b>
+      ${picked.map(([n, d]) => `<div>✓ ${esc(n)} <span class="why">(${esc(d.why)})</span></div>`).join('') || '<div class="why">None fit this item. Tick any you want yourself.</div>'}
+      ${skipped.length ? `<div class="why" style="margin-top:4px">Left unticked: ${skipped.map(([n]) => esc(n)).join(', ')}</div>` : ''}
+    </div>`;
+    view.note = '<b>Your turn:</b> check the groups — untick any that don\'t fit — then click <b>Publish</b> yourself. Set up group rules in the extension\'s <b>Groups</b> tab.';
+    render();
+  }
+
+  // ── sold: point at the listings to mark sold ───────────────────────────────
+
+  async function markSoldMode() {
+    view.head = 'Sold in Shopify';
+    view.sub = `${job.sold.length} listing${job.sold.length === 1 ? '' : 's'} to mark sold`;
+    view.buttons = false; view.extra = '';
+    view.steps = job.sold.map((s) => ({ key: s.sku, label: s.title, state: 'run', text: '— looking…' }));
+    view.note = '';
+    render();
+    const end = Date.now() + 25000;
+    const found = new Set();
+    while (Date.now() < end && found.size < job.sold.length) {
+      for (const s of job.sold) {
+        if (found.has(s.sku)) continue;
+        const card = findCard(s.title);
+        if (!card) continue;
+        found.add(s.sku);
+        card.style.outline = '3px solid #c62828';
+        card.style.outlineOffset = '2px';
+        card.style.borderRadius = '8px';
+        const btn = Array.from(card.querySelectorAll('[role="button"], button, a')).find((b) => /mark as sold/i.test(b.textContent || b.getAttribute('aria-label') || ''));
+        if (btn) { btn.style.outline = '3px solid #ed6c02'; btn.style.outlineOffset = '2px'; }
+        if (found.size === 1) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        const st = view.steps.find((x) => x.key === s.sku);
+        st.state = 'ok'; st.text = btn ? '— outlined; click its Mark as sold' : '— outlined; use its ⋯ menu → Mark as sold';
+        render();
+      }
+      if (found.size < job.sold.length) { window.scrollBy(0, 600); await sleep(900); }
+    }
+    for (const st of view.steps) if (st.state === 'run') { st.state = 'todo'; st.text = '— not found here; it may already be marked sold or deleted'; }
+    view.note = 'Click <b>Mark as sold</b> on each outlined listing. Then press <b>Done</b> next to it in the extension\'s <b>Listed</b> tab.';
+    render();
+  }
+
+  // The listing card for a title: the smallest element whose text starts with
+  // the title (Facebook may cut a long title short), walked up to the block
+  // that holds the listing's buttons.
+  function findCard(title) {
+    const want = norm(title).slice(0, 40);
+    for (const el of document.querySelectorAll('span, a, div[dir="auto"]')) {
+      if (el.children.length > 2) continue;
+      const t = norm(el.textContent);
+      if (!t || t.length > 200 || !(t.startsWith(want) || want.startsWith(t.replace(/…$/, '')) && t.length > 20)) continue;
+      let card = el;
+      for (let i = 0; i < 14 && card; i++) {
+        card = card.parentElement;
+        if (card && card.querySelector('[role="button"], button') && card.getBoundingClientRect().height > 80) return card;
+      }
+    }
+    return null;
+  }
+
+  // ── boot ───────────────────────────────────────────────────────────────────
+
   async function boot() {
-    if (!onCreatePage()) return;
+    if (!onCreatePage() && !onSellingPage()) return;
     const got = await send({ type: 'job' });
     if (!got.ok || !got.job) return;
     job = got.job;
-    fill();
+    if (job.sold && onSellingPage()) markSoldMode();
+    else if (job.fb && onCreatePage()) fill();
   }
 
   boot();
-  // Facebook is a single-page app: leaving the create form doesn't reload the
-  // page, so watch the path and take the panel down when the form is gone.
+  // Facebook is a single-page app: leaving the form doesn't reload the page,
+  // so watch the path and take the panel down when the page it was for is gone.
   let last = location.pathname;
   setInterval(() => {
     if (location.pathname === last) return;
     last = location.pathname;
-    if (!onCreatePage() && host) { host.remove(); host = root = null; }
-    else if (onCreatePage() && !host) boot();
+    const here = (job?.fb && onCreatePage()) || (job?.sold && onSellingPage());
+    if (!here && host) { closePanel(); clearInterval(groupTimer); }
+    else if (!host) boot();
   }, 800);
 })();

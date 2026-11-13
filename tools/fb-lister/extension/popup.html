@@ -24,14 +24,12 @@
     <nav>
       <button class="tab on" data-tab="list">List an item</button>
       <button class="tab" data-tab="listed">Listed <span id="listedCount"></span></button>
+      <button class="tab" data-tab="groups">Groups</button>
     </nav>
 
     <div id="tab-list">
       <div class="row">
-        <select id="store">
-          <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option>
-          <option value="MPL">MPL</option><option value="BAL">BAL</option>
-        </select>
+        <select id="store"></select>
         <input id="q" type="search" placeholder="Search title or SKU">
       </div>
       <div class="msg" id="listMsg"></div>
@@ -42,9 +40,26 @@
     <div id="tab-listed" hidden>
       <div class="row">
         <button id="check">Check what's sold</button>
+        <button id="markAll" class="primary" hidden>Mark sold on Facebook</button>
       </div>
       <div class="msg" id="listedMsg"></div>
       <div id="listed"></div>
+    </div>
+
+    <div id="tab-groups" hidden>
+      <p class="hint">On the screen after <b>Next</b>, the extension ticks the groups that fit the item. You check them and click Publish.</p>
+      <label class="chk"><input type="checkbox" id="gAuto"> Automatic picks: local buy/sell groups, and local groups about this kind of item</label>
+      <div class="sub">Your rules <span class="hint">(checked first, and they beat automatic picks)</span></div>
+      <div id="gRules"></div>
+      <div class="rule add">
+        <input id="gName" placeholder="Group name contains…">
+        <select id="gMode"><option value="all">Every item</option><option value="match">Items with keywords</option><option value="never">Never</option></select>
+        <input id="gKw" placeholder="keywords, comma separated" hidden>
+        <button id="gAdd">Add</button>
+      </div>
+      <div class="sub">Find groups to join</div>
+      <p class="hint">Opens Facebook's group search. You join the ones you want; groups usually need an admin to approve you.</p>
+      <div id="gFind" class="finds"></div>
     </div>
 
     <footer><button id="logout" class="link">Sign out</button></footer>

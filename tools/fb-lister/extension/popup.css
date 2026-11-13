@@ -40,3 +40,16 @@ nav { display: flex; gap: 4px; margin-bottom: 8px; }
 .acts { display: flex; gap: 6px; }
 .acts button { flex: 1; }
 footer { margin-top: 8px; text-align: right; }
+.hint { color: #65676b; font-size: 12px; }
+p.hint { margin: 0 0 8px; }
+.chk { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 10px; }
+.sub { font-weight: 600; margin: 10px 0 6px; }
+.rule { display: flex; gap: 4px; align-items: center; padding: 4px 0; border-bottom: 1px solid #eef0f2; }
+.rule .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule .m { color: #65676b; font-size: 12px; }
+.rule.add { flex-wrap: wrap; border: 0; }
+.rule.add input { flex: 1 1 140px; min-width: 0; }
+.finds { display: flex; flex-wrap: wrap; gap: 4px; }
+.finds button { font-size: 12px; }
+.item button.small { padding: 2px 8px; font-size: 12px; white-space: nowrap; }
+[hidden] { display: none !important; }

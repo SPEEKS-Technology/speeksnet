@@ -1,20 +1,26 @@
 <!doctype html>
 <!--
-  Mock of Facebook Marketplace's "Item for sale" form, for exercising the
-  Marketplace Lister's content.js without a Facebook account. Serve the repo
-  (preview "speeksnet", port 8080) and open /scripts/fb-lister-fill-mock.html.
+  Mock of Facebook Marketplace for exercising the Marketplace Lister's
+  content.js without a Facebook account. Serve the repo (preview "speeksnet",
+  port 8080) and open:
+    /scripts/fb-lister-fill-mock.html        the create form, then the groups step
+    /scripts/fb-lister-fill-mock.html?sold   Marketplace -> Selling, sold finder
 
   It copies the SHAPE content.js relies on — fields found by label text or
   aria-label, Condition as a combobox with role="option" items, a hidden
-  multiple file input — not Facebook's real markup, which changes. A pass here
-  proves the filler's logic; only a real Facebook page proves the selectors.
-  window.__result is filled in once the panel says "Your turn".
+  multiple file input, group rows as role="checkbox" under "List in more
+  places", listing cards with a "Mark as sold" button — not Facebook's real
+  markup, which changes. A pass here proves the logic; only a real Facebook
+  page proves the selectors. window.__result is filled in at the end.
 -->
 <html><head><meta charset="utf-8"><title>FB form mock</title>
 <style>body{font:14px system-ui;max-width:480px;margin:20px} label{display:block;border:1px solid #ccc;border-radius:6px;padding:6px;margin:8px 0;cursor:text}
 label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;border:0;font:inherit} [role=listbox]{border:1px solid #999;background:#fff}
-[role=option]{padding:4px 8px;cursor:pointer}</style></head>
+[role=option]{padding:4px 8px;cursor:pointer} .g{display:flex;justify-content:space-between;padding:4px 0}
+[role=checkbox]{display:inline-block;width:14px;height:14px;border:1px solid #333} [role=checkbox][aria-checked=true]{background:#1877f2}
+.card{height:120px;border:1px solid #ddd;margin:8px;padding:6px}</style></head>
 <body>
+<div id="form">
 <div><span>Photos</span><input type="file" accept="image/*,image/heif,image/heic" multiple style="display:none" id="file"></div>
 <label><div><span>Title</span><input type="text" id="title"></div></label>
 <label><div><span>Price</span><input type="text" id="price"></div></label>
@@ -22,50 +28,94 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
 <label role="combobox" aria-haspopup="listbox" id="cond"><div><span>Condition</span><div id="condVal"></div></div></label>
 <div id="lb"></div>
 <label><div><span>Description</span><textarea id="desc" rows="4"></textarea></div></label>
+<div><span>Hide from friends</span><div role="checkbox" aria-checked="false" aria-label="Hide from friends"></div></div>
 <div role="button" id="next">Next</div>
+</div>
 <script>
+  const SOLD = location.search.includes('sold');
+  const $ = (id) => document.getElementById(id);
+
   // Condition dropdown, Facebook-style: the options appear only after a click.
-  document.getElementById('cond').addEventListener('click', () => {
-    document.getElementById('lb').innerHTML = '<div role="listbox">' +
+  $('cond').addEventListener('click', () => {
+    $('lb').innerHTML = '<div role="listbox">' +
       ['New', 'Used - Like New', 'Used - Good', 'Used - Fair'].map(o => `<div role="option">${o}</div>`).join('') + '</div>';
-    document.querySelectorAll('[role=option]').forEach(o => o.onclick = () => {
-      document.getElementById('condVal').textContent = o.textContent; document.getElementById('lb').innerHTML = '';
-    });
+    document.querySelectorAll('[role=option]').forEach(o => o.onclick = () => { $('condVal').textContent = o.textContent; $('lb').innerHTML = ''; });
   });
-  let files = 0, nextClicked = false;
-  document.getElementById('file').addEventListener('change', e => files = e.target.files.length);
-  document.getElementById('next').addEventListener('click', () => nextClicked = true);
+  let files = 0, nextClicked = false, soldClicks = 0, groupsShown = false;
+  $('file').addEventListener('change', e => files = e.target.files.length);
+  $('next').addEventListener('click', () => nextClicked = true);
+  const wireBoxes = (root) => root.querySelectorAll('[role=checkbox]').forEach(c => c.onclick = () =>
+    c.setAttribute('aria-checked', c.getAttribute('aria-checked') === 'true' ? 'false' : 'true'));
+  wireBoxes(document);
+
+  // The step after Next. Expected for an OVL Nintendo Switch with the rule
+  // "Owners USA" -> keywords "nintendo": ticks Kansas City Buy Sell Trade
+  // (local buy/sell), KC Video Gamers (local, games), Nintendo Switch Owners USA
+  // (the rule); leaves KC Furniture (unrelated), Overland Park Moms (not a
+  // selling group), St Louis Buy Sell (other metro) and Hide from friends.
+  const GROUPS = ['Kansas City Buy Sell Trade', 'KC Video Gamers', 'KC Furniture Buy Sell', 'Nintendo Switch Owners USA', 'Overland Park Moms', 'St Louis Buy Sell'];
+  function showGroupsStep() {
+    const d = document.createElement('div'); d.id = 'groups';
+    d.innerHTML = '<h3>List in more places</h3>' + GROUPS.map(n => `<div class="g"><span>${n}</span><div role="checkbox" aria-checked="false" aria-label="${n}"></div></div>`).join('');
+    document.body.appendChild(d);
+    wireBoxes(d);
+  }
 
   const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
   const job = {
-    item: { sku: 'KS01-TEST-1', store: 'OVL', title: 'Nintendo Switch OLED 64GB White' },
+    item: { sku: 'KS01-TEST-1', store: 'OVL', title: 'Nintendo Switch OLED 64GB White', collections: ['video-game-systems'] },
     fb: { title: 'Nintendo Switch OLED 64GB White', price: 250, condition: 'Used - Good',
           description: 'Tested and working.\n\n• Console\n• Dock', photos: ['https://cdn.shopify.com/a.jpg', 'https://cdn.shopify.com/b.jpg'] },
     warnings: ['Example warning.'],
   };
-  window.chrome = { runtime: { lastError: null, sendMessage(msg, cb) {
-    setTimeout(() => {
-      if (msg.type === 'job') cb({ ok: true, job });
-      else if (msg.type === 'photos') cb({ ok: true, files: msg.urls.map((u, i) => ({ name: `p${i}.png`, type: 'image/png', b64: PNG })), failed: [] });
-      else cb({ ok: true });
-    }, 20);
-  } } };
+  const soldJob = { sold: [{ sku: 'KS01-A', title: 'Apple iPad 9th Gen 64GB Space Gray' }, { sku: 'KS01-B', title: 'An Item That Is Not On The Page' }] };
+  const storage = { groupRules: [{ name: 'Owners USA', mode: 'match', keywords: 'nintendo' }], groupAuto: true };
+  window.chrome = {
+    storage: { local: { get: async (k) => { const o = {}; [].concat(k).forEach(x => o[x] = storage[x]); return o; } } },
+    runtime: { lastError: null, sendMessage(msg, cb) {
+      setTimeout(() => {
+        if (msg.type === 'job') cb({ ok: true, job: SOLD ? soldJob : job });
+        else if (msg.type === 'photos') cb({ ok: true, files: msg.urls.map((u, i) => ({ name: `p${i}.png`, type: 'image/png', b64: PNG })), failed: [] });
+        else cb({ ok: true });
+      }, 20);
+    } },
+  };
+
+  if (SOLD) {
+    $('form').innerHTML = ['Apple iPad 9th Gen 64GB Space Gray', 'Some Other Listing We Did Not Sell'].map(t =>
+      `<div class="card" data-t="${t}"><span>${t}</span><div role="button" class="ms">Mark as sold</div><div role="button">Share</div></div>`).join('');
+    document.querySelectorAll('.ms').forEach(b => b.onclick = () => soldClicks++);
+  }
+
+  const panelText = () => { const h = [...document.documentElement.children].find(c => c.shadowRoot); return h ? h.shadowRoot.querySelector('.box')?.innerText || '' : ''; };
 
   fetch('../tools/fb-lister/extension/content.js').then(r => r.text()).then(src => {
-    // The real script only runs on /marketplace/create/item.
-    const patched = src.replace("/^\\/marketplace\\/create\\/item/.test(location.pathname)", 'true');
-    if (patched === src) throw new Error('path check not found — content.js changed');
-    (0, eval)(patched);
+    // The real script only runs on Facebook's own paths.
+    const create = '/^\\/marketplace\\/create\\/item/.test(location.pathname)';
+    const selling = '/^\\/marketplace\\/you(\\/selling)?\\/?$/.test(location.pathname)';
+    if (!src.includes(create) || !src.includes(selling)) throw new Error('path checks not found — content.js changed');
+    (0, eval)(src.replace(create, SOLD ? 'false' : 'true').replace(selling, SOLD ? 'true' : 'false'));
     const t0 = Date.now();
     const iv = setInterval(() => {
-      const host = [...document.documentElement.children].find(c => c.shadowRoot);
-      const txt = host ? host.shadowRoot.textContent : '';
-      if (/Your turn/.test(txt) || Date.now() - t0 > 15000) {
+      const txt = panelText();
+      if (SOLD) {
+        if (/Click Mark as sold on each/.test(txt) || Date.now() - t0 > 40000) {
+          clearInterval(iv);
+          window.__result = {
+            outlined: [...document.querySelectorAll('.card')].map(c => `${c.dataset.t}: card=${!!c.style.outline} button=${!!c.querySelector('.ms').style.outline}`),
+            soldClicks, panel: txt,
+          };
+        }
+        return;
+      }
+      if (/Your turn/.test(txt) && !groupsShown) { groupsShown = true; showGroupsStep(); return; }
+      if (/Groups — ticked/.test(txt) || Date.now() - t0 > 25000) {
         clearInterval(iv);
         window.__result = {
-          title: document.getElementById('title').value, price: document.getElementById('price').value,
-          condition: document.getElementById('condVal').textContent, description: document.getElementById('desc').value,
-          files, nextClicked, panel: txt.replace(/\s+/g, ' ').slice(0, 600),
+          title: $('title').value, price: $('price').value, condition: $('condVal').textContent, description: $('desc').value,
+          files, nextClicked,
+          groups: [...document.querySelectorAll('[role=checkbox]')].map(g => `${g.getAttribute('aria-label')}=${g.getAttribute('aria-checked')}`),
+          panel: txt,
         };
       }
     }, 200);

@@ -22,8 +22,14 @@ async function show() {
   $('who').textContent = who ? who.name : '';
   if (!who) { if (r.error) say('signinMsg', r.error, true); $('pin').focus(); return; }
   if (r.offline) say('listMsg', 'SPEEKSNET is not answering: ' + r.offline, true);
+  // Only the stores SPEEKSNET says this person may see (one, for anyone at a
+  // store). The server enforces the same list; this just doesn't offer the rest.
+  const stores = (who.stores && who.stores.length) ? who.stores : [who.store].filter(Boolean);
+  $('store').innerHTML = stores.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  $('store').hidden = stores.length < 2;
+  $('who').textContent = who.name + (stores.length === 1 ? ' · ' + stores[0] : '');
   const saved = (await chrome.storage.local.get('store')).store;
-  $('store').value = saved || who.store || 'OVL';
+  $('store').value = stores.includes(saved) ? saved : (stores.includes(who.store) ? who.store : stores[0]);
   loadCatalog();
   countListed();
 }
@@ -44,7 +50,9 @@ document.querySelectorAll('.tab').forEach((b) => b.onclick = () => {
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === b));
   $('tab-list').hidden = b.dataset.tab !== 'list';
   $('tab-listed').hidden = b.dataset.tab !== 'listed';
+  $('tab-groups').hidden = b.dataset.tab !== 'groups';
   if (b.dataset.tab === 'listed') renderListed();
+  if (b.dataset.tab === 'groups') renderGroups();
 });
 
 // ── List an item ─────────────────────────────────────────────────────────────
@@ -124,8 +132,8 @@ async function openItem(sku, productId) {
 }
 
 // ── Listed ───────────────────────────────────────────────────────────────────
-
-let lastStatus = {};
+// The background worker re-checks these against Shopify every 30 minutes and
+// keeps the last answer in soldStatus, so this tab opens already knowing.
 
 async function countListed() {
   const { listed = [] } = await chrome.storage.local.get('listed');
@@ -133,47 +141,94 @@ async function countListed() {
 }
 
 async function renderListed() {
-  const { listed = [] } = await chrome.storage.local.get('listed');
+  const { listed = [], soldStatus } = await chrome.storage.local.get(['listed', 'soldStatus']);
+  const st = soldStatus?.results || {};
   countListed();
+  $('markAll').hidden = true;
   if (!listed.length) { $('listed').innerHTML = ''; return say('listedMsg', 'Nothing filled from this computer yet.'); }
-  const sold = listed.filter((l) => lastStatus[l.sku]?.status === 'sold').length;
-  say('listedMsg', Object.keys(lastStatus).length
-    ? (sold ? `${sold} sold — mark ${sold === 1 ? 'it' : 'them'} sold on Facebook, then remove from this list.` : 'Nothing here has sold.')
-    : `${listed.length} filled from this computer. Check them against Shopify to catch anything that sold in store, online or on eBay.`);
+  const sold = listed.filter((l) => st[l.sku]?.status === 'sold');
+  const when = soldStatus?.at ? ` Checked ${new Date(soldStatus.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
+  say('listedMsg', soldStatus
+    ? (sold.length ? `${sold.length} sold in Shopify — mark ${sold.length === 1 ? 'it' : 'them'} sold on Facebook, then press Done.${when}` : `Nothing here has sold.${when} Checked again every 30 minutes while Chrome is open.`)
+    : `${listed.length} filled from this computer. Checked against Shopify every 30 minutes while Chrome is open.`);
+  $('markAll').hidden = sold.length < 1;
+  $('markAll').textContent = sold.length > 1 ? `Mark ${sold.length} sold on Facebook` : 'Mark sold on Facebook';
   // Sold first, so the ones to act on are at the top.
-  const rank = (l) => ({ sold: 0, unknown: 1, instock: 2 }[lastStatus[l.sku]?.status] ?? 3);
+  const rank = (l) => ({ sold: 0, unknown: 1, instock: 2 }[st[l.sku]?.status] ?? 3);
   const rows = [...listed].sort((a, b) => rank(a) - rank(b));
   $('listed').innerHTML = rows.map((l, n) => {
-    const s = lastStatus[l.sku];
-    return `<div class="item" data-n="${n}" title="${esc(s?.reason || '')}">
+    const s = st[l.sku];
+    return `<div class="item" title="${esc(s?.reason || '')}">
       <div class="t"><b>${esc(l.title)}</b><span>${esc(l.sku)} · ${new Date(l.at).toLocaleDateString()}${l.by ? ' · ' + esc(l.by) : ''}</span></div>
       ${s ? `<span class="pill ${s.status}">${s.status === 'instock' ? 'in stock' : s.status}</span>` : `<span class="p">${money(l.price)}</span>`}
-      <button class="link" data-forget="${n}" title="Remove from this list">remove</button>
+      ${s?.status === 'sold' ? `<button class="small" data-find="${n}" title="Open Facebook Selling with this listing outlined">Find</button>` : ''}
+      <button class="small" data-forget="${n}" title="${s?.status === 'sold' ? 'Marked sold on Facebook — take it off this list' : 'Take it off this list'}">Done</button>
     </div>`;
   }).join('');
-  $('listed').querySelectorAll('[data-forget]').forEach((b) => b.onclick = async (e) => {
-    e.stopPropagation();
+  $('listed').querySelectorAll('[data-forget]').forEach((b) => b.onclick = async () => {
     const l = rows[Number(b.dataset.forget)];
     await send({ type: 'forget', sku: l.sku, product_id: l.product_id });
     renderListed();
   });
+  $('listed').querySelectorAll('[data-find]').forEach((b) => b.onclick = () => send({ type: 'openSold', items: [rows[Number(b.dataset.find)]] }));
 }
 
+$('markAll').onclick = () => send({ type: 'openSold', items: [] });
+
 $('check').onclick = async () => {
-  const { listed = [] } = await chrome.storage.local.get('listed');
-  if (!listed.length) return;
   $('check').disabled = true;
   say('listedMsg', 'Checking Shopify…');
-  const skus = [...new Set(listed.map((l) => l.sku))];
-  const out = {};
-  for (let i = 0; i < skus.length; i += 200) {
-    const r = await send({ type: 'status', skus: skus.slice(i, i + 200) });
-    if (!r.ok) { $('check').disabled = false; return say('listedMsg', r.error, true); }
-    Object.assign(out, r.results);
-  }
-  lastStatus = out;
+  const r = await send({ type: 'checkSold' });
   $('check').disabled = false;
+  if (!r.ok) return say('listedMsg', r.error, true);
   renderListed();
 };
+
+// ── Groups ───────────────────────────────────────────────────────────────────
+// Rules are kept on this computer (chrome.storage.local), because the groups
+// are the person's own: each Facebook account is in different ones. content.js
+// reads them on the "list in more places" step.
+
+const FIND = {
+  KC: ['Kansas City buy sell trade', 'Kansas City electronics', 'Kansas City video games', 'Kansas City phones', 'Johnson County buy sell', 'Overland Park buy sell', "Lee's Summit buy sell", 'Westport Midtown KC buy sell'],
+  STL: ['St Louis buy sell trade', 'St Louis electronics', 'St Louis video games', 'St Louis phones', 'West County STL buy sell', 'Ballwin buy sell', 'Maplewood buy sell', 'Chesterfield buy sell'],
+};
+const METRO = { OVL: 'KC', LEE: 'KC', WSP: 'KC', MPL: 'STL', BAL: 'STL' };
+const MODE = { all: 'every item', match: 'items with', never: 'never' };
+
+$('gMode').onchange = () => { $('gKw').hidden = $('gMode').value !== 'match'; };
+$('gAuto').onchange = () => chrome.storage.local.set({ groupAuto: $('gAuto').checked });
+$('gAdd').onclick = async () => {
+  const name = $('gName').value.trim();
+  const mode = $('gMode').value;
+  const keywords = $('gKw').value.trim();
+  if (!name) return $('gName').focus();
+  if (mode === 'match' && !keywords) return $('gKw').focus();
+  const { groupRules = [] } = await chrome.storage.local.get('groupRules');
+  groupRules.push({ name, mode, keywords: mode === 'match' ? keywords : '' });
+  await chrome.storage.local.set({ groupRules });
+  $('gName').value = ''; $('gKw').value = '';
+  renderGroups();
+};
+
+async function renderGroups() {
+  const { groupRules = [], groupAuto = true } = await chrome.storage.local.get(['groupRules', 'groupAuto']);
+  $('gAuto').checked = groupAuto;
+  $('gRules').innerHTML = groupRules.map((r, n) => `<div class="rule">
+      <span class="n" title="${esc(r.name)}">“${esc(r.name)}”</span>
+      <span class="m">${esc(MODE[r.mode] || r.mode)}${r.mode === 'match' ? ': ' + esc(r.keywords) : ''}</span>
+      <button class="link" data-del="${n}">remove</button>
+    </div>`).join('') || '<p class="hint">None yet. Example: “KC Gamers” → items with: nintendo, playstation, xbox.</p>';
+  $('gRules').querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    groupRules.splice(Number(b.dataset.del), 1);
+    await chrome.storage.local.set({ groupRules });
+    renderGroups();
+  });
+  const metros = [...new Set(((who && who.stores) || []).map((s) => METRO[s]).filter(Boolean))];
+  $('gFind').innerHTML = (metros.length ? metros : ['KC', 'STL']).flatMap((m) => FIND[m])
+    .map((q) => `<button data-q="${esc(q)}">${esc(q)}</button>`).join('');
+  $('gFind').querySelectorAll('[data-q]').forEach((b) => b.onclick = () =>
+    chrome.tabs.create({ url: 'https://www.facebook.com/groups/search/groups/?q=' + encodeURIComponent(b.dataset.q) }));
+}
 
 show();

@@ -56,7 +56,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     switch (msg.type) {
       case 'login': {
         const out = await api({ action: 'login', pin: msg.pin });
-        const who = { name: out.name, store: out.store, role: out.role };
+        const who = { name: out.name, store: out.store, role: out.role, stores: out.stores || [] };
         await chrome.storage.local.set({ token: out.token, who });
         return { who };
       }
@@ -66,7 +66,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'me': {
         const { token, who } = await chrome.storage.local.get(['token', 'who']);
         if (!token) return { who: null };
-        try { const out = await api({ action: 'me' }); return { who: { name: out.name, store: out.store, role: out.role } }; }
+        try { const out = await api({ action: 'me' }); return { who: { name: out.name, store: out.store, role: out.role, stores: out.stores || [] } }; }
         catch (e) { if (e.status === 401 || e.status === 403) return { who: null, error: e.message }; return { who, offline: e.message }; }
       }
       case 'catalog':
@@ -107,8 +107,14 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'forget': {
         const { listed = [] } = await chrome.storage.local.get('listed');
         await chrome.storage.local.set({ listed: listed.filter((l) => !(l.sku === msg.sku && l.product_id === msg.product_id)) });
+        await refreshBadge();
         return {};
       }
+      case 'checkSold':
+        return checkSold({ notify: false });
+      case 'openSold':
+        await openSold(msg.items || []);
+        return {};
       default:
         throw new Error('Unknown request.');
     }
@@ -117,3 +123,84 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove('job:' + tabId); });
+
+// ── SOLD WATCH ───────────────────────────────────────────────────────────────
+// Facebook isn't connected to Shopify, so a listing stays up after the item
+// sells in store, online or on eBay. Every 30 minutes while Chrome is open,
+// everything filled from this computer is checked against Shopify (through
+// fb-lister's status action). Anything sold puts a count on the toolbar icon
+// and raises one notification per item; clicking it opens Marketplace →
+// Selling with those listings outlined and their "Mark as sold" buttons
+// pointed at. The person clicks Mark as sold — see content.js for why the
+// extension never does.
+
+const SELLING = 'https://www.facebook.com/marketplace/you/selling';
+
+async function checkSold({ notify }) {
+  const { listed = [], token } = await chrome.storage.local.get(['listed', 'token']);
+  if (!token || !listed.length) { await refreshBadge(); return { results: {} }; }
+  const skus = [...new Set(listed.map((l) => l.sku))];
+  const results = {};
+  try {
+    for (let i = 0; i < skus.length; i += 200) {
+      const r = await api({ action: 'status', skus: skus.slice(i, i + 200) });
+      Object.assign(results, r.results);
+    }
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) {
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#ed6c02' });
+      chrome.action.setTitle({ title: 'SPEEKS Marketplace Lister — sign in again to keep checking for sales' });
+    }
+    throw e;
+  }
+  await chrome.storage.local.set({ soldStatus: { at: Date.now(), results } });
+  await refreshBadge();
+
+  if (notify) {
+    const { notified = [] } = await chrome.storage.local.get('notified');
+    const fresh = listed.filter((l) => results[l.sku]?.status === 'sold' && !notified.includes(l.sku));
+    if (fresh.length) {
+      chrome.notifications.create('sold', {
+        type: 'basic', iconUrl: 'icon128.png', priority: 2, requireInteraction: true,
+        title: fresh.length === 1 ? 'Sold in Shopify — still on Facebook' : `${fresh.length} items sold in Shopify — still on Facebook`,
+        message: fresh.slice(0, 3).map((l) => l.title).join('\n') + (fresh.length > 3 ? `\n…and ${fresh.length - 3} more` : '') + '\nClick to mark them sold on Facebook.',
+      });
+      await chrome.storage.local.set({ notified: [...new Set([...notified, ...fresh.map((l) => l.sku)])].slice(-1000) });
+    }
+  }
+  return { results };
+}
+
+async function soldListed() {
+  const { listed = [], soldStatus } = await chrome.storage.local.get(['listed', 'soldStatus']);
+  const res = soldStatus?.results || {};
+  return listed.filter((l) => res[l.sku]?.status === 'sold');
+}
+
+async function refreshBadge() {
+  const { token } = await chrome.storage.local.get('token');
+  if (!token) return;
+  const n = (await soldListed()).length;
+  chrome.action.setBadgeText({ text: n ? String(n) : '' });
+  chrome.action.setBadgeBackgroundColor({ color: '#c62828' });
+  chrome.action.setTitle({ title: n ? `SPEEKS Marketplace Lister — ${n} sold, mark ${n === 1 ? 'it' : 'them'} sold on Facebook` : 'SPEEKS Marketplace Lister' });
+}
+
+async function openSold(items) {
+  if (!items.length) items = await soldListed();
+  if (!items.length) return;
+  const tab = await chrome.tabs.create({ url: SELLING, active: true });
+  await chrome.storage.session.set({ ['job:' + tab.id]: { sold: items.map((l) => ({ sku: l.sku, title: l.title })) } });
+}
+
+chrome.notifications.onClicked.addListener(async (id) => {
+  if (id !== 'sold') return;
+  chrome.notifications.clear(id);
+  await openSold([]);
+});
+
+function ensureAlarm() { chrome.alarms.create('soldCheck', { periodInMinutes: 30, delayInMinutes: 1 }); }
+chrome.runtime.onInstalled.addListener(ensureAlarm);
+chrome.runtime.onStartup.addListener(ensureAlarm);
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'soldCheck') checkSold({ notify: true }).catch(() => {}); });

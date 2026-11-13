@@ -44148,7 +44148,7 @@ const FEATURE_CATALOG = [
     // the fb-lister edge function resolves 'fb-lister' on every call, so turning it
     // off here cuts off the extension too. Its def is copied into that function as
     // FB_LISTER_DEF — change one, change both.
-    { key: 'fb-lister',                label: 'Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'Listings', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager'] },
+    { key: 'fb-lister',                label: 'Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'Downloads', def: ['district-manager'] },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
     // Delegation tab pairs them the way it already pairs the claims tools.
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
@@ -71725,7 +71725,7 @@ else _eqTabsWatch();
 // FB_LISTER_VERSION must match "version" in tools/fb-lister/extension/
 // manifest.json, and the zip must be rebuilt (tools/fb-lister/build-zip.ps1)
 // whenever the extension changes. It is also the zip's cache-buster.
-const FB_LISTER_VERSION = '1.0.0';
+const FB_LISTER_VERSION = '1.1.0';
 const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
 
 function openFbLister() {
@@ -71746,7 +71746,7 @@ function openFbLister() {
             <div class="tool-head-main">
                 <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span>
                 <div class="tool-head-titles">
-                    <span class="tool-head-eyebrow">Listings</span>
+                    <span class="tool-head-eyebrow">Downloads</span>
                     <span class="tool-head-title">Marketplace Lister</span>
                     <span class="tool-head-sub">A Chrome extension that fills in a Facebook Marketplace listing from one of our Shopify items. You check it and click Publish.</span>
                 </div>
@@ -71770,9 +71770,18 @@ function openFbLister() {
                 <ol style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px">
                     <li>Be signed in to Facebook in the same Chrome.</li>
                     <li>Open the extension, search the store's in-stock items, pick one and click <b>Fill on Facebook</b>.</li>
-                    <li>It fills in the photos, title, price, condition and description. <b>You pick the category</b>, read everything, then click <b>Next</b> and <b>Publish</b> yourself — it never posts for you.</li>
-                    <li>When something sells, the <b>Listed</b> tab → <b>Check What's Sold</b> shows which ones to mark sold on Facebook. It checks Shopify, so sales in store, online and on eBay all count.</li>
+                    <li>It fills in the photos, title, price, condition and description. <b>You pick the category</b>, read everything, then click <b>Next</b>.</li>
+                    <li>On the next screen it ticks the groups that fit the item — your rules from its <b>Groups</b> tab, plus local buy/sell groups. Check them, then click <b>Publish</b> yourself. It never posts for you.</li>
+                    <li>You only ever see your own store's inventory.</li>
                 </ol>
+            </div>
+
+            <div class="b2b-note"><span class="b2b-note-k">When It Sells</span>
+                Every 30 minutes while Chrome is open, it checks everything you listed against Shopify — in-store, online and eBay sales all count. Anything sold puts a red number on its icon and pops up a notification. Click it and Facebook's Selling page opens with those listings outlined; click <b>Mark as sold</b> on each, then <b>Done</b> in the Listed tab.
+            </div>
+
+            <div class="b2b-note"><span class="b2b-note-k">Groups</span>
+                Join the groups yourself — the <b>Groups</b> tab has search buttons for your area. Then add rules like “KC Gamers → items with: nintendo, xbox” so the right ones get ticked.
             </div>
 
             <div class="b2b-note"><span class="b2b-note-k">Updating</span>

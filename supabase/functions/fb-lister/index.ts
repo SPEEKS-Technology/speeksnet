@@ -49,7 +49,7 @@ const corsHeaders = {
 };
 
 const FEATURE_KEY = "fb-lister";
-const FB_LISTER_DEF = ["ceo", "district-manager", "mocd", "owner-manager", "manager", "assistant-manager"];
+const FB_LISTER_DEF = ["district-manager"];
 const TOKEN_DAYS = 30;
 const API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
@@ -278,7 +278,7 @@ async function login(pin: unknown, ip: string) {
   if (!row) { failed(ip); throw new Http(401, "That PIN didn't match anyone."); }
   const who: Who = { name: row.name, store: row.store || null, role: row.role || "", isTest };
   if (!(await allowed(who))) throw new Http(403, "The Marketplace Lister isn't switched on for you in SPEEKSNET. Ask your DM.");
-  return { token: await makeToken(row.name, isTest, p), name: who.name, store: homeStore(who), role: who.role };
+  return { token: await makeToken(row.name, isTest, p), ...profile(who) };
 }
 
 function homeStore(who: Who): string | null {
@@ -286,9 +286,29 @@ function homeStore(who: Who): string | null {
   return STORES.includes(s) ? s : null;
 }
 
-async function catalog(store: unknown, q: unknown) {
-  const st = String(store || "").toUpperCase();
+// ── ONE STORE PER PERSON (Ethan, 2026-11-13) ────────────────────────────────
+// Someone signed in at BAL sees BAL and nothing else: the catalog, item reads
+// and sold checks for any other store are refused HERE, not just hidden in the
+// popup, because the popup is a file on their computer and can be edited.
+// Only people whose SPEEKSNET store is not one of the five (CORP — DM, CEO,
+// MOCD) see every store.
+function storesFor(who: Who): string[] {
+  const home = homeStore(who);
+  return home ? [home] : STORES;
+}
+function mustSee(who: Who, store: string | null) {
+  if (!store || !storesFor(who).includes(store)) {
+    throw new Http(403, `You can only see ${storesFor(who).join(", ")} items.`);
+  }
+}
+function profile(who: Who) {
+  return { name: who.name, store: homeStore(who), role: who.role, stores: storesFor(who) };
+}
+
+async function catalog(who: Who, store: unknown, q: unknown) {
+  const st = String(store || homeStore(who) || "").toUpperCase();
   if (!STORES.includes(st)) throw new Http(400, "Pick a store.");
+  mustSee(who, st);
   const term = String(q || "").trim().toLowerCase();
   // PostgREST stops at 1,000 rows whatever limit= says — page it.
   const rows: any[] = [];
@@ -324,10 +344,11 @@ const ITEM_Q = `query($q: String!) {
   }
 }`;
 
-async function item(sku: unknown, productId: unknown) {
+async function item(who: Who, sku: unknown, productId: unknown) {
   const s = String(sku || "").trim();
   const store = storeOfSku(s);
   if (!store) throw new Http(400, "That SKU doesn't start with one of our store prefixes.");
+  mustSee(who, store);
   const data = await gql(store, ITEM_Q, { q: skuQuery([s]) });
   const hits = (data?.productVariants?.nodes || [])
     .filter((v: any) => String(v.sku || "").toUpperCase() === s.toUpperCase());
@@ -386,15 +407,17 @@ const STATUS_Q = `query($q: String!) {
   productVariants(first: 100, query: $q) { nodes { sku inventoryQuantity product { status } } }
 }`;
 
-async function status(skusIn: unknown) {
+async function status(who: Who, skusIn: unknown) {
   const skus = Array.from(new Set((Array.isArray(skusIn) ? skusIn : []).map((s) => String(s || "").trim()).filter(Boolean)));
   if (!skus.length) return { results: {} };
   if (skus.length > 200) throw new Http(400, "Check 200 SKUs at a time at most.");
   const results: Record<string, { status: string; reason: string; quantity?: number }> = {};
   const byStore: Record<string, string[]> = {};
+  const mine = storesFor(who);
   for (const s of skus) {
     const st = storeOfSku(s);
     if (!st) { results[s] = { status: "unknown", reason: "Not one of our SKU prefixes." }; continue; }
+    if (!mine.includes(st)) { results[s] = { status: "unknown", reason: `A ${st} item — you can only check ${mine.join(", ")}.` }; continue; }
     (byStore[st] ||= []).push(s);
   }
 
@@ -456,10 +479,10 @@ Deno.serve(async (req: Request) => {
     if (action === "login") return json({ success: true, ...(await login(body.pin, ip)) });
 
     const who = await verify(body.token);
-    if (action === "me") return json({ success: true, name: who.name, store: homeStore(who), role: who.role });
-    if (action === "catalog") return json({ success: true, ...(await catalog(body.store || homeStore(who), body.q)) });
-    if (action === "item") return json({ success: true, ...(await item(body.sku, body.product_id)) });
-    if (action === "status") return json({ success: true, ...(await status(body.skus)) });
+    if (action === "me") return json({ success: true, ...profile(who) });
+    if (action === "catalog") return json({ success: true, ...(await catalog(who, body.store, body.q)) });
+    if (action === "item") return json({ success: true, ...(await item(who, body.sku, body.product_id)) });
+    if (action === "status") return json({ success: true, ...(await status(who, body.skus)) });
     return json({ success: false, error: "Unknown action." }, 400);
   } catch (e) {
     if (e instanceof Http) return json({ success: false, error: e.message }, e.status);

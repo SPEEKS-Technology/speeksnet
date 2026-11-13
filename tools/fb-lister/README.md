@@ -20,13 +20,34 @@ the tokens already in `shopify_stores`) plus `ebay_catalog`.
 ## Who can use it
 Feature Access key **`fb-lister`**. That key controls both the SPEEKS Tools →
 Marketplace Lister download page and the extension's sign-in, because the edge
-function checks it on every call. By default it's on for managers and up (not
-employees or the store board). The default lives in two places that must agree:
+function checks it on every call. By default it's on for **DMs only**. Switch it
+on for anyone else, by person or by role, in Feature Access. The default lives in two places that must agree:
 `FEATURE_CATALOG` in `speeks.js` and `FB_LISTER_DEF` in the edge function.
 
 Sign-in uses the person's SPEEKSNET PIN, checked on the server. The extension
 then holds a signed 30-day token. Changing someone's PIN or deleting them cuts
 it off on the next call.
+
+## One store per person
+Anyone whose SPEEKSNET store is one of the five sees only that store: the
+catalog, item reads and sold checks are refused server-side for any other
+store. CORP people (DM, CEO, MOCD) see all five.
+
+## Groups
+On the "list in more places" step after Next, `content.js` ticks groups (never
+unticks, never posts). It applies the person's rules from the popup's Groups tab
+first (name contains X → every item / items with keywords / never). Then come
+automatic picks: a group with the store's own metro in its name that is
+buy/sell or about this kind of item, and isn't about cars, rentals, pets and so
+on. National groups are never picked automatically. People join groups
+themselves; the Groups tab has Facebook group-search buttons for their area.
+
+## Sold watch
+Every 30 minutes while Chrome is open, the worker checks everything filled
+from that computer against Shopify. Anything sold shows a badge count and a
+notification. Clicking it opens Marketplace → Selling with those listings
+outlined; the person clicks Mark as sold. The list is per computer
+(chrome.storage.local); nothing is written to SPEEKSNET.
 
 ## Shipping a change to the extension
 1. Edit `extension/`, then bump `"version"` in `extension/manifest.json`.
