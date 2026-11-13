@@ -1,0 +1,74 @@
+<!doctype html>
+<!--
+  Mock of Facebook Marketplace's "Item for sale" form, for exercising the
+  Marketplace Lister's content.js without a Facebook account. Serve the repo
+  (preview "speeksnet", port 8080) and open /scripts/fb-lister-fill-mock.html.
+
+  It copies the SHAPE content.js relies on — fields found by label text or
+  aria-label, Condition as a combobox with role="option" items, a hidden
+  multiple file input — not Facebook's real markup, which changes. A pass here
+  proves the filler's logic; only a real Facebook page proves the selectors.
+  window.__result is filled in once the panel says "Your turn".
+-->
+<html><head><meta charset="utf-8"><title>FB form mock</title>
+<style>body{font:14px system-ui;max-width:480px;margin:20px} label{display:block;border:1px solid #ccc;border-radius:6px;padding:6px;margin:8px 0;cursor:text}
+label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;border:0;font:inherit} [role=listbox]{border:1px solid #999;background:#fff}
+[role=option]{padding:4px 8px;cursor:pointer}</style></head>
+<body>
+<div><span>Photos</span><input type="file" accept="image/*,image/heif,image/heic" multiple style="display:none" id="file"></div>
+<label><div><span>Title</span><input type="text" id="title"></div></label>
+<label><div><span>Price</span><input type="text" id="price"></div></label>
+<label role="combobox" aria-haspopup="listbox" id="cat"><div><span>Category</span></div></label>
+<label role="combobox" aria-haspopup="listbox" id="cond"><div><span>Condition</span><div id="condVal"></div></div></label>
+<div id="lb"></div>
+<label><div><span>Description</span><textarea id="desc" rows="4"></textarea></div></label>
+<div role="button" id="next">Next</div>
+<script>
+  // Condition dropdown, Facebook-style: the options appear only after a click.
+  document.getElementById('cond').addEventListener('click', () => {
+    document.getElementById('lb').innerHTML = '<div role="listbox">' +
+      ['New', 'Used - Like New', 'Used - Good', 'Used - Fair'].map(o => `<div role="option">${o}</div>`).join('') + '</div>';
+    document.querySelectorAll('[role=option]').forEach(o => o.onclick = () => {
+      document.getElementById('condVal').textContent = o.textContent; document.getElementById('lb').innerHTML = '';
+    });
+  });
+  let files = 0, nextClicked = false;
+  document.getElementById('file').addEventListener('change', e => files = e.target.files.length);
+  document.getElementById('next').addEventListener('click', () => nextClicked = true);
+
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const job = {
+    item: { sku: 'KS01-TEST-1', store: 'OVL', title: 'Nintendo Switch OLED 64GB White' },
+    fb: { title: 'Nintendo Switch OLED 64GB White', price: 250, condition: 'Used - Good',
+          description: 'Tested and working.\n\n• Console\n• Dock', photos: ['https://cdn.shopify.com/a.jpg', 'https://cdn.shopify.com/b.jpg'] },
+    warnings: ['Example warning.'],
+  };
+  window.chrome = { runtime: { lastError: null, sendMessage(msg, cb) {
+    setTimeout(() => {
+      if (msg.type === 'job') cb({ ok: true, job });
+      else if (msg.type === 'photos') cb({ ok: true, files: msg.urls.map((u, i) => ({ name: `p${i}.png`, type: 'image/png', b64: PNG })), failed: [] });
+      else cb({ ok: true });
+    }, 20);
+  } } };
+
+  fetch('../tools/fb-lister/extension/content.js').then(r => r.text()).then(src => {
+    // The real script only runs on /marketplace/create/item.
+    const patched = src.replace("/^\\/marketplace\\/create\\/item/.test(location.pathname)", 'true');
+    if (patched === src) throw new Error('path check not found — content.js changed');
+    (0, eval)(patched);
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      const host = [...document.documentElement.children].find(c => c.shadowRoot);
+      const txt = host ? host.shadowRoot.textContent : '';
+      if (/Your turn/.test(txt) || Date.now() - t0 > 15000) {
+        clearInterval(iv);
+        window.__result = {
+          title: document.getElementById('title').value, price: document.getElementById('price').value,
+          condition: document.getElementById('condVal').textContent, description: document.getElementById('desc').value,
+          files, nextClicked, panel: txt.replace(/\s+/g, ' ').slice(0, 600),
+        };
+      }
+    }, 200);
+  }).catch(e => window.__result = { error: String(e) });
+</script>
+</body></html>

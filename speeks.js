@@ -44144,6 +44144,11 @@ const FEATURE_CATALOG = [
     { key: 'tool-store-comment-drafts', label: 'Daily Store Messages',         tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    // The Chrome extension's download page. THE SAME KEY GATES THE EXTENSION ITSELF:
+    // the fb-lister edge function resolves 'fb-lister' on every call, so turning it
+    // off here cuts off the extension too. Its def is copied into that function as
+    // FB_LISTER_DEF — change one, change both.
+    { key: 'fb-lister',                label: 'Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'Listings', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager'] },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
     // Delegation tab pairs them the way it already pairs the claims tools.
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
@@ -45378,6 +45383,7 @@ const JUMP_KEYWORDS = {
     'tool-claims-oversight':     'claims oversight all stores review insurance',
     'tool-box-order':            'boxes box shipping supplies packaging tape order',
     'tool-recycle-inventory':    'recycle scrap ewaste e waste pickup haul junk',
+    'fb-lister':                 'facebook marketplace fb lister list listing extension chrome post sell',
     'tool-preferred-request':    'preferred purchase purchases request buy approval',
     'tool-preferred-approve':    'preferred purchase purchases approve owner',
     'tool-store-comment':        'comment message note feedback to store',
@@ -71699,3 +71705,81 @@ function _eqTabsWatch() {
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _eqTabsWatch);
 else _eqTabsWatch();
+
+// ============================================================================
+// MARKETPLACE LISTER — download page for the Chrome extension (2026-11-13)
+// ============================================================================
+// A store manager built a Chrome extension that fills in Facebook Marketplace
+// listings; it originally scraped the public PayMore store sites. It now reads
+// our own Shopify through the read-only `fb-lister` edge function, and lives in
+// tools/fb-lister/ (source in extension/, the zip next to it, served straight
+// off GitHub Pages like any other file here).
+//
+// THE EXTENSION NEVER POSTS. It fills the form; a person picks the category,
+// checks it and clicks Publish. Facebook does not allow automated posting, and
+// the listing goes out under a person's own Facebook account.
+//
+// Who gets it is Feature Access key 'fb-lister' — this page AND the extension's
+// sign-in (the edge function checks the same key on every call).
+//
+// FB_LISTER_VERSION must match "version" in tools/fb-lister/extension/
+// manifest.json, and the zip must be rebuilt (tools/fb-lister/build-zip.ps1)
+// whenever the extension changes. It is also the zip's cache-buster.
+const FB_LISTER_VERSION = '1.0.0';
+const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
+
+function openFbLister() {
+    if (typeof _featureEffectiveVisible === 'function'
+        && _featureEffectiveVisible('fb-lister', _b2bRoleClass(), _b2bUser()) !== true) return;
+    let modal = document.getElementById('fbListerModal');
+    if (!modal) {
+        // Built here rather than declared in six .html files: it is one modal
+        // with no state, opened from the SPEEKS Tools panel on every page.
+        modal = document.createElement('div');
+        modal.className = 'modal-menu manage-menu';
+        modal.id = 'fbListerModal';
+        document.body.appendChild(modal);
+    }
+    const zip = `${FB_LISTER_ZIP}?v=${encodeURIComponent(FB_LISTER_VERSION)}`;
+    modal.innerHTML = `
+        <div class="modal-header tool-head">
+            <div class="tool-head-main">
+                <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span>
+                <div class="tool-head-titles">
+                    <span class="tool-head-eyebrow">Listings</span>
+                    <span class="tool-head-title">Marketplace Lister</span>
+                    <span class="tool-head-sub">A Chrome extension that fills in a Facebook Marketplace listing from one of our Shopify items. You check it and click Publish.</span>
+                </div>
+            </div>
+            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="manage-content fbl-body">
+            <a class="b2b-btn b2b-btn-primary b2b-cap-get" href="${zip}" download="SPEEKS-Marketplace-Lister-${FB_LISTER_VERSION}.zip">⭳ Download Version ${FB_LISTER_VERSION}</a>
+
+            <div class="b2b-note"><span class="b2b-note-k">Install It (Once Per Computer)</span>
+                <ol style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px">
+                    <li>Right-click the zip → <b>Extract All</b>. Put the folder somewhere it can stay, like Documents — Chrome runs it from there, so don't delete it.</li>
+                    <li>In Chrome, go to <b>chrome://extensions</b> and turn on <b>Developer mode</b> (top right).</li>
+                    <li>Click <b>Load unpacked</b> and pick the <b>SPEEKS-Marketplace-Lister</b> folder.</li>
+                    <li>Click the puzzle piece in Chrome's toolbar and pin <b>SPEEKS Marketplace Lister</b>.</li>
+                    <li>Click it and sign in with your SPEEKSNET PIN.</li>
+                </ol>
+            </div>
+
+            <div class="b2b-note"><span class="b2b-note-k">List An Item</span>
+                <ol style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px">
+                    <li>Be signed in to Facebook in the same Chrome.</li>
+                    <li>Open the extension, search the store's in-stock items, pick one and click <b>Fill on Facebook</b>.</li>
+                    <li>It fills in the photos, title, price, condition and description. <b>You pick the category</b>, read everything, then click <b>Next</b> and <b>Publish</b> yourself — it never posts for you.</li>
+                    <li>When something sells, the <b>Listed</b> tab → <b>Check What's Sold</b> shows which ones to mark sold on Facebook. It checks Shopify, so sales in store, online and on eBay all count.</li>
+                </ol>
+            </div>
+
+            <div class="b2b-note"><span class="b2b-note-k">Updating</span>
+                Download the new zip, extract it over the old folder, then click the ↻ on the extension's card in chrome://extensions.
+            </div>
+        </div>`;
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+}

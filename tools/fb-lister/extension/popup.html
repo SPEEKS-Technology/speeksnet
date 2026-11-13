@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPEEKS Marketplace Lister</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <b>SPEEKS Marketplace Lister</b>
+    <span id="who"></span>
+  </header>
+
+  <section id="signin" hidden>
+    <p>Sign in with your SPEEKSNET PIN.</p>
+    <form id="signinForm">
+      <input id="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="PIN">
+      <button type="submit">Sign in</button>
+    </form>
+    <div class="msg" id="signinMsg"></div>
+  </section>
+
+  <section id="app" hidden>
+    <nav>
+      <button class="tab on" data-tab="list">List an item</button>
+      <button class="tab" data-tab="listed">Listed <span id="listedCount"></span></button>
+    </nav>
+
+    <div id="tab-list">
+      <div class="row">
+        <select id="store">
+          <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option>
+          <option value="MPL">MPL</option><option value="BAL">BAL</option>
+        </select>
+        <input id="q" type="search" placeholder="Search title or SKU">
+      </div>
+      <div class="msg" id="listMsg"></div>
+      <div id="results"></div>
+      <div id="detail" hidden></div>
+    </div>
+
+    <div id="tab-listed" hidden>
+      <div class="row">
+        <button id="check">Check what's sold</button>
+      </div>
+      <div class="msg" id="listedMsg"></div>
+      <div id="listed"></div>
+    </div>
+
+    <footer><button id="logout" class="link">Sign out</button></footer>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>
