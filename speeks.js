@@ -13577,6 +13577,9 @@ function _lvNpOverlay(v, n) {
         npMtd: live ? n.mtd : p.mtd,
         npTrack: live ? n.track : p.track,
         npLastMonth: n.lastMonth,
+        // Month to date at yesterday's close whatever tab is showing — what the Today
+        // tab's "Net Profit This Month" tile reads (Ethan 2026-11-13). Null on the 1st.
+        npMtdThru: p ? p.mtd : null,
         pctOfGoal: live ? n.pctOfGoal : p.pctOfGoal,
         paceIndex: live ? n.paceIndex : p.paceIndex,
         // Finished days only (the NP tab's own days), for the Month table's eBay
@@ -13807,6 +13810,23 @@ function _lvPaceThruRoll(rollup, stores, d) {
     return _lvPace(pv.pctOfGoal, d.prev.elapsedPct);
 }
 const _LV_THRU_TAG = '<span class="lv-thru">Through Yesterday</span>';
+// "NP THIS MONTH" ON THE TODAY TAB IS THROUGH YESTERDAY TOO (Ethan 2026-11-13),
+// for the same reason as % to goal: the live month figure carries today's
+// ESTIMATED net profit, so it moved all day and sat beside a % to goal that did
+// not. Both now stop at yesterday's close and agree with each other. Null when
+// there is no in-month yesterday (the 1st) — the caller keeps the live figure.
+function _lvNpMtdThruStore(m, d) {
+    if (!(d && d.prev && d.prev.inMonth) || !m || m.error) return null;
+    const v = _lvAsPrev(() => _lvView(m));
+    return v && v.npKind && v.npMtd !== undefined ? v.npMtd : null;
+}
+function _lvNpMtdThruRoll(rollup, stores, d) {
+    if (!(d && d.prev && d.prev.inMonth)) return null;
+    const pv = _lvAsPrev(() => (rollup && rollup.prev)
+        ? _lvView(rollup)
+        : _lvCombine((stores || []).filter(m => m && !m.error).map(_lvView)));
+    return pv && pv.npKind && pv.npMtd !== undefined ? pv.npMtd : null;
+}
 
 // --- "something just happened at MPL" ---------------------------------------
 // The payload is a snapshot, not an event stream, so a sale or a refund is derived
@@ -16828,8 +16848,9 @@ function _lvCombineNp(views) {
     const add = k => views.reduce((a, v) => a + (Number(v[k]) || 0), 0);
     const goal = views.every(v => v.npGoal > 0) ? add('npGoal') : 0;
     const npMtd = add('npMtd');
+    const npMtdThru = views.every(v => v.npMtdThru !== null && v.npMtdThru !== undefined) ? add('npMtdThru') : null;
     return {
-        npKind: true, npGoal: goal, goal, npDay: add('npDay'), npMtd,
+        npKind: true, npGoal: goal, goal, npDay: add('npDay'), npMtd, npMtdThru,
         npDayEst: views.some(v => v.npDayEst),
         npTrack: views.every(v => v.npTrack !== null) ? add('npTrack') : null,
         pctOfGoal: goal > 0 ? npMtd / goal * 100 : null,
@@ -16864,8 +16885,11 @@ function _lvRollupTiles(r, d, label, views) {
                 r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
     } else if (_lvHasMonth(d)) {
         last = r.npKind
-            ? _lvTile(_lvEstName('Net Profit This Month', true), _lvMoney(r.npMtd, false),
-                _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days))
+            ? (_lvIsToday() && r.npMtdThru !== null && r.npMtdThru !== undefined
+                ? _lvTile('Net Profit This Month<span class="lv-thru">Through Yesterday</span>', _lvMoney(r.npMtdThru, false),
+                    _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days))
+                : _lvTile(_lvEstName('Net Profit This Month', true), _lvMoney(r.npMtd, false),
+                _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days)))
             : _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
     } else {
         last = r.npKind
@@ -17329,7 +17353,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + (_lvNpKind() ? '<th>Gross margin</th>' : '')
         + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
         + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
-            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th>'
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP'))
+        + (_lvNpKind() && _lvHasMonth(d) && _lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + '<th>% to goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
@@ -17339,8 +17364,10 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     const thru = _lvPaceThru();
     stores.forEach(m => {
         const v = _lvView(m);
+        const npThru = thru && v.npKind ? _lvNpMtdThruStore(m, d) : null;
         html += _lvStoreRow(thru && !m.error
-            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v, d, false, null);
+            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) },
+                npThru !== null ? { npMtd: npThru } : {}) : v, d, false, null);
     });
     html += '</tbody>';
     if (rollup) {
@@ -17351,6 +17378,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // function the Tracking tiles also use.
             fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
             paceIndex: thru ? _lvPaceThruRoll(rollup, stores, d) : _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
+            npMtd: (thru && rv.npKind && _lvNpMtdThruRoll(rollup, stores, d) !== null)
+                ? _lvNpMtdThruRoll(rollup, stores, d) : rv.npMtd,
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
