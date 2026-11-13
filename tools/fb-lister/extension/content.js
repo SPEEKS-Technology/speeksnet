@@ -116,6 +116,55 @@
     return false;
   }
 
+  // ── PUBLIC MEETUP, AT THE STORE (Ethan, 2026-11-13) ────────────────────────
+  // Marketplace buyers come into the store to buy. Every listing is set to
+  // Public meetup (Door pickup / Door drop-off switched off — nobody goes to a
+  // home), and its location is set to the store's own city, so the listing
+  // shows up for people near the store rather than near wherever the person
+  // listing it lives.
+  const STORE_AREA = {
+    OVL: 'Overland Park, Kansas', LEE: "Lee's Summit, Missouri", WSP: 'Kansas City, Missouri',
+    MPL: 'Maplewood, Missouri', BAL: 'Ballwin, Missouri',
+  };
+
+  async function setLocation(place) {
+    const el = field('Location');
+    if (!el) return null;
+    const city = place.split(',')[0];
+    setValue(el, city);
+    el.focus();
+    // A typeahead: the value only counts once a suggestion is picked.
+    for (let i = 0; i < 25; i++) {
+      await sleep(200);
+      const opts = Array.from(document.querySelectorAll('[role="option"], [role="listbox"] li')).filter(visible);
+      const hit = opts.find((o) => norm(o.textContent).startsWith(norm(city)) && norm(o.textContent).includes(norm(place.split(',')[1] || '').slice(0, 2)))
+        || opts.find((o) => norm(o.textContent).startsWith(norm(city)));
+      if (hit) { const t = hit.textContent.trim(); hit.click(); await sleep(300); return t; }
+    }
+    return null;
+  }
+
+  // A meetup-preference checkbox by its label: set it on or off. Returns the
+  // state it ended in, or null if there's no such box on this layout.
+  async function setBox(word, on) {
+    const w = norm(word);
+    for (const cb of document.querySelectorAll('[role="checkbox"], [role="switch"], input[type="checkbox"]')) {
+      // Only the row's FIRST line counts: walking up far enough reaches the
+      // block holding all three options, and "Door pickup" in there must not
+      // be read as the Public meetup box's name.
+      let name = norm(cb.getAttribute('aria-label'));
+      if (!name) {
+        let el = cb;
+        for (let i = 0; i < 5 && el && !name; i++) { el = el.parentElement; name = norm((el?.innerText || '').split('\n')[0]); }
+      }
+      if (!name.startsWith(w)) continue;
+      const state = () => cb.tagName === 'INPUT' ? cb.checked : cb.getAttribute('aria-checked') === 'true';
+      if (state() !== on) { cb.click(); await sleep(200); }
+      return state();
+    }
+    return null;
+  }
+
   async function attachPhotos(files) {
     const input = Array.from(document.querySelectorAll('input[type="file"]'))
       .find((i) => /image/.test(i.accept || '') || i.multiple);
@@ -215,6 +264,8 @@
       { key: 'category', label: 'Category', state: 'todo', text: '— pick it yourself' },
       { key: 'condition', label: 'Condition', state: 'run' },
       { key: 'description', label: 'Description', state: 'run' },
+      { key: 'location', label: 'Location', state: 'run' },
+      { key: 'meetup', label: 'Public meetup', state: 'run' },
     ];
     view.note = '';
     const set = (key, state, text) => { const s = view.steps.find((x) => x.key === key); s.state = state; s.text = text || ''; render(); };
@@ -256,6 +307,18 @@
       if (more) { more.click(); d = await waitFor(() => field('Description'), 3000); }
     }
     set('description', d && setValue(d, fb.description) ? 'ok' : 'bad', d ? '' : '— not found; use Copy description');
+
+    const area = STORE_AREA[job.item.store];
+    if (area) {
+      const got = await setLocation(area);
+      set('location', got ? 'ok' : 'bad', got ? `— ${got}` : `— set it to ${area} yourself`);
+    } else set('location', 'todo', '— set it to the store\'s city');
+
+    const meet = await setBox('Public meetup', true);
+    const doorP = await setBox('Door pickup', false);
+    const doorD = await setBox('Door drop-off', false);
+    if (meet === true) set('meetup', 'ok', (doorP || doorD) ? '— on, but turn door pickup/drop-off off' : '— on, door pickup/drop-off off');
+    else set('meetup', 'bad', '— tick Public meetup yourself (and leave door pickup off)');
 
     busy = false;
     view.note = '<b>Your turn:</b> pick the category, read every field and the photos, then click <b>Next</b>. On the next screen this panel ticks the groups that fit — check them, then click <b>Publish</b> yourself. This tool never posts for you.';
@@ -384,7 +447,7 @@
     const picked = all.filter(([, d]) => d.ticked);
     const skipped = all.filter(([, d]) => !d.ticked);
     view.extra = `<div class="grp"><b>Groups — ticked ${picked.length} of ${all.length}</b>
-      ${picked.map(([n, d]) => `<div>✓ ${esc(n)} <span class="why">(${esc(d.why)})</span></div>`).join('') || '<div class="why">None fit this item. Tick any you want yourself.</div>'}
+      ${picked.map(([n, d]) => `<div>✓ ${esc(n)} <span class="why">(${esc(d.why)})</span></div>`).join('') || '<div class="why">None fit this item. Tick any you want yourself — or join more local buy/sell groups (the extension\'s Groups tab has search buttons); it can only use groups you\'re in.</div>'}
       ${skipped.length ? `<div class="why" style="margin-top:4px">Left unticked: ${skipped.map(([n]) => esc(n)).join(', ')}</div>` : ''}
     </div>`;
     view.note = '<b>Your turn:</b> check the groups — untick any that don\'t fit — then click <b>Publish</b> yourself. Set up group rules in the extension\'s <b>Groups</b> tab.';

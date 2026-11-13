@@ -33,7 +33,16 @@ Anyone whose SPEEKSNET store is one of the five sees only that store: the
 catalog, item reads and sold checks are refused server-side for any other
 store. CORP people (DM, CEO, MOCD) see all five.
 
+## Public meetup, in the store's city
+Marketplace buyers come into the store to buy. Every fill turns on **Public
+meetup**, turns off Door pickup and Door drop-off, and sets the listing's
+location to the store's city (`STORE_AREA` in `content.js`). That way the
+listing reaches people near the store, not near wherever the lister lives.
+
 ## Groups
+People must **join groups themselves** first; the tool can only use groups
+they're already in. The download page, the Groups tab and the panel all say so.
+
 On the "list in more places" step after Next, `content.js` ticks groups (never
 unticks, never posts). It applies the person's rules from the popup's Groups tab
 first (name contains X → every item / items with keywords / never). Then come
@@ -43,8 +52,10 @@ on. National groups are never picked automatically. People join groups
 themselves; the Groups tab has Facebook group-search buttons for their area.
 
 ## Sold watch
-Every 30 minutes while Chrome is open, the worker checks everything filled
-from that computer against Shopify. Anything sold shows a badge count and a
+Once a day, the worker checks everything filled from that computer against
+Shopify. Daily is enough because Marketplace buyers buy in store. An hourly
+alarm only checks once the last check is 24 hours old, so a computer that was
+off still catches up. Anything sold shows a badge count and a
 notification. Clicking it opens Marketplace → Selling with those listings
 outlined; the person clicks Mark as sold. The list is per computer
 (chrome.storage.local); nothing is written to SPEEKSNET.

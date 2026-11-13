@@ -126,13 +126,20 @@ chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove('jo
 
 // ── SOLD WATCH ───────────────────────────────────────────────────────────────
 // Facebook isn't connected to Shopify, so a listing stays up after the item
-// sells in store, online or on eBay. Every 30 minutes while Chrome is open,
-// everything filled from this computer is checked against Shopify (through
+// sells in store, online or on eBay. Once a day, everything filled from this
+// computer is checked against Shopify (through
 // fb-lister's status action). Anything sold puts a count on the toolbar icon
 // and raises one notification per item; clicking it opens Marketplace →
 // Selling with those listings outlined and their "Mark as sold" buttons
 // pointed at. The person clicks Mark as sold — see content.js for why the
 // extension never does.
+//
+// ONCE A DAY IS ENOUGH (Ethan, 2026-11-13): Marketplace buyers come into the
+// store to buy, so a Facebook listing can't be sold out from under us online
+// in the hours between checks. The alarm wakes hourly only so a computer that
+// was off or asleep at check time still checks soon after it wakes; it does
+// nothing unless the last check is 24 hours old. "Check what's sold" in the
+// popup checks right away.
 
 const SELLING = 'https://www.facebook.com/marketplace/you/selling';
 
@@ -200,7 +207,13 @@ chrome.notifications.onClicked.addListener(async (id) => {
   await openSold([]);
 });
 
-function ensureAlarm() { chrome.alarms.create('soldCheck', { periodInMinutes: 30, delayInMinutes: 1 }); }
+const DAY = 24 * 60 * 60 * 1000;
+function ensureAlarm() { chrome.alarms.create('soldCheck', { periodInMinutes: 60, delayInMinutes: 1 }); }
 chrome.runtime.onInstalled.addListener(ensureAlarm);
 chrome.runtime.onStartup.addListener(ensureAlarm);
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'soldCheck') checkSold({ notify: true }).catch(() => {}); });
+chrome.alarms.onAlarm.addListener(async (a) => {
+  if (a.name !== 'soldCheck') return;
+  const { soldStatus } = await chrome.storage.local.get('soldStatus');
+  if (soldStatus?.at && Date.now() - soldStatus.at < DAY) return;
+  checkSold({ notify: true }).catch(() => {});
+});

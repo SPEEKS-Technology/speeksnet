@@ -132,7 +132,7 @@ async function openItem(sku, productId) {
 }
 
 // ── Listed ───────────────────────────────────────────────────────────────────
-// The background worker re-checks these against Shopify every 30 minutes and
+// The background worker re-checks these against Shopify once a day and
 // keeps the last answer in soldStatus, so this tab opens already knowing.
 
 async function countListed() {
@@ -149,8 +149,8 @@ async function renderListed() {
   const sold = listed.filter((l) => st[l.sku]?.status === 'sold');
   const when = soldStatus?.at ? ` Checked ${new Date(soldStatus.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
   say('listedMsg', soldStatus
-    ? (sold.length ? `${sold.length} sold in Shopify — mark ${sold.length === 1 ? 'it' : 'them'} sold on Facebook, then press Done.${when}` : `Nothing here has sold.${when} Checked again every 30 minutes while Chrome is open.`)
-    : `${listed.length} filled from this computer. Checked against Shopify every 30 minutes while Chrome is open.`);
+    ? (sold.length ? `${sold.length} sold in Shopify — mark ${sold.length === 1 ? 'it' : 'them'} sold on Facebook, then press Done.${when}` : `Nothing here has sold.${when} Checked again once a day.`)
+    : `${listed.length} filled from this computer. Checked against Shopify once a day.`);
   $('markAll').hidden = sold.length < 1;
   $('markAll').textContent = sold.length > 1 ? `Mark ${sold.length} sold on Facebook` : 'Mark sold on Facebook';
   // Sold first, so the ones to act on are at the top.

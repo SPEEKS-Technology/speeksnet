@@ -56628,6 +56628,8 @@ function _qptRenderRail(main) {
         // Full, it still opens the drawer — the other minis preview there, and
         // the rail's own minis can be removed from it (2026-11-10).
         add.disabled = false;
+        // Only while Customize is on (2026-11-13) — the rail reads clean otherwise.
+        add.hidden = !_qptEdit;
         add.classList.toggle('full', full);
         add.textContent = full ? QPT_MINI_MAX + ' of ' + QPT_MINI_MAX + ' Minis · Customize' : '+ Add Mini Widget';
     }
@@ -71725,7 +71727,7 @@ else _eqTabsWatch();
 // FB_LISTER_VERSION must match "version" in tools/fb-lister/extension/
 // manifest.json, and the zip must be rebuilt (tools/fb-lister/build-zip.ps1)
 // whenever the extension changes. It is also the zip's cache-buster.
-const FB_LISTER_VERSION = '1.1.0';
+const FB_LISTER_VERSION = '1.2.0';
 const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
 
 function openFbLister() {
@@ -71763,6 +71765,7 @@ function openFbLister() {
                     <li>Click <b>Load unpacked</b> and pick the <b>SPEEKS-Marketplace-Lister</b> folder.</li>
                     <li>Click the puzzle piece in Chrome's toolbar and pin <b>SPEEKS Marketplace Lister</b>.</li>
                     <li>Click it and sign in with your SPEEKSNET PIN.</li>
+                    <li><b>Join local buy/sell groups on Facebook.</b> The tool can only put listings in groups you're already a member of — its <b>Groups</b> tab has search buttons for your store's area.</li>
                 </ol>
             </div>
 
@@ -71770,18 +71773,18 @@ function openFbLister() {
                 <ol style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px">
                     <li>Be signed in to Facebook in the same Chrome.</li>
                     <li>Open the extension, search the store's in-stock items, pick one and click <b>Fill on Facebook</b>.</li>
-                    <li>It fills in the photos, title, price, condition and description. <b>You pick the category</b>, read everything, then click <b>Next</b>.</li>
+                    <li>It fills in the photos, title, price, condition and description, and sets the listing to <b>Public meetup</b> in your <b>store's city</b> — buyers come into the store to buy. <b>You pick the category</b>, read everything, then click <b>Next</b>.</li>
                     <li>On the next screen it ticks the groups that fit the item — your rules from its <b>Groups</b> tab, plus local buy/sell groups. Check them, then click <b>Publish</b> yourself. It never posts for you.</li>
                     <li>You only ever see your own store's inventory.</li>
                 </ol>
             </div>
 
             <div class="b2b-note"><span class="b2b-note-k">When It Sells</span>
-                Every 30 minutes while Chrome is open, it checks everything you listed against Shopify — in-store, online and eBay sales all count. Anything sold puts a red number on its icon and pops up a notification. Click it and Facebook's Selling page opens with those listings outlined; click <b>Mark as sold</b> on each, then <b>Done</b> in the Listed tab.
+                Once a day, it checks everything you listed against Shopify — in-store, online and eBay sales all count. Anything sold puts a red number on its icon and pops up a notification. Click it and Facebook's Selling page opens with those listings outlined; click <b>Mark as sold</b> on each, then <b>Done</b> in the Listed tab.
             </div>
 
             <div class="b2b-note"><span class="b2b-note-k">Groups</span>
-                Join the groups yourself — the <b>Groups</b> tab has search buttons for your area. Then add rules like “KC Gamers → items with: nintendo, xbox” so the right ones get ticked.
+                Join groups first — the tool can only put listings in groups you're a member of, and it can't join them for you. The <b>Groups</b> tab has search buttons for your area. Then add rules like “KC Gamers → items with: nintendo, xbox” so the right ones get ticked.
             </div>
 
             <div class="b2b-note"><span class="b2b-note-k">Updating</span>

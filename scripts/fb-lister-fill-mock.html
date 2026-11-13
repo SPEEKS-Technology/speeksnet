@@ -28,6 +28,15 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
 <label role="combobox" aria-haspopup="listbox" id="cond"><div><span>Condition</span><div id="condVal"></div></div></label>
 <div id="lb"></div>
 <label><div><span>Description</span><textarea id="desc" rows="4"></textarea></div></label>
+<label><div><span>Location</span><input type="text" id="loc" value="Somewhere Else, MO"></div></label>
+<div id="locOpts"></div>
+<!-- Meetup rows WITHOUT aria-labels, all in one parent: content.js must name
+     each box by its own row's first line, not by the shared block's text. -->
+<div id="meet"><span>Meetup preferences</span>
+  <div class="g"><div><span>Public meetup</span><br><small>Meet at a public place</small></div><div role="checkbox" aria-checked="false"></div></div>
+  <div class="g"><div><span>Door pickup</span><br><small>Pick up at your door</small></div><div role="checkbox" aria-checked="true"></div></div>
+  <div class="g"><div><span>Door drop-off</span><br><small>Drop off at their door</small></div><div role="checkbox" aria-checked="false"></div></div>
+</div>
 <div><span>Hide from friends</span><div role="checkbox" aria-checked="false" aria-label="Hide from friends"></div></div>
 <div role="button" id="next">Next</div>
 </div>
@@ -40,6 +49,13 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
     $('lb').innerHTML = '<div role="listbox">' +
       ['New', 'Used - Like New', 'Used - Good', 'Used - Fair'].map(o => `<div role="option">${o}</div>`).join('') + '</div>';
     document.querySelectorAll('[role=option]').forEach(o => o.onclick = () => { $('condVal').textContent = o.textContent; $('lb').innerHTML = ''; });
+  });
+  // Location typeahead: suggestions appear as you type; only a click sets it.
+  let locPicked = '';
+  $('loc').addEventListener('input', () => {
+    const v = $('loc').value.trim();
+    $('locOpts').innerHTML = v ? `<ul role="listbox"><li role="option">${v}, Missouri</li><li role="option">${v}, Kansas</li></ul>` : '';
+    $('locOpts').querySelectorAll('[role=option]').forEach(o => o.onclick = () => { locPicked = o.textContent; $('loc').value = o.textContent; $('locOpts').innerHTML = ''; });
   });
   let files = 0, nextClicked = false, soldClicks = 0, groupsShown = false;
   $('file').addEventListener('change', e => files = e.target.files.length);
@@ -113,8 +129,9 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
         clearInterval(iv);
         window.__result = {
           title: $('title').value, price: $('price').value, condition: $('condVal').textContent, description: $('desc').value,
-          files, nextClicked,
-          groups: [...document.querySelectorAll('[role=checkbox]')].map(g => `${g.getAttribute('aria-label')}=${g.getAttribute('aria-checked')}`),
+          files, nextClicked, location: locPicked,
+          meetup: [...document.querySelectorAll('#meet .g')].map(g => `${g.querySelector('span').textContent}=${g.querySelector('[role=checkbox]').getAttribute('aria-checked')}`),
+          groups: [...document.querySelectorAll('#groups [role=checkbox], [aria-label="Hide from friends"]')].map(g => `${g.getAttribute('aria-label')}=${g.getAttribute('aria-checked')}`),
           panel: txt,
         };
       }
