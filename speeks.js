@@ -44148,7 +44148,7 @@ const FEATURE_CATALOG = [
     // the fb-lister edge function resolves 'fb-lister' on every call, so turning it
     // off here cuts off the extension too. Its def is copied into that function as
     // FB_LISTER_DEF — change one, change both.
-    { key: 'fb-lister',                label: 'Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'Downloads', def: ['district-manager'] },
+    { key: 'fb-lister',                label: 'Downloads: Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'System', def: ['district-manager'] },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
     // Delegation tab pairs them the way it already pairs the claims tools.
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
@@ -45383,7 +45383,7 @@ const JUMP_KEYWORDS = {
     'tool-claims-oversight':     'claims oversight all stores review insurance',
     'tool-box-order':            'boxes box shipping supplies packaging tape order',
     'tool-recycle-inventory':    'recycle scrap ewaste e waste pickup haul junk',
-    'fb-lister':                 'facebook marketplace fb lister list listing extension chrome post sell',
+    'fb-lister':                 'downloads download facebook marketplace fb lister list listing extension chrome post sell',
     'tool-preferred-request':    'preferred purchase purchases request buy approval',
     'tool-preferred-approve':    'preferred purchase purchases approve owner',
     'tool-store-comment':        'comment message note feedback to store',
@@ -71709,20 +71709,28 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else _eqTabsWatch();
 
 // ============================================================================
-// MARKETPLACE LISTER — download page for the Chrome extension (2026-11-13)
+// DOWNLOADS — SPEEKS Tools → Downloads (2026-11-13)
 // ============================================================================
+// One tool, "Downloads", that lists things to install on a computer. Today it
+// holds one entry, the Marketplace Lister Chrome extension; DOWNLOADS below is
+// the list, so the next one is an entry there and nothing else.
+//
+// WHO SEES WHAT: each entry carries its own Feature Access key, and the page
+// lists only the entries the person has. The Downloads link itself carries
+// 'fb-lister' (data-feature on the SPEEKS Tools item) because that is the only
+// entry. When a second entry arrives, give the link a key of its own
+// ('tool-downloads') or the link will hide for people who have only the new
+// entry.
+//
+// ── Marketplace Lister ──
 // A store manager built a Chrome extension that fills in Facebook Marketplace
 // listings; it originally scraped the public PayMore store sites. It now reads
 // our own Shopify through the read-only `fb-lister` edge function, and lives in
 // tools/fb-lister/ (source in extension/, the zip next to it, served straight
-// off GitHub Pages like any other file here).
-//
-// THE EXTENSION NEVER POSTS. It fills the form; a person picks the category,
-// checks it and clicks Publish. Facebook does not allow automated posting, and
-// the listing goes out under a person's own Facebook account.
-//
-// Who gets it is Feature Access key 'fb-lister' — this page AND the extension's
-// sign-in (the edge function checks the same key on every call).
+// off GitHub Pages like any other file here). THE EXTENSION NEVER POSTS: it
+// fills the form; a person picks the category, checks it and clicks Publish.
+// 'fb-lister' gates this entry AND the extension's sign-in (the edge function
+// checks the same key on every call).
 //
 // FB_LISTER_VERSION must match "version" in tools/fb-lister/extension/
 // manifest.json, and the zip must be rebuilt (tools/fb-lister/build-zip.ps1)
@@ -71730,36 +71738,20 @@ else _eqTabsWatch();
 const FB_LISTER_VERSION = '1.3.0';
 const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
 
-function openFbLister() {
-    if (typeof _featureEffectiveVisible === 'function'
-        && _featureEffectiveVisible('fb-lister', _b2bRoleClass(), _b2bUser()) !== true) return;
-    let modal = document.getElementById('fbListerModal');
-    if (!modal) {
-        // Built here rather than declared in six .html files: it is one modal
-        // with no state, opened from the SPEEKS Tools panel on every page.
-        modal = document.createElement('div');
-        modal.className = 'modal-menu manage-menu';
-        modal.id = 'fbListerModal';
-        document.body.appendChild(modal);
-    }
-    const zip = `${FB_LISTER_ZIP}?v=${encodeURIComponent(FB_LISTER_VERSION)}`;
-    modal.innerHTML = `
-        <div class="modal-header tool-head">
-            <div class="tool-head-main">
-                <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span>
-                <div class="tool-head-titles">
-                    <span class="tool-head-eyebrow">Downloads</span>
-                    <span class="tool-head-title">Marketplace Lister</span>
-                    <span class="tool-head-sub">A Chrome extension that fills in a Facebook Marketplace listing from one of our Shopify items. You check it and click Publish.</span>
-                </div>
-            </div>
-            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-        </div>
-        <div class="manage-content fbl-body">
-            <a class="b2b-btn b2b-btn-primary b2b-cap-get" href="${zip}" download="SPEEKS-Marketplace-Lister-${FB_LISTER_VERSION}.zip">⭳ Download Version ${FB_LISTER_VERSION}</a>
-
-            <div class="b2b-note"><span class="b2b-note-k">Install It (Once Per Computer)</span>
-                <ol style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px">
+const _DL_OL = 'style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px"';
+const DOWNLOADS = [
+    {
+        key: 'fb-lister',
+        name: 'Marketplace Lister',
+        kind: 'Chrome Extension',
+        version: FB_LISTER_VERSION,
+        href: `${FB_LISTER_ZIP}?v=${encodeURIComponent(FB_LISTER_VERSION)}`,
+        file: `SPEEKS-Marketplace-Lister-${FB_LISTER_VERSION}.zip`,
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>',
+        blurb: "Fills in a Facebook Marketplace listing from one of your store's Shopify items — photos, title, price, condition, description, public meetup at the store, and the right groups. You check it and click Publish.",
+        guide: `
+            <div class="b2b-note"><span class="b2b-note-k">Install</span>
+                <ol ${_DL_OL}>
                     <li>Right-click the zip → <b>Extract All</b>. Put the folder somewhere it can stay, like Documents — Chrome runs it from there, so don't delete it.</li>
                     <li>In Chrome, go to <b>chrome://extensions</b> and turn on <b>Developer mode</b> (top right).</li>
                     <li>Click <b>Load unpacked</b> and pick the <b>SPEEKS-Marketplace-Lister</b> folder.</li>
@@ -71768,28 +71760,73 @@ function openFbLister() {
                     <li><b>Join local buy/sell groups on Facebook.</b> The tool can only put listings in groups you're already a member of — its <b>Groups</b> tab has search buttons for your store's area.</li>
                 </ol>
             </div>
-
-            <div class="b2b-note"><span class="b2b-note-k">List An Item</span>
-                <ol style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px">
+            <div class="b2b-note"><span class="b2b-note-k">List</span>
+                <ol ${_DL_OL}>
                     <li>Be signed in to Facebook in the same Chrome.</li>
-                    <li>Open the extension, search the store's in-stock items, pick one and click <b>Fill on Facebook</b>.</li>
+                    <li>Open the extension, search your store's in-stock items, pick one and click <b>Fill On Facebook</b>.</li>
                     <li>It fills in the photos, title, price, condition and description, and sets the listing to <b>Public meetup</b> in your <b>store's city</b> — buyers come into the store to buy. <b>You pick the category</b>, read everything, then click <b>Next</b>.</li>
                     <li>On the next screen it ticks the groups that fit the item — your rules from its <b>Groups</b> tab, plus local buy/sell groups. Check them, then click <b>Publish</b> yourself. It never posts for you.</li>
                     <li>You only ever see your own store's inventory.</li>
                 </ol>
             </div>
-
-            <div class="b2b-note"><span class="b2b-note-k">When It Sells</span>
-                Once a day, it checks everything you listed against Shopify — in-store, online and eBay sales all count. Anything sold puts a red number on its icon and pops up a notification. Click it and Facebook's Selling page opens with those listings outlined; click <b>Mark as sold</b> on each, then <b>Done</b> in the Listed tab.
+            <div class="b2b-note"><span class="b2b-note-k">Sold</span>
+                <span>Once a day it checks everything you listed against Shopify — in-store, online and eBay sales all count. Anything sold puts a red number on its icon and pops up a notification. Click it and Facebook's Selling page opens with those listings outlined; click <b>Mark as sold</b> on each, then <b>Done</b> in the Listed tab.</span>
             </div>
+            <div class="b2b-note"><span class="b2b-note-k">Update</span>
+                <span>Download the new zip, extract it over the old folder, then click the ↻ on the extension's card in chrome://extensions.</span>
+            </div>`,
+    },
+];
 
-            <div class="b2b-note"><span class="b2b-note-k">Groups</span>
-                Join groups first — the tool can only put listings in groups you're a member of, and it can't join them for you. The <b>Groups</b> tab has search buttons for your area. Then add rules like “KC Gamers → items with: nintendo, xbox” so the right ones get ticked.
-            </div>
+function _downloadsMine() {
+    const role = _b2bRoleClass(), user = _b2bUser();
+    return DOWNLOADS.filter(d => typeof _featureEffectiveVisible !== 'function'
+        || _featureEffectiveVisible(d.key, role, user) === true);
+}
 
-            <div class="b2b-note"><span class="b2b-note-k">Updating</span>
-                Download the new zip, extract it over the old folder, then click the ↻ on the extension's card in chrome://extensions.
+function openDownloads() {
+    const mine = _downloadsMine();
+    let modal = document.getElementById('downloadsModal');
+    if (!modal) {
+        // Built here rather than declared in six .html files: it is one modal
+        // with no state, opened from the SPEEKS Tools panel on every page.
+        modal = document.createElement('div');
+        modal.className = 'modal-menu manage-menu';
+        modal.id = 'downloadsModal';
+        document.body.appendChild(modal);
+    }
+    const card = (d) => `
+        <div style="border:1px solid #e6ebf1;border-radius:14px;padding:16px;background:#fff;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:13px;flex-wrap:wrap">
+                <span class="tool-head-ico" style="width:44px;height:44px">${d.icon}</span>
+                <div style="flex:1;min-width:180px">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span style="font-size:15px;font-weight:800;color:#0f172a">${escapeHtml(d.name)}</span>
+                        <span style="font-size:11px;font-weight:700;color:#647082;background:#f1f5f9;border-radius:20px;padding:2px 8px">${escapeHtml(d.kind)} · v${escapeHtml(d.version)}</span>
+                    </div>
+                    <div style="font-size:12.5px;color:#647082;line-height:1.45;margin-top:3px">${escapeHtml(d.blurb)}</div>
+                </div>
+                <a class="b2b-btn b2b-btn-primary" style="text-decoration:none" href="${d.href}" download="${d.file}">⭳ Download</a>
             </div>
+            <details style="margin-top:12px">
+                <summary style="cursor:pointer;font-size:12.5px;font-weight:750;color:#178048">How To Install And Use</summary>
+                <div style="margin-top:10px">${d.guide}</div>
+            </details>
+        </div>`;
+    modal.innerHTML = `
+        <div class="modal-header tool-head">
+            <div class="tool-head-main">
+                <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+                <div class="tool-head-titles">
+                    <span class="tool-head-eyebrow">SPEEKS Tools</span>
+                    <span class="tool-head-title">Downloads</span>
+                    <span class="tool-head-sub">Tools to install on your computer.</span>
+                </div>
+            </div>
+            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="manage-content">
+            ${mine.length ? mine.map(card).join('') : '<div class="status-message">Nothing to download for you yet.</div>'}
         </div>`;
     closeAllModals();
     modal.classList.add('show');

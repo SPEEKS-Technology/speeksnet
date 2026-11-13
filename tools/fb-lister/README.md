@@ -24,7 +24,7 @@ pair, the B2B lines, and the `--qs-*` status palette. Don't add new shades.
 
 ## Who can use it
 Feature Access key **`fb-lister`**. That key controls both the SPEEKS Tools →
-Marketplace Lister download page and the extension's sign-in, because the edge
+Downloads page and the extension's sign-in, because the edge
 function checks it on every call. By default it's on for **DMs only**. Switch it
 on for anyone else, by person or by role, in Feature Access. The default lives in two places that must agree:
 `FEATURE_CATALOG` in `speeks.js` and `FB_LISTER_DEF` in the edge function.
