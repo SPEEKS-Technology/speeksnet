@@ -5,6 +5,7 @@
   port 8080) and open:
     /scripts/fb-lister-fill-mock.html        the create form, then the groups step
     /scripts/fb-lister-fill-mock.html?sold   Marketplace -> Selling, sold finder
+    /scripts/fb-lister-fill-mock.html?fbnext the person clicks Facebook's Next, not the panel's
 
   It copies the SHAPE content.js relies on — fields found by label text or
   aria-label, Condition as a combobox with role="option" items, a hidden
@@ -17,17 +18,29 @@
 <style>body{font:14px system-ui;max-width:480px;margin:20px} label{display:block;border:1px solid #ccc;border-radius:6px;padding:6px;margin:8px 0;cursor:text}
 label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;border:0;font:inherit} [role=listbox]{border:1px solid #999;background:#fff}
 [role=option]{padding:4px 8px;cursor:pointer} .g{display:flex;justify-content:space-between;padding:4px 0}
-[role=checkbox]{display:inline-block;width:14px;height:14px;border:1px solid #333} [role=checkbox][aria-checked=true]{background:#1877f2}
+[role=checkbox],[role=switch]{display:inline-block;width:14px;height:14px;border:1px solid #333} [role=checkbox][aria-checked=true],[role=switch][aria-checked=true]{background:#1877f2}
 .card{height:120px;border:1px solid #ddd;margin:8px;padding:6px}</style></head>
 <body>
 <div id="form">
 <div><span>Photos</span><input type="file" accept="image/*,image/heif,image/heic" multiple style="display:none" id="file"></div>
 <label><div><span>Title</span><input type="text" id="title"></div></label>
 <label><div><span>Price</span><input type="text" id="price"></div></label>
-<label role="combobox" aria-haspopup="listbox" id="cat"><div><span>Category</span></div></label>
+<label role="combobox" aria-haspopup="listbox" id="cat"><div><span>Category</span><div id="catVal"></div></div></label>
+<div id="catOpts"></div>
+<!-- Appear once a category is picked, like Facebook's video-games extras. -->
+<div id="catExtras"></div>
 <label role="combobox" aria-haspopup="listbox" id="cond"><div><span>Condition</span><div id="condVal"></div></div></label>
 <div id="lb"></div>
 <label><div><span>Description</span><textarea id="desc" rows="4"></textarea></div></label>
+<!-- Folded like Facebook's: the SKU box only exists once it is opened. -->
+<div role="button" id="more" aria-expanded="false">More details<br><small>Attract more interest by including more details.</small></div>
+<div id="moreBody"></div>
+<div><span>Boost listing after publish</span><div role="switch" aria-checked="false" aria-label="Boost listing after publish" id="boost"></div></div>
+<div><span>Hide from friends</span><div role="checkbox" aria-checked="false" aria-label="Hide from friends"></div></div>
+<div role="button" id="next">Next</div>
+</div>
+<!-- PAGE TWO, shown by Next: where the real Facebook keeps these (11-13 test). -->
+<div id="page2" style="display:none">
 <label><div><span>Location</span><input type="text" id="loc" value="Somewhere Else, MO"></div></label>
 <div id="locOpts"></div>
 <!-- Meetup rows WITHOUT aria-labels, all in one parent: content.js must name
@@ -35,10 +48,8 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
 <div id="meet"><span>Meetup preferences</span>
   <div class="g"><div><span>Public meetup</span><br><small>Meet at a public place</small></div><div role="checkbox" aria-checked="false"></div></div>
   <div class="g"><div><span>Door pickup</span><br><small>Pick up at your door</small></div><div role="checkbox" aria-checked="true"></div></div>
-  <div class="g"><div><span>Door drop-off</span><br><small>Drop off at their door</small></div><div role="checkbox" aria-checked="false"></div></div>
+  <div class="g"><div><span>Door dropoff</span><br><small>You drop off at buyer's door.</small></div><div role="checkbox" aria-checked="false"></div></div>
 </div>
-<div><span>Hide from friends</span><div role="checkbox" aria-checked="false" aria-label="Hide from friends"></div></div>
-<div role="button" id="next">Next</div>
 </div>
 <script>
   const SOLD = location.search.includes('sold');
@@ -57,9 +68,31 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
     $('locOpts').innerHTML = v ? `<ul role="listbox"><li role="option">${v}, Missouri</li><li role="option">${v}, Kansas</li></ul>` : '';
     $('locOpts').querySelectorAll('[role=option]').forEach(o => o.onclick = () => { locPicked = o.textContent; $('loc').value = o.textContent; $('locOpts').innerHTML = ''; });
   });
+  let categorySaved = '';
   let files = 0, nextClicked = false, soldClicks = 0, groupsShown = false;
   $('file').addEventListener('change', e => files = e.target.files.length);
-  $('next').addEventListener('click', () => nextClicked = true);
+  // Category: options on click; a pick adds Storage Capacity + a Color dropdown.
+  $('cat').addEventListener('click', () => {
+    $('catOpts').innerHTML = '<div role="listbox">' + ['Electronics', 'Video Games', 'Toys & Games'].map(o => `<div role="option">${o}</div>`).join('') + '</div>';
+    $('catOpts').querySelectorAll('[role=option]').forEach(o => o.onclick = () => {
+      $('catVal').textContent = o.textContent; $('catOpts').innerHTML = '';
+      $('catExtras').innerHTML = '<label><div><span>Storage Capacity</span><input type="text" id="storage"></div></label>'
+        + '<label role="combobox" aria-haspopup="listbox" id="color"><div><span>Color</span><div id="colorVal"></div></div></label><div id="colorOpts"></div>';
+      $('color').addEventListener('click', () => {
+        $('colorOpts').innerHTML = '<div role="listbox">' + ['Black', 'White', 'Gray', 'Blue'].map(c => `<div role="option">${c}</div>`).join('') + '</div>';
+        $('colorOpts').querySelectorAll('[role=option]').forEach(c => c.onclick = () => { $('colorVal').textContent = c.textContent; $('colorOpts').innerHTML = ''; });
+      });
+    });
+  });
+  // Facebook reformats the price as you type: why a string compare said x on 11-13.
+  $('price').addEventListener('input', () => { const d = $('price').value.replace(/\D/g, ''); if (d && $('price').value !== '$' + d) $('price').value = '$' + d; });
+  $('more').addEventListener('click', () => {
+    const open = $('more').getAttribute('aria-expanded') !== 'true';
+    $('more').setAttribute('aria-expanded', String(open));
+    $('moreBody').innerHTML = open ? '<label><div><span>SKU</span><input type="text" id="sku"></div></label>' : '';
+  });
+  $('boost').onclick = () => $('boost').setAttribute('aria-checked', $('boost').getAttribute('aria-checked') === 'true' ? 'false' : 'true');
+  $('next').addEventListener('click', () => { nextClicked = true; $('form').style.display = 'none'; $('page2').style.display = ''; showGroupsStep(); });
   const wireBoxes = (root) => root.querySelectorAll('[role=checkbox]').forEach(c => c.onclick = () =>
     c.setAttribute('aria-checked', c.getAttribute('aria-checked') === 'true' ? 'false' : 'true'));
   wireBoxes(document);
@@ -72,7 +105,10 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
   const GROUPS = ['Kansas City Buy Sell Trade', 'KC Video Gamers', 'KC Furniture Buy Sell', 'Nintendo Switch Owners USA', 'Overland Park Moms', 'St Louis Buy Sell'];
   function showGroupsStep() {
     const d = document.createElement('div'); d.id = 'groups';
-    d.innerHTML = '<h3>List in more places</h3>' + GROUPS.map(n => `<div class="g"><span>${n}</span><div role="checkbox" aria-checked="false" aria-label="${n}"></div></div>`).join('');
+    // Publish: Facebook then says it's published (the extension only watches).
+    d.innerHTML = '<h3>List in more places</h3>' + GROUPS.map(n => `<div class="g"><span>${n}</span><div role="checkbox" aria-checked="false" aria-label="${n}"></div></div>`).join('')
+      + '<div role="button" id="publish">Publish</div>';
+    setTimeout(() => $('publish').onclick = () => setTimeout(() => document.body.insertAdjacentHTML('afterbegin', '<p>Your listing is published.</p>'), 300));
     document.body.appendChild(d);
     wireBoxes(d);
   }
@@ -80,7 +116,7 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
   const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
   const job = {
     item: { sku: 'KS01-TEST-1', store: 'OVL', title: 'Nintendo Switch OLED 64GB White', collections: ['video-game-systems'] },
-    fb: { title: 'Nintendo Switch OLED 64GB White', price: 250, condition: 'Used - Good',
+    fb: { title: 'Nintendo Switch OLED 64GB White', price: 250, condition: 'Used - Good', category: 'Video Games',
           description: 'Tested and working.\n\n• Console\n• Dock', photos: ['https://cdn.shopify.com/a.jpg', 'https://cdn.shopify.com/b.jpg'] },
     warnings: ['Example warning.'],
   };
@@ -90,6 +126,8 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
     storage: { local: { get: async (k) => { const o = {}; [].concat(k).forEach(x => o[x] = storage[x]); return o; } } },
     runtime: { lastError: null, getURL: (p) => '../tools/fb-lister/extension/' + p, sendMessage(msg, cb) {
       setTimeout(() => {
+        if (msg.type === 'category') categorySaved = msg.category;
+        if (msg.type === 'published') window.__published = msg.item.sku;
         if (msg.type === 'job') cb({ ok: true, job: SOLD ? soldJob : job });
         else if (msg.type === 'photos') cb({ ok: true, files: msg.urls.map((u, i) => ({ name: `p${i}.png`, type: 'image/png', b64: PNG })), failed: [] });
         else cb({ ok: true });
@@ -124,11 +162,21 @@ label span{display:block;color:#666;font-size:12px} input,textarea{width:100%;bo
         }
         return;
       }
-      if (/Your turn/.test(txt) && !groupsShown) { groupsShown = true; showGroupsStep(); return; }
-      if (/Groups — ticked/i.test(txt) || Date.now() - t0 > 25000) {
+      // Stand in for the person: tick Boost in the panel, then Confirm & Next.
+      if (/Confirm & Next/.test(txt) && /Your turn/.test(txt) && !groupsShown) {
+        groupsShown = true;
+        // ?fbnext: the person uses FACEBOOK's Next instead (the 11-13 test) —
+        // page two must still be filled.
+        if (location.search.includes('fbnext')) { $('next').click(); return; }
+        const sr = [...document.documentElement.children].find(c => c.shadowRoot).shadowRoot;
+        sr.getElementById('go').click();
+        return;
+      }
+      if ((/Groups Ticked: \d/i.test(txt) && /Your turn: Check the location and groups/.test(txt)) || Date.now() - t0 > 25000) {
         clearInterval(iv);
         window.__result = {
-          title: $('title').value, price: $('price').value, condition: $('condVal').textContent, description: $('desc').value,
+          category: $('catVal').textContent, storage: ($('storage') || {}).value || '', color: ($('colorVal') || {}).textContent || '', categorySaved,
+          title: $('title').value, price: $('price').value, sku: ($('sku') || {}).value || '', boost: $('boost').getAttribute('aria-checked'), condition: $('condVal').textContent, description: $('desc').value,
           files, nextClicked, location: locPicked,
           meetup: [...document.querySelectorAll('#meet .g')].map(g => `${g.querySelector('span').textContent}=${g.querySelector('[role=checkbox]').getAttribute('aria-checked')}`),
           groups: [...document.querySelectorAll('#groups [role=checkbox], [aria-label="Hide from friends"]')].map(g => `${g.getAttribute('aria-label')}=${g.getAttribute('aria-checked')}`),

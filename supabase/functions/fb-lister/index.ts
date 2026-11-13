@@ -7,8 +7,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // The extension fills in a Facebook Marketplace listing from one of OUR Shopify
 // products; a person reviews it and clicks Publish themselves. This function is
-// everything the extension knows about the item. READ-ONLY: nothing here writes
-// to Shopify, and the only thing it writes in SPEEKSNET is nothing at all.
+// everything the extension knows about the item. Nothing here writes to
+// Shopify. Its only SPEEKSNET writes are the store's Listed list
+// (fb_listings, since 2026-11-13; see migration 0182).
 //
 // WHY THIS EXISTS: the store manager's first version scraped the public store
 // websites (*.paymore.com). Those are PayMore's, not ours, and they show what
@@ -23,6 +24,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //   catalog { token, store, q? }     -> in-stock, published items for a store
 //   item    { token, sku, product_id? } -> everything needed to fill the form
 //   status  { token, skus[] (<=200) }-> per SKU: instock / sold / unknown
+//   thumbs  { token, store, product_ids[] (<=300) } -> { product gid: lead photo URL }
+//   listed  { token, sku, product_id, title, price, kind } -> records a fill on the store's list
+//   category{ token, sku, product_id, category } -> the Facebook category picked for it
+//   listedList { token }             -> the open Listed rows for the person's store(s)
+//   done    { token, id }            -> takes a row off the list
+//   boost   { token, id, days, budget } -> records a Facebook boost on a row
+// The list actions are the only writes this function makes (fb_listings).
 //
 // ── SIGN-IN, and why it is not the website's ────────────────────────────────
 // The website checks a PIN in the browser and never gets a server session, so
@@ -322,6 +330,8 @@ async function catalog(who: Who, store: unknown, q: unknown) {
     rows.push(...(data || []));
     if (!data || data.length < 1000) break;
   }
+  const { data: run } = await sb.from("ebay_catalog_runs")
+    .select("finished_at").eq("store_code", st).maybeSingle();
   const items = rows
     .filter((r) => !term || `${r.title} ${r.sku}`.toLowerCase().includes(term))
     .map((r) => ({
@@ -329,7 +339,29 @@ async function catalog(who: Who, store: unknown, q: unknown) {
       condition: r.condition, photos: r.image_count, handle: r.product_handle,
       collections: r.collections || [], added: r.product_created_at,
     }));
-  return { store: st, count: items.length, items };
+  return { store: st, count: items.length, items, refreshed: run?.finished_at || null, next_refresh: nextRefresh() };
+}
+
+// ── WHEN THE LIST REFRESHES (Ethan, 2026-11-13: "put a note ... when the last
+// and next refresh was and will be"). The list is ebay_catalog, which the
+// ebay-catalog function updates from Shopify on the cron job
+// 'callback-catalog-refresh' at :28 past these Central hours. "Last" is read
+// from ebay_catalog_runs (what actually finished); "next" can only come from
+// the schedule, so THIS LIST MUST MATCH that job's hour filter — change one,
+// change both. Hourly 9am–8pm since migration 0181 (was 9, 12, 15).
+const REFRESH_HOURS_CT = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+const REFRESH_MINUTE = 28;
+function nextRefresh(): string {
+  const hourCT = (d: Date) => Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", hourCycle: "h23" }).format(d));
+  const t = new Date();
+  t.setUTCSeconds(0, 0);
+  t.setUTCMinutes(REFRESH_MINUTE);
+  if (t.getTime() <= Date.now()) t.setUTCHours(t.getUTCHours() + 1);
+  for (let i = 0; i < 48; i++) {
+    if (REFRESH_HOURS_CT.includes(hourCT(t))) return t.toISOString();
+    t.setUTCHours(t.getUTCHours() + 1);
+  }
+  return "";
 }
 
 const ITEM_Q = `query($q: String!) {
@@ -372,12 +404,13 @@ async function item(who: Who, sku: unknown, productId: unknown) {
   const productIdStr = String(p.legacyResourceId);
   const { data: cat } = await sb.from("ebay_catalog")
     .select("condition, collections").eq("store_code", store).eq("sku", v.sku).maybeSingle();
+  const kind = kindOf(cat?.collections || []);
+  const category = await suggestCategory(kind);
   const photos = (p.media?.nodes || []).map((m: any) => m?.image?.url).filter(Boolean);
   const descriptionText = htmlToText(p.descriptionHtml);
   const condition = cat?.condition || null;
 
   const warnings: string[] = [];
-  if (Number(v.inventoryQuantity) <= 0) warnings.push("Shopify shows 0 in stock — it may already be sold.");
   if (p.status !== "ACTIVE") warnings.push(`The Shopify product is ${String(p.status).toLowerCase()}, not active.`);
   if (!photos.length) warnings.push("No photos on the Shopify product.");
   if (photos.length > MAX_PHOTOS) warnings.push(`${photos.length} photos — Facebook takes the first ${MAX_PHOTOS}.`);
@@ -387,7 +420,7 @@ async function item(who: Who, sku: unknown, productId: unknown) {
     item: {
       store, sku: v.sku, product_id: productIdStr, handle: p.handle, status: p.status,
       title: p.title, price: Number(v.price), quantity: v.inventoryQuantity,
-      condition, collections: cat?.collections || [],
+      condition, collections: cat?.collections || [], kind,
       description_html: p.descriptionHtml || "", photos, online_url: p.onlineStoreUrl || null,
     },
     // Exactly what goes into Facebook's form. The extension types these in and
@@ -398,9 +431,144 @@ async function item(who: Who, sku: unknown, productId: unknown) {
       condition: fbCondition(condition),
       description: descriptionText,
       photos: photos.slice(0, MAX_PHOTOS),
+      category,
     },
     warnings,
   };
+}
+
+// ── THE STORE'S LISTED LIST + LEARNED CATEGORIES (Ethan, 2026-11-13) ────────
+// fb_listings (migration 0182) is each store's shared list of items filled on
+// Facebook, so everyone at a store sees the same Listed tab whichever computer
+// they use. Names come from the verified token. See the migration header.
+//
+// kind = the item's Shopify collection, minus the catch-alls every item sits
+// in. It's what a learned category is keyed on.
+const NOT_A_KIND = new Set(["newly-listed-devices", "other", "all", "frontpage"]);
+function kindOf(collections: string[]): string | null {
+  return (collections || []).find((c) => !NOT_A_KIND.has(c)) || null;
+}
+
+// The category people have picked most for this kind (ties: most recent).
+async function suggestCategory(kind: string | null): Promise<string | null> {
+  if (!kind) return null;
+  const { data } = await sb.from("fb_listings").select("fb_category, listed_at")
+    .eq("kind", kind).not("fb_category", "is", null).order("listed_at", { ascending: false }).limit(50);
+  const n = new Map<string, number>();
+  for (const r of data || []) n.set(r.fb_category, (n.get(r.fb_category) || 0) + 1);
+  let best: string | null = null, top = 0;
+  for (const [c, k] of n) if (k > top) { best = c; top = k; } // Map keeps first-seen (newest) order on ties
+  return best;
+}
+
+async function listed(who: Who, b: any) {
+  const sku = String(b.sku || "").trim();
+  const store = storeOfSku(sku);
+  if (!store) throw new Http(400, "That SKU doesn't start with one of our store prefixes.");
+  mustSee(who, store);
+  const pid = String(b.product_id || "").replace(/\D/g, "") || null;
+  const row = {
+    title: String(b.title || "").slice(0, 300), price: Number(b.price) || null,
+    kind: b.kind ? String(b.kind) : null, listed_by: who.name, listed_at: new Date().toISOString(),
+  };
+  let q = sb.from("fb_listings").select("id").eq("store_code", store).eq("sku", sku).is("done_at", null);
+  q = pid ? q.eq("product_id", pid) : q.is("product_id", null);
+  const { data: open } = await q.maybeSingle();
+  if (open) await sb.from("fb_listings").update(row).eq("id", open.id);
+  else await sb.from("fb_listings").insert({ ...row, store_code: store, sku, product_id: pid });
+  return {};
+}
+
+async function setCategory(who: Who, b: any) {
+  const sku = String(b.sku || "").trim();
+  const store = storeOfSku(sku);
+  if (!store) throw new Http(400, "Bad SKU.");
+  mustSee(who, store);
+  const cat = String(b.category || "").trim().slice(0, 120);
+  if (!cat) return {};
+  const pid = String(b.product_id || "").replace(/\D/g, "") || null;
+  let q = sb.from("fb_listings").update({ fb_category: cat }).eq("store_code", store).eq("sku", sku).is("done_at", null);
+  q = pid ? q.eq("product_id", pid) : q.is("product_id", null);
+  await q;
+  return {};
+}
+
+async function listedList(who: Who) {
+  const { data, error } = await sb.from("fb_listings")
+    .select("id, store_code, sku, product_id, title, price, listed_by, listed_at, boosted_at, boost_days, boost_budget, boost_ends_at")
+    .in("store_code", storesFor(who)).is("done_at", null)
+    .order("listed_at", { ascending: false }).limit(1000);
+  if (error) throw new Http(500, "Couldn't read the Listed list.");
+  return {
+    listed: (data || []).map((r: any) => ({
+      id: r.id, store: r.store_code, sku: r.sku, product_id: r.product_id, title: r.title,
+      price: r.price, by: r.listed_by, at: r.listed_at,
+      boosted_at: r.boosted_at, boost_days: r.boost_days, boost_budget: r.boost_budget, boost_ends_at: r.boost_ends_at,
+    })),
+  };
+}
+
+// ── BOOSTS (Ethan, 2026-11-13) ──────────────────────────────────────────────
+// Facebook doesn't tell us about a boost (it's bought on the person's own
+// account), so the person records it in the Listed tab: days + total budget.
+// Re-saving edits the same boost; the start stays the first time it was saved.
+// The weekly boost email (fb-boost-report) reads these columns.
+async function boost(who: Who, b: any) {
+  const id = Number(b.id), days = Math.round(Number(b.days)), budget = Math.round(Number(b.budget) * 100) / 100;
+  if (!(days >= 1 && days <= 60)) throw new Http(400, "Days must be 1 to 60.");
+  if (!(budget > 0 && budget <= 10000)) throw new Http(400, "Enter the total budget in dollars.");
+  const { data: r } = await sb.from("fb_listings").select("id, store_code, boosted_at").eq("id", id).is("done_at", null).maybeSingle();
+  if (!r) throw new Http(404, "That listing isn't on the list any more.");
+  mustSee(who, r.store_code);
+  const start = r.boosted_at ? new Date(r.boosted_at) : new Date();
+  await sb.from("fb_listings").update({
+    boosted_at: start.toISOString(), boost_days: days, boost_budget: budget,
+    boost_ends_at: new Date(start.getTime() + days * 864e5).toISOString(), boosted_by: who.name,
+  }).eq("id", id);
+  return {};
+}
+
+async function done(who: Who, id: unknown) {
+  const { data: r } = await sb.from("fb_listings").select("id, store_code").eq("id", Number(id)).maybeSingle();
+  if (!r) return {};
+  mustSee(who, r.store_code);
+  await sb.from("fb_listings").update({ done_at: new Date().toISOString(), done_by: who.name }).eq("id", r.id);
+  return {};
+}
+
+// ── LEAD PHOTOS FOR THE LIST (Ethan, 2026-11-13) ────────────────────────────
+// ebay_catalog has no image URL, so the popup asks for the rows it is showing:
+// one nodes() call per 100 products, featured image only. Read-only, and the
+// popup shows the list without photos if this fails.
+const THUMBS_Q = `query($ids: [ID!]!) {
+  nodes(ids: $ids) { ... on Product { id totalInventory status featuredMedia { preview { image { url } } } } }
+}`;
+// The same call also answers "is it still in stock?" for every row on screen
+// (Ethan, 11-13: "it should only show in-stock items"). ebay_catalog is up to
+// an hour behind, so a sale since the last refresh still lists there; Shopify
+// here is live. The popup drops any row this says is gone.
+
+async function thumbs(who: Who, store: unknown, idsIn: unknown) {
+  const st = String(store || "").toUpperCase();
+  if (!STORES.includes(st)) throw new Http(400, "Pick a store.");
+  mustSee(who, st);
+  const ids = Array.from(new Set((Array.isArray(idsIn) ? idsIn : [])
+    .map((s) => String(s || "")).filter((s) => /^gid:\/\/shopify\/Product\/\d+$/.test(s)))).slice(0, 300);
+  const out: Record<string, string> = {};
+  const gone: string[] = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const data = await gql(st, THUMBS_Q, { ids: chunk });
+    const nodes = data?.nodes || [];
+    chunk.forEach((id, k) => {
+      const n = nodes[k];
+      // null = deleted from Shopify (sold and removed).
+      if (!n || Number(n.totalInventory) <= 0 || n.status !== "ACTIVE") gone.push(id);
+      const url = n?.featuredMedia?.preview?.image?.url;
+      if (n?.id && url) out[n.id] = url;
+    });
+  }
+  return { thumbs: out, gone };
 }
 
 const STATUS_Q = `query($q: String!) {
@@ -482,6 +650,12 @@ Deno.serve(async (req: Request) => {
     if (action === "me") return json({ success: true, ...profile(who) });
     if (action === "catalog") return json({ success: true, ...(await catalog(who, body.store, body.q)) });
     if (action === "item") return json({ success: true, ...(await item(who, body.sku, body.product_id)) });
+    if (action === "listed") return json({ success: true, ...(await listed(who, body)) });
+    if (action === "category") return json({ success: true, ...(await setCategory(who, body)) });
+    if (action === "listedList") return json({ success: true, ...(await listedList(who)) });
+    if (action === "boost") return json({ success: true, ...(await boost(who, body)) });
+    if (action === "done") return json({ success: true, ...(await done(who, body.id)) });
+    if (action === "thumbs") return json({ success: true, ...(await thumbs(who, body.store, body.product_ids)) });
     if (action === "status") return json({ success: true, ...(await status(who, body.skus)) });
     return json({ success: false, error: "Unknown action." }, 400);
   } catch (e) {

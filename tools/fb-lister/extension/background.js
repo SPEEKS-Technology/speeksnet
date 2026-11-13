@@ -13,15 +13,49 @@
 const API = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/fb-lister';
 const FB_CREATE = 'https://www.facebook.com/marketplace/create/item';
 
+// ── SIGN-IN LASTS ONE BROWSER SESSION (Ethan, 2026-11-13) ──────────────────
+// Store computers are shared: closing Chrome must sign the person out, or the
+// next person to open it lists under their name. So the token and who-am-I
+// live in chrome.storage.session, which Chrome keeps in memory and drops when
+// the browser quits. Up to 1.5.0 they were in storage.local and survived a
+// restart; the cleanup below wipes those old copies. Everything that SHOULD
+// survive stays in storage.local: what was listed from this computer, the
+// last sold check, the store picked, the groups switch.
+//
+// Closing the LAST window also signs out, for when Chrome keeps running in
+// the background after its windows are gone.
+//
+// The cost: the daily sold check needs a sign-in, so after a restart it waits
+// until someone signs in. The toolbar shows "!" meanwhile when there are
+// listings to check.
+const SIGNIN = chrome.storage.session;
+async function signedOutStart() {
+  await chrome.storage.local.remove(['token', 'who']);
+  const { token } = await SIGNIN.get('token');
+  if (token) return;
+  const { listed = [] } = await chrome.storage.local.get('listed');
+  if (listed.length) {
+    chrome.action.setBadgeText({ text: '!' });
+    chrome.action.setBadgeBackgroundColor({ color: '#ed6c02' });
+    chrome.action.setTitle({ title: 'SPEEKS Marketplace Lister — sign in to keep checking your listings for sales' });
+  }
+}
+chrome.runtime.onStartup.addListener(signedOutStart);
+chrome.runtime.onInstalled.addListener(signedOutStart);
+chrome.windows.onRemoved.addListener(async () => {
+  const left = await chrome.windows.getAll();
+  if (!left.length) await SIGNIN.remove(['token', 'who']);
+});
+
 async function api(payload) {
-  const { token } = await chrome.storage.local.get('token');
+  const { token } = await SIGNIN.get('token');
   const res = await fetch(API, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ ...payload, token }),
   });
   const out = await res.json().catch(() => ({}));
-  if (res.status === 401) await chrome.storage.local.remove(['token', 'who']);
+  if (res.status === 401) await SIGNIN.remove(['token', 'who']);
   if (!res.ok || out.success === false) {
     const err = new Error(out.error || `SPEEKSNET didn't answer (HTTP ${res.status}).`);
     err.status = res.status;
@@ -41,14 +75,29 @@ async function photoAsData(url) {
   return { name, type: blob.type || 'image/jpeg', b64: btoa(bin) };
 }
 
+// ── THE LISTED LIST IS THE STORE'S (Ethan, 2026-11-13) ─────────────────────
+// It lives in SPEEKSNET (fb_listings, through fb-lister), so everyone at a
+// store sees the same list on any computer. storage.local 'listed' is now only
+// a cache of it, refreshed on every read, so the badge and the popup can draw
+// without waiting. Rows filled before 1.5.2 were only on this computer and
+// have no id: the first sync sends them up, then drops the local copies.
+async function syncListed() {
+  const { listed = [] } = await chrome.storage.local.get('listed');
+  for (const l of listed.filter((x) => !x.id)) {
+    await api({ action: 'listed', sku: l.sku, product_id: l.product_id, title: l.title, price: l.price }).catch(() => {});
+  }
+  const out = await api({ action: 'listedList' });
+  const rows = (out.listed || []).map((r) => ({ ...r, at: Date.parse(r.at) || Date.now() }));
+  await chrome.storage.local.set({ listed: rows });
+  return rows;
+}
+
 async function rememberListed(job) {
-  const { listed = [], who } = await chrome.storage.local.get(['listed', 'who']);
-  const rest = listed.filter((l) => !(l.sku === job.item.sku && l.product_id === job.item.product_id));
-  rest.unshift({
-    sku: job.item.sku, product_id: job.item.product_id, title: job.item.title,
-    store: job.item.store, price: job.fb.price, at: Date.now(), by: who?.name || '',
+  await api({
+    action: 'listed', sku: job.item.sku, product_id: job.item.product_id, title: job.item.title,
+    price: job.fb.price, kind: job.item.kind || null,
   });
-  await chrome.storage.local.set({ listed: rest.slice(0, 500) });
+  await syncListed().catch(() => {});
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -57,14 +106,22 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'login': {
         const out = await api({ action: 'login', pin: msg.pin });
         const who = { name: out.name, store: out.store, role: out.role, stores: out.stores || [] };
-        await chrome.storage.local.set({ token: out.token, who });
+        await SIGNIN.set({ token: out.token, who });
+        // Signed back in after a restart: clear the "!" and catch up on a
+        // sold check that came due while nobody was signed in.
+        chrome.action.setTitle({ title: 'SPEEKS Marketplace Lister' });
+        chrome.action.setBadgeText({ text: '' });
+        await refreshBadge();
+        const { soldStatus } = await chrome.storage.local.get('soldStatus');
+        if (!soldStatus?.at || Date.now() - soldStatus.at >= DAY) checkSold({ notify: true }).catch(() => {});
         return { who };
       }
       case 'logout':
-        await chrome.storage.local.remove(['token', 'who']);
+        await SIGNIN.remove(['token', 'who']);
+        await signedOutStart();
         return {};
       case 'me': {
-        const { token, who } = await chrome.storage.local.get(['token', 'who']);
+        const { token, who } = await SIGNIN.get(['token', 'who']);
         if (!token) return { who: null };
         try { const out = await api({ action: 'me' }); return { who: { name: out.name, store: out.store, role: out.role, stores: out.stores || [] } }; }
         catch (e) { if (e.status === 401 || e.status === 403) return { who: null, error: e.message }; return { who, offline: e.message }; }
@@ -75,14 +132,19 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return api({ action: 'item', sku: msg.sku, product_id: msg.product_id || null });
       case 'status':
         return api({ action: 'status', skus: msg.skus });
+      case 'thumbs':
+        return api({ action: 'thumbs', store: msg.store, product_ids: msg.product_ids || [] });
       case 'start': {
         // Re-read the item at the moment of listing, not whatever the popup had
         // cached: the price or stock may have moved since the list loaded.
         const out = await api({ action: 'item', sku: msg.sku, product_id: msg.product_id || null });
         if (out.choose) return out;
+        if (Number(out.item.quantity) <= 0) throw new Error(`${out.item.sku} sold since you opened it — Shopify shows 0 in stock.`);
         const tab = await chrome.tabs.create({ url: FB_CREATE, active: true });
         await chrome.storage.session.set({ ['job:' + tab.id]: { item: out.item, fb: out.fb, warnings: out.warnings } });
-        await rememberListed(out);
+        // NOT added to the Listed list here: opening the form isn't listing it
+        // (Ethan, 11-13 — a fill he never published showed up as listed).
+        // content.js says 'published' once the person's Publish went through.
         return { ok: true };
       }
       case 'job': {
@@ -105,11 +167,25 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return {};
       }
       case 'forget': {
-        const { listed = [] } = await chrome.storage.local.get('listed');
-        await chrome.storage.local.set({ listed: listed.filter((l) => !(l.sku === msg.sku && l.product_id === msg.product_id)) });
+        if (msg.id) await api({ action: 'done', id: msg.id });
+        await syncListed();
         await refreshBadge();
         return {};
       }
+      case 'listed':
+        return { listed: await syncListed() };
+      case 'boost':
+        await api({ action: 'boost', id: msg.id, days: msg.days, budget: msg.budget });
+        return { listed: await syncListed() };
+      case 'published':
+        // From content.js, after the person clicked Facebook's Publish and
+        // Facebook moved off the create form.
+        await rememberListed({ item: msg.item, fb: msg.fb });
+        await refreshBadge();
+        return {};
+      case 'category':
+        // Read off Facebook's form at Confirm & Next; teaches the next listing.
+        return api({ action: 'category', sku: msg.sku, product_id: msg.product_id || null, category: msg.category });
       case 'checkSold':
         return checkSold({ notify: false });
       case 'openSold':
@@ -126,8 +202,8 @@ chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove('jo
 
 // ── SOLD WATCH ───────────────────────────────────────────────────────────────
 // Facebook isn't connected to Shopify, so a listing stays up after the item
-// sells in store, online or on eBay. Once a day, everything filled from this
-// computer is checked against Shopify (through
+// sells in store, online or on eBay. Once a day, the store's Listed list is
+// checked against Shopify (through
 // fb-lister's status action). Anything sold puts a count on the toolbar icon
 // and raises one notification per item; clicking it opens Marketplace →
 // Selling with those listings outlined and their "Mark as sold" buttons
@@ -144,8 +220,10 @@ chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove('jo
 const SELLING = 'https://www.facebook.com/marketplace/you/selling';
 
 async function checkSold({ notify }) {
-  const { listed = [], token } = await chrome.storage.local.get(['listed', 'token']);
-  if (!token || !listed.length) { await refreshBadge(); return { results: {} }; }
+  const { token } = await SIGNIN.get('token');
+  if (!token) { await refreshBadge(); return { results: {} }; }
+  const listed = await syncListed();
+  if (!listed.length) { await refreshBadge(); return { results: {} }; }
   const skus = [...new Set(listed.map((l) => l.sku))];
   const results = {};
   try {
@@ -186,7 +264,7 @@ async function soldListed() {
 }
 
 async function refreshBadge() {
-  const { token } = await chrome.storage.local.get('token');
+  const { token } = await SIGNIN.get('token');
   if (!token) return;
   const n = (await soldListed()).length;
   chrome.action.setBadgeText({ text: n ? String(n) : '' });

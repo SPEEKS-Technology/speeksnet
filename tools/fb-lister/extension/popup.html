@@ -35,12 +35,13 @@
     </nav>
 
     <div id="tab-list">
-      <div class="row">
+      <div class="row" id="listBar">
         <select id="store"></select>
         <input id="q" type="search" placeholder="Search title or SKU">
       </div>
       <div class="msg" id="listMsg"></div>
       <div id="results" class="list"></div>
+      <div id="refresh" class="refresh"></div>
       <div id="detail" hidden></div>
     </div>
 
@@ -54,23 +55,13 @@
     </div>
 
     <div id="tab-groups" hidden>
-      <div class="note warn"><span class="note-k">First</span><span><b>Join groups first.</b> The extension can only put listings in Facebook groups you're already a member of, and it can't join them for you. Use the search buttons at the bottom to find local buy/sell groups for your store's area.</span></div>
-      <p class="hint">On the screen after <b>Next</b>, the extension ticks the groups that fit the item. You check them and click Publish.</p>
-      <label class="chk"><input type="checkbox" id="gAuto"> <span>Automatic picks: local buy/sell groups, and local groups about this kind of item</span></label>
-      <div class="sub">Your Rules <span class="sub-note">Checked first; they beat automatic picks</span></div>
-      <div id="gRules"></div>
-      <div class="rule add">
-        <input id="gName" placeholder="Group name contains…">
-        <select id="gMode"><option value="all">Every item</option><option value="match">Items with keywords</option><option value="never">Never</option></select>
-        <input id="gKw" placeholder="Keywords, comma separated" hidden>
-        <button id="gAdd" class="primary">Add</button>
-      </div>
+      <div class="note warn"><span>It can only post in groups <b>you've already joined</b>. Join local ones below.</span></div>
+      <label class="chk"><input type="checkbox" id="gAuto"> <span><b>Post In Groups For Me</b><br>Ticks the local groups that fit the item. You still click Publish.</span></label>
       <div class="sub">Find Groups To Join</div>
-      <p class="hint">Opens Facebook's group search. You join the ones you want; groups usually need an admin to approve you.</p>
       <div id="gFind" class="finds"></div>
     </div>
 
-    <footer><button id="logout" class="link">Sign out</button></footer>
+    <footer><button id="logout">Sign Out</button></footer>
   </section>
 
   <script src="popup.js"></script>

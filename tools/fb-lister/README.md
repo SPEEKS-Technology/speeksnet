@@ -1,8 +1,10 @@
 # SPEEKS Marketplace Lister (Chrome extension)
 
 Fills in a Facebook Marketplace "Item for sale" listing from one of our Shopify
-items. **It never posts.** A person picks the category, checks everything, and
-clicks Next → Publish themselves. Facebook doesn't allow automated posting, and
+items. **It never posts.** A person picks the category, checks everything and
+presses the panel's **Confirm & Next**. Only then does the extension click
+Facebook's Next, once, to fill page two: location, Public meetup and groups.
+The person clicks Publish themselves. Facebook doesn't allow automated posting, and
 the listing goes out under that person's own Facebook account.
 
 This started as a store manager's tool that scraped the public PayMore store
@@ -49,9 +51,9 @@ People must **join groups themselves** first; the tool can only use groups
 they're already in. The download page, the Groups tab and the panel all say so.
 
 On the "list in more places" step after Next, `content.js` ticks groups (never
-unticks, never posts). It applies the person's rules from the popup's Groups tab
-first (name contains X → every item / items with keywords / never). Then come
-automatic picks: a group with the store's own metro in its name that is
+unticks, never posts). It picks only from groups the person is already in
+("Tick groups for me" in the Groups tab turns this off). The per-group rules
+("Your Rules") are parked since 1.4.0. The picks are: a group with the store's own metro in its name that is
 buy/sell or about this kind of item, and isn't about cars, rentals, pets and so
 on. National groups are never picked automatically. People join groups
 themselves; the Groups tab has Facebook group-search buttons for their area.

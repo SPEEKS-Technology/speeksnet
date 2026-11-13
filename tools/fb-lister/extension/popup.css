@@ -16,9 +16,20 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-/* Chrome caps a popup at 600px tall; past that a vertical scrollbar eats into
-   the 400px and, without this, brings a horizontal one with it. */
-html, body { overflow-x: hidden; }
+/* ONE HEIGHT FOR ALL THREE TABS (Ethan, 11-13). Chrome sizes the popup to its
+   content, so tabs of different lengths made the window jump, and the longest
+   one grew a page scrollbar that took width from the 400px and shifted
+   everything sideways. Now the signed-in view is a fixed 530px (header + this
+   stays under Chrome's 600px cap): the tab bar and footer stay put, the item
+   lists stretch to fill and scroll inside their own box, and the page itself
+   never scrolls. Only a long item detail can scroll its tab. The sign-in card
+   keeps its own natural height. */
+html, body { overflow: hidden; }
+#app { height: 530px; display: flex; flex-direction: column; }
+#app > .seg, #app > footer { flex: none; }
+#tab-list, #tab-listed, #tab-groups { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+#tab-list > *, #tab-listed > *, #tab-groups > * { flex: none; }
+#tab-list > #results, #tab-listed > #listed { flex: 1 1 auto; min-height: 0; max-height: none; }
 body {
   width: 400px; margin: 0; background: var(--app); color: var(--text);
   font: 13px/1.45 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
@@ -61,6 +72,26 @@ button.link { height: auto; padding: 0; border: 0; background: none; color: var(
 button.link:hover { color: var(--bad-fg); }
 button.small { height: 28px; padding: 0 10px; font-size: 11.5px; border-radius: 8px; }
 
+/* ── store picker: SPEEKSNET's dropdown (styles.css .dd-*), same colours ── */
+select.dd-native { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%); overflow: hidden; pointer-events: none; }
+.dd-host { position: relative; flex: none; }
+.dd-btn { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 88px; height: 38px;
+  padding: 0 11px 0 13px; border: 1px solid var(--line); border-radius: 9px; background: #fff;
+  color: var(--ink); font-size: 13px; font-weight: 650; }
+.dd-btn:hover:not(:disabled) { border-color: var(--line); color: var(--ink); }
+.dd-btn:focus-visible, .dd-host.open .dd-btn { outline: none; border-color: var(--green-brand); box-shadow: var(--ring); }
+.dd-chev { width: 15px; height: 15px; flex: none; color: #94a3b8; transition: transform .15s ease; }
+.dd-host.open .dd-chev { transform: rotate(180deg); }
+.dd-list { display: none; }
+.dd-list.dd-open { display: block; position: fixed; z-index: 10; padding: 5px; background: #fff;
+  border: 1px solid #e3e8ee; border-radius: 12px; box-shadow: 0 12px 34px rgba(16, 24, 40, .18); }
+.dd-opt { display: block; width: 100%; height: auto; padding: 8px 11px; border: 0; border-radius: 8px; background: none;
+  text-align: left; font-size: 13px; font-weight: 650; color: #4c5c54; }
+.dd-opt:hover:not(:disabled) { background: #f1f5f9; color: #4c5c54; border: 0; }
+.dd-opt:focus-visible { outline: none; background: #f6faf7; box-shadow: inset 0 0 0 1.5px var(--green-brand); }
+.dd-opt.on, .dd-opt.on:hover { background: var(--green-tint); color: var(--green); font-weight: 780; }
+
 /* ── segmented tabs ── */
 .seg { display: flex; gap: 2px; padding: 3px; margin-bottom: 12px; background: #e9eef3; border-radius: 11px; }
 .seg .tab { flex: 1; height: 32px; border: 0; background: transparent; color: var(--muted); border-radius: 8px; font-size: 12px; }
@@ -83,9 +114,14 @@ button.small { height: 28px; padding: 0 10px; font-size: 11.5px; border-radius: 
        font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
 .sub-note { font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; }
 
-.signin-card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
-.signin-card p { color: var(--muted); margin: 2px 0 10px; }
+.signin-card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+.signin-card p { color: var(--muted); margin: 4px 0 14px; }
 .signin-card .row { margin-bottom: 0; }
+/* Room between a text box and the words under it (Ethan, 11-13) — the
+   sign-in errors, "Signing in…", and the in-stock count. */
+.signin-card .msg { margin: 14px 0 0; }
+#tab-list > .row { margin-bottom: 14px; }
+#tab-list > .msg { margin-bottom: 12px; }
 
 /* ── item lists ── */
 .list { max-height: 360px; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
@@ -97,7 +133,32 @@ button.small { height: 28px; padding: 0 10px; font-size: 11.5px; border-radius: 
 .item .t b { display: block; color: var(--ink); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item .t span { color: var(--faint); font-size: 11.5px; }
 .item .p { color: var(--ink); font-weight: 750; white-space: nowrap; }
+/* SKU · condition · date as three fixed columns, so they line up row to row
+   (Ethan, 11-13). A long SKU ends in "…" and shows whole on hover. */
+.item .t .meta { display: grid; grid-template-columns: 112px 60px auto; column-gap: 8px; margin-top: 1px; }
+.item .t .meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refresh { flex: none; margin-top: 8px; color: var(--faint); font-size: 11.5px; text-align: center; }
+.refresh:empty, #results[hidden] ~ .refresh { display: none; }
+.thumb { flex: none; width: 44px; height: 44px; border-radius: 9px; overflow: hidden; background: var(--surface); border: 1px solid var(--line-2); }
+.thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 
+/* Listed rows: actions stacked at the right; the confirm/boost form opens
+   full-width under the row. */
+.lrow { flex-wrap: wrap; cursor: default; }
+.lrow:hover { background: none; }
+.lrow .racts { display: flex; flex-direction: column; gap: 4px; }
+.lrow .racts button { width: 100%; }
+.lrow .rform { flex-basis: 100%; margin-top: 6px; padding: 10px 11px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; font-size: 12px; }
+.rform .q { color: var(--text); line-height: 1.5; margin-bottom: 8px; }
+.rform .q b { color: var(--ink); }
+.rform .q .bad { color: var(--bad-fg); }
+.rform .fa { display: flex; justify-content: flex-end; gap: 6px; }
+.rform .bf { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.rform .bf label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+.rform .bf input { height: 32px; width: 100%; min-width: 0; text-transform: none; letter-spacing: 0; font-size: 13px; }
+.item .t .btag { display: block; width: fit-content; margin-top: 4px; padding: 1px 8px; border-radius: 20px; font-size: 10.5px; font-weight: 700;
+  background: #f1f5f9; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+.item .t .btag.on { background: var(--warn-bg); color: var(--warn-fg); box-shadow: inset 0 0 0 1px var(--warn-bd); }
 .pill { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .pill.instock { background: var(--good-bg); color: var(--good-fg); box-shadow: inset 0 0 0 1px var(--good-bd); }
 .pill.sold { background: var(--bad-bg); color: var(--bad-fg); box-shadow: inset 0 0 0 1px var(--bad-bd); }
@@ -120,15 +181,16 @@ button.small { height: 28px; padding: 0 10px; font-size: 11.5px; border-radius: 
 /* ── groups ── */
 .chk { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
 .chk input { margin-top: 2px; width: 16px; height: 16px; accent-color: var(--green-brand); flex: none; }
-#gRules:not(:empty) { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; }
-.rule { display: flex; gap: 6px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line-2); }
-.rule:last-child { border-bottom: 0; }
-.rule .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 650; }
-.rule .m { color: var(--muted); font-size: 11.5px; }
-.rule.add { flex-wrap: wrap; border: 0; padding-top: 8px; }
-.rule.add input { flex: 1 1 150px; min-width: 0; }
-#gRules p.hint { padding: 8px 0; margin: 0; }
-.finds { display: flex; flex-wrap: wrap; gap: 5px; }
-.finds button { height: 30px; padding: 0 11px; font-size: 11.5px; font-weight: 650; border-radius: 20px; }
+.chk b { color: var(--ink); }
+#tab-groups > .note.warn { font-weight: 500; margin-bottom: 10px; }
+.chk span { line-height: 1.5; }
+/* Search pills are all one size (Ethan's standard: side-by-side pills share
+   the widest's width) — an equal two-column grid. */
+.finds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.finds button { width: 100%; height: 32px; padding: 0 10px; font-size: 11.5px; font-weight: 650; border-radius: 20px; overflow: hidden; text-overflow: ellipsis; }
 
-footer { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line-2); text-align: right; }
+footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line-2); text-align: right; }
+/* Sign Out as a pill, like the site's own (Ethan, 11-13). */
+footer #logout { height: 28px; padding: 0 14px; border: 1px solid var(--line); border-radius: 20px; background: #fff;
+  color: var(--muted); font-size: 11.5px; font-weight: 700; text-decoration: none; }
+footer #logout:hover { border-color: var(--bad-bd); background: var(--bad-bg); color: var(--bad-fg); }

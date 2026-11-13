@@ -79,6 +79,10 @@ const LIST_KEYS = new Set([
   // unrestocked_returns_<STORE>: the same mail cut to one store, sent only on
   // mornings that store has a line open (2026-11-06, 0178). Empty = no store copy.
   ...STORES.map((s) => `unrestocked_returns_${s}`),
+  // fb_boosts: the Monday Facebook Boosts email (fb-boost-report, 2026-11-13)
+  // — boosts staff record in the Marketplace Lister. Empty, it falls back to
+  // claims_disputes_dm.
+  "fb_boosts",
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

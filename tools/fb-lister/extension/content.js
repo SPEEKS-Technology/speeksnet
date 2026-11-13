@@ -12,10 +12,17 @@
 //   sold — on Marketplace → Selling: finds the listings whose item has sold in
 //          Shopify, outlines each one and points at its "Mark as sold" button.
 //
-// IT NEVER CLICKS NEXT, PUBLISH, POST OR MARK AS SOLD. Facebook does not allow
+// IT NEVER CLICKS PUBLISH, POST OR MARK AS SOLD. Facebook does not allow
 // automated posting or account actions, and a listing is a public statement in
 // the store's name under someone's personal account — a person makes every
-// final click. Category is left to the person too: Facebook's category picker
+// final click.
+//
+// NEXT IS THE ONE EXCEPTION, and only on the person's own click (Ethan,
+// 2026-11-13, after the first real test): Location and Public meetup live on
+// Facebook's SECOND page, so the panel has a "Confirm & Next" button. Pressing
+// it is the person confirming page one; the extension then clicks Facebook's
+// Next for them, once, and fills page two. It never clicks Next by itself,
+// and Publish stays theirs. Category is left to the person too: Facebook's category picker
 // is a search box with suggestions that change, and a wrong guess is worse
 // than an empty field Facebook refuses to publish without. Ticking a group box
 // is a form choice like any other field, made before the person posts.
@@ -116,6 +123,56 @@
     return false;
   }
 
+  // ── CATEGORY, LEARNED (Ethan, 2026-11-13) ──────────────────────────────────
+  // Facebook's category box is a search-as-you-type picker whose wording we
+  // don't control, so nothing here guesses. The name typed is one a person at
+  // SPEEKS already picked for this kind of item (read back at Confirm & Next),
+  // and it only counts if Facebook offers that exact name.
+  async function pickCategory(name) {
+    const box = combo('Category') || field('Category');
+    if (!box) return false;
+    box.click();
+    await sleep(300);
+    const typeIn = (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) ? document.activeElement
+      : (box.tagName === 'INPUT' ? box : null);
+    if (typeIn) { typeIn.focus(); try { document.execCommand('insertText', false, name); } catch (_) {} }
+    const want = norm(name);
+    for (let i = 0; i < 20; i++) {
+      await sleep(200);
+      const opts = Array.from(document.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitem"], [role="radio"]')).filter(visible);
+      const hit = opts.find((o) => norm(o.textContent) === want || norm(o.getAttribute('aria-label')) === want);
+      if (hit) { hit.click(); await sleep(300); return norm(categoryValue()) === want || !categoryValue(); }
+    }
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    return false;
+  }
+
+  // What the Category box shows now: its text minus the word "Category".
+  function categoryValue() {
+    const box = combo('Category') || field('Category');
+    if (!box) return '';
+    if (box.tagName === 'INPUT') return box.value.trim();
+    return (box.innerText || '').split('\n').map((s) => s.trim()).filter((s) => s && norm(s) !== 'category')[0] || '';
+  }
+
+  // The category the person ended up with (picked by them, or by us and kept)
+  // is saved, so the next listing of this kind picks it for them. Read on
+  // page one only: page two has no Category box. (Optional "More details"
+  // fields like Storage and Color are deliberately left alone, Ethan 11-13:
+  // the whole listing is in the description.)
+  // lastCategory: the page watcher's latest reading of the box, for when the
+  // person clicks Facebook's own Next and page one is gone before we look.
+  let categorySaved = false, lastCategory = '';
+  function saveCategory() {
+    if (categorySaved) return;
+    const cat = (onPage2() ? '' : categoryValue()) || lastCategory;
+    if (!cat) return;
+    categorySaved = true;
+    const s = view.steps.find((x) => x.key === 'category');
+    if (s) { s.state = 'ok'; s.text = cat; }
+    send({ type: 'category', sku: job.item.sku, product_id: job.item.product_id, category: cat });
+  }
+
   // ── PUBLIC MEETUP, AT THE STORE (Ethan, 2026-11-13) ────────────────────────
   // Marketplace buyers come into the store to buy. Every listing is set to
   // Public meetup (Door pickup / Door drop-off switched off — nobody goes to a
@@ -137,8 +194,8 @@
     for (let i = 0; i < 25; i++) {
       await sleep(200);
       const opts = Array.from(document.querySelectorAll('[role="option"], [role="listbox"] li')).filter(visible);
-      const hit = opts.find((o) => norm(o.textContent).startsWith(norm(city)) && norm(o.textContent).includes(norm(place.split(',')[1] || '').slice(0, 2)))
-        || opts.find((o) => norm(o.textContent).startsWith(norm(city)));
+      const hit = opts.find((o) => sameCity(o.textContent, place))
+        || opts.find((o) => letters(o.textContent).startsWith(letters(city)));
       if (hit) { const t = hit.textContent.trim(); hit.click(); await sleep(300); return t; }
     }
     return null;
@@ -147,7 +204,8 @@
   // A meetup-preference checkbox by its label: set it on or off. Returns the
   // state it ended in, or null if there's no such box on this layout.
   async function setBox(word, on) {
-    const w = norm(word);
+    // Letters only: Facebook says "Door dropoff", older layouts "Door drop-off".
+    const w = norm(word).replace(/[^a-z0-9]/g, '');
     for (const cb of document.querySelectorAll('[role="checkbox"], [role="switch"], input[type="checkbox"]')) {
       // Only the row's FIRST line counts: walking up far enough reaches the
       // block holding all three options, and "Door pickup" in there must not
@@ -157,7 +215,7 @@
         let el = cb;
         for (let i = 0; i < 5 && el && !name; i++) { el = el.parentElement; name = norm((el?.innerText || '').split('\n')[0]); }
       }
-      if (!name.startsWith(w)) continue;
+      if (!name.replace(/[^a-z0-9]/g, '').startsWith(w)) continue;
       const state = () => cb.tagName === 'INPUT' ? cb.checked : cb.getAttribute('aria-checked') === 'true';
       if (state() !== on) { cb.click(); await sleep(200); }
       return state();
@@ -189,7 +247,10 @@
   // ── the panel ──────────────────────────────────────────────────────────────
 
   let host = null, root = null, job = null, busy = false;
-  const view = { head: '', sub: '', steps: [], note: '', extra: '', buttons: true };
+  // page: 1 = the first form page (shows Confirm & Next), 2 = after Next.
+  // (A Boost checkbox lived here in 1.5.0–1.5.4; removed at Ethan's word,
+  // 11-13. Facebook's own boost switch is left however the person sets it.)
+  const view = { head: '', sub: '', steps: [], note: '', extra: '', buttons: true, page: 1 };
 
   function panel() {
     if (host) return root;
@@ -203,8 +264,11 @@
 
   function render() {
     const r = panel();
-    const mark = { ok: '✓', todo: '!', bad: '×', run: '' };
-    const rows = view.steps.map((s) => `<li class="${s.state}"><span class="ic">${mark[s.state] || ''}</span><span><b>${esc(s.label)}</b> <span class="tx">${esc(s.text || '')}</span></span></li>`).join('');
+    const mark = { ok: '✓', todo: '!', bad: '×', run: '', wait: '2' };
+    // Three columns — mark, field, what happened — so every row lines up
+    // (Ethan, 11-13). Texts are written "— like this" for the old one-line
+    // layout; the dash goes now that the column does the separating.
+    const rows = view.steps.map((s) => `<li class="${s.state}"><span class="ic">${mark[s.state] || ''}</span><b>${esc(s.label)}</b><span class="tx">${esc(String(s.text || '').replace(/^—\s*/, ''))}</span></li>`).join('');
     const warn = (job?.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join('');
     let logo = '';
     try { logo = chrome.runtime.getURL('logo-white.png'); } catch (_) {}
@@ -226,7 +290,8 @@
         .it{color:#0f172a;font-weight:750;font-size:13.5px;line-height:1.3;margin-bottom:3px}
         .sku{color:#8a94a3;font-size:11.5px;font-weight:600;margin-bottom:10px}
         ul{list-style:none;margin:0 0 4px;padding:0;border:1px solid #eef2f6;border-radius:10px;overflow:hidden}
-        li{display:flex;gap:9px;align-items:flex-start;padding:7px 10px;border-bottom:1px solid #eef2f6}
+        li{display:grid;grid-template-columns:18px 104px minmax(0,1fr);gap:9px;align-items:start;padding:7px 10px;border-bottom:1px solid #eef2f6}
+        li .tx{overflow-wrap:anywhere}
         li:last-child{border-bottom:0}
         li b{color:#0f172a;font-weight:650}.tx{color:#647082}
         .ic{width:18px;height:18px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:11px;font-weight:800;margin-top:1px;
@@ -246,6 +311,9 @@
         .ft button{flex:1;height:36px;border-radius:9px;border:1px solid #e6ebf1;background:#fff;color:#647082;cursor:pointer;font:inherit;font-size:12.5px;font-weight:750;transition:border-color .16s,color .16s}
         .ft button:hover:not(:disabled){border-color:#5a8d3b;color:#178048}
         .ft button:disabled{opacity:.45;cursor:not-allowed}
+        .ft.go{padding-bottom:6px}
+        .ft button.pri{background:#178048;border-color:#178048;color:#fff}
+        .ft button.pri:hover:not(:disabled){background:#106438;border-color:#106438;color:#fff}
       </style>
       <div class="box">
         <div class="hd">${logo ? `<img src="${logo}" alt="">` : ''}<div class="br"><span class="ey">SPEEKSNET</span><span class="ti">Marketplace Lister</span></div><button id="x" title="Close this panel">×</button></div>
@@ -257,13 +325,16 @@
           ${view.extra}
           ${view.note ? `<div class="next">${view.note}</div>` : ''}
         </div>
+        ${view.buttons && view.page === 1 ? `<div class="ft go"><button id="go" class="pri" ${busy ? 'disabled' : ''}>Confirm &amp; Next</button></div>` : ''}
         ${view.buttons ? `<div class="ft">
           <button id="again" ${busy ? 'disabled' : ''}>Fill Again</button>
           <button id="copy">Copy Description</button>
         </div>` : ''}
       </div>`;
     r.getElementById('x').onclick = () => { closePanel(); send({ type: 'done' }); };
-    const again = r.getElementById('again'); if (again) again.onclick = () => fill();
+    // Fill Again fills the page you're ON (page two has no Title box).
+    const again = r.getElementById('again'); if (again) again.onclick = () => (onPage2() ? fillPage2() : fill());
+    const go = r.getElementById('go'); if (go) go.onclick = () => confirmNext();
     const copy = r.getElementById('copy');
     if (copy) copy.onclick = async (e) => {
       try { await navigator.clipboard.writeText(job.fb.description); e.target.textContent = 'Copied'; }
@@ -279,20 +350,30 @@
     const fb = job.fb;
     view.head = job.item.title;
     view.sub = `${job.item.sku} · ${job.item.store} · $${fb.price}`;
-    view.extra = ''; view.buttons = true;
+    view.extra = ''; view.buttons = true; view.page = 1;
     view.steps = [
       { key: 'photos', label: 'Photos', state: 'run', text: `fetching ${fb.photos.length}…` },
       { key: 'title', label: 'Title', state: 'run' },
       { key: 'price', label: 'Price', state: 'run' },
-      { key: 'category', label: 'Category', state: 'todo', text: '— pick it yourself' },
+      { key: 'category', label: 'Category', state: 'run' },
       { key: 'condition', label: 'Condition', state: 'run' },
       { key: 'description', label: 'Description', state: 'run' },
-      { key: 'location', label: 'Location', state: 'run' },
-      { key: 'meetup', label: 'Public meetup', state: 'run' },
+      { key: 'sku', label: 'SKU', state: 'run' },
+      { key: 'location', label: 'Location', state: 'wait', text: '— on the next page' },
+      { key: 'meetup', label: 'Public Meetup', state: 'wait', text: '— on the next page' },
     ];
     view.note = '';
     const set = (key, state, text) => { const s = view.steps.find((x) => x.key === key); s.state = state; s.text = text || ''; render(); };
     render();
+    startPageWatch();
+
+    // Already past page one (the panel came back on page two): page one's
+    // rows are history, so fill this page instead of waiting for a Title box.
+    if (onPage2()) {
+      view.steps.forEach((s) => { if (s.state === 'run') { s.state = 'ok'; s.text = 'page one'; } });
+      busy = false;
+      return fillPage2();
+    }
 
     const ready = await waitFor(() => field('Title'));
     if (!ready) {
@@ -315,8 +396,21 @@
 
     const t = field('Title');
     set('title', t && setValue(t, fb.title) ? 'ok' : 'bad', t ? '' : '— not found, type it in');
+    // Facebook reformats the price as it's typed ("$500", "1,049"), so the box
+    // never reads back exactly "500" — compare the digits, not the string.
+    // (First real test, 11-13: the price went in but the panel said ×.)
     const p = field('Price');
-    set('price', p && setValue(p, String(fb.price)) ? 'ok' : 'bad', p ? `— $${fb.price}` : '— not found, type it in');
+    if (p) setValue(p, String(fb.price));
+    const priceIn = p && p.value.replace(/\D/g, '') === String(fb.price);
+    set('price', priceIn ? 'ok' : 'bad', !p ? '— not found, type it in' : priceIn ? `— $${fb.price}` : `— check it says $${fb.price}`);
+
+    // Category: the one people at SPEEKS picked most for this kind of item
+    // (fb-lister learns it from fb_listings). None learned yet → the person
+    // picks, and that pick teaches the next listing.
+    if (fb.category) {
+      const ok = await pickCategory(fb.category);
+      set('category', ok ? 'ok' : 'todo', ok ? fb.category : `Pick It Yourself (try “${fb.category}”)`);
+    } else set('category', 'todo', 'Pick It Yourself');
 
     if (fb.condition) {
       const ok = await pickOption('Condition', fb.condition);
@@ -326,27 +420,143 @@
     // Description sits under "More details" on some layouts; open it if shut.
     let d = field('Description');
     if (!d) {
-      const more = Array.from(document.querySelectorAll('[role="button"], div[tabindex]')).find((b) => norm(b.textContent) === 'more details');
-      if (more) { more.click(); d = await waitFor(() => field('Description'), 3000); }
+      const more = moreDetails();
+      if (more && more.getAttribute('aria-expanded') !== 'true') { more.click(); d = await waitFor(() => field('Description'), 3000); }
     }
     set('description', d && setValue(d, fb.description) ? 'ok' : 'bad', d ? '' : '— not found; use Copy description');
 
+    // SKU, under "More details" ("Optional. Only visible to you"). Ours goes
+    // in, so whoever reads their Selling page can match a listing to the shelf.
+    let s = field('SKU');
+    if (!s) {
+      const more = moreDetails();
+      if (more && more.getAttribute('aria-expanded') !== 'true') { more.click(); s = await waitFor(() => field('SKU'), 3000); }
+    }
+    set('sku', s && setValue(s, job.item.sku) ? 'ok' : 'bad', s ? `— ${job.item.sku}` : `— not found; type ${job.item.sku} under More details`);
+
+    busy = false;
+    view.note = '<b>Your turn:</b> Pick the category and read every field and photo, then press <b>Confirm &amp; Next</b>. On the next page it sets the location and Public meetup and ticks the groups that fit. You click <b>Publish</b> yourself — this tool never posts.';
+    render();
+    watchForGroups();
+  }
+
+  // The "More details" toggle. Its text carries a subtitle ("Attract more
+  // interest…"), so match the start. Callers check aria-expanded first —
+  // clicking an open one folds the SKU box away.
+  function moreDetails() {
+    return Array.from(document.querySelectorAll('[role="button"], div[tabindex]'))
+      .filter((b) => norm(b.textContent).startsWith('more details') && norm(b.textContent).length < 120)
+      .sort((a, b) => a.textContent.length - b.textContent.length)[0] || null;
+  }
+
+  // Facebook's own Next button on page one.
+  function nextButton() {
+    return Array.from(document.querySelectorAll('[role="button"], button')).find((b) =>
+      visible(b) && (norm(b.getAttribute('aria-label')) === 'next' || norm(b.textContent) === 'next'));
+  }
+
+  // Only ever run from the panel's "Confirm & Next" — the person's click.
+  async function confirmNext() {
+    if (busy || !job) return;
+    busy = true;
+    const set = (key, state, text) => { const s = view.steps.find((x) => x.key === key); if (s) { s.state = state; s.text = text || ''; } render(); };
+
+    saveCategory();
+
+
+    const btn = nextButton();
+    if (!btn || btn.getAttribute('aria-disabled') === 'true') {
+      busy = false;
+      view.note = '<b>Facebook\'s Next isn\'t ready.</b> Usually the category is still empty, or a field is flagged in red. Fix it, then press <b>Confirm &amp; Next</b> again.';
+      render();
+      return;
+    }
+    btn.click();
+    view.page = 2;
+    view.note = 'Moving to the next page…';
+    render();
+    busy = false;
+    const ready = await waitFor(onPage2, 15000);
+    if (ready) await fillPage2();
+    else {
+      const area = STORE_AREA[job.item.store];
+      set('location', 'bad', area ? `set it to ${area} yourself` : 'set it yourself');
+      set('meetup', 'bad', 'tick Public meetup yourself (and leave door pickup off)');
+    }
+  }
+
+  // ── PAGE TWO: "Delivery method" ────────────────────────────────────────────
+  // Location, and Meetup preferences (Public meetup / Door pickup / Door
+  // dropoff). Filled however the person got here — the panel's Confirm & Next,
+  // or Facebook's own Next (the 11-13 test did that, and nothing filled) — and
+  // again by Fill Again while on this page. Fill Again used to restart page
+  // one and sit waiting for a Title box that page two doesn't have.
+  // Notices page two however it was reached (Facebook's own Next included)
+  // and fills it once.
+  let pageTimer = null;
+  function startPageWatch() {
+    clearInterval(pageTimer);
+    pageTimer = setInterval(() => {
+      if (!job || !onCreatePage()) { clearInterval(pageTimer); return; }
+      if (view.page !== 1) return;
+      if (!onPage2()) { const c = categoryValue(); if (c) lastCategory = c; return; }
+      if (!busy) { saveCategory(); fillPage2(); }
+    }, 1000);
+  }
+
+  function onPage2() {
+    if (field('Title')) return false;
+    return !!(field('Location') || /meetup preferences|delivery method/i.test(document.body.innerText.slice(0, 20000)));
+  }
+
+  async function fillPage2() {
+    if (busy || !job) return;
+    busy = true;
+    view.page = 2;
+    const set = (key, state, text) => { const s = view.steps.find((x) => x.key === key); if (s) { s.state = state; s.text = text || ''; } render(); };
+    set('location', 'run', ''); set('meetup', 'run', '');
+    view.note = '';
+
     const area = STORE_AREA[job.item.store];
     if (area) {
-      const got = await setLocation(area);
-      set('location', got ? 'ok' : 'bad', got ? `— ${got}` : `— set it to ${area} yourself`);
-    } else set('location', 'todo', '— set it to the store\'s city');
+      const now = locationValue();
+      if (now && sameCity(now, area)) set('location', 'ok', now);
+      else {
+        const got = await setLocation(area);
+        set('location', got ? 'ok' : 'bad', got || `set it to ${area} yourself`);
+      }
+    } else set('location', 'todo', 'set it to the store\'s city');
 
     const meet = await setBox('Public meetup', true);
     const doorP = await setBox('Door pickup', false);
-    const doorD = await setBox('Door drop-off', false);
-    if (meet === true) set('meetup', 'ok', (doorP || doorD) ? '— on, but turn door pickup/drop-off off' : '— on, door pickup/drop-off off');
-    else set('meetup', 'bad', '— tick Public meetup yourself (and leave door pickup off)');
+    const doorD = await setBox('Door dropoff', false);
+    if (meet === true) set('meetup', 'ok', (doorP || doorD) ? 'turn door pickup and dropoff off' : '');
+    else set('meetup', 'bad', 'tick Public meetup yourself (and leave door pickup off)');
 
     busy = false;
-    view.note = '<b>Your turn:</b> pick the category, read every field and the photos, then click <b>Next</b>. On the next screen this panel ticks the groups that fit — check them, then click <b>Publish</b> yourself. This tool never posts for you.';
+    view.note = decided.size
+      ? '<b>Your turn:</b> Check the location and groups — untick any that don\'t fit — then click <b>Publish</b> yourself.'
+      : '<b>Your turn:</b> Check the location, click <b>Next</b>, check the groups, then click <b>Publish</b> yourself.';
     render();
-    watchForGroups();
+  }
+
+  // Facebook writes "Lees Summit" without the apostrophe; compare letters only.
+  const letters = (s) => norm(s).replace(/[^a-z0-9]/g, '');
+  function sameCity(shown, area) {
+    const [city, state] = area.split(',').map((x) => x.trim());
+    return letters(shown).startsWith(letters(city)) && (!state || letters(shown).includes(letters(state)));
+  }
+  function locationValue() {
+    const el = field('Location');
+    if (el) return (el.value || '').trim();
+    // Some layouts show it as a box of text, "Location" over the place.
+    for (const n of document.querySelectorAll('span, div')) {
+      if (n.children.length || norm(n.textContent) !== 'location') continue;
+      const box = n.parentElement?.parentElement;
+      const lines = (box?.innerText || '').split('\n').map((s) => s.trim()).filter((s) => s && norm(s) !== 'location');
+      if (lines[0]) return lines[0];
+    }
+    return '';
   }
 
   // ── groups: the "list in more places" step ─────────────────────────────────
@@ -452,7 +662,12 @@
     groupTimer = setInterval(async () => {
       if (!job || !onCreatePage()) { clearInterval(groupTimer); return; }
       if (!onGroupsStep()) return;
-      const { groupRules = [], groupAuto = true } = await chrome.storage.local.get(['groupRules', 'groupAuto']);
+      // Group rules are parked (Ethan, 11-13: "get rid of the your rules for
+      // now"); the popup no longer edits them, so none saved earlier apply
+      // unseen. To bring them back, read groupRules here again and restore
+      // the Your Rules block in popup.html/popup.js (git history, v1.3.0).
+      const { groupAuto = true } = await chrome.storage.local.get('groupAuto');
+      const groupRules = [];
       let changed = false;
       for (const row of groupRows()) {
         if (decided.has(row.name)) continue;
@@ -466,14 +681,13 @@
     }, 1000);
   }
   function showGroups() {
-    const all = [...decided.entries()];
-    const picked = all.filter(([, d]) => d.ticked);
-    const skipped = all.filter(([, d]) => !d.ticked);
-    view.extra = `<div class="grp"><b>Groups — Ticked ${picked.length} Of ${all.length}</b>
-      ${picked.map(([n, d]) => `<div>✓ ${esc(n)} <span class="why">(${esc(d.why)})</span></div>`).join('') || '<div class="why">None fit this item. Tick any you want yourself — or join more local buy/sell groups (the extension\'s Groups tab has search buttons); it can only use groups you\'re in.</div>'}
-      ${skipped.length ? `<div class="why" style="margin-top:4px">Left unticked: ${skipped.map(([n]) => esc(n)).join(', ')}</div>` : ''}
+    // Only what was ticked, and no reasons (Ethan, 11-13: the unticked list
+    // and "(local buy/sell)" were noise). decide() still works out the why.
+    const picked = [...decided.entries()].filter(([, d]) => d.ticked);
+    view.extra = `<div class="grp"><b>Groups Ticked: ${picked.length}</b>
+      ${picked.map(([n]) => `<div>✓ ${esc(n)}</div>`).join('') || '<div class="why">None fit this item. Tick any you want yourself — or join more local buy/sell groups (the extension\'s Groups tab has search buttons); it can only use groups you\'re in.</div>'}
     </div>`;
-    view.note = '<b>Your turn:</b> check the groups — untick any that don\'t fit — then click <b>Publish</b> yourself. Set up group rules in the extension\'s <b>Groups</b> tab.';
+    view.note = '<b>Your turn:</b> Check the location and groups — untick any that don\'t fit — then click <b>Publish</b> yourself.';
     render();
   }
 
@@ -507,7 +721,7 @@
       if (found.size < job.sold.length) { window.scrollBy(0, 600); await sleep(900); }
     }
     for (const st of view.steps) if (st.state === 'run') { st.state = 'todo'; st.text = '— not found here; it may already be marked sold or deleted'; }
-    view.note = 'Click <b>Mark as sold</b> on each outlined listing. Then press <b>Done</b> next to it in the extension\'s <b>Listed</b> tab.';
+    view.note = 'Click <b>Mark as sold</b> on each outlined listing. Then press <b>Marked Sold</b> next to it in the extension\'s <b>Listed</b> tab.';
     render();
   }
 
@@ -540,6 +754,29 @@
     else if (job.fb && onCreatePage()) fill();
   }
 
+  // ── PUBLISHED? (Ethan, 2026-11-13) ─────────────────────────────────────────
+  // The store's Listed list is only for listings that actually went up — a
+  // form the tool opened and nobody published isn't one. This only WATCHES:
+  // it notes the person's own click on Facebook's Publish, and counts it once
+  // Facebook leaves the create form (or says the listing is published) within
+  // two minutes. A Publish Facebook refused leaves you on the form, so it
+  // doesn't count.
+  let publishAt = 0, reported = false;
+  document.addEventListener('click', (e) => {
+    if (!job?.fb || !onCreatePage()) return;
+    const b = e.target.closest && e.target.closest('[role="button"], button');
+    if (b && (norm(b.getAttribute('aria-label')) === 'publish' || norm(b.textContent) === 'publish')) publishAt = Date.now();
+  }, true);
+  function reportPublished() {
+    if (reported || !job?.fb) return;
+    reported = true;
+    send({ type: 'published', item: job.item, fb: job.fb });
+  }
+  setInterval(() => {
+    if (!publishAt || reported || Date.now() - publishAt > 120000) return;
+    if (!onCreatePage() || /your listing (is|has been) published|listing published/i.test(document.body.innerText.slice(0, 5000))) reportPublished();
+  }, 700);
+
   boot();
   // Facebook is a single-page app: leaving the form doesn't reload the page,
   // so watch the path and take the panel down when the page it was for is gone.
@@ -547,6 +784,7 @@
   setInterval(() => {
     if (location.pathname === last) return;
     last = location.pathname;
+    if (publishAt && !reported && Date.now() - publishAt < 120000 && !onCreatePage()) reportPublished();
     const here = (job?.fb && onCreatePage()) || (job?.sold && onSellingPage());
     if (!here && host) { closePanel(); clearInterval(groupTimer); }
     else if (!host) boot();

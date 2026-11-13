@@ -18,9 +18,9 @@ const items = [
   ['KS01-8423D-E10', 'New Nintendo 3DS XL Handheld Game Console RED-001 Black', 299.99, 'Good', 5],
   ['KS01-8411A-E4', 'Apple iPhone 13 128GB Midnight Unlocked A2482', 389.99, 'Very Good', 8],
   ['KS01-8399C-E9', 'Sony PlayStation 5 Slim Digital Edition 1TB CFI-2015', 349.99, 'Like New', 7],
-  ['KS01-8380B-E2', 'Apple MacBook Air 13" M1 8GB 256GB Space Gray A2337', 479.99, 'Good', 9],
+  ['MO01-B2B197-QTY2-R1R2', 'Apple MacBook Air 13" M1 8GB 256GB Space Gray A2337', 479.99, 'Good', 9],
   ['KS01-8377D-E10', 'Bose QuietComfort 45 Wireless Headphones Black', 129.99, 'Acceptable', 6],
-].map(([sku, title, price, condition, photos], i) => ({ sku, product_id: String(1000 + i), title, price, quantity: 1, condition, photos }));
+].map(([sku, title, price, condition, photos], i) => ({ sku, product_id: 'gid://shopify/Product/' + (1000 + i), title, price, quantity: 1, condition, photos, added: new Date(Date.now() - 36e5 * (i * 7 + 1)).toISOString() }));
 const store = {
   listed: [
     { sku: 'KS01-7701A-E1', product_id: '1', title: 'Apple iPad 9th Gen 64GB Space Gray', store: 'OVL', price: 190, at: Date.now() - 864e5 * 3, by: 'Test DM' },
@@ -32,7 +32,6 @@ const store = {
     'KS01-7702A-E1': { status: 'instock', reason: '1 in stock in Shopify.' },
     'KS01-7703A-E1': { status: 'unknown', reason: 'In stock, but the Shopify product isn\'t active.' },
   } },
-  groupRules: [{ name: 'KC Gamers', mode: 'match', keywords: 'nintendo, playstation, xbox' }, { name: 'Overland Park Moms', mode: 'never', keywords: '' }],
   groupAuto: true,
 };
 const who = { name: 'Test Manager', store: 'OVL', role: 'manager', stores: ['OVL'] };
@@ -47,13 +46,16 @@ const fake = {
       switch (msg.type) {
         case 'me': return cb({ ok: true, who: SIGNIN ? null : who });
         case 'login': return cb({ ok: false, error: 'This is a mock — no sign-in here.' });
-        case 'catalog': return cb({ ok: true, store: 'OVL', count: items.length, items });
+        case 'catalog': return cb({ ok: true, store: 'OVL', count: items.length, items, refreshed: new Date(Date.now() - 52 * 6e4).toISOString(), next_refresh: new Date(Date.now() + 128 * 6e4).toISOString() });
         case 'item': {
           const it = items.find(i => i.sku === msg.sku) || items[0];
           return cb({ ok: true, item: { ...it, store: 'OVL', status: 'ACTIVE' }, warnings: it.condition === 'Acceptable' ? ['Example warning: check the photos show the wear.'] : [],
             fb: { title: it.title, price: Math.round(it.price), condition: 'Used - Good', photos: [1, 2, 3, 4, 5].map(n => shopPhoto(n * 50)),
                   description: 'Items included in this sale:\n\nConsole\nStylus\n\nSpecifications:\n\nBrand: Nintendo\nModel: 3DS XL\nColor: Black' } });
         }
+        // ?gone: Shopify says the 2nd row sold since the catalog refresh.
+        case 'thumbs': return cb({ ok: true, thumbs: Object.fromEntries(msg.product_ids.map((id, n) => [id, shopPhoto(n * 70)])),
+          gone: location.search.includes('gone') ? msg.product_ids.slice(1, 2) : [] });
         case 'checkSold': return cb({ ok: true, results: store.soldStatus.results });
         default: return cb({ ok: true });
       }

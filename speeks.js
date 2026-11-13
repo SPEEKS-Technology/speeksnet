@@ -43794,6 +43794,11 @@ const EMAIL_LIST_GROUPS = [
                   + 'buy or sell, or a monthly one once the Monthly Breakdown is in. Copied on every store\'s email.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `record_watch_${s}`, label: `Company Records — ${s}`,
               desc: `The ${s} manager and ASM: the same email, whenever it is about ${s}.` })),
+            { key: 'fb_boosts', label: 'Facebook Boosts',
+              desc: 'Monday 8am — Facebook Marketplace boosts: the amount boosted last week, how many are '
+                  + 'running and ending soon, and each store\'s open boosts. Boosts are the ones staff record '
+                  + 'with Mark Boosted in the Marketplace Lister. Left empty, it goes to the Claims & Disputes — '
+                  + 'District Manager list.' },
             { key: 'unrestocked_returns', label: 'Returned But Not Back In Stock',
               desc: '7:35am, every morning anything is open: whole items refunded or cancelled '
                   + '(in store, online or eBay) that never went back into inventory. '
@@ -44178,6 +44183,9 @@ const FEATURE_CATALOG = [
     // off here cuts off the extension too. Its def is copied into that function as
     // FB_LISTER_DEF — change one, change both.
     { key: 'fb-lister',                label: 'Downloads: Facebook Marketplace Lister (Chrome Extension)', tab: 'tools', group: 'System', def: ['district-manager'] },
+    // The Downloads link itself: on for everyone (Ethan, 11-13). What is IN it
+    // is gated per download by the keys above (e.g. 'fb-lister').
+    { key: 'tool-downloads',           label: 'Downloads',                     tab: 'tools', group: 'System', def: 'all' },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
     // Delegation tab pairs them the way it already pairs the claims tools.
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
@@ -71744,12 +71752,15 @@ else _eqTabsWatch();
 // holds one entry, the Marketplace Lister Chrome extension; DOWNLOADS below is
 // the list, so the next one is an entry there and nothing else.
 //
-// WHO SEES WHAT: each entry carries its own Feature Access key, and the page
-// lists only the entries the person has. The Downloads link itself carries
-// 'fb-lister' (data-feature on the SPEEKS Tools item) because that is the only
-// entry. When a second entry arrives, give the link a key of its own
-// ('tool-downloads') or the link will hide for people who have only the new
-// entry.
+// WHO SEES WHAT (Ethan, 11-13): the Downloads link is on for EVERYONE — its
+// own key 'tool-downloads', def 'all', and no role-* classes on the SPEEKS
+// Tools item in the six pages. Each entry carries its own Feature Access key
+// and the page lists only the entries the person has, so someone with none
+// sees the link and an empty page saying who switches them on. No
+// data-mobile="hide" on it either: the compact layout also covers narrow
+// desktop windows (it hid the link from Ethan's 843px pane), and an empty
+// list on a phone costs nothing. Adding a
+// download is one entry in DOWNLOADS plus one FEATURE_CATALOG line.
 //
 // ── Marketplace Lister ──
 // A store manager built a Chrome extension that fills in Facebook Marketplace
@@ -71767,7 +71778,7 @@ else _eqTabsWatch();
 //
 // No "Update" how-to on the card (Ethan, 11-13): he announces each new version
 // in Announcements, with its own instructions. Don't add one back.
-const FB_LISTER_VERSION = '1.3.0';
+const FB_LISTER_VERSION = '1.6.0';
 const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
 
 const _DL_OL = 'style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px"';
@@ -71854,7 +71865,7 @@ function openDownloads() {
             <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="manage-content">
-            ${mine.length ? mine.map(card).join('') : '<div class="status-message">Nothing to download for you yet.</div>'}
+            ${mine.length ? mine.map(card).join('') : '<div class="status-message">Nothing to download for you yet. Your DM switches downloads on for you in Feature Access.</div>'}
         </div>`;
     closeAllModals();
     modal.classList.add('show');
