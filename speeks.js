@@ -71778,7 +71778,7 @@ else _eqTabsWatch();
 //
 // No "Update" how-to on the card (Ethan, 11-13): he announces each new version
 // in Announcements, with its own instructions. Don't add one back.
-const FB_LISTER_VERSION = '1.6.0';
+const FB_LISTER_VERSION = '1.6.1';
 const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
 
 const _DL_OL = 'style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px"';

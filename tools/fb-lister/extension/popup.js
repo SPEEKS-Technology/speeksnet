@@ -247,7 +247,8 @@ async function openItem(sku, productId) {
 
 async function countListed() {
   const { listed = [] } = await chrome.storage.local.get('listed');
-  $('listedCount').textContent = listed.length ? `(${listed.length})` : '';
+  // Just the number: the bubble is the bracket (Ethan, 11-13).
+  $('listedCount').textContent = listed.length ? String(listed.length) : '';
 }
 
 // The list is the STORE's (fb_listings in SPEEKSNET), shared by everyone at
@@ -268,10 +269,12 @@ async function renderListed(synced) {
   const sold = listed.filter((l) => st[l.sku]?.status === 'sold');
   const when = soldStatus?.at ? ` Checked ${new Date(soldStatus.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
   say('listedMsg', soldStatus
-    ? (sold.length ? `${sold.length} sold in Shopify — mark ${sold.length === 1 ? 'it' : 'them'} sold on Facebook, then press Marked Sold.${when}` : `${listed.length} Listed For ${where}, None Sold.${when}`)
+    ? (sold.length ? `${sold.length} Sold in Shopify —mark ${sold.length === 1 ? 'it' : 'them'} sold on Facebook, then press Marked Sold.${when}` : `${listed.length} Listed For ${where}, None Sold.${when}`)
     : `${listed.length} Listed For ${where}. Checked against Shopify once a day.`);
   $('markAll').hidden = sold.length < 1;
-  $('markAll').textContent = sold.length > 1 ? `Mark ${sold.length} Sold On Facebook` : 'Mark Sold On Facebook';
+  // "Open", not "Mark": it opens Facebook's Selling page with the sold ones
+  // outlined; the person still clicks Mark as sold there (Ethan, 11-13).
+  $('markAllText').textContent = sold.length > 1 ? `Open ${sold.length} Sold On Facebook` : 'Open Sold On Facebook';
   // Sold first, so the ones to act on are at the top.
   const rank = (l) => ({ sold: 0, unknown: 1, instock: 2 }[st[l.sku]?.status] ?? 3);
   const rows = [...listed].sort((a, b) => rank(a) - rank(b));
@@ -280,7 +283,11 @@ async function renderListed(synced) {
     const isSold = s?.status === 'sold';
     return `<div class="item lrow" data-n="${n}" title="${esc(s?.reason || '')}">
       <div class="t"><b>${esc(l.title)}</b><span>${esc(l.sku)} · ${esc(shortDate(l.at))}${l.by ? ' · ' + esc(l.by) : ''}</span>${boostTag(l)}</div>
-      ${s ? `<span class="pill ${s.status}">${{ instock: 'In Stock', sold: 'Sold', unknown: 'Unknown' }[s.status] || s.status}</span>` : `<span class="p">${money(l.price)}</span>`}
+      ${/* Price on every row; a pill only for Sold, the one to act on. An
+           "In Stock" pill used to replace the price, but only on rows the
+           daily check had already seen, so rows listed since then showed a
+           price instead and the list looked inconsistent (Ethan, 11-13). */
+        isSold ? `<span class="pill sold">Sold</span>` : `<span class="p">${money(l.price)}</span>`}
       <div class="racts">
         ${isSold ? `<button class="small" data-find="${n}" title="Open Facebook Selling with this listing outlined">Find</button>` : `<button class="small" data-boost="${n}">${l.boosted_at ? 'Edit Boost' : 'Mark Boosted'}</button>`}
         <button class="small" data-forget="${n}">${isSold ? 'Marked Sold' : 'Remove'}</button>
@@ -294,11 +301,11 @@ async function renderListed(synced) {
   $('listed').querySelectorAll('[data-forget]').forEach((b) => b.onclick = () => {
     const n = Number(b.dataset.forget), l = rows[n], isSold = st[l.sku]?.status === 'sold';
     openForm(n, `
-      <div class="q"><b>Take this off ${esc(l.store)}'s Listed list?</b>
+      <div class="q"><b>Remove from ${esc(l.store)}'s list?</b>
         ${isSold
-          ? `Do this once you've clicked <b>Mark as sold</b> on Facebook.`
-          : `Do this when the Facebook listing is gone: you <b>deleted it</b> on Facebook, or it <b>sold</b> and you marked it sold there.`}
-        It comes off the list for everyone at ${esc(l.store)}.</div>
+          ? `Only after you've marked it sold on Facebook.`
+          : `Only once it's deleted or marked sold on Facebook.`}
+        Everyone at ${esc(l.store)} will stop seeing it.</div>
       <div class="fa"><button class="small" data-x>Cancel</button><button class="small primary" data-ok>${isSold ? 'Marked Sold' : 'Remove'}</button></div>`,
       async (f) => {
         f.querySelector('[data-ok]').disabled = true;

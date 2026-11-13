@@ -248,7 +248,7 @@ async function checkSold({ notify }) {
     if (fresh.length) {
       chrome.notifications.create('sold', {
         type: 'basic', iconUrl: 'icon128.png', priority: 2, requireInteraction: true,
-        title: fresh.length === 1 ? 'Sold in Shopify — still on Facebook' : `${fresh.length} items sold in Shopify — still on Facebook`,
+        title: fresh.length === 1 ? 'Sold in Shopify — still on Facebook' : `${fresh.length} Sold in Shopify — still on Facebook`,
         message: fresh.slice(0, 3).map((l) => l.title).join('\n') + (fresh.length > 3 ? `\n…and ${fresh.length - 3} more` : '') + '\nClick to mark them sold on Facebook.',
       });
       await chrome.storage.local.set({ notified: [...new Set([...notified, ...fresh.map((l) => l.sku)])].slice(-1000) });

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SPEEKS Marketplace Lister",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Fills in a Facebook Marketplace listing from a SPEEKS Shopify item. You review it and click Publish.",
   "permissions": [
     "storage",

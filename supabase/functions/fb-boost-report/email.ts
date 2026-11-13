@@ -62,7 +62,9 @@ const td = (inner: string, align = 'left', extra = '') =>
   `<td align="${align}" style="padding:11px 6px;border-bottom:1px solid ${C.line2};font-size:13px;color:${C.charcoal};text-align:${align};vertical-align:top;${extra}">${inner}</td>`;
 
 function tile(label: string, value: string, note = '', color: string = C.charcoal) {
-  return `<td width="33%" align="center" style="padding:14px 6px;background:${C.soft};border:1px solid ${C.line};border-radius:12px;">
+  // valign top: a tile with a note line is taller, and middle-aligning made its
+  // title sit higher than its neighbours' (Ethan, 2026-11-13).
+  return `<td width="33%" align="center" valign="top" style="vertical-align:top;padding:14px 6px;background:${C.soft};border:1px solid ${C.line};border-radius:12px;">
     <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${C.faint};">${label}</div>
     <div style="font-size:20px;font-weight:800;color:${color};margin-top:4px;">${value}</div>
     ${note ? sub(note) : ''}
@@ -120,10 +122,9 @@ export function buildBoostEmail(rep: BoostReport): string {
       ${tile('Running Now', String(rep.running.length), endingSoon ? `${endingSoon} Ending in 3 Days` : '')}
     </tr></table>
 
-    ${heading('By Store', 'boosts open now')}
+    ${heading('By Store', 'Boosts Open Now')}
     ${box(`<tr>${th('Store', 'center', '30%')}${th('Open Boosts', 'center', '30%')}${th('Boosted Amount', 'center', '40%')}</tr>${storeRows}${total}`)}
     `}
   </td></tr>
-  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:${C.footBg};">Generated automatically by Speeks &middot; Boosts are recorded by staff with <b>Mark Boosted</b> in the Marketplace Lister&rsquo;s Listed tab &mdash; Facebook doesn&rsquo;t report them to us. Boosted amount is the total each boost was set to, not what Facebook has charged so far.</td></tr>
 </table></td></tr></table></body></html>`;
 }
