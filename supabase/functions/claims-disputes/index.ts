@@ -1079,14 +1079,34 @@ function readEbayDisputeDetail(d: any) {
   const ev = (d.evidence || [])[0] || {};
   const overdue = resp === "SELLER_RESPONSE_OVERDUE";
   const answered = !!resp && !overdue;
+  // SELLER PROTECTION (Ethan, 2026-11-13). eBay's dispute detail has no
+  // "protected" field — OVL 03-15322-48948 ($399.99, AUTHORIZATION_FAILED) came
+  // back with none — but it says it by what it does NOT ask of us: an open
+  // dispute with no sellerResponse, an EMPTY availableChoices and no evidence
+  // requests is one eBay is carrying itself, because we qualified for seller
+  // protection. Nothing we could submit would be accepted, so it is not ours to
+  // chase. Every dispute that does need us lists CONTEST/ACCEPT; an overdue one
+  // carries SELLER_RESPONSE_OVERDUE and an answered one SELLER_*, which is why
+  // those two are excluded before an empty list is read as protection.
+  // THE RULE IS AN INFERENCE, so it never hides anything by itself (Ethan,
+  // 2026-11-13: it goes to him to confirm, and only his confirm takes it off the
+  // list). It is marked outcome 'protected_suspected' and the sweep files a
+  // system resolution for the DM to answer (see the detail pass). If eBay later
+  // offers us a choice, the next sweep clears the mark on its own.
+  const stillOpen = !/CLOSED|RESOLVED/i.test(String(d.paymentDisputeStatus ?? ""));
+  const protectedBySite = stillOpen && !resp
+    && Array.isArray(d.availableChoices) && d.availableChoices.length === 0
+    && !(Array.isArray(d.evidenceRequests) && d.evidenceRequests.length)
+    && !(Array.isArray(d.evidence) && d.evidence.length);
   return {
+    ...(protectedBySite ? { outcome: "protected_suspected" } : stillOpen ? { outcome: null } : {}),
     seller_response: resp || null,
     response_overdue: overdue,
     // Overdue still counts as unanswered: the money is at risk and nobody dealt
     // with it. What changes is that it can no longer be fixed by responding, so
     // the card and the refusal say something different (see stateOf and the POST
     // gate).
-    needs_response: !answered,
+    needs_response: !answered && !protectedBySite,
     responded_at: answered ? dateOf(ev.providedDate) : null,
     respond_by: dateOf(ev.respondByDate) ?? dateOf(d.respondByDate),
     detail_checked_at: new Date().toISOString(),
@@ -1153,7 +1173,16 @@ async function sweepDisputes(sb: any, store: string, ebayRow: any, shopRow: any)
     for (const p of want || []) {
       try {
         const d = await ebayGet(`${host}/sell/fulfillment/v1/payment_dispute/${encodeURIComponent(p.external_id)}`, token);
-        await sb.from("payment_disputes").update(readEbayDisputeDetail(d)).eq("dispute_key", p.dispute_key);
+        // The detail is kept whole in raw.detail: seller protection (2026-11-13)
+        // is read from it, and the summary says nothing about it.
+        const { data: cur } = await sb.from("payment_disputes").select("raw").eq("dispute_key", p.dispute_key).maybeSingle();
+        const rd = readEbayDisputeDetail(d);
+        await sb.from("payment_disputes")
+          .update({ ...rd, raw: { ...(cur?.raw || {}), detail: d } })
+          .eq("dispute_key", p.dispute_key);
+        // A "looks protected" dispute is NOT sent to the DM by the sweep (Ethan,
+        // 2026-11-13). It reaches the DM only when the store's manager resolves
+        // it — factCheckRaw then reads the resolution as unverifiable.
       } catch { bad++; }
     }
     if (bad) {
@@ -1632,6 +1661,12 @@ function factCheck(type: string, it: any, review: any): { ok: boolean; why: stri
 function factCheckRaw(type: string, it: any, review: any): { ok: boolean; why: string; kind?: FactKind } {
   const ok = { ok: true, why: "" };
   if (type === "dispute") {
+    // The sweep's own resolution (outcome protected_suspected) is never taken
+    // on trust: the DM confirms it, and only then does it leave the list.
+    if (it.is_open && it.outcome === "protected_suspected") {
+      return { ok: false, kind: "unverifiable",
+        why: "eBay is asking nothing of us on this dispute, which usually means we qualified for seller protection. Confirm it in Seller Hub, then confirm here" };
+    }
     if (!it.is_open || !it.needs_response) return ok;
     const site = it.source === "ebay" ? "eBay" : "Shopify";
     return { ok: false, why: missedWindow(type, it)
@@ -1719,6 +1754,11 @@ function stateOf(type: string, it: any, review: any, ctx: any): StateOut {
   if (review.dm_status === "denied") {
     // Sent back: as though nobody had resolved it, except it is due TODAY —
     // the DM has just said it isn't done, so no timeframe or check-in hides it.
+    // A "looks protected" dispute the DM says is NOT protected is the store's
+    // again, due today, like any dispute still waiting on us.
+    if (type === "dispute" && it.is_open && it.outcome === "protected_suspected") {
+      return { state: "needs_reply", due_on: ctx.today, note: "protection_denied", dm: dmOf(review, false, fc.why) };
+    }
     const s = baseState(type, it, null, ctx);
     const quiet = ["waiting", "checked", "resolved"].includes(s.state);
     return { ...(quiet ? { state: "due", due_on: ctx.today } : s), note: s.note, quiet_until: undefined,
