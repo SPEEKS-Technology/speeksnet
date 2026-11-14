@@ -2352,6 +2352,30 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   queueFrom("ebay_case", cases, (x) => x.case_key);
   queueFrom("payment", payments, (x) => x.order_key);
   queueFrom("mismatch", mismatches, (x) => x.issue_key);
+  // RETURNED BUT NOT BACK IN STOCK (Ethan, 2026-11-14: "any resolutions to
+  // confirm on the returns not in stock report also just go in the need confirm
+  // on claims and disputes"). A manager's Never Came Back mark (0179) is the same
+  // shape as a resolution the sites don't back up — Shopify still reads 0 on
+  // hand and no resale, so only the DM can say it's right — so it sits on the
+  // same list. The row itself stays in unrestocked_returns, and the answer goes
+  // back through unrestocked-returns' own nb_confirm / nb_deny (the front end
+  // posts there for this type), so the 7:35 mail and the #restock card keep
+  // reading one record. Read-only here; a failed read just leaves them off.
+  try {
+    const { data: nb } = await sb.from("unrestocked_returns")
+      .select("issue_key,store_code,order_name,channel,kind,title,sku,amount,nb_requested_at,nb_requested_by,nb_reason")
+      .not("nb_requested_at", "is", null).is("resolved_at", null).in("store_code", stores);
+    for (const r of nb || []) {
+      dmQueue.push({
+        type: "unrestocked", key: r.issue_key, review_key: r.issue_key, store_code: r.store_code, state: "dm_review",
+        why: `Shopify still has ${r.sku || "it"} at 0 on hand and it hasn't sold again, so nothing shows whether it ${r.kind === "cancel" ? "was ever shipped" : "came back"}`,
+        resolved_by: r.nb_requested_by, resolved_note: `Never came back — ${r.nb_reason || ""}`, resolved_at: r.nb_requested_at,
+        fact_kind: "unverifiable",
+        amount: r.amount ?? null, order: r.order_name || null, title: r.title || null,
+        channel: r.channel || null, restock_kind: r.kind || null,
+      });
+    }
+  } catch (_) { /* the claims list still stands without them */ }
   dmQueue.sort((a, b) => String(a.resolved_at || "").localeCompare(String(b.resolved_at || "")));
 
   return {

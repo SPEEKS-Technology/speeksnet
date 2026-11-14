@@ -38145,11 +38145,12 @@ function _holdConfirmList(ctx, d) {
     const tabOf = x => x.type === 'mismatch' ? 'mismatch' : x.type === 'payment' ? 'payments' : 'cases';
     const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
     const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
-    return `<div style="font-size:12px; color:#64748b; margin:2px 0 12px; line-height:1.6;"><b style="color:var(--slate-charcoal);">${q.length} resolution${q.length === 1 ? '' : 's'} · ${_holdMoney(total)}</b> — marked resolved by a manager, not backed up by eBay or Shopify. Oldest first.</div>
+    return `<div style="font-size:12px; color:#64748b; margin:2px 0 12px; line-height:1.6;"><b style="color:var(--slate-charcoal);">${q.length} resolution${q.length === 1 ? '' : 's'} · ${_holdMoney(total)}</b> — marked resolved by a manager (or Never Came Back on the restock report), not backed up by eBay or Shopify. Oldest first.</div>
     <div style="display:flex; flex-direction:column; gap:10px;">${q.map((x, i) => {
         const it = find(x);
-        const kind = _holdKindChip(x.type, it.type ? it : x) || (x.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
-        const title = x.type === 'mismatch'
+        const nbk = x.type === 'unrestocked';
+        const kind = nbk ? 'Not back in stock' : (_holdKindChip(x.type, it.type ? it : x) || (x.type === 'mismatch' ? 'Refund mismatch' : 'eBay case'));
+        const title = nbk ? (x.title || 'Returned item') : x.type === 'mismatch'
             ? (it.direction === 'ebay_only' ? 'Refunded on eBay — still a sale in Shopify' : 'Refunded in Shopify — still a sale on eBay')
             : (x.title || it.item_title || kind);
         const order = x.order || it.ebay_order_id || '';
@@ -38173,9 +38174,11 @@ function _holdConfirmList(ctx, d) {
                 <label class="form-label-caps" for="hold-dm-note-${i}">Note — optional to confirm, required to send back</label>
                 <textarea id="hold-dm-note-${i}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;" placeholder="e.g. Checked Seller Hub — eBay credited it Oct 30 / Not good enough: call eBay and get the case number"></textarea>
                 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-                    <button onclick="_holdDmAnswer(${i}, 'dm_confirm')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Confirm resolved</button>
+                    <button onclick="_holdDmAnswer(${i}, 'dm_confirm')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${nbk ? 'Confirm never came back' : 'Confirm resolved'}</button>
                     <button onclick="_holdDmAnswer(${i}, 'dm_send_back')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Send back to manager</button>
-                    <button onclick="switchOversightTab('${tabOf(x)}')" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">See it in ${tabOf(x) === 'mismatch' ? 'Mismatches' : tabOf(x) === 'payments' ? 'Payments' : 'Cases'}</button>
+                    ${nbk
+                        ? `<a href="index.html#restock=${encodeURIComponent(x.key)}" style="${sBtn} text-decoration:none; background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Open the restock card</a>`
+                        : `<button onclick="switchOversightTab('${tabOf(x)}')" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">See it in ${tabOf(x) === 'mismatch' ? 'Mismatches' : tabOf(x) === 'payments' ? 'Payments' : 'Cases'}</button>`}
                 </div>
             </div>
         </div>`;
@@ -38192,6 +38195,23 @@ async function _holdDmAnswer(i, action) {
         return;
     }
     try {
+        // Returned But Not Back In Stock (2026-11-14): a Never Came Back mark
+        // lives in unrestocked_returns, so it is answered there, through the
+        // same nb_confirm / nb_deny the #restock card uses — one record for the
+        // 7:35 mail, the card and this list. Send back = deny: the line stays
+        // open on the store's restock mail with the DM's reason on it.
+        if (x.type === 'unrestocked') {
+            const res = await fetch(UNRESTOCKED_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: x.key, who: _restockWho(), note: note || null,
+                    action: action === 'dm_confirm' ? 'nb_confirm' : 'nb_deny' }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (!j.ok) throw new Error(j.why || j.error || ('Error ' + res.status));
+            await _holdAfterWrite('ov');
+            if (typeof checkClaimsConfirmAlerts === 'function') checkClaimsConfirmAlerts();
+            return;
+        }
         // review_key: the row the resolution actually lives on — an escalated
         // INR's note can sit on the inquiry it came from.
         await _holdPost({ action, item_type: x.type, item_key: x.review_key || x.key, note: note || null });

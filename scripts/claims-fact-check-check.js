@@ -17,8 +17,11 @@ var _fcList = null;
 window.fetch = function (url, opts) {
     var u = String(url);
     if (opts && opts.method === 'POST') {
-        _fcPosts.push(JSON.parse(opts.body));
-        return Promise.resolve({ ok: true, json: function () { return Promise.resolve({ success: true }); } });
+        var b = JSON.parse(opts.body);
+        b._url = u;
+        _fcPosts.push(b);
+        // ok: unrestocked-returns answers { ok }, claims-disputes { success }.
+        return Promise.resolve({ ok: true, json: function () { return Promise.resolve({ success: true, ok: true }); } });
     }
     if (/claims-disputes\?action=alerts/.test(u)) {
         return Promise.resolve({ json: function () { return Promise.resolve(JSON.parse(JSON.stringify(_fcAlerts))); } });
@@ -193,6 +196,51 @@ t('DM To Confirm list: renders, send back needs a reason, posts against the revi
         });
     });
 });
+
+// 2026-11-14: a Never Came Back mark on the Returned But Not Back In Stock
+// report sits on the same list, and is answered through unrestocked-returns.
+// The runner fires every t() at once and settles promises after, so this waits
+// for the To Confirm test above — both use _holdData.ov, _fcPosts and the
+// hold-dm-note-0 box, and running alongside it breaks it.
+t('To Confirm: Never Came Back line renders and answers through unrestocked-returns', function () {
+    return Promise.all((window.__pending || []).slice()).then(nbLine);
+});
+function nbLine() {
+    as('District Manager');
+    _holdData.ov = { stores: ['WSP'], cases: [], mismatches: [], disputes: [], payments: [],
+        dmQueue: [{ type: 'unrestocked', key: 'WSP:1:2', review_key: 'WSP:1:2', store_code: 'WSP', state: 'dm_review',
+            why: 'Shopify still has MO02-X at 0 on hand and it has not sold again, so nothing shows whether it came back',
+            resolved_by: 'Eli', resolved_note: 'Never came back — refunded without a return', resolved_at: '2026-11-13T18:45:00Z',
+            amount: 108.99, order: '#MO02-8171', title: 'Test game', fact_kind: 'unverifiable' }] };
+    renderHoldItems('ov');
+    var panel = document.getElementById('hold-ov-confirm');
+    var x = panel.textContent.replace(/\s+/g, ' ');
+    if (!/Not back in stock/.test(x)) return 'kind chip missing: ' + x.slice(0, 200);
+    if (!/Test game/.test(x) || !/Eli said/.test(x)) return 'title / account missing';
+    if (!/Confirm never came back/.test(x)) return 'confirm label';
+    var link = panel.querySelector('a[href*="restock="]');
+    if (!link || !/WSP%3A1%3A2/.test(link.getAttribute('href'))) return 'no restock card link';
+    _fcPosts = [];
+    _fcList = JSON.parse(JSON.stringify(_holdData.ov)); _fcList.success = true;
+    document.getElementById('hold-dm-note-0').value = 'Fine — eBay ding not worth it';
+    return _holdDmAnswer(0, 'dm_confirm').then(function () {
+        var p = _fcPosts[0];
+        if (!p) return 'nothing posted';
+        if (!/unrestocked-returns/.test(p._url)) return 'posted to ' + p._url;
+        if (p.action !== 'nb_confirm' || p.key !== 'WSP:1:2') return 'action/key ' + p.action + ' ' + p.key;
+        if (!p.who || p.who.role !== 'District Manager') return 'who not sent';
+        _fcPosts = [];
+        document.getElementById('hold-dm-note-0').value = '';
+        return _holdDmAnswer(0, 'dm_send_back').then(function () {
+            if (_fcPosts.length) return 'denied with no reason';
+            document.getElementById('hold-dm-note-0').value = 'Ship it back next time';
+            return _holdDmAnswer(0, 'dm_send_back').then(function () {
+                var q = _fcPosts[0];
+                return (q && q.action === 'nb_deny' && q.note === 'Ship it back next time') || 'deny post: ' + JSON.stringify(q);
+            });
+        });
+    });
+}
 
 t('DM feed card: shows for the DM only, no snooze, opens To Confirm', function () {
     if (!document.getElementById('claimAlertBubble')) return 'no #claimAlertBubble in the page';
