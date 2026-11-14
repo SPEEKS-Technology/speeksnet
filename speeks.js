@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.11.0';
+const APP_VERSION = '3.12.0';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -13577,6 +13577,9 @@ function _lvNpOverlay(v, n) {
         npMtd: live ? n.mtd : p.mtd,
         npTrack: live ? n.track : p.track,
         npLastMonth: n.lastMonth,
+        // Month to date at yesterday's close whatever tab is showing — what the Today
+        // tab's "Net Profit This Month" tile reads (Ethan 2026-11-13). Null on the 1st.
+        npMtdThru: p ? p.mtd : null,
         pctOfGoal: live ? n.pctOfGoal : p.pctOfGoal,
         paceIndex: live ? n.paceIndex : p.paceIndex,
         // Finished days only (the NP tab's own days), for the Month table's eBay
@@ -13807,6 +13810,23 @@ function _lvPaceThruRoll(rollup, stores, d) {
     return _lvPace(pv.pctOfGoal, d.prev.elapsedPct);
 }
 const _LV_THRU_TAG = '<span class="lv-thru">Through Yesterday</span>';
+// "NP THIS MONTH" ON THE TODAY TAB IS THROUGH YESTERDAY TOO (Ethan 2026-11-13),
+// for the same reason as % to goal: the live month figure carries today's
+// ESTIMATED net profit, so it moved all day and sat beside a % to goal that did
+// not. Both now stop at yesterday's close and agree with each other. Null when
+// there is no in-month yesterday (the 1st) — the caller keeps the live figure.
+function _lvNpMtdThruStore(m, d) {
+    if (!(d && d.prev && d.prev.inMonth) || !m || m.error) return null;
+    const v = _lvAsPrev(() => _lvView(m));
+    return v && v.npKind && v.npMtd !== undefined ? v.npMtd : null;
+}
+function _lvNpMtdThruRoll(rollup, stores, d) {
+    if (!(d && d.prev && d.prev.inMonth)) return null;
+    const pv = _lvAsPrev(() => (rollup && rollup.prev)
+        ? _lvView(rollup)
+        : _lvCombine((stores || []).filter(m => m && !m.error).map(_lvView)));
+    return pv && pv.npKind && pv.npMtd !== undefined ? pv.npMtd : null;
+}
 
 // --- "something just happened at MPL" ---------------------------------------
 // The payload is a snapshot, not an event stream, so a sale or a refund is derived
@@ -16828,8 +16848,9 @@ function _lvCombineNp(views) {
     const add = k => views.reduce((a, v) => a + (Number(v[k]) || 0), 0);
     const goal = views.every(v => v.npGoal > 0) ? add('npGoal') : 0;
     const npMtd = add('npMtd');
+    const npMtdThru = views.every(v => v.npMtdThru !== null && v.npMtdThru !== undefined) ? add('npMtdThru') : null;
     return {
-        npKind: true, npGoal: goal, goal, npDay: add('npDay'), npMtd,
+        npKind: true, npGoal: goal, goal, npDay: add('npDay'), npMtd, npMtdThru,
         npDayEst: views.some(v => v.npDayEst),
         npTrack: views.every(v => v.npTrack !== null) ? add('npTrack') : null,
         pctOfGoal: goal > 0 ? npMtd / goal * 100 : null,
@@ -16864,8 +16885,11 @@ function _lvRollupTiles(r, d, label, views) {
                 r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
     } else if (_lvHasMonth(d)) {
         last = r.npKind
-            ? _lvTile(_lvEstName('Net Profit This Month', true), _lvMoney(r.npMtd, false),
-                _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days))
+            ? (_lvIsToday() && r.npMtdThru !== null && r.npMtdThru !== undefined
+                ? _lvTile('Net Profit This Month<span class="lv-thru">Through Yesterday</span>', _lvMoney(r.npMtdThru, false),
+                    _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days))
+                : _lvTile(_lvEstName('Net Profit This Month', true), _lvMoney(r.npMtd, false),
+                _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days)))
             : _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
     } else {
         last = r.npKind
@@ -17329,7 +17353,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + (_lvNpKind() ? '<th>Gross margin</th>' : '')
         + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
         + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
-            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th>'
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP'))
+        + (_lvNpKind() && _lvHasMonth(d) && _lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + '<th>% to goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
@@ -17339,8 +17364,10 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     const thru = _lvPaceThru();
     stores.forEach(m => {
         const v = _lvView(m);
+        const npThru = thru && v.npKind ? _lvNpMtdThruStore(m, d) : null;
         html += _lvStoreRow(thru && !m.error
-            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v, d, false, null);
+            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) },
+                npThru !== null ? { npMtd: npThru } : {}) : v, d, false, null);
     });
     html += '</tbody>';
     if (rollup) {
@@ -17351,6 +17378,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // function the Tracking tiles also use.
             fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
             paceIndex: thru ? _lvPaceThruRoll(rollup, stores, d) : _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
+            npMtd: (thru && rv.npKind && _lvNpMtdThruRoll(rollup, stores, d) !== null)
+                ? _lvNpMtdThruRoll(rollup, stores, d) : rv.npMtd,
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
@@ -38116,11 +38145,12 @@ function _holdConfirmList(ctx, d) {
     const tabOf = x => x.type === 'mismatch' ? 'mismatch' : x.type === 'payment' ? 'payments' : 'cases';
     const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
     const total = q.reduce((n, x) => n + (Number(x.amount) || 0), 0);
-    return `<div style="font-size:12px; color:#64748b; margin:2px 0 12px; line-height:1.6;"><b style="color:var(--slate-charcoal);">${q.length} resolution${q.length === 1 ? '' : 's'} · ${_holdMoney(total)}</b> — marked resolved by a manager, not backed up by eBay or Shopify. Oldest first.</div>
+    return `<div style="font-size:12px; color:#64748b; margin:2px 0 12px; line-height:1.6;"><b style="color:var(--slate-charcoal);">${q.length} resolution${q.length === 1 ? '' : 's'} · ${_holdMoney(total)}</b> — marked resolved by a manager (or Never Came Back on the restock report), not backed up by eBay or Shopify. Oldest first.</div>
     <div style="display:flex; flex-direction:column; gap:10px;">${q.map((x, i) => {
         const it = find(x);
-        const kind = _holdKindChip(x.type, it.type ? it : x) || (x.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
-        const title = x.type === 'mismatch'
+        const nbk = x.type === 'unrestocked';
+        const kind = nbk ? 'Not back in stock' : (_holdKindChip(x.type, it.type ? it : x) || (x.type === 'mismatch' ? 'Refund mismatch' : 'eBay case'));
+        const title = nbk ? (x.title || 'Returned item') : x.type === 'mismatch'
             ? (it.direction === 'ebay_only' ? 'Refunded on eBay — still a sale in Shopify' : 'Refunded in Shopify — still a sale on eBay')
             : (x.title || it.item_title || kind);
         const order = x.order || it.ebay_order_id || '';
@@ -38144,9 +38174,11 @@ function _holdConfirmList(ctx, d) {
                 <label class="form-label-caps" for="hold-dm-note-${i}">Note — optional to confirm, required to send back</label>
                 <textarea id="hold-dm-note-${i}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;" placeholder="e.g. Checked Seller Hub — eBay credited it Oct 30 / Not good enough: call eBay and get the case number"></textarea>
                 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-                    <button onclick="_holdDmAnswer(${i}, 'dm_confirm')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Confirm resolved</button>
+                    <button onclick="_holdDmAnswer(${i}, 'dm_confirm')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${nbk ? 'Confirm never came back' : 'Confirm resolved'}</button>
                     <button onclick="_holdDmAnswer(${i}, 'dm_send_back')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Send back to manager</button>
-                    <button onclick="switchOversightTab('${tabOf(x)}')" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">See it in ${tabOf(x) === 'mismatch' ? 'Mismatches' : tabOf(x) === 'payments' ? 'Payments' : 'Cases'}</button>
+                    ${nbk
+                        ? `<a href="index.html#restock=${encodeURIComponent(x.key)}" style="${sBtn} text-decoration:none; background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Open the restock card</a>`
+                        : `<button onclick="switchOversightTab('${tabOf(x)}')" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">See it in ${tabOf(x) === 'mismatch' ? 'Mismatches' : tabOf(x) === 'payments' ? 'Payments' : 'Cases'}</button>`}
                 </div>
             </div>
         </div>`;
@@ -38163,6 +38195,23 @@ async function _holdDmAnswer(i, action) {
         return;
     }
     try {
+        // Returned But Not Back In Stock (2026-11-14): a Never Came Back mark
+        // lives in unrestocked_returns, so it is answered there, through the
+        // same nb_confirm / nb_deny the #restock card uses — one record for the
+        // 7:35 mail, the card and this list. Send back = deny: the line stays
+        // open on the store's restock mail with the DM's reason on it.
+        if (x.type === 'unrestocked') {
+            const res = await fetch(UNRESTOCKED_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: x.key, who: _restockWho(), note: note || null,
+                    action: action === 'dm_confirm' ? 'nb_confirm' : 'nb_deny' }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (!j.ok) throw new Error(j.why || j.error || ('Error ' + res.status));
+            await _holdAfterWrite('ov');
+            if (typeof checkClaimsConfirmAlerts === 'function') checkClaimsConfirmAlerts();
+            return;
+        }
         // review_key: the row the resolution actually lives on — an escalated
         // INR's note can sit on the inquiry it came from.
         await _holdPost({ action, item_type: x.type, item_key: x.review_key || x.key, note: note || null });
@@ -39741,11 +39790,12 @@ async function checkAgingClaims() {
     }
 }
 
-// --- DM: claims aging ACROSS ALL STORES -------------------------------------
+// --- DM: claim DELETE REQUESTS across all stores ------------------------------
 // The manager-side check is store-scoped, and _claimStores() returns [] for a DM
-// (their store is ALL), so they were never told about overdue claims anywhere.
-// This is the district view: one row covering every store, with the per-store
-// breakdown, mirroring the oversight modal's all-stores fetch (no stores param).
+// (their store is ALL), so this is the district fetch (no stores param), like
+// the oversight modal's. It used to also raise a "N open over 7 days" row with
+// a per-store breakdown; that half was removed 2026-11-13 — see the note inside.
+// The name is kept because the page-load wiring calls it by name.
 // CEO is deliberately excluded — they keep tool access without the notifications.
 let _dmClaimAlertPollStarted = false;
 async function checkAgingClaimsDM() {
@@ -39762,47 +39812,29 @@ async function checkAgingClaimsDM() {
         const json = await res.json();
         if (!json.success) return;
         const data = json.data || [];
-        // An INR ticket escalated to a loss claim is no longer open itself — the
-        // child claim is. Same exclusion the oversight table uses.
-        const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id));
-        let aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
-
-        // A store the DM has already nudged (active, unacknowledged reminder still
-        // inside the cooldown) is the manager's court now — don't keep nagging the
-        // DM about it. It returns to the district alert once the reminder is acked
-        // (the manager reviewed, which also clears the aging) or the cooldown lapses
-        // so the DM can re-nudge. Without this, sending a reminder left the same
-        // aging row on the DM's own feed indefinitely.
-        try {
-            const rr = await fetch(`${CLAIMS_URL}?reminders=1&stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
-            const rj = await rr.json();
-            if (rj.success) {
-                const cutoff = Date.now() - CLAIM_REMINDER_COOLDOWN_DAYS * 86400000;
-                const nudged = new Set((rj.data || [])
-                    .filter(r => !r.acknowledged_at && new Date(r.created_at).getTime() > cutoff)
-                    .map(r => (r.store || '').toUpperCase()));
-                if (nudged.size) aging = aging.filter(r => !nudged.has((r.store || '').toUpperCase()));
-            }
-        } catch (_) { /* if reminders fail to load, show everything rather than hide */ }
-
-        // The OTHER thing waiting on the DM in this tool, and it behaves nothing
-        // like ageing: a manager who asked to delete a claim is blocked until the
-        // DM approves or denies it. So it is STATE-based and never marked seen —
-        // a glance must not silence work somebody else is waiting on. Exactly the
+        // NO AGEING ROW FOR THE DM (Ethan, 2026-11-13): "This shouldn't be sitting
+        // here when I don't have something I can do with these. The emails every
+        // morning inform me on how much is open." The "7 open over 7 days · BAL 1 ·
+        // LEE 1…" row was a count of the managers' work, not the DM's — the feed
+        // is a list of things YOU can act on. So the DM's feed carries only what
+        // waits on the DM: resolutions to confirm (checkClaimsConfirmAlerts) and
+        // the delete requests below. Don't bring the ageing count back here; it
+        // lives in the morning mail and the oversight view.
+        //
+        // What is left is STATE-based and never marked seen: a manager who asked
+        // to delete a claim is blocked until the DM approves or denies it, and a
+        // glance must not silence work somebody else is waiting on. Exactly the
         // rule checkRecycleReminders already applies to its own delete queue.
         //
-        // Not filtered through `sup`: a parent claim that has been escalated to an
-        // INR child is excluded from AGEING (the child carries the clock now), but
-        // a delete request on it is still a real approval someone is waiting for.
-        // The oversight panel lists them the same way.
+        // Escalated parents are NOT filtered out: a delete request on a claim
+        // whose INR child now carries the clock is still a real approval someone
+        // is waiting for. The oversight panel lists them the same way.
         const pendingDelete = data.filter(r => r.delete_requested_at);
 
-        if (!aging.length && !pendingDelete.length) {
-            // Nothing is aging any more (reviewed via "Still in progress", resolved,
-            // or escalated). This used to just `return`, leaving a stale "claims are
-            // aging" bubble — and therefore a stale feed row — on screen for the rest
-            // of the session after the manager had already done the work. Clear it so
-            // the row actually disappears, as the Snooze tooltip promises.
+        if (!pendingDelete.length) {
+            // Every request has been answered. Clear the bubble rather than just
+            // `return`, or the feed row it carries stays on screen for the rest
+            // of the session after the DM has already done the work.
             const b = document.getElementById('claimAlertBubble');
             if (b && getComputedStyle(b).display !== 'none') {
                 b.style.display = 'none';
@@ -39812,62 +39844,29 @@ async function checkAgingClaimsDM() {
             return;
         }
 
-        // Same once-per-session rule as the manager alert — but for the AGEING
-        // half only. Ageing is a standing condition, not a handoff, and
-        // re-announcing it every poll is what made the old toast unbearable.
-        const seen = _seenAgingClaims();
-        const freshAging = aging.filter(r => !seen.has(r.id));
-        if (!freshAging.length && !pendingDelete.length) return;
-        if (freshAging.length) {
-            aging.forEach(r => seen.add(r.id));
-            _saveSeenAgingClaims(seen);
-        }
-
-        const bodyParts = [], sumParts = [];
-        if (freshAging.length) {
-            const byStore = {};
-            aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
-            const stores = Object.keys(byStore).sort();
-            const breakdown = stores.map(s => `${s} ${byStore[s]}`).join(' · ');
-            const inrCount = aging.filter(_isINRTicket).length;
-
-            const head = aging.length === 1
-                ? '1 claim has been open over 7 days.'
-                : `${aging.length} claims have been open over 7 days.`;
-            bodyParts.push(`${head} Across ${stores.length === 1 ? '1 store' : stores.length + ' stores'} — ${breakdown}.`
-                + _inrGuidanceHtml(inrCount));
-            sumParts.push(`${aging.length} open over 7 days · ${breakdown}`);
-        }
-        if (pendingDelete.length) {
-            // Name the case when there are only one or two. "1 delete request" is
-            // not something you can go and find; a case number is. Same reasoning
-            // as _rcLabel on the recycle side.
-            const _clLabel = r => `${(r.store || '').toUpperCase()} ${String(r.case_number || 'no case #').trim()}`;
-            const askers = [...new Set(pendingDelete
-                .map(r => String(r.delete_requested_by || '').trim()).filter(Boolean))];
-            const which = pendingDelete.length <= 2
-                ? pendingDelete.map(_clLabel).join(', ')
-                : `${pendingDelete.length} claims`;
-            const line = `${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval — ${which}`
-                + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.`;
-            bodyParts.push(escapeHtml(line));
-            sumParts.push(line);
-        }
+        // Name the case when there are only one or two. "1 delete request" is
+        // not something you can go and find; a case number is. Same reasoning
+        // as _rcLabel on the recycle side.
+        const _clLabel = r => `${(r.store || '').toUpperCase()} ${String(r.case_number || 'no case #').trim()}`;
+        const askers = [...new Set(pendingDelete
+            .map(r => String(r.delete_requested_by || '').trim()).filter(Boolean))];
+        const which = pendingDelete.length <= 2
+            ? pendingDelete.map(_clLabel).join(', ')
+            : `${pendingDelete.length} claims`;
+        const line = `${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval — ${which}`
+            + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.`;
 
         // The snooze identity carries the pending delete ids, so a SECOND request
         // arrives as new information rather than being swallowed by a snooze taken
         // on the first one.
-        const sig = `ag:${freshAging.length}|del:${pendingDelete.map(r => r.id).sort().join(',')}`;
-        _renderClaimBubble(
-            pendingDelete.length ? '🗑' : '⚠️',
-            pendingDelete.length && !freshAging.length ? 'Claim Delete Requests' : 'Claims Review — District',
-            bodyParts.join('<br><br>'), sumParts.join(' · '), sig);
-        // Tells the feed card which of the two it is looking at (see _samReminderCfg).
+        // ("ag:0" is kept so a snooze taken before the ageing half was removed
+        // still matches the same set of requests.)
+        const sig = `ag:0|del:${pendingDelete.map(r => r.id).sort().join(',')}`;
+        _renderClaimBubble('🗑', 'Claim Delete Requests',
+            escapeHtml(line), line, sig);
+        // Tells the feed card it is the delete-request card (see _samReminderCfg).
         const _clT = document.getElementById('claimAlertBubbleText');
-        if (_clT) {
-            if (pendingDelete.length) _clT.dataset.del = freshAging.length ? 'mixed' : 'only';
-            else delete _clT.dataset.del;
-        }
+        if (_clT) _clT.dataset.del = 'only';
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
@@ -43815,6 +43814,11 @@ const EMAIL_LIST_GROUPS = [
                   + 'buy or sell, or a monthly one once the Monthly Breakdown is in. Copied on every store\'s email.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `record_watch_${s}`, label: `Company Records — ${s}`,
               desc: `The ${s} manager and ASM: the same email, whenever it is about ${s}.` })),
+            { key: 'fb_boosts', label: 'Facebook Boosts',
+              desc: 'Monday 8am — Facebook Marketplace boosts: the amount boosted last week, how many are '
+                  + 'running and ending soon, and each store\'s open boosts. Boosts are the ones staff record '
+                  + 'with Mark Boosted in the Marketplace Lister. Left empty, it goes to the Claims & Disputes — '
+                  + 'District Manager list.' },
             { key: 'unrestocked_returns', label: 'Returned But Not Back In Stock',
               desc: '7:35am, every morning anything is open: whole items refunded or cancelled '
                   + '(in store, online or eBay) that never went back into inventory. '
@@ -44194,6 +44198,10 @@ const FEATURE_CATALOG = [
     { key: 'tool-store-comment-drafts', label: 'Daily Store Messages',         tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    // The Downloads link itself: on for everyone (Ethan, 11-13). What is IN it
+    // is gated per download by its own key (e.g. 'fb-lister', listed beside
+    // 'b2b-capture-download' under Widgets → Operations).
+    { key: 'tool-downloads',           label: 'Downloads',                     tab: 'tools', group: 'System', def: 'all' },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
     // Delegation tab pairs them the way it already pairs the claims tools.
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
@@ -44387,6 +44395,15 @@ const FEATURE_CATALOG = [
     // button also carries `role-none` in operations.html, so the role gate
     // denies everyone and a per-user override is the only way to see it.
     { key: 'b2b-capture-download',     label: 'B2B Capture Tool (Download)',   tab: 'widgets', group: 'Operations', def: [] },
+    // The Facebook Marketplace Lister in SPEEKS Tools → Downloads. Listed here,
+    // beside the other download, rather than under Tools (Ethan, 11-13). The B2B
+    // Capture Tool above stays in the B2B header and is NOT in Downloads -- it
+    // isn't ready. THE SAME KEY GATES THE EXTENSION ITSELF: the fb-lister edge
+    // function resolves 'fb-lister' on every call, so turning it off here cuts
+    // off the extension too. Its def is copied into that function as
+    // FB_LISTER_DEF — change one, change both. The key is unchanged by the move,
+    // so per-person and per-role overrides carry over.
+    { key: 'fb-lister',                label: 'Facebook Marketplace Lister (Download)', tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it.
@@ -45428,6 +45445,7 @@ const JUMP_KEYWORDS = {
     'tool-claims-oversight':     'claims oversight all stores review insurance',
     'tool-box-order':            'boxes box shipping supplies packaging tape order',
     'tool-recycle-inventory':    'recycle scrap ewaste e waste pickup haul junk',
+    'fb-lister':                 'downloads download facebook marketplace fb lister list listing extension chrome post sell',
     'tool-preferred-request':    'preferred purchase purchases request buy approval',
     'tool-preferred-approve':    'preferred purchase purchases approve owner',
     'tool-store-comment':        'comment message note feedback to store',
@@ -52497,7 +52515,7 @@ function _qpWidgetCard(el, rows, id) {
                 : lines && lines.length ? (cap ? '<div class="qp-hl-cap">' + escapeHtml(cap) + '</div>' : '')
                 + (it.room === 5 && !(wideOn && it.wideLines) ? '<div class="qp-cw-grid">' + lines.slice(0, fit).join('') + '</div>' : lines.slice(0, fit).join('')) : '');
         body = tabs + '<div class="qp-ai-body' + (dense ? ' qp-ai-dense' : '') + (wideOn ? ' qpt-wb' : '') + '">'
-            + (wideOn ? '<div class="qpt-wl">' + inner + '</div><div class="qpt-wr">' + (it.wideCap ? '<div class="qp-hl-cap">' + escapeHtml(it.wideCap) + '</div>' : '') + it.wide + '</div>' : inner)
+            + (wideOn ? '<div class="qpt-wcl">' + inner + '</div><div class="qpt-wcr">' + (it.wideCap ? '<div class="qp-hl-cap">' + escapeHtml(it.wideCap) + '</div>' : '') + it.wide + '</div>' : inner)
             + _qpAiLink(escapeHtml(it.link[0]), it.link[1]) + '</div>';
         }
     }
@@ -54476,7 +54494,11 @@ const QP_MINIS = {
     // into one widget? Just % to goal and how much per day needed and how many
     // days left"): the line under the % is what a day still needs and the days
     // left, or Goal Hit. Nothing else (he'd asked for "only the %" before that).
-    mgoal: { label: '% to Goal', sub: 'Net profit against the goal, what a day still needs, and days left', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => _qpIsDist() || (!!_qpMyStore() && (_qpIsMgr() || _qpIsAsm())),
+    // OFF FOR THE DISTRICT (Ethan, 2026-11-13: "get rid of the % to goal mini
+    // widget since we have the company snapshot mini widget that shows the same
+    // stuff"). Company Snapshot is district-only, so a store still has this one;
+    // a DM's saved % to Goal reads as Company Snapshot (_qptRead).
+    mgoal: { label: '% to Goal', sub: 'Net profit against the goal, what a day still needs, and days left', icon: _qpMI.flag, tone: 'g', src: 'snap', avail: () => !_qpIsDist() && !!_qpMyStore() && (_qpIsMgr() || _qpIsAsm()),
         draw: d => {
             const ps = (_qpIsDist() ? STORE_CODES : [_qpMyStore()]).map(s => _qpPaceOf(d, s));
             const soFar = _qpSum(ps, 'soFar'), goal = _qpSum(ps, 'goal');
@@ -55455,7 +55477,7 @@ const QPT_HIDDEN_DEFAULT = [];
 // The rail a person starts with: the first five of these they can see.
 // mgoal (% to Goal) added 2026-11-10; musage, mlive, mnews, mpace and mreviews
 // were retired the same day, so they are not in the default any more.
-const QPT_MINI_DEFAULT = ['mdue', 'mgoal', 'mstars', 'mcash', 'mtop', 'mavail', 'mqueue'];
+const QPT_MINI_DEFAULT = ['mdue', 'mgoal', 'mcompany', 'mstars', 'mcash', 'mtop', 'mavail', 'mqueue'];
 // A retired mini that was folded into another reads as that one from a saved
 // rail (2026-11-10), so nobody's rail just loses a place: Goal Pace → % to Goal,
 // Google Reviews → Five-Star Reviews. A duplicate it makes is dropped.
@@ -55505,7 +55527,8 @@ function _qptRead() {
         known.forEach(k => { if (s.order.indexOf(k) === -1) s.order.push(k); });
     }
     if (seen.hidden) s.hidden = got.hidden.filter(k => known.indexOf(k) !== -1);
-    if (seen.minis) s.minis = got.minis.map(t => _QPT_MINI_ALIAS[_qpTokId(t)] || t)
+    // % to Goal is off for the district (2026-11-13): theirs becomes Company Snapshot.
+    if (seen.minis) s.minis = got.minis.map(t => _QPT_MINI_ALIAS[_qpTokId(t)] || (_qpTokId(t) === 'mgoal' && _qpIsDist() ? 'mcompany' : t))
         .filter((t, i, a) => QP_MINIS[_qpTokId(t)] && a.findIndex(x => _qpTokId(x) === _qpTokId(t)) === i);
     return s;
 }
@@ -56667,6 +56690,8 @@ function _qptRenderRail(main) {
         // Full, it still opens the drawer — the other minis preview there, and
         // the rail's own minis can be removed from it (2026-11-10).
         add.disabled = false;
+        // Only while Customize is on (2026-11-13) — the rail reads clean otherwise.
+        add.hidden = !_qptEdit;
         add.classList.toggle('full', full);
         add.textContent = full ? QPT_MINI_MAX + ' of ' + QPT_MINI_MAX + ' Minis · Customize' : '+ Add Mini Widget';
     }
@@ -59176,9 +59201,9 @@ function _samReminderCfg() {
     // B2B pricing: stamped by _b2bPricingCard off the same list as its snippet.
     const _b2bPrT = document.getElementById('b2bPricingAlertBubbleText');
     const _b2bPricingLate = !!(_b2bPrT && _b2bPrT.dataset && _b2bPrT.dataset.late);
-    // Claims: is a manager waiting on the DM to approve a deletion? 'only' when
-    // that is all there is, 'mixed' when claims are ageing too. Stamped by
-    // checkAgingClaimsDM, so it is never set for a manager.
+    // Claims: is a manager waiting on the DM to approve a deletion? 'only' is
+    // the one value now — the DM's card no longer carries ageing claims
+    // (2026-11-13). Stamped by checkAgingClaimsDM, so never set for a manager.
     const _clT = document.getElementById('claimAlertBubbleText');
     const _clDel = (_clT && _clT.dataset && _clT.dataset.del) || '';
     // The 4pm due-today card: stamped by checkClaimsDueAlerts off the same items
@@ -71744,3 +71769,130 @@ function _eqTabsWatch() {
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _eqTabsWatch);
 else _eqTabsWatch();
+
+// ============================================================================
+// DOWNLOADS — SPEEKS Tools → Downloads (2026-11-13)
+// ============================================================================
+// One tool, "Downloads", that lists things to install on a computer. Today it
+// holds one entry, the Marketplace Lister Chrome extension; DOWNLOADS below is
+// the list, so the next one is an entry there and nothing else.
+//
+// WHO SEES WHAT (Ethan, 11-13): the Downloads link is on for EVERYONE — its
+// own key 'tool-downloads', def 'all', and no role-* classes on the SPEEKS
+// Tools item in the six pages. Each entry carries its own Feature Access key
+// and the page lists only the entries the person has, so someone with none
+// sees the link and an empty page saying who switches them on. No
+// data-mobile="hide" on it either: the compact layout also covers narrow
+// desktop windows (it hid the link from Ethan's 843px pane), and an empty
+// list on a phone costs nothing. Adding a
+// download is one entry in DOWNLOADS plus one FEATURE_CATALOG line.
+//
+// ── Marketplace Lister ──
+// A store manager built a Chrome extension that fills in Facebook Marketplace
+// listings; it originally scraped the public PayMore store sites. It now reads
+// our own Shopify through the read-only `fb-lister` edge function, and lives in
+// tools/fb-lister/ (source in extension/, the zip next to it, served straight
+// off GitHub Pages like any other file here). THE EXTENSION NEVER POSTS: it
+// fills the form; a person picks the category, checks it and clicks Publish.
+// 'fb-lister' gates this entry AND the extension's sign-in (the edge function
+// checks the same key on every call).
+//
+// FB_LISTER_VERSION must match "version" in tools/fb-lister/extension/
+// manifest.json, and the zip must be rebuilt (tools/fb-lister/build-zip.ps1)
+// whenever the extension changes. It is also the zip's cache-buster.
+//
+// No "Update" how-to on the card (Ethan, 11-13): he announces each new version
+// in Announcements, with its own instructions. Don't add one back.
+const FB_LISTER_VERSION = '1.6.1';
+const FB_LISTER_ZIP = 'tools/fb-lister/SPEEKS-Marketplace-Lister.zip';
+
+const _DL_OL = 'style="margin:6px 0 0;padding-left:20px;display:grid;gap:4px"';
+const DOWNLOADS = [
+    {
+        key: 'fb-lister',
+        name: 'Facebook Marketplace Lister',
+        kind: 'Chrome Extension',
+        version: FB_LISTER_VERSION,
+        href: `${FB_LISTER_ZIP}?v=${encodeURIComponent(FB_LISTER_VERSION)}`,
+        file: `SPEEKS-Marketplace-Lister-${FB_LISTER_VERSION}.zip`,
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>',
+        blurb: "Fills in a Facebook Marketplace listing from one of your store's Shopify items — photos, title, price, condition, description, public meetup at the store, and the right groups. You check it and click Publish.",
+        guide: `
+            <div class="b2b-note"><span class="b2b-note-k">Install</span>
+                <ol ${_DL_OL}>
+                    <li>Right-click the zip → <b>Extract All</b>. Put the folder somewhere it can stay, like Documents — Chrome runs it from there, so don't delete it.</li>
+                    <li>In Chrome, go to <b>chrome://extensions</b> and turn on <b>Developer mode</b> (top right).</li>
+                    <li>Click <b>Load unpacked</b> and pick the <b>SPEEKS-Marketplace-Lister</b> folder.</li>
+                    <li>Click the puzzle piece in Chrome's toolbar and pin <b>SPEEKS Marketplace Lister</b>.</li>
+                    <li>Click it and sign in with your SPEEKSNET PIN.</li>
+                    <li><b>Join local buy/sell groups on Facebook.</b> The tool can only put listings in groups you're already a member of — its <b>Groups</b> tab has search buttons for your store's area.</li>
+                </ol>
+            </div>
+            <div class="b2b-note"><span class="b2b-note-k">List</span>
+                <ol ${_DL_OL}>
+                    <li>Be signed in to Facebook in the same Chrome.</li>
+                    <li>Open the extension, search your store's in-stock items, pick one and click <b>Fill On Facebook</b>.</li>
+                    <li>It fills in the photos, title, price, condition and description, and sets the listing to <b>Public meetup</b> in your <b>store's city</b> — buyers come into the store to buy. <b>You pick the category</b>, read everything, then click <b>Next</b>.</li>
+                    <li>On the next screen it ticks the groups that fit the item — your rules from its <b>Groups</b> tab, plus local buy/sell groups. Check them, then click <b>Publish</b> yourself. It never posts for you.</li>
+                </ol>
+            </div>
+            <div class="b2b-note"><span class="b2b-note-k">Sold</span>
+                <span>Once a day it checks everything you listed against Shopify — in-store, online and eBay sales all count. Anything sold puts a red number on its icon and pops up a notification. Click it and Facebook's Selling page opens with those listings outlined; click <b>Mark as sold</b> on each, then <b>Done</b> in the Listed tab.</span>
+            </div>`,
+    },
+];
+
+function _downloadsMine() {
+    const role = _b2bRoleClass(), user = _b2bUser();
+    return DOWNLOADS.filter(d => typeof _featureEffectiveVisible !== 'function'
+        || _featureEffectiveVisible(d.key, role, user) === true);
+}
+
+function openDownloads() {
+    const mine = _downloadsMine();
+    let modal = document.getElementById('downloadsModal');
+    if (!modal) {
+        // Built here rather than declared in six .html files: it is one modal
+        // with no state, opened from the SPEEKS Tools panel on every page.
+        modal = document.createElement('div');
+        modal.className = 'modal-menu manage-menu';
+        modal.id = 'downloadsModal';
+        document.body.appendChild(modal);
+    }
+    const card = (d) => `
+        <div style="border:1px solid #e6ebf1;border-radius:14px;padding:16px;background:#fff;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:13px;flex-wrap:wrap">
+                <span class="tool-head-ico" style="width:44px;height:44px">${d.icon}</span>
+                <div style="flex:1;min-width:180px">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span style="font-size:15px;font-weight:800;color:#0f172a">${escapeHtml(d.name)}</span>
+                        <span style="font-size:11px;font-weight:700;color:#647082;background:#f1f5f9;border-radius:20px;padding:2px 8px">${escapeHtml(d.kind)} · v${escapeHtml(d.version)}</span>
+                    </div>
+                    <div style="font-size:12.5px;color:#647082;line-height:1.45;margin-top:3px">${escapeHtml(d.blurb)}</div>
+                </div>
+                <a class="b2b-btn b2b-btn-primary" style="text-decoration:none" href="${d.href}" download="${d.file}">⭳ Download</a>
+            </div>
+            <details style="margin-top:12px">
+                <summary style="cursor:pointer;font-size:12.5px;font-weight:750;color:#178048">How To Install And Use</summary>
+                <div style="margin-top:10px">${d.guide}</div>
+            </details>
+        </div>`;
+    modal.innerHTML = `
+        <div class="modal-header tool-head">
+            <div class="tool-head-main">
+                <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+                <div class="tool-head-titles">
+                    <span class="tool-head-eyebrow">SPEEKS Tools</span>
+                    <span class="tool-head-title">Downloads</span>
+                    <span class="tool-head-sub">Tools to install on your computer.</span>
+                </div>
+            </div>
+            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="manage-content">
+            ${mine.length ? mine.map(card).join('') : '<div class="status-message">Nothing to download for you yet. Your DM switches downloads on for you in Feature Access.</div>'}
+        </div>`;
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+}

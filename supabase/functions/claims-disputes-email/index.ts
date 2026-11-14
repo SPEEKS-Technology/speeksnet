@@ -745,7 +745,8 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
     body += sectionRow(`Resolutions to confirm — ${toConfirm.length}`, C.warn);
     body += toConfirm.map((q) => {
       const days = q.resolved_at ? Math.max(0, Math.round((Date.parse(today) - Date.parse(chicagoDay(q.resolved_at))) / 86400000)) : 0;
-      const what = q.type === "mismatch" ? "Refund mismatch" : q.type === "payment" ? "Unpaid order"
+      const what = q.type === "unrestocked" ? "Returned, not back in stock"
+        : q.type === "mismatch" ? "Refund mismatch" : q.type === "payment" ? "Unpaid order"
         : q.type === "dispute" ? (q.source === "ebay" ? "eBay payment dispute" : "Shopify chargeback")
         : (q.kind === "inquiry" || q.case_type === "ITEM_NOT_RECEIVED") ? "Item not received" : "eBay case";
       return `<tr><td style="padding:14px;border-top:1px solid ${C.line};">
