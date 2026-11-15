@@ -5284,9 +5284,12 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
         const hasSaved = !!entry.id;
         const sc = hasSaved ? '#16a34a' : 'transparent';
         const rowClass = isAvg ? 'kpi-avg-row' : (empIdx % 2 === 1 ? 'kpi-row-alt' : '');
+        const canRemove = isEditing && !isAvg && _kpiIsRemovableExtra(entry);
         let cells = '<td class="kpi-grid-name-col"><div class="kpi-grid-name-cell">' +
             '<span class="kpi-grid-emp-name">' + entry.employee_name + '</span>' +
             (!isAvg ? '<span class="kpi-grid-status" id="kpiS-' + pk + '-' + empIdx + '" style="color:' + sc + '" title="' + (hasSaved ? 'Saved' : '') + '">' + (hasSaved ? '✓' : '') + '</span>' : '') +
+            (canRemove ? '<button type="button" class="kpi-remove-extra" onclick="_kpiRemoveExtra(\'' + periodDate + '\',' + empIdx + ')" title="Take ' + escapeHtml(entry.employee_name) + ' off this period" ' +
+                'style="margin-left:6px; font-size:11px; font-weight:800; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; border-radius:6px; padding:1px 6px; cursor:pointer; line-height:1.4;">✕ Remove</button>' : '') +
             '</div></td>';
         _KPI_GRID_FIELDS.forEach(function(f) {
             const tc = _kpiThresholdCls(f.key, entry[f.key], false);
@@ -5406,6 +5409,55 @@ function _kpiAddSelf(periodDate, who) {
     // _selfAdded marks the row as a local, not-yet-saved addition so cancelling
     // the edit can remove it again (saved rows have an id and are kept).
     p.entries.push({ employee_name: name, _selfAdded: true });
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+// The DM / CEO row is the one row on the grid that isn't roster — someone chose
+// to add it, so someone has to be able to take it off again. Before this the
+// only way out was "clear every box and Save" (the delete-on-empty rule in
+// _kpiSavePeriod), which nobody would guess from a row with an "+ Add" button.
+// Roster rows never get the control: kpi-manage excludes corp roles from the
+// roster, so a name matching the DM (or the signed-in CEO) can only be an add.
+function _kpiIsRemovableExtra(entry) {
+    if (!entry || !entry.employee_name) return false;
+    if (entry._selfAdded) return true;
+    const nm = entry.employee_name;
+    const dm = _kpiDmName();
+    if (dm && nm === dm) return true;
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if ((role === 'ceo' || role === 'district manager') && nm === sessionStorage.getItem('speeksUserName')) return true;
+    return false;
+}
+
+// Never-saved row: just drop it. Saved row: delete it on the server now, through
+// the same delete_entry action the emptied-row save uses (period lock applies
+// server-side, so only the current period can lose one).
+async function _kpiRemoveExtra(periodDate, empIdx) {
+    const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
+    if (!p || !p.entries || !p.entries[empIdx]) return;
+    const entry = p.entries[empIdx];
+    if (!_kpiIsRemovableExtra(entry)) return;
+    const period = _kpiCurrentTab === 'weekly' ? 'week' : 'month';
+    if (entry.id) {
+        if (!confirm('Take ' + entry.employee_name + ' off this ' + period + '? Their saved numbers for it will be deleted.')) return;
+        const store = _kpiResolveStore();
+        const pin   = sessionStorage.getItem('speeksUserPin');
+        if (!store || !pin) return;
+        try {
+            const resp = await _kpiPostEntry({ store: store, period_type: _kpiCurrentTab, period_end_date: periodDate,
+                employee_name: entry.employee_name, action: 'delete_entry' }, pin);
+            const result = await resp.json().catch(function() { return {}; });
+            if (!resp.ok) throw new Error(result.error || 'Remove failed');
+        } catch (e) {
+            alert('Could not remove ' + entry.employee_name + ': ' + (e.message || e));
+            return;
+        }
+    }
+    // Harvest BEFORE the splice: the input ids are keyed on row index, so the
+    // rows below shift up one and would otherwise lose what was typed in them.
+    _kpiHarvestInputs(periodDate);
+    p.entries.splice(empIdx, 1);
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
 }
@@ -10771,7 +10823,8 @@ async function _kpiSavePeriod(periodDate) {
                 // But a row that DOES exist and has been emptied is a delete. The
                 // grid has no per-row delete control, so clearing the boxes is the
                 // only way to take someone off a period they were entered on by
-                // mistake, and it used to be skipped here — leaving the entry sitting
+                // mistake (the DM/CEO add-row has its own ✕ Remove since 11-15;
+                // roster rows still don't), and it used to be skipped here — leaving the entry sitting
                 // in the table looking like it had been removed. Same rule the
                 // coaching note beside it already follows: emptied means gone.
                 reqBody.action = 'delete_entry';
