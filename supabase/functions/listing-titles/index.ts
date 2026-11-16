@@ -1677,6 +1677,66 @@ function isM2Misnomer(wrong: string, right: string): boolean {
     === right.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+// ⚠️ TWO THINGS A PHOTO CANNOT TELL, from the 2026-11 denials (Ethan reviewed
+// them 11-16). Both were a clean, confident read of something real — and both
+// answered a question the photo does not answer:
+//
+//   WSP Corsair Vengeance Pro (MO02-5426B-E7, denied 11-14 "Its only one stick
+//     and not two"): the label reads CMH32GX4M2D3600C18 DDR4 32GB(2X16GB), and
+//     we turned "16GB (1x16GB)" into "32GB (2x16GB)". Kit makers print the KIT's
+//     label on every stick (M2 = a two-module kit), so one stick carries it too.
+//     A label can say how big a stick is; it cannot say how many are for sale.
+//     Our own sentence even said "only one stick is shown".
+//   BAL Oura Ring Gen 2 Air (MO04-2512A-E7, denied 11-10 "it shows a 6"): the
+//     size is stamped inside the band, side-on in photo 2. With OURA upright it
+//     is a 6; we read it upside down as a 9. A lone 6/9 has no "up".
+//
+// So a photo-only correction that does nothing but add sticks of the same size,
+// or nothing but swap 6s and 9s, is not settled by the photo. analyse drops it.
+function photoCannotSee(wrong: string, right: string): boolean {
+  if (wrong.length === right.length && wrong !== right) {
+    let diff = 0, flips = 0;
+    for (let i = 0; i < wrong.length; i++) {
+      if (wrong[i] === right[i]) continue;
+      diff++;
+      if (wrong[i] + right[i] === "69" || wrong[i] + right[i] === "96") flips++;
+    }
+    if (diff === flips) return true;
+  }
+  const kit = (s: string) => {
+    const m = /(\d+)\s*GB\s*\(\s*(\d+)\s*x\s*(\d+)\s*GB\s*\)/i.exec(s);
+    return m ? { n: Number(m[2]), per: Number(m[3]) } : null;
+  };
+  const to = kit(right);
+  if (to && to.n > 1) {
+    const from = kit(wrong);
+    if (from && from.per === to.per && from.n < to.n) return true;
+    const plain = /(\d+)\s*GB/i.exec(wrong);
+    if (!from && plain && Number(plain[1]) === to.per) return true;
+  }
+  return false;
+}
+
+// ⚠️ WINDOWS COUNTS A DRIVE IN BINARY UNITS. BAL's HP 15-CS3055WM (MO04-2376A-R4R1,
+// denied 11-11 "500GB is correct"): photo 5 is Task Manager showing Disk 0 at
+// 477 GB, and we offered "477GB SSD". Windows' "GB" is 2^30 bytes, so 477 GB is
+// a 512GB drive — the store's 500GB was wrong too, and the reviewer was right to
+// refuse ours. A title says the size on the box, so a figure that is exactly
+// Windows' reading of an advertised size is written as that size. Sizes that
+// are themselves advertised (120, 250, 500…) are never touched.
+const ADVERTISED_GB = [16, 32, 64, 120, 128, 240, 250, 256, 480, 500, 512, 960, 1000, 2000, 4000];
+const ADVERTISED_TB = [1, 2, 4, 8, 16];
+function advertisedSize(text: string): string {
+  return text.replace(/\b(\d+(?:\.\d+)?)(\s?)(GB|TB)\b/gi, (all: string, num: string, sp: string, unit: string) => {
+    const n = Number(num), tb = unit.toUpperCase() === "TB";
+    if ((tb ? ADVERTISED_TB : ADVERTISED_GB).includes(n)) return all;
+    const real = n * (tb ? 1.099511627776 : 1.073741824);
+    const hit = (tb ? ADVERTISED_TB : ADVERTISED_GB).find(s => Math.abs(real - s) / s < 0.01);
+    if (!hit) return all;
+    return !tb && hit >= 1000 ? `${hit / 1000}${sp}TB` : `${hit}${sp}${tb ? "TB" : "GB"}`;
+  });
+}
+
 function identityFields(specs: Record<string, string> | undefined) {
   const out: Record<string, string> = {};
   for (const k of IDENTITY_FIELDS) if (specs && specs[k]) out[k] = specs[k];
@@ -1956,6 +2016,16 @@ label, a settings or About screen), or a physical feature that on its own tells
 the variants apart. Do not use the listing's words, and do not use a stock or
 manufacturer image — it is not this unit.
 
+Three readings that look clear and are not:
+  - A RAM kit's label ("32GB (2x16GB)") is printed on EVERY stick of the kit,
+    so it says how big one stick is, never how many are being sold. Count the
+    sticks in the photos.
+  - Windows (Task Manager, File Explorer, Disk Management) shows drive sizes in
+    binary units: 477 GB is a 512GB drive, 931 GB is a 1TB drive. Answer with
+    the drive's advertised size, never the number on the screen.
+  - A lone 6 or 9 stamped on a ring, a dial or anything round has no "up". Read
+    it only with the text beside it upright; if you cannot, "cannot_tell".
+
 In "seen", write exactly what you read or saw and where, in a few words a store
 manager can check: "the caseback reads SM-R930", "the barrel reads 1:4-5.6".
 In "photo", give that photo's number. If you cannot point at it, answer
@@ -2095,6 +2165,14 @@ Never report:
   - a label on an accessory, a charger, or a different item in the photo
   - anything, if the photos show several different units or a stock /
     manufacturer image rather than this unit
+  - a stick count from a RAM label: a kit's label ("32GB (2x16GB)") is printed
+    on every stick of the kit, so one stick for sale still carries it. Count
+    the sticks in the photos instead.
+  - the size Windows shows for a drive (Task Manager, File Explorer, Disk
+    Management) as if it were the drive's size: Windows counts in binary units,
+    so 477 GB is a 512GB drive and 931 GB a 1TB drive. Report the advertised
+    size.
+  - a lone 6 or 9 you cannot read with the text beside it upright
 
 For each mismatch:
   title_text — the title's words for it, copied EXACTLY as they appear in the
@@ -2529,7 +2607,11 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // same reason "…GeForce RTX" was never acceptable.
   if (nameVerdict && nameVerdict.verdict !== "ok") {
     const wrong = String(nameVerdict.wrong_text || "");
-    const right = String(nameVerdict.correct_text || "").trim();
+    // A raw Windows figure becomes the advertised size here, once, so every
+    // branch below — disputed, fix, the "already correct" drop — sees the real
+    // one. See advertisedSize: 477GB is a 512GB drive.
+    const rawRight = String(nameVerdict.correct_text || "").trim();
+    const right = advertisedSize(rawRight);
     const at = wrong ? title.indexOf(wrong) : -1;
     // ⚠️ A CORRECTION CAN BE A PLACEHOLDER, AND THE QUOTE CHECK CANNOT SEE IT.
     // WSP's truncated `"v (Neo Geo MVS,"` came back with the replacement
@@ -2614,13 +2696,28 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // contradiction in the title itself — if the photos show a plain Watch6, it
     // is "Classic" that has to go, not "Aluminum". The photo's wording replaces
     // the same quoted span and goes through every guard the model's does.
-    const should = String(photo?.should_say || "").trim();
+    const rawShould = String(photo?.should_say || "").trim();
+    const should = advertisedSize(rawShould);
     const photoFix = !!seen && photo?.answer === "other" && !!should && should !== wrong
       && !/[\[\]<>{}]|\b(actual|correct|real|proper|insert|unknown|tbd|xxx+)\b/i.test(should)
       ? should : "";
     const photoSaysOurs = !!seen && photo?.answer === "ours";
     const settled = !!backedBy || photoSaysOurs || !!photoFix;
     const fixTo = photoFix || right;
+    // ⚠️ A PHOTO READ OF SOMETHING A PHOTO CANNOT SHOW SETTLES NOTHING — a 6/9
+    // swap, or more sticks of the same size (photoCannotSee). Dropped outright,
+    // not downgraded to disputed: the photo was the only reason to doubt the
+    // listing, and a "we recommend Size 9" left on the row is the same wrong
+    // answer with the button taken off. The sweep counts it as unverified.
+    const photoBlind = (photoSaysOurs || !!photoFix) && photoCannotSee(wrong, fixTo);
+    // Said when we rewrote Windows' figure, or the reviewer sees "477 GB" in the
+    // photo, "512GB" in the fix, and reasonably thinks we misread it.
+    const sizesIn = (s = "") => s.match(/\d+(?:\.\d+)?\s?[GT]B/gi) || [];
+    const shown = sizesIn(photoFix ? rawShould : rawRight), real = sizesIn(fixTo);
+    const resized = shown.findIndex((s, i) => real[i] && s !== real[i]);
+    const fromWindows = resized >= 0
+      ? ` Windows counts drive sizes in binary units, so the ${shown[resized]} it shows is a ${real[resized]} drive.`
+      : "";
     // ⚠️ SAY WHY THE WRONG VALUE LOOKS RIGHT. LEE, 2026-10-08 to 10-19: the
     // PSP's "PCH-1001" and the Canon's "f/1.5-4.9" were both denied by a
     // reviewer who believed them, and both were real markings — a PS Vita model
@@ -2635,7 +2732,9 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // panel can put the picture beside the sentence.
     const evidence = (photoSaysOurs || photoFix) && photo?.photo
       ? { n: photo.photo, url: photo.url || null } : null;
-    if (saidBy && seen && photo?.answer === "listing") {
+    if (photoBlind) {
+      // See photoBlind. Nothing to report.
+    } else if (saidBy && seen && photo?.answer === "listing") {
       // The photos show what the listing says, so the listing was right and our
       // knowledge was not. Nothing to report — counted by the sweep instead, so
       // how often this happens stays visible.
@@ -2721,6 +2820,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
                 : photoSaysOurs && fromLabel
                   ? ` Look at ${shot.toLowerCase()}: ${seen}.`
                   : "")
+          + fromWindows
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
         // finding on this page is read off the title and the spec table, and
