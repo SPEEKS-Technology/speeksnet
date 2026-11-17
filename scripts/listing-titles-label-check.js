@@ -41,7 +41,7 @@ const strip = s => s
     .replace(/function hasPartCode\([^)]*\)\s*:\s*boolean\s*\{/,
              'function hasPartCode(title, specs) {')
     .replace(/:\s*Record<[^>]*>(\s*\|\s*undefined)?/g, '')
-    .replace(/\)\s*:\s*(number|boolean|\[number,\s*number\])\s*\{/g, ') {')
+    .replace(/\)\s*:\s*(number|boolean|string|\[number,\s*number\])\s*\{/g, ') {')
     .replace(/(\w)\??\s*:\s*\[number,\s*number\]/g, '$1')
     .replace(/:\s*number\[\]\[\]/g, '')
     .replace(/(\w+)\s*:\s*number\b(?=\s*[,)])/g, '$1')
@@ -177,6 +177,68 @@ console.log('\n== 4. Through the real decision ==');
        'capacity corrected in one click', r.title);
     ok(/Capacity field \("1TB"\) says otherwise, and approving corrects that field too/.test(f.says),
        'and the Capacity field with it', f.says);
+}
+
+// --- 5: what a photo cannot tell (the 2026-11 denials, reviewed 11-16) -------
+console.log('\n== 5. What a photo cannot tell ==');
+{
+    // WSP Corsair (MO02-5426B-E7): one stick carrying the kit's 32GB(2X16GB) label.
+    const T = 'Corsair Vengeance Pro 16GB (1x16GB) RAM DDR4 3600MHz CMH32GX4M2D3600C18';
+    const v = labelVerdict(T, [{ title_text: '16GB (1x16GB)', label_text: '32GB (2x16GB)', photo: 3,
+        seen: 'the module label reads CMH32GX4M2D3600C18 DDR4 32GB(2X16GB) 3600MHz' }], URLS, LOADED);
+    const r = decide(v, T, { specs: { Brand: 'Corsair', MPN: 'CMH32GX4M2D3600C18',
+        'Memory Size': '16GB (1x16GB) RAM' } });
+    ok(!r.findings.length && !r.fixable && r.title === T, 'a kit label adds no sticks', r.findings[0] && r.findings[0].says);
+    const plain = labelVerdict('Corsair 16GB DDR4', [{ title_text: '16GB', label_text: '32GB (2x16GB)', photo: 3,
+        seen: 'the label reads 32GB(2X16GB)' }], URLS, LOADED);
+    ok(!decide(plain, 'Corsair 16GB DDR4', { specs: {} }).findings.length, 'nor from a plain "16GB"');
+    // …but a real per-stick size change still goes through.
+    const T2 = 'Kingston 8GB (1x8GB) RAM DDR4';
+    const real = labelVerdict(T2, [{ title_text: '8GB (1x8GB)', label_text: '16GB (1x16GB)', photo: 1,
+        seen: 'the stick reads 16GB' }], URLS, LOADED);
+    ok(decide(real, T2, { specs: {} }).title === 'Kingston 16GB (1x16GB) RAM DDR4', 'a bigger stick is still a fix');
+}
+{
+    // BAL Oura (MO04-2512A-E7): the side-on stamp is a 6, read as a 9.
+    const T = 'Oura Ring Gen 2 Air Size 6 Silver Stainless Steel Smart Ring JZ90-54217-06';
+    const v = labelVerdict(T, [{ title_text: 'Size 6', label_text: 'Size 9', photo: 2,
+        seen: "the ring's inner band is stamped OURA 9" }], URLS, LOADED);
+    const r = decide(v, T, { specs: { Brand: 'Oura', Size: 'Size 6' } });
+    ok(!r.findings.length && r.title === T, 'a 6/9 swap read off a photo is dropped');
+    // A tiebreak "ours" on a 6/9 is dropped too, even with a field repeating the title.
+    const tb = { verdict: 'wrong', wrong_text: 'A2169', correct_text: 'A2166', why: 'x',
+                 photo: { answer: 'ours', photo: 1, seen: 'the caseback reads A2166', url: URLS[0] } };
+    ok(!decide(tb, 'Apple Watch A2169 44mm', { specs: { Model: 'A2169' } }).findings.length,
+       'from the tiebreak as well');
+    // A digit change that is not only 6<->9 still goes through.
+    const ok69 = labelVerdict('Ring Size 8', [{ title_text: 'Size 8', label_text: 'Size 9', photo: 1,
+        seen: 'stamped 9' }], URLS, LOADED);
+    ok(decide(ok69, 'Ring Size 8', { specs: {} }).title === 'Ring Size 9', '8 -> 9 is still a fix');
+}
+{
+    // BAL HP (MO04-2376A-R4R1): Task Manager's 477 GB is a 512GB drive.
+    const T = 'HP Laptop 15-CS3055WM 15.3" i5-1035G1 1.0GHz 8GB RAM 500GB SSD';
+    const v = labelVerdict(T, [{ title_text: '500GB SSD', label_text: '477GB SSD', photo: 2,
+        seen: 'Task Manager Disk 0 shows capacity 477 GB' }], URLS, LOADED);
+    const r = decide(v, T, { specs: { Brand: 'HP', MPN: '15-CS3055WM', 'Storage 1': '500GB' } });
+    const f = r.findings[0] || {};
+    ok(r.title === 'HP Laptop 15-CS3055WM 15.3" i5-1035G1 1.0GHz 8GB RAM 512GB SSD' && r.fixable,
+       'written as the advertised 512GB', r.title);
+    ok(/the 477GB it shows is a 512GB drive/.test(f.says || ''), 'and says why the photo reads 477', f.says);
+    // A title that already says 512GB is left alone.
+    const T2 = 'HP Laptop 8GB RAM 512GB SSD';
+    const same = labelVerdict(T2, [{ title_text: '512GB', label_text: '477GB', photo: 1,
+        seen: 'Task Manager shows 477 GB' }], URLS, LOADED);
+    ok(!decide(same, T2, { specs: {} }).findings.length, '477 against a 512GB title is no finding');
+    // 931 GB -> 1TB, and an advertised size is never touched.
+    const T3 = 'Dell 500GB HDD';
+    const tb = labelVerdict(T3, [{ title_text: '500GB', label_text: '931GB', photo: 1,
+        seen: 'Disk Management shows 931 GB' }], URLS, LOADED);
+    ok(decide(tb, T3, { specs: {} }).title === 'Dell 1TB HDD', '931GB is written 1TB');
+    const T4 = 'Samsung T7 1TB SSD';
+    const adv = labelVerdict(T4, [{ title_text: '1TB', label_text: '500GB', photo: 1,
+        seen: 'the drive label reads 500GB' }], URLS, LOADED);
+    ok(decide(adv, T4, { specs: {} }).title === 'Samsung T7 500GB SSD', 'an advertised 500GB stays 500GB');
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all passed') + '\n');

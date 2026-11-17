@@ -52,7 +52,7 @@ const between = (from, to) => {
 const strip = s => s
     .replace(/:\s*Record<[^>]*>(\s*\|\s*undefined)?/g, '')
     // changedSpan / typoDistance / isMisspelling / listingSaysItself's cover
-    .replace(/\)\s*:\s*(number|boolean|\[number,\s*number\])\s*\{/g, ') {')
+    .replace(/\)\s*:\s*(number|boolean|string|\[number,\s*number\])\s*\{/g, ') {')
     .replace(/(\w)\??\s*:\s*\[number,\s*number\]/g, '$1')
     .replace(/:\s*number\[\]\[\]/g, '')
     .replace(/(\w+)\s*:\s*number\b(?=\s*[,)])/g, '$1')
