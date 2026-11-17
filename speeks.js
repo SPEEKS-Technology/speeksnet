@@ -54814,15 +54814,20 @@ const QP_MINIS = {
     //   Conv — the latest Day End's customer conversion, all stores
     // (A GM — the Live board's month-to-date gross margin — sat between them for
     // a day; Ethan took it out, 2026-11-10.)
-    mcompany: { label: 'Company Snapshot', sub: '% to goal, buying margin and conversion, all stores', icon: _qpMI.pulse, tone: 'g', src: 'snap', avail: () => _qpIsDist(),
+    // Both are MONTH TO DATE since 2026-11-17 (Ethan: "should be MTD conversion
+    // and margin %") — every Day End this month, all stores: margin weighted by
+    // value bought, conversion from the summed customer counts. Was the latest
+    // day only, which swung on one slow Day End.
+    mcompany: { label: 'Company Snapshot', sub: '% to goal, plus month-to-date conversion and buying margin, all stores', icon: _qpMI.pulse, tone: 'g', src: 'snap', avail: () => _qpIsDist(),
         draw: d => {
-            const g = _qpGoalSum(d, STORE_CODES), day = _qpDistDay(d);
-            const val = _qpSum(day.on, 'est_value');
-            const buyM = val ? day.on.reduce((a, y) => a + (Number(y.est_value) || 0) * _qpFrac(y.est_margin_pct), 0) / val : null;
-            const den = _qpSum(day.on, 'cust_conv_den'), conv = den ? _qpSum(day.on, 'cust_conv_num') / den : null;
+            const g = _qpGoalSum(d, STORE_CODES);
+            const mtd = STORE_CODES.flatMap(s => _qpThisMonth(d, s));
+            const val = _qpSum(mtd, 'est_value');
+            const buyM = val ? mtd.reduce((a, y) => a + (Number(y.est_value) || 0) * _qpFrac(y.est_margin_pct), 0) / val : null;
+            const den = _qpSum(mtd, 'cust_conv_den'), conv = den ? _qpSum(mtd, 'cust_conv_num') / den : null;
             const pc = x => x == null ? '—' : Math.round(x * 100) + '%';
             return { k: 'Company Snapshot', v: g.goal ? '<span class="' + g.tone + '">' + g.pace + '%</span><small>to goal</small>' : '—',
-                s: 'Buy ' + pc(buyM) + ' · Conv ' + pc(conv) };
+                s: 'MTD Conv ' + pc(conv) + ' · Margin ' + pc(buyM) };
         } },
     // Every store's B2B value still to list, and the units.
     mb2bunl: { label: 'Unlisted B2B', sub: 'B2B value and items still waiting to be listed, all stores', icon: '', tone: 't', src: 'w:b2b', avail: () => _qpIsDist() && _qpWidgetOk('b2b'),
