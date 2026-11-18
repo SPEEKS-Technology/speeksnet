@@ -21,7 +21,7 @@ const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const LIST_KEYS = new Set([
   "recycle_report",
   "weekly_leadership",
-  // expense_report: where a DM/MSM monthly expense report is emailed (the CEO).
+  // expense_report: where a DM monthly expense report is emailed (the CEO).
   "expense_report",
   // Keep every list a report reads from IN this set. sales_import_alert was
   // inserted straight into the table and is therefore invisible to the DM's
@@ -46,9 +46,9 @@ const LIST_KEYS = new Set([
   // waiting on approval. Read by b2b-outreach's sendQuoteReady, which falls back
   // to the single CRM Settings address while this list is empty.
   "b2b_quote_ready",
-  // idea_submissions: who receives a Submit an Idea form. The form posts through
-  // formsubmit.co, which takes ONE address in its URL and the rest as _cc, so the
-  // order of this list matters: the first address is the To.
+  // idea_submissions: who receives a Submit an Idea form. Read server side by the
+  // idea-submit fn (since 2026-11-05; it was formsubmit.co before), which mails
+  // the whole list as To — order no longer matters.
   "idea_submissions",
   ...STORES.map((s) => `box_order_${s}`),
   ...STORES.map((s) => `weekly_store_${s}`),
@@ -76,6 +76,9 @@ const LIST_KEYS = new Set([
   // (unrestocked-returns, 0153) — the DM. Empty, it falls back to
   // claims_disputes_dm.
   "unrestocked_returns",
+  // unrestocked_returns_<STORE>: the same mail cut to one store, sent only on
+  // mornings that store has a line open (2026-11-06, 0178). Empty = no store copy.
+  ...STORES.map((s) => `unrestocked_returns_${s}`),
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

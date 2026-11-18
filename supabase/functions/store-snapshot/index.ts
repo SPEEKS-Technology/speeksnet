@@ -14,11 +14,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // WHO SEES WHAT (the person behind the PIN, as every PIN-gated read here):
 //   DM / CEO / MOCD (or store CORP)  all five stores
-//   Multi-Store Manager              BAL and MPL
 //   everyone else                    their own store
 //   cash                             managers and up only — not ASMs below
 //                                    owner level, employees or the store login
-//   team production                  an employee gets only their own line
+//   team production                  the whole team, employees included (11-08)
 //   usage (who signed in)            DM / CEO / MOCD only
 // A TEST ACCOUNT (test_users, migration 0160) reads with its own role, like the
 // other seven PIN-gated reads.
@@ -34,15 +33,14 @@ const corsHeaders = {
 };
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
-const MULTISTORE_MANAGER_STORES = ["BAL", "MPL"];
 const DISTRICT_ROLES = new Set(["district manager", "ceo", "mocd"]);
-const CASH_ROLES = new Set(["district manager", "ceo", "mocd", "manager", "owner (manager)", "multi-store manager"]);
+const CASH_ROLES = new Set(["district manager", "ceo", "mocd", "manager", "owner (manager)"]);
 const FACT_COLS = [
   "store", "date", "est_value", "total_spent", "est_margin_pct", "cust_conv_num", "cust_conv_den",
   "failed_deals", "devices_lost", "lost_revenue", "net_sales", "new_customers", "return_customers",
   "recycle_customers", "no_deal_customers", "total_customers", "reviews_today", "five_star_today",
   "five_star_mtd", "devices_processed", "processed_value", "listed_devices", "queue_count",
-  "available_count", "available_cost", "live_count", "team_production",
+  "available_count", "available_cost", "available_value", "live_count", "team_production",
 ].join(",");
 
 function json(body: unknown, status = 200) {
@@ -78,7 +76,6 @@ Deno.serve(async (req: Request) => {
   const home = String(user.store || "").toUpperCase().trim();
   const district = DISTRICT_ROLES.has(role) || home === "CORP" || home === "ALL";
   const stores = district ? STORES
-    : role === "multi-store manager" ? MULTISTORE_MANAGER_STORES
     : STORES.filter((s) => home.split(/[^A-Z]+/).includes(s));
   if (!stores.length) return json({ success: false, error: "No store for this person" }, 403);
 
@@ -101,14 +98,10 @@ Deno.serve(async (req: Request) => {
   const err = factsQ.error || npQ.error || goalsQ.error || cashQ.error;
   if (err) return json({ success: false, error: err.message }, 500);
 
-  // An employee sees the store's totals and their own production line only —
-  // the rest of the team's figures are their manager's to read.
-  const employee = role === "employee";
-  const me = norm(user.name);
-  const facts = (factsQ.data || []).map((r: any) => {
-    if (!employee || !Array.isArray(r.team_production)) return r;
-    return { ...r, team_production: r.team_production.filter((m: any) => norm(m && m.name) === me) };
-  });
+  // Everyone at the store sees the whole team's production line (Ethan,
+  // 2026-11-08: "Employee version can be the same as manager. This is good for
+  // the whole team to see"). It used to trim an employee to their own line.
+  const facts = factsQ.data || [];
 
   let usage = null;
   if (DISTRICT_ROLES.has(role)) {

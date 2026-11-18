@@ -112,5 +112,16 @@ console.log('\n== 4. One drive: unchanged ==');
        'RAM and storage in one title do not fight');
 }
 
+console.log('\n== 5. A size the title calls RAM is not a drive ==');
+{
+    // BAL Azpen X1160 (MO04-2532C-R3R2), denied 2026-11-05.
+    ok(!run('New Azpen X1160 4GB RAM', { 'Storage 1': '128GB' }).some(x => x.code === 'spec-conflict'),
+       '"4GB RAM" does not fight Storage 1 = 128GB');
+    ok(!run('Dell PC 16GB (2x8GB) DDR4 RAM', { 'Storage 1': '512GB' }).some(x => x.code === 'spec-conflict'),
+       '"16GB (2x8GB) DDR4 RAM" is RAM too');
+    ok(run('Azpen X1160 4GB RAM 64GB', { 'Storage 1': '128GB' }).some(x => x.code === 'spec-conflict'),
+       'but a stated 64GB drive against 128GB still fires');
+}
+
 console.log('\n' + (fails ? fails + ' FAILED' : 'all passed') + '\n');
 process.exit(fails ? 1 : 0);

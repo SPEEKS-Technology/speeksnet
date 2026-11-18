@@ -97,6 +97,10 @@ const FIELD_MAP: Record<string, string> = {
   queueCount: "queue_count",
   availableCount: "available_count",
   availableCost: "available_cost",
+  // The Available card's Projection: what that stock is worth (0180, Ethan
+  // 2026-11-08: the QuickPortal shows value, not cost). Null until the Apps
+  // Script sends it, never a 0.
+  availableValue: "available_value",
   liveCount: "live_count",
   teamProduction: "team_production",
   shoutouts: "shoutouts",
@@ -345,7 +349,9 @@ Deno.serve(async (req) => {
 
   // Each person's figure onto their Listing Goals row. After the facts upsert,
   // and only on rows that landed — a failed chunk leaves its days' goals alone.
-  const goalResults = errors.length ? null : await writeGoalResults(sb, rows);
+  // ?goals=0 skips it: a backfill run only to fill a new column (0180's
+  // available_value) has no business rewriting past goal results.
+  const goalResults = errors.length || url.searchParams.get("goals") === "0" ? null : await writeGoalResults(sb, rows);
 
   // Cross-check against the feed that already exists. These two read the same
   // email by different routes, so a disagreement means a column moved — and

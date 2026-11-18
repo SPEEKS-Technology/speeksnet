@@ -75,10 +75,8 @@ const C = {
 
 // Who counts as a person owed a role today. MOCD is corp-wide, and `store` is the
 // shop-floor TV board — counted, a TV would read as the most diligent employee
-// in the company. Mirrors the roster rule in kpi-manage, NOT store-targets'
-// (which drops the MSM on purpose for target sizing; here Joseph should count).
+// in the company. Mirrors the roster rule in kpi-manage.
 const ROSTER_EXCLUDE = new Set(['ceo', 'district manager', 'mocd', 'tom', 'store']);
-const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 const GOALS_OFF = 'OFF';
 
 // The tracked surfaces, in the order they appear in the email: key, label, group.
@@ -324,18 +322,10 @@ async function gather(sb: any, endDay: string, mode: Mode) {
   const nameOf = new Map<string, string>();
   allUsers.forEach((u: any) => nameOf.set(norm(u.name), u.name));
 
-  // Roster per store. The MSM's DB store is their home store only, so they are
-  // folded into both stores they actually cover.
-  const rosterFor = (store: string) => {
-    const base = allUsers.filter((u: any) =>
-      String(u.store || '').toUpperCase() === store &&
-      !ROSTER_EXCLUDE.has(norm(u.role)));
-    const msm = allUsers.filter((u: any) =>
-      norm(u.role) === 'multi-store manager' &&
-      MULTISTORE_MANAGER_STORES.includes(store) &&
-      String(u.store || '').toUpperCase() !== store);
-    return [...base, ...msm];
-  };
+  // Roster per store: everyone whose users.store is that store.
+  const rosterFor = (store: string) => allUsers.filter((u: any) =>
+    String(u.store || '').toUpperCase() === store &&
+    !ROSTER_EXCLUDE.has(norm(u.role)));
 
   // ---- usage events ----
   // Two per-day sets (was anyone here / did they open a tracked tool) plus one
@@ -531,8 +521,8 @@ async function gather(sb: any, endDay: string, mode: Mode) {
   // ---- tool adoption across the district ----
   // Which stores a person answers to, from the rosters rather than the store
   // stamped on the event. Two things fall out for free: CORP and the TV boards
-  // are on no roster and so are silently excluded, and the Multi-Store Manager
-  // is on two, so one Margin Guide lookup shows under both his stores.
+  // are on no roster and so are silently excluded, and anyone on two rosters
+  // shows under both stores.
   const storesForPerson = new Map<string, string[]>();
   STORES.forEach(s => rows[s].roster.forEach((u: any) => {
     const k = norm(u.name);
@@ -582,8 +572,8 @@ async function gather(sb: any, endDay: string, mode: Mode) {
       if (!t) { t = { users: new Set(), perStore: new Map() }; toolUse.set(key, t); }
       const nm = nameOf.get(k) || k;
       t.users.add(nm);
-      // The Multi-Store Manager is on two rosters, so his one lookup counts at
-      // both — the same rule the coverage table runs on.
+      // Anyone on two rosters counts at both — the same rule the coverage
+      // table runs on.
       mine.forEach(s => {
         if (!t!.perStore.has(s)) t!.perStore.set(s, new Set());
         t!.perStore.get(s)!.add(nm);
@@ -1007,9 +997,8 @@ function buildReport(d: any) {
   // wrong. One row per problem, with the stores on each name, says the same
   // thing in a glance.
   if (!d.sunday) {
-    // One entry per PERSON, not per store, and not per day. The Multi-Store
-    // Manager belongs to two rosters, so he would otherwise appear twice under
-    // two different stores; here he reads once, with both store badges on him.
+    // One entry per PERSON, not per store, and not per day: anyone on two
+    // rosters reads once, with both store badges.
     const collect = (pick: (r: any) => Map<string, number>) => {
       const stores = new Map<string, string[]>();
       const count = new Map<string, number>();

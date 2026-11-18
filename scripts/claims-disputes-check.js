@@ -1213,7 +1213,8 @@ t('a shut reply window reads as missed, not as something to go and answer', func
     renderHoldItems('mgr');
     var card = cardAround(html('hold-mgr-cases'), '01-15084-49541');
     if (!/Missed reply window/.test(card)) return 'the chip does not say the window was missed';
-    if (!/no longer takes one/.test(card)) return 'it does not say a late response is not accepted';
+    if (!/won't take one now/.test(card)) return 'it does not say a late response is not accepted';
+    if (/very likely lost|lost by default/.test(card)) return 'it still calls a missed reply a loss';
     return !/clears itself on the next read/.test(card) || 'it still promises that responding clears it';
 });
 
@@ -1226,7 +1227,8 @@ t('an eBay case past its deadline says so in the words of a case', function () {
     renderHoldItems('mgr');
     var card = cardAround(html('hold-mgr-cases'), f.cases[0].ebay_id);
     if (!/Missed reply window/.test(card)) return 'the chip does not say the window was missed';
-    if (!/does not take a late reply/.test(card)) return 'it does not explain why answering will not help';
+    if (!/won't take a late reply/.test(card)) return 'it does not explain why answering will not help';
+    if (!/doesn't mean we lose/.test(card)) return 'it still reads as a lost case';
     return !/answer it on eBay and this clears itself/.test(card)
         || 'it still tells them to go and answer it';
 });

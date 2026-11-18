@@ -50,6 +50,7 @@ BATCH = os.environ.get("PQ_BATCH", os.path.join(r"C:\Users\User\pq-train", "pref
 ADAPTER = os.environ.get("PQ_ADAPTER", r"C:\Users\User\pq-train\runs\run-20261023-2324\adapter")
 MODEL = os.environ.get("PQ_MODEL_NAME", "local-r5")
 ONLY = {s for s in os.environ.get("PQ_ONLY", "").split(",") if s}
+CAP = int(os.environ.get("PQ_CAP", "999"))   # a ceiling on every sheet's cap, to size a batch to an evening's labelling
 SHOP = {"OVL": "paymore-overland-park", "LEE": "paymore-lees-summit", "WSP": "paymore-westport",
         "MPL": "paymore-maplewood", "BAL": "paymore-ballwin"}
 
@@ -103,12 +104,15 @@ SHEETS = [
 ]
 
 
-def db(sql):
-    """One read or write through the Supabase CLI (already logged in): free."""
+def db(sql, write=False):
+    """One read or write through the Supabase CLI (already logged in): free.
+    CLI v3 (2026-11) refuses an unmarked query from an agent run: a read says
+    --read-only, and the one write here (load, which Ethan asks for) says --yes."""
     path = os.path.join(BATCH, "q.sql")
     with open(path, "w", encoding="utf-8") as f:
         f.write(sql)
-    p = subprocess.run(f'npx supabase db query --linked --project-ref {REF} --output-format json -f "{path}"',
+    mark = "--yes" if write else "--read-only"
+    p = subprocess.run(f'npx supabase db query --linked --project-ref {REF} {mark} --output-format json -f "{path}"',
                        shell=True, capture_output=True, text=True, encoding="utf-8", cwd=REPO)
     out = p.stdout[p.stdout.find("{"):]
     try:
@@ -126,8 +130,16 @@ def storefront(store):
     while True:
         url = f"https://{SHOP[store]}.myshopify.com/products.json?limit=250&page={page}"
         req = urllib.request.Request(url, headers={"User-Agent": "speeksnet-pq-train"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            got = json.loads(r.read())["products"]
+        for wait in (0, 10, 30, 60, 120):   # Shopify answers 429 to a quick burst (seen 2026-11-02)
+            time.sleep(wait)
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    got = json.loads(r.read())["products"]
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429 or wait == 120:
+                    raise
+                print(f"  {store} page {page}: rate-limited, waiting", flush=True)
         if not got:
             return out
         for p in got:
@@ -168,7 +180,7 @@ def pick():
         for p in sorted(hits, key=lambda p: int(p["id"])):
             by.setdefault(p["store"], []).append(p)
         order = [q for grp in zip(*[iter(v + [None] * len(hits)) for v in by.values()]) for q in grp if q]
-        chosen[sheet] = order[:cap]
+        chosen[sheet] = order[:min(cap, CAP)]
         taken |= {p["id"] for p in chosen[sheet]}
     json.dump(chosen, open(os.path.join(BATCH, "pick.json"), "w", encoding="utf-8"), indent=1)
     n = sum(len(v) for v in chosen.values())
@@ -243,7 +255,7 @@ def load():
         db("insert into pq_local_prefill (store_code, product_id, sheet_slug, title, model, photos) values "
            + ",\n".join(values[i:i + 40])
            + " on conflict (store_code, product_id) do update set sheet_slug = excluded.sheet_slug, title = excluded.title,"
-             " model = excluded.model, photos = excluded.photos, created_at = now() returning product_id")
+             " model = excluded.model, photos = excluded.photos, created_at = now() returning product_id", write=True)
     print(f"loaded {len(values)} listings into pq_local_prefill")
 
 

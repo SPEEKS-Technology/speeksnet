@@ -14,8 +14,8 @@ const corsHeaders = {
 //   POST { user, [store,] rows }          -> save the layout (rows null = back to default)
 //   POST { user, seen: [...] }            -> widgets now seen in the drawer
 //
-// A MULTI-STORE MANAGER keeps a layout per store (Ethan, 2026-10-26: "saved by
-// user, by store"): the page sends store=, and the layout lives in the row
+// A per-store layout (built 2026-10-26 for the Multi-Store Manager, retired
+// 2026-11-08; the page no longer sends store=): with store=, the layout lives in the row
 // "<name>@<store>". Until a store has its own, it starts from the person's
 // plain row. The drawer's New marks (seen) stay with the person, in the plain row.
 //
