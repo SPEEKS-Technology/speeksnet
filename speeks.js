@@ -44769,6 +44769,19 @@ const FEATURE_CATALOG = [
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager', 'employee'] },
+    // The DEVELOPMENT TRACKER (2026-11, docs/plans/dev-tracker-HANDOFF.md): tickets,
+    // branches and releases for SPEEKSNET itself. Its door is a green quick-tool
+    // button just right of the settings cog (Nick: "a pretty prominent spot …
+    // to the right of settings … a slightly green hue"), drawn in Phase 3.
+    // `def: []` for BOTH, every role including the DM: dev access is a per-person
+    // grant, not a role (D2) — today Nick and Ethan, seeded as user overrides by
+    // migration 0188. The dev-tickets edge function reads the same keys with the
+    // same defaults (DEFAULTS there); change one, change the other.
+    // dev-release-publish is who may ship a release to production (Phase 6, Q3
+    // still open) — catalogued now so the function can report it, granted to
+    // nobody until Q3 is answered.
+    { key: 'dev-tracker',              label: 'Development Tracker',           tab: 'hotbar', group: 'Top Bar', def: [] },
+    { key: 'dev-release-publish',      label: 'Development — Publish a Release', tab: 'hotbar', group: 'Top Bar', def: [] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },

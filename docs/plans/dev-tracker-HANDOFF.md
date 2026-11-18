@@ -45,15 +45,42 @@ moves into SPEEKSNET, and shipping to production happens only from there.
 
 ## 3. Open decisions — ask Nick before building the affected phase
 
+Q1, Q2 and Q5 were answered in Phase 0 (2026-11-18) — see §3a. The rest are
+still open.
+
 | # | Question | Recommendation | Blocks |
 |---|---|---|---|
-| Q1 | Is **B2B a ticket type or an area**? A broken B2B quote is both "B2B" and "Bug". | Type (Bug / Suggestion / Improvement / Task) **plus** an Area field (B2B, Claims, eBay & listings, KPIs, QuickPortal, Operations, Callbacks, Other). Both table-driven. | Phase 1 |
-| Q2 | **Where does the dev tracker live?** Projects is a Workspace tab "for now". | A Workspace tab ("Development") gated by the dev switch, matching Projects. Revisit a page of its own if it outgrows a tab. | Phase 3 |
+| Q1 | ~~Is **B2B a ticket type or an area**?~~ **Answered → §3a.** | Type (Bug / Suggestion / Improvement / Task) **plus** an Area field (B2B, Claims, eBay & listings, KPIs, QuickPortal, Operations, Callbacks, Other). Both table-driven. | Phase 1 |
+| Q2 | ~~**Where does the dev tracker live?**~~ **Answered → §3a** (not the Workspace tab recommended here). | A Workspace tab ("Development") gated by the dev switch, matching Projects. Revisit a page of its own if it outgrows a tab. | Phase 3 |
 | Q3 | **Who can Publish** (ship to prod)? | DM + named devs via a separate `dev-release-publish` switch, PIN re-entered at publish. | Phase 6 |
 | Q4 | **Edge functions & migrations bypass GitHub** (deployed straight to Supabase). Lock those too? | Phase 6 just records them on the ship checklist; a later phase can deploy functions from a GitHub Action on merge to `main`. | Phase 6/7 |
-| Q5 | Ticket numbering. | Imported issues keep their GitHub number (`#573` → `SN-573`) so old commit/PR references resolve; new tickets start at **SN-1000** (GitHub shares one sequence between issues and PRs). | Phase 1 |
+| Q5 | ~~Ticket numbering.~~ **Answered → §3a.** | Imported issues keep their GitHub number (`#573` → `SN-573`) so old commit/PR references resolve; new tickets start at **SN-1000** (GitHub shares one sequence between issues and PRs). | Phase 1 |
 | Q6 | What happens to closed GitHub issues after import, and when does Issues get switched off? | Import → verify counts in SPEEKSNET → comment "Moved to SN-n" on open issues and close them → an org admin turns Issues off. | Phase 2 |
 | Q7 | Should completed **Projects** with outcome "Fold into SPEEKSNET" spawn dev tickets automatically? | Yes, a "Create dev ticket" button on the completed project, linking both ways. | Phase 3 (nice-to-have) |
+
+---
+
+## 3a. Phase 0 answers (Nick, 2026-11-18) — decided, don't relitigate
+
+| # | Answer |
+|---|---|
+| Q1 | **Type + Area**, as recommended. Types: Bug / Suggestion / Improvement / Task (devs may get extra types). Areas: B2B, Claims, eBay & listings, KPIs, QuickPortal, Operations, Callbacks, Other. Both lists live in tables (`dev_ticket_types`, `dev_ticket_areas`), not code. |
+| Q2 | **Not a Workspace tab.** In Nick's words: *"this will only be available to myself and Ethan the DM, and it will be pretty important … put it in a pretty prominent spot. Maybe on the quick tools at the top to the right of settings? And then a slightly green hue to it."* So: a header **quick-tool button** (`.action-btn`) placed **directly right of Settings** (`#notifySettingsBtn`) in every page's header, with a subtle green tint so it reads as different from the neutral tools, gated `data-feature="dev-tracker"`, `data-mobile="hide"` like Settings. **Where it opens** wasn't specified; default plan is a full-screen page of its own, **`dev.html`**, the way B2B moved to `b2b.html` (a whole ticket tracker is too much for a popup). That makes the cache-buster **seven** pages — update CLAUDE.md's list when it lands. Confirm with Nick at the start of Phase 3 if a popup was meant instead. |
+| Q5 | **Keep GitHub numbers, new tickets from SN-1000**, as recommended. Imported issue `#573` → `SN-573`; a sequence starting at 1000 for everything new. |
+| D2 | Confirmed: dev access is **only Nick and Ethan (DM)** for now. `dev-tracker` defaults to **off for every role** (including DM, so it's a per-person grant, not "the DM role"), switched on for those two people in Feature Access. |
+
+**GitHub people → `users.id`** (seed `github_people` from this in Phase 1; verified against `users` 2026-11-18):
+
+| GitHub login | Person | `users.id` |
+|---|---|---|
+| `Eckushnir` | Ethan Kushnir (District Manager, CORP) | `523bae7a-5308-4294-ba7e-540a081e67b9` |
+| `back707` | Nick Hettinger (Manager, OVL) | `01b159e2-bbbd-4151-b650-6c64780e782d` |
+
+⚠️ There is also an **Ethan Frye** (Assistant Manager, LEE). Match on the id above, never on the first name "Ethan".
+
+**Migration number for Phase 1:** this said `0187` — and was wrong within hours: another session's `feat/projects-completion-signoff` (PR #581) took `0187_projects_signoff.sql` the same afternoon. Phase 1 is **`0188_dev_tracker`**. Re-check `list_migrations` **and every remote branch** (`git ls-tree` each) immediately before applying, not just when writing.
+
+**GitHub App permissions — one change from Phase 0 below:** the import (Phase 2) reads issues, comments and milestones, so the App needs **Issues: read** as well as Contents / Pull requests / Metadata read. The original list missed it.
 
 ---
 
@@ -102,12 +129,20 @@ Read `speeks.js` "24b. MODULE: PROJECTS", `supabase/functions/projects/index.ts`
 Each phase is shippable on its own and gets its own PR into `pre-release`.
 
 ### Phase 0 — Prerequisites (before writing code)
-- [ ] Get answers to **Q1, Q2, Q5** (§3).
-- [ ] **Create the GitHub App** "SPEEKSNET" on the `SPEEKS-Technology` org, installed on `speeksnet` only. Permissions: Contents **read** (write later, Phase 5/6), Pull requests read (write later), Metadata read. Webhook URL → the `github-webhook` function (Phase 4), with a webhook secret.
-- [ ] Store the App id, private key and webhook secret as **Supabase function secrets** (never in the repo — it's public).
-- [ ] Decide the people mapping: `Eckushnir` → Ethan, `back707` → Nick (stored as `users.id` in `github_people`).
+- [x] Get answers to **Q1, Q2, Q5** (§3) — 2026-11-18, recorded in §3a.
+- [x] **Create the GitHub App** — done 2026-11-18: slug **`speeksnet`**, App ID `5823517`, installation `183468117` on the org (selected repositories), permissions exactly Contents / Issues / Pull requests / Metadata **read**, webhook off. Originally specced as: "SPEEKSNET" on the `SPEEKS-Technology` org, installed on `speeksnet` only. Permissions: Contents **read** (write later, Phase 5/6), Pull requests read (write later), **Issues read** (for the Phase 2 import), Metadata read. **Webhook off for now** — `github-webhook` doesn't exist until Phase 4; turn it on then, with its URL and a webhook secret.
+- [x] Store the App's secrets — done 2026-11-18; `secrets list` digests of the App ID and installation ID match the values above. **The private key is unverified until something signs with it** — the first function that mints an installation token (the Phase 2 import's dry run, or a tiny probe in Phase 1) proves it. A 401 there means the `.pem` was pasted wrong (missing header/footer lines or mangled newlines). As specced: store the App's secrets as **Supabase function secrets** (never in the repo — it's public): `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` (the whole `.pem`, header lines included). `GITHUB_WEBHOOK_SECRET` follows in Phase 4. Nick enters the private key himself in the Supabase dashboard — it never goes through chat or a Claude session.
+- [x] Decide the people mapping: `Eckushnir` → Ethan Kushnir, `back707` → Nick — ids in §3a.
 
 ### Phase 1 — Data model + dev access
+> **Built 2026-11-18 on `feat/dev-tracker`** (all phases of this update stay on that one branch — Nick, 2026-11-18). Migration `0188_dev_tracker.sql`, function `supabase/functions/dev-tickets`, catalog entries next to `nav-settings` in `FEATURE_CATALOG`, checks in `scripts/dev-tracker-check.js`. Decisions made while building, beyond the draft below:
+> - Dev-created tickets start in **Backlog** (a dev has already triaged it); only Phase 3's intake lands in **Triage**.
+> - Tickets can be **assigned only to people who hold `dev-tracker`** — the GET returns them as `devs`.
+> - **Won't do needs a reason** (the reporter reads it); any other status can move to any other by hand until Phase 4 automates some.
+> - Only your own SPEEKSNET-written comments are editable; imported GitHub comments are the record.
+> - `edit` takes only the fields sent and is race-safe on `updated_at`; `status` is race-safe on the status it moved from.
+> - Types get a `dev_only` flag for later; none of the four seeded types uses it. `dev-release-publish` is granted to nobody until Q3.
+> - The two `dev-tracker` grants (Nick, Ethan) are seeded by the migration as ordinary `feature_overrides` user rows — visible and revocable in Feature Access.
 - Migration (next free number — check!): `dev_tickets`, `dev_ticket_comments`, `dev_ticket_events` (append-only history), `dev_ticket_types`, `dev_ticket_areas` (if Q1 = type+area), `dev_releases`, `dev_ticket_links` (commit / branch / PR refs), `github_branches` (cache), `github_people` (login → `users.id`), `github_sync_log`.
 - `dev_tickets` columns (draft): `id` (= SN number), `title`, `description`, `type`, `area`, `priority`, `status` (`triage`, `backlog`, `in_progress`, `in_review`, `on_prerelease`, `done`, `wont_do`), `assignee_id` (users.id), `reporter_id` (users.id) + names at the time, `stores` text[], `release_id`, `due`, `source` (`github_import` / `idea` / `dev`), `github_number`, `project_id` (link to Projects), timestamps.
 - Numbering per Q5: imported rows take their GitHub number; a sequence starting at 1000 for new ones.
@@ -124,7 +159,7 @@ Each phase is shippable on its own and gets its own PR into `pre-release`.
 
 ### Phase 3 — Intake + the Development tab
 - **Submit an Idea → Submit a ticket** (D3): same button and popup, fields reworked to type (+ area), description, attachment; creates a ticket in **Triage**; the email to the `idea_submissions` list still goes out with a link to the ticket. A "This is a project I want to build" option routes to the Projects request form instead. Submitters see their own tickets' status ("My tickets").
-- **Development tab** (Q2): Workspace look (D9) — `.ws-head`, segmented status filter (Triage · Backlog · In progress · In review · On pre-release · Done), `.cb-table` list, ticket popup with history, comments, linked code, and dev actions. Triage inbox for new submissions. "My tickets" filter.
+- **Development page** (Q2 → §3a: a green-tinted header quick-tool button right of Settings, opening `dev.html`; seven cache-buster pages from then on): Workspace look (D9) — `.ws-head`, segmented status filter (Triage · Backlog · In progress · In review · On pre-release · Done), `.cb-table` list, ticket popup with history, comments, linked code, and dev actions. Triage inbox for new submissions. "My tickets" filter.
 - Devs create tickets directly, with dev-only types.
 - **Done when:** a store manager submits an idea and it appears in Triage for a dev; a dev moves it through statuses by hand; checks (3 suites) pass.
 
