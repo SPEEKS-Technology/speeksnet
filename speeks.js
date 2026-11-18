@@ -27279,6 +27279,7 @@ function _b2bPaintTotals() {
     // The workspace numbers block (2026-10 overhaul) -- same figures, its own markup.
     const ws = document.getElementById('b2bWsNums');
     if (ws) { ws.innerHTML = _b2bNumsInner(); ws.hidden = !_b2bModalItems.length; }
+    _b2bPaintSortBtn();
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
     // "Our offer" is the gross offer we make the client; the data-wipe discount
     // is shown as its own line and added back into the net below, rather than
@@ -28526,13 +28527,26 @@ function _b2bStagePricing(deal) {
 // the store move.
 function _b2bPricingTools(deal) {
     return `${_b2bPrintAllBtn(deal)}
-        ${!_b2bIsPreval() && _b2bModalItems.length > 1
-            ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+        ${''/* Always drawn, and shown or hidden by _b2bPaintSortBtn as the line
+                 count changes. It used to be drawn only when the deal OPENED
+                 with two lines or more, and this row is painted once -- so a
+                 deal opened empty and priced line by line never grew the
+                 button until a refresh (Haydn, 2026-11-09, on ReviveKC). */}
+        ${!_b2bIsPreval()
+            ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn" id="b2bSortBtn"
+                ${_b2bModalItems.length > 1 ? '' : 'style="display:none;"'}
                 title="Group by brand then model, highest value first at both levels"
                 onclick="b2bSortItems(this)">↕ Sort by brand</button>` : ''}
         ${_b2bMoveBtn(deal)}
         <button class="b2b-btn b2b-btn-secondary" id="b2bSaveNow" disabled style="display:none;"
             title="Post anything typed but not yet saved" onclick="b2bSaveNow()">Save</button>`;
+}
+
+// The brand sort needs two lines to do anything. Called from _b2bPaintTotals,
+// which runs after every add, delete and repaint of the sheet.
+function _b2bPaintSortBtn() {
+    const btn = document.getElementById('b2bSortBtn');
+    if (btn) btn.style.display = _b2bModalItems.length > 1 ? '' : 'none';
 }
 
 async function b2bSubmitPricing(id, btn) {
