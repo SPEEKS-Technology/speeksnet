@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPEEKSNET | Arcade</title>
+  <!-- The Listing XP arcade (2026-11-17). A page of its own with no SPEEKSNET
+       nav bar: it is reached from the QuickPortal launcher through the portal
+       animation, and left by "Back to SPEEKSNET" the same way. FRONT END ONLY
+       for now: every number is ARC_SAMPLE in speeks.js until the formula and
+       its data are designed. Gated by Feature Access (widget-arcade) in
+       initArcadePage, the way b2b.html is, so a URL or bookmark is no way in. -->
+  <!-- Arriving through the portal: cover the page from its very first paint
+       (styles.css, LISTING XP ARCADE) until speeks.js puts the overlay in. -->
+  <script>try { if (sessionStorage.getItem('speeksArcPortal')) document.documentElement.classList.add('arc-landing'); } catch (e) {}</script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="styles.css?v=20261117g">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <script src="speeks.js?v=20261117g" defer></script>
+</head>
+<body class="arc-page preload">
+
+<header class="arc-band">
+  <div class="arc-wrap">
+    <button class="arc-back" type="button" onclick="arcPortal(this, 'BACK TO SPEEKSNET', 'index.html')">&lsaquo; Back to SPEEKSNET</button>
+    <div class="arc-brandbox">
+      <h1 class="arc-logo" id="arcLogo">SPEEKSNET ARCADE</h1>
+      <div class="arc-lights" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    </div>
+    <nav class="arc-tabs" id="arcTabs" aria-label="Arcade">
+      <button class="arc-tab" type="button" data-arc-go="play" aria-current="true" onclick="arcGo('play')"><span class="arc-b" style="background:var(--arc-brand)"></span>Play</button>
+      <button class="arc-tab" type="button" data-arc-go="scores" aria-current="false" onclick="arcGo('scores')"><span class="arc-b" style="background:var(--arc-teal)"></span>High Scores</button>
+      <button class="arc-tab" type="button" data-arc-go="prizes" aria-current="false" onclick="arcGo('prizes')"><span class="arc-b" style="background:var(--arc-ticket)"></span>Prize Counter</button>
+      <button class="arc-tab" type="button" data-arc-go="how" aria-current="false" onclick="arcGo('how')"><span class="arc-b" style="background:var(--arc-gold)"></span>How To Play</button>
+    </nav>
+    <div class="arc-who"><span class="arc-sample">Sample numbers</span><span id="arcWho"></span><button class="arc-opkey" type="button" id="arcOpKey" aria-pressed="false" onclick="arcOperator()">Operator</button></div>
+  </div>
+</header>
+
+<main class="arc-main">
+<div class="arc-wrap">
+
+<!-- PLAY -->
+<section data-arc-v="play" class="arc-v">
+  <div class="arc-play">
+    <div class="arc-col">
+      <div class="arc-card">
+        <div class="arc-player">
+          <div class="arc-lv"><small>LVL</small><b id="arcLv">4</b></div>
+          <div style="min-width:0">
+            <div class="arc-pname" id="arcName">PLAYER</div>
+            <div class="arc-rankname" id="arcRank">Specialist</div>
+            <div class="arc-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Progress to the next level"><i id="arcXpFill"></i></div>
+            <div class="arc-tiny" style="margin-top:6px" id="arcNext"></div>
+          </div>
+        </div>
+        <div class="arc-big2">
+          <div class="arc-meter arc-score"><span class="arc-h">SCORE</span><b class="arc-num" id="arcScore">0</b><span class="arc-tiny">this month</span></div>
+          <div class="arc-meter arc-tix"><span class="arc-h">TICKETS</span><b class="arc-num" id="arcTix">0</b><span class="arc-tiny">to spend</span></div>
+        </div>
+        <p class="arc-tiny" style="text-align:center">Your score turns into tickets on the 1st. Your sold % is the bonus round.</p>
+      </div>
+      <div class="arc-card" id="arcLast"></div>
+    </div>
+
+    <div class="arc-col">
+      <div class="arc-card">
+        <div class="arc-row"><span class="arc-h">TODAY'S BOSS</span><span class="arc-tiny" id="arcBossGoal"></span></div>
+        <div class="arc-hp" aria-label="Boss health"><i id="arcHp"></i></div>
+        <div class="arc-row"><span class="arc-tiny" id="arcBossLine"></span><span class="arc-win" id="arcBossWin"></span></div>
+        <div class="arc-week" id="arcWeek" aria-label="This week"></div>
+        <p class="arc-tiny">Beat the boss and everyone who listed gets bonus points.</p>
+      </div>
+      <div class="arc-card">
+        <span class="arc-h" id="arcTroHead">TROPHIES</span>
+        <div class="arc-trophies" id="arcTrophies"></div>
+      </div>
+    </div>
+
+    <div class="arc-col">
+      <div class="arc-card">
+        <div class="arc-row"><span class="arc-h" id="arcMiniHead">HIGH SCORES</span><button class="arc-btn" type="button" onclick="arcGo('scores')">All</button></div>
+        <div id="arcMini"></div>
+      </div>
+      <div class="arc-card">
+        <div class="arc-combo">
+          <div style="flex:1"><span class="arc-h">CLEAN COMBO</span><p style="margin-top:6px"><b style="font-size:20px" id="arcComboN"></b> <span class="arc-tiny">every title passed</span></p></div>
+          <div class="arc-flames" id="arcFlames"></div>
+        </div>
+        <p class="arc-tiny">5 in a row earns the Spotless Week trophy. A sent-back title resets it.</p>
+      </div>
+      <button type="button" class="arc-door" onclick="arcGo('prizes')">
+        <span class="arc-px">PRIZE COUNTER</span>
+        <span class="arc-tiny" style="font-size:15px" id="arcDoorLine"></span>
+        <span class="arc-tiny" id="arcDoorSave"></span>
+        <span class="arc-dgo">Go to the counter</span>
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- HIGH SCORES -->
+<section data-arc-v="scores" class="arc-v" hidden>
+  <div class="arc-scores">
+    <div class="arc-card">
+      <div class="arc-row"><span class="arc-title" id="arcStoreHead">HIGH SCORES</span><span class="arc-tiny" id="arcMonthLine"></span></div>
+      <div id="arcHsStore"></div>
+      <p class="arc-tiny">Points this month. Spending tickets doesn't change your place.</p>
+    </div>
+    <div class="arc-card">
+      <div class="arc-row"><span class="arc-title">DISTRICT</span><span class="arc-tiny">Points per player-day</span></div>
+      <div id="arcHsDistrict"></div>
+      <p class="arc-tiny">Per day worked, so small stores can win.</p>
+    </div>
+  </div>
+  <div class="arc-card" style="flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap">
+    <span class="arc-h">LAST MONTH'S CHAMPION</span>
+    <p id="arcChamp"></p>
+  </div>
+</section>
+
+<!-- HOW TO PLAY -->
+<section data-arc-v="how" class="arc-v" hidden>
+  <span class="arc-title">HOW TO PLAY</span>
+  <div class="arc-steps">
+    <div class="arc-card"><span class="arc-k" style="background:var(--arc-brand)">1</span><b style="font-size:17px">List it</b><p class="arc-tiny" style="font-size:15px">Every item you list scores points.</p></div>
+    <div class="arc-card"><span class="arc-k" style="background:var(--arc-teal)">2</span><b style="font-size:17px">List it right</b><p class="arc-tiny" style="font-size:15px">A title sent back costs points. Clean days build your combo.</p></div>
+    <div class="arc-card"><span class="arc-k" style="background:var(--arc-gold)">3</span><b style="font-size:17px">Bonus round</b><p class="arc-tiny" style="font-size:15px">On the 1st, your sold % boosts or cuts your score. Then it turns into tickets.</p></div>
+    <div class="arc-card"><span class="arc-k" style="background:var(--arc-rose)">4</span><b style="font-size:17px">Keep it sold</b><p class="arc-tiny" style="font-size:15px">A return or claim on your item takes points back.</p></div>
+  </div>
+  <div class="arc-two">
+    <div class="arc-card">
+      <span class="arc-h">GAME OVER IF YOU</span>
+      <p>Reprice items (managers only) · split one item into many listings · list on someone else's POS login</p>
+    </div>
+    <div class="arc-card">
+      <span class="arc-h">LEVELS NEVER GO DOWN</span>
+      <p>Rookie · Apprentice · Associate · Specialist · Professional · Senior Professional · Veteran · Expert · Master · <b style="color:var(--arc-brand-deep)">The Standard</b></p>
+      <p class="arc-tiny">Spending tickets never lowers your level.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PRIZE COUNTER -->
+<section data-arc-v="prizes" class="arc-v" hidden>
+  <div class="arc-roomhead">
+    <span class="arc-logo">PRIZE COUNTER</span>
+    <span class="arc-tickets arc-num" id="arcTixBig">0 TICKETS</span>
+  </div>
+  <div class="arc-roomgrid">
+    <div class="arc-shelf" id="arcShelf"></div>
+    <div class="arc-roomside">
+      <div class="arc-side">
+        <span class="arc-h" style="color:var(--arc-ticket)">SAVING UP</span>
+        <p id="arcSaveName"></p>
+        <div class="arc-bar"><i id="arcSaveFill"></i></div>
+      </div>
+      <div class="arc-side">
+        <span class="arc-h" style="color:var(--arc-ticket)">HOW IT WORKS</span>
+        <p class="arc-tiny" style="font-size:14px">Pick a prize. Your tickets go on hold. Your manager hands it over, and only then do the tickets leave your balance. Turned down? They come back.</p>
+        <p class="arc-say" id="arcSay" role="status"></p>
+        <button type="button" class="arc-btn" onclick="arcGo('play')" style="margin-top:auto">Back to the arcade</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- OPERATOR (managers / DM): month-end cash-out, checks, prize hand-over -->
+<section data-arc-v="op" class="arc-v" hidden>
+  <div class="arc-opgrid">
+    <div class="arc-card" style="grid-area:cash">
+      <div class="arc-row" style="flex-wrap:wrap"><span class="arc-title" id="arcCashHead">CASH OUT</span><span class="arc-tiny" id="arcCashMeta"></span></div>
+      <div class="arc-tbl"><table class="arc-table">
+        <thead><tr><th>Player</th><th class="arc-r">Days</th><th class="arc-r">Listed</th><th class="arc-r">Score</th><th class="arc-r">Sold %</th><th class="arc-r">Bonus round</th><th>Check</th><th class="arc-r">Tickets</th></tr></thead>
+        <tbody id="arcOpRows"></tbody>
+      </table></div>
+      <div class="arc-row" style="align-items:center;margin-top:auto">
+        <p class="arc-say" id="arcCashSay" role="status"></p>
+        <button class="arc-btn arc-go" type="button" onclick="arcCashOut()">Cash out the month</button>
+      </div>
+    </div>
+    <div class="arc-card" style="grid-area:flags">
+      <span class="arc-h">CHECK THESE</span>
+      <div id="arcFlags"></div>
+    </div>
+    <div class="arc-card" style="grid-area:reqs">
+      <span class="arc-h" style="color:var(--arc-ticket)">PRIZE REQUESTS</span>
+      <div id="arcReqs"></div>
+    </div>
+    <div class="arc-card" style="grid-area:budget">
+      <span class="arc-h">PRIZE BUDGET</span>
+      <p id="arcBudget"></p>
+      <div class="arc-bar"><i id="arcBudgetFill"></i></div>
+      <p class="arc-tiny">The DM sets the monthly budget and the ticket price of each prize.</p>
+    </div>
+  </div>
+</section>
+
+</div>
+</main>
+
+</body>
+</html>

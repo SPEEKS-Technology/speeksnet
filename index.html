@@ -4,12 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SPEEKSNET | QuickPortal</title>
+  <!-- Arriving back from the arcade: cover the page from its very first paint
+       (styles.css, LISTING XP ARCADE). speeks.js is defer, so without this the
+       dashboard flashes before the portal overlay exists. -->
+  <script>try { if (sessionStorage.getItem('speeksArcPortal')) document.documentElement.classList.add('arc-landing'); } catch (e) {}</script>
   <style>
     /* Critical anti-FOUC: keep slide-in side panels out of flow until styles.css loads.
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261113b">
+  <link rel="stylesheet" href="styles.css?v=20261117g">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +29,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261121e" defer></script>
+  <script src="speeks.js?v=20261117g" defer></script>
 </head>
 
 <body class="preload">

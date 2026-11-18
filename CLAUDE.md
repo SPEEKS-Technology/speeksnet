@@ -32,8 +32,8 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 3. **Ship a JS/CSS change → bump the cache-buster in every HTML page.** Assets
    are served raw with a hand-maintained query string, e.g.
-   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The six pages
-   that carry it: `index.html`, `operations.html`, `b2b.html`, `workspace.html`, `stats.html`,
+   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The seven pages
+   that carry it: `index.html`, `operations.html`, `b2b.html`, `workspace.html`, `stats.html`, `arcade.html`,
    `docs.html`. Forget this and users keep the old file.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
@@ -64,6 +64,7 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 | `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance. |
 | `stats.html` | Stats/reporting page. |
 | `docs.html` | *Not* developer docs — the in-app Processes & Policies library (CMS-driven). |
+| `arcade.html` | The Listing XP arcade (2026-11-17): no nav bar, reached from the QuickPortal launcher through a portal animation. Front end only on sample numbers (`ARC_SAMPLE`, section LISTING XP ARCADE at the end of `speeks.js`); gated by `widget-arcade`, DM only for now. |
 | `tv.html` | Retired. A redirect stub to `index.html`, kept only for the five wall TVs still bookmarked to it. The shop-floor board is now the Command Center card on the QuickPortal — see `STORE_BOARD_FEATURES`. |
 | `speeks.js` | The entire front end. See `docs/modules/README.md`. |
 | `styles.css` | ~970 KB, same monolithic story. |
