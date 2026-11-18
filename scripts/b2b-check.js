@@ -3398,3 +3398,71 @@ t('review: the numbers block is always on the page, hidden until there is a line
 t('review: closing a deal drops a half-built listing split', function () {
     return _srcOf(b2bCloseDeal).indexOf('_b2bSplitMode = false') > -1 || 'split mode carries over to the next deal';
 });
+// --- recycle many lines out at once (Nick, 2026-11-04) -----------------------
+function _recFixture() {
+    return [
+        { id: 'r1', line_no: 1, sku: 'S1', make: 'Dell', model: 'Scrap tower', quantity: 4, listed_qty: 0, recycled_qty: 1, disposition: 'recycle', listings: [] },
+        { id: 'r2', line_no: 2, sku: 'S2', make: 'HP', model: 'Laptop', quantity: 3, listed_qty: 1, recycled_qty: 0, disposition: 'purchase', cost: 50, listings: [] },
+        { id: 'r3', line_no: 3, sku: 'S3', make: 'Acer', model: 'Done', quantity: 2, listed_qty: 2, recycled_qty: 0, disposition: 'purchase', cost: 10, listings: [] },
+        { id: 'r4', line_no: 4, sku: 'S4', make: 'Old', model: 'Monitor', quantity: 2, listed_qty: 0, recycled_qty: 0, disposition: 'recycle', listings: [] },
+    ];
+}
+function _recWith(fn) {
+    var keep = _b2bModalItems, keepD = _b2bModalDeal, keepR = sessionStorage.getItem('speeksUserRole');
+    var body = document.createElement('div'), foot = document.createElement('div');
+    body.id = 'b2bRecycleManyBody'; foot.id = 'b2bRecycleManyFooter';
+    document.body.appendChild(body); document.body.appendChild(foot);
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try {
+        _b2bModalItems = _recFixture();
+        _b2bModalDeal = { id: 'rec-deal', ref: 'REC-1', stage: 'listing', listing_store: 'OVL' };
+        return fn(body, foot);
+    } finally {
+        _b2bModalItems = keep; _b2bModalDeal = keepD; _b2bRecSel = {};
+        sessionStorage.setItem('speeksUserRole', keepR);
+        body.remove(); foot.remove();
+    }
+}
+t('recycle many: the listing screen offers it, other stages do not', function () {
+    if (_b2bRecycleManyBtn({ id: 'x', stage: 'listing' }).indexOf('b2bOpenRecycleMany()') < 0) return 'no button on listing';
+    if (_b2bRecycleManyBtn({ id: 'x', stage: 'pricing' })) return 'offered outside listing';
+    return _srcOf(_b2bStageListing).indexOf('_b2bRecycleManyBtn(deal)') > -1 || 'not in the listing tools row';
+});
+t('recycle many: opens with the outstanding recycle lines ticked and nothing else', function () {
+    return _recWith(function (body, foot) {
+        b2bOpenRecycleMany();
+        var sel = Object.keys(_b2bRecSel).sort().join(',');
+        if (sel !== 'r1,r4') return 'ticked: ' + sel;
+        if (body.innerHTML.indexOf('Done') > -1) return 'a finished line is offered';
+        if (body.querySelectorAll('.b2b-moverow').length !== 3) return 'expected 3 outstanding lines';
+        return foot.textContent.indexOf('Recycle Out 5 Units') > -1 || 'footer: ' + foot.textContent.replace(/\s+/g, ' ');
+    });
+});
+t('recycle many: ticking a bought line adds its outstanding units and its cost', function () {
+    return _recWith(function (body, foot) {
+        b2bOpenRecycleMany();
+        b2bRecToggle('r2');
+        var f = foot.textContent.replace(/\s+/g, ' ');
+        if (f.indexOf('Recycle Out 7 Units') < 0) return 'footer: ' + f;
+        return f.indexOf('$100.00 written off') > -1 || 'no cost in: ' + f;
+    });
+});
+t('recycle many: recycles every outstanding unit on the ticked lines only', function () {
+    return _recWith(function () {
+        b2bOpenRecycleMany();
+        b2bRecycleMany();
+        var by = {}; _b2bModalItems.forEach(function (i) { by[i.id] = i; });
+        if (by.r1.recycled_qty !== 4) return 'r1 recycled ' + by.r1.recycled_qty + ', expected 4';
+        if (by.r4.recycled_qty !== 2) return 'r4 recycled ' + by.r4.recycled_qty + ', expected 2';
+        if (by.r2.recycled_qty !== 0) return 'an unticked line was recycled';
+        return Object.keys(_b2bRecSel).length === 0 || 'the selection outlives the action';
+    });
+});
+t('recycle many: nothing ticked leaves the button disabled, and a store sees only its own lines', function () {
+    return _recWith(function (body, foot) {
+        b2bOpenRecycleMany();
+        b2bRecPick('none');
+        if (!foot.querySelector('.b2b-btn-primary').disabled) return 'enabled with nothing ticked';
+        return _srcOf(_b2bRecLines).indexOf('_b2bMyLines()') > -1 || 'not scoped to the lines this user answers for';
+    });
+});

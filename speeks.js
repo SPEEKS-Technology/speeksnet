@@ -30088,7 +30088,7 @@ function _b2bStageListing(deal) {
         eyebrow: deal.ref,
         title: deal.client?.company || 'Deal',
         menu: _b2bDeclineMenu(deal),
-        tools: _b2bPrintAllBtn(deal) + _b2bMoveLinesBtn(deal) + _b2bMoveBtn(deal),
+        tools: _b2bPrintAllBtn(deal) + _b2bRecycleManyBtn(deal) + _b2bMoveLinesBtn(deal) + _b2bMoveBtn(deal),
         next: {
             primary: { id: 'b2bListDone', disabled: !_b2bAllSatisfied(), onclick: `b2bCompleteDeal('${deal.id}',this)`,
                        label: _b2bIsSplit(deal) && !_b2bIsCorp() ? 'My Part Is Done' : 'Complete Deal' },
@@ -30762,6 +30762,130 @@ function b2bRecycleUnits(itemId) {
         + `(${_b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * units, 2)} at cost). `
         + `Use the − on the recycle counter if you need to put units back.`)) return;
     _b2bRecycleApply(it, +units);
+}
+
+// --- recycling many lines out at once --------------------------------------
+//
+// Nick, 2026-11-04: "Ability to mass recycle the recycle items out or select
+// given line items." A pallet's recycle lines are known at pricing, so by
+// listing they are a chore: open each row's menu, Recycle several, type the
+// count, confirm -- once per line.
+//
+// One picker does both halves of the ask. It opens with every outstanding
+// RECYCLE line already ticked (the mass case is then one click), and any other
+// line can be ticked beside them. A ticked line has ALL its outstanding units
+// recycled; part of a line is still the row menu's "Recycle several".
+//
+// No new server action: each line goes through _b2bRecycleApply, so it rides
+// the same per-item queue, rolls back on its own if its save fails, and is
+// undone the same way (the row menu's "Put one back"). Scoped to _b2bMyLines,
+// like Complete, so a store never recycles a line another store was sent.
+// No role gate, because recycling a single line has none either.
+let _b2bRecSel = {};                // itemId -> true, while picking
+
+function _b2bRecRoom(it) { return Math.max(0, (Number(it.quantity) || 1) - _b2bDone(it)); }
+function _b2bRecLines()  { return _b2bMyLines().filter(it => _b2bRecRoom(it) > 0); }
+
+function _b2bRecycleManyBtn(deal) {
+    if (!deal || deal.stage !== 'listing') return '';
+    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bOpenRecycleMany()"
+        title="Recycle out every recycle line at once, or pick the lines">Recycle Out</button>`;
+}
+
+function b2bOpenRecycleMany() {
+    if (!_b2bModalDeal) return;
+    _b2bRecSel = {};
+    _b2bRecLines().filter(_b2bIsScrap).forEach(it => { _b2bRecSel[it.id] = true; });
+    _b2bPaintRecycleMany();
+    toggleModal('b2bRecycleManyModal');
+}
+
+// Closes the picker and leaves the deal page up. closeAllModals() on its own
+// would take the deal with it; toggleModal on an open modal is the route that
+// asks for the page to be kept.
+function b2bCloseRecycleMany() {
+    if (document.getElementById('b2bRecycleManyModal')?.classList.contains('show')) toggleModal('b2bRecycleManyModal');
+}
+
+function b2bRecToggle(itemId) {
+    if (_b2bRecSel[itemId]) delete _b2bRecSel[itemId];
+    else _b2bRecSel[itemId] = true;
+    _b2bPaintRecycleMany();
+}
+function b2bRecPick(which) {
+    _b2bRecSel = {};
+    _b2bRecLines().filter(it => which === 'all' || (which === 'scrap' && _b2bIsScrap(it)))
+        .forEach(it => { _b2bRecSel[it.id] = true; });
+    _b2bPaintRecycleMany();
+}
+
+function _b2bPaintRecycleMany() {
+    const body = document.getElementById('b2bRecycleManyBody');
+    if (!body) return;
+    const lines = _b2bRecLines();
+    const picked = lines.filter(it => _b2bRecSel[it.id]);
+    const scrapN = lines.filter(_b2bIsScrap).length;
+    const unitCost = it => _b2bIsBuy(it) ? (Number(it.cost != null ? it.cost : it.offer) || 0) : 0;
+
+    const rows = lines.map(it => {
+        const on = !!_b2bRecSel[it.id];
+        const room = _b2bRecRoom(it), qty = Number(it.quantity) || 1;
+        return `
+        <div class="b2b-moverow ${on ? 'on' : ''}" onclick="b2bRecToggle('${it.id}')">
+            <span class="b2b-movecheck">${on ? _b2bIco('<polyline points="20 6 9 17 4 12"/>') : ''}</span>
+            <span class="b2b-splitrow-m">
+                <b>${escapeHtml(_b2bItemName(it))}</b>
+                <span>${escapeHtml(_b2bLineNo(it))} · ${escapeHtml(it.sku || 'no SKU')} · ${room} of ${qty} unit${qty === 1 ? '' : 's'} outstanding</span>
+            </span>
+            <span class="b2b-movenow">${!_b2bIsBuy(it)
+                ? `<span class="b2b-doc-rec ${_b2bIsScrap(it) ? '' : 'nrv'}">${escapeHtml(B2B_DISP[_b2bDispOf(it)].label)}</span>`
+                : (unitCost(it) ? `${_b2bMoney(unitCost(it) * room, 2)} at cost` : '')}</span>
+        </div>`;
+    }).join('');
+
+    body.innerHTML = lines.length ? `
+        <div class="b2b-note">
+            <span class="b2b-note-k">Recycle lines out</span>
+            <div>Every outstanding unit on a ticked line is recycled out and comes off the listing
+                checklist. To put units back afterwards, use "Put one back" in that line's ⋯ menu.</div>
+        </div>
+        <div class="b2b-splitacts">
+            ${scrapN ? `<button class="b2b-mini" onclick="b2bRecPick('scrap')">Recycle lines only (${scrapN})</button>` : ''}
+            <button class="b2b-mini" onclick="b2bRecPick('all')">Select all</button>
+            <button class="b2b-mini" onclick="b2bRecPick('none')">Clear</button>
+        </div>
+        <div class="b2b-moverows">${rows}</div>`
+        : `<div class="b2b-empty sm"><div class="b2b-empty-t">Every unit is already listed or recycled</div></div>`;
+
+    const foot = document.getElementById('b2bRecycleManyFooter');
+    if (foot) {
+        const units = picked.reduce((n, it) => n + _b2bRecRoom(it), 0);
+        const cost  = picked.reduce((n, it) => n + unitCost(it) * _b2bRecRoom(it), 0);
+        foot.innerHTML = `
+            <span class="b2b-msg">${picked.length
+                ? `${picked.length} line${picked.length === 1 ? '' : 's'} · ${units} unit${units === 1 ? '' : 's'}${
+                    cost ? ` · ${_b2bMoney(cost, 2)} written off at cost` : ''}`
+                : ''}</span>
+            <button class="kpi-cancel-btn" onclick="b2bCloseRecycleMany()">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" ${units ? '' : 'disabled'}
+                onclick="b2bRecycleMany()">Recycle Out ${units || ''} ${units === 1 ? 'Unit' : 'Units'}</button>`;
+    }
+}
+
+function b2bRecycleMany() {
+    // Re-read the room at the moment of the click: a unit listed from another
+    // tab since the picker was painted must not be recycled as well.
+    const todo = _b2bRecLines().filter(it => _b2bRecSel[it.id]);
+    if (!todo.length) return;
+    _b2bRecSel = {};
+    b2bCloseRecycleMany();
+    const units = todo.reduce((n, it) => n + _b2bRecRoom(it), 0);
+    todo.forEach(it => _b2bRecycleApply(it, +_b2bRecRoom(it)));
+    // _b2bRecycleApply shows the "every unit is accounted for" screen itself
+    // when the last line lands; say what happened only when it did not.
+    if (!_b2bAllSatisfied()) {
+        _b2bSay(`${units} unit${units === 1 ? '' : 's'} recycled out across ${todo.length} line${todo.length === 1 ? '' : 's'}.`);
+    }
 }
 
 // Every unit is accounted for -- say so properly before closing the deal out.
