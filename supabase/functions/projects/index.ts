@@ -9,6 +9,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // approves it; approving IS starting (requested → in_progress). Only the DM
 // completes one and records what happens to it afterwards.
 //
+// SIGN-OFF (0187, Ethan's feedback, 2026-11-18). The people doing the work say
+// when it is finished (request_signoff → awaiting_signoff) and the DM approves
+// it as complete or sends it back with a note (return_signoff → in_progress).
+// He can still complete a running project directly: he is who signs off.
+//
 //   GET   + x-user-pin                       the list + history — EVERY project for
 //                                            DM, CEO and MOCD (always, by role),
 //                                            only the ones you asked for or are
@@ -348,7 +353,7 @@ Deno.serve(async (req: Request) => {
     // withdrawn) are the record and stay as they were.
     case "edit": {
       if (!mine && !perms.approve) return json({ success: false, error: "Only the person who asked, or the DM, can edit a project." }, 403);
-      if (!["requested", "changes_requested", "in_progress", "parked"].includes(from)) {
+      if (!["requested", "changes_requested", "in_progress", "parked", "awaiting_signoff"].includes(from)) {
         return json({ success: false, error: "A finished or closed project can't be edited." }, 409);
       }
       // Empty falls back to whoever asked, as it did on create.
@@ -372,12 +377,23 @@ Deno.serve(async (req: Request) => {
     // -- whoever is involved (or the approver): progress notes while it runs --
     case "update": {
       if (!owns && !perms.approve) return json({ success: false, error: "Only people working on the project can post updates." }, 403);
-      if (!["in_progress", "parked"].includes(from)) return json({ success: false, error: "Updates go on projects that are under way." }, 409);
+      // Waiting on sign-off still takes updates: "here's where to find it".
+      if (!["in_progress", "parked", "awaiting_signoff"].includes(from)) return json({ success: false, error: "Updates go on projects that are under way." }, 409);
       if (!note) return json({ success: false, error: "Write the update first." }, 400);
       await sb.from("projects").update({ updated_at: now }).eq("id", id);
       await sb.from("project_events").insert({ project_id: id, kind: "update", actor: me, note });
       await broadcastChange("projects");
       return json({ success: true });
+    }
+
+    // "It's finished — please sign it off." Anyone on the project. A parked
+    // project has to be resumed first: parked means nobody is working on it.
+    case "request_signoff": {
+      if (!owns) return json({ success: false, error: "Only people working on the project can send it for sign-off." }, 403);
+      return move({ allowedFrom: ["in_progress"], to: "awaiting_signoff", kind: "signoff_requested",
+        tell: { kind: "project_request", title: `Project ready for sign-off: ${p.title}`,
+          body: note ? `${me} says PRJ-${id} is finished: ${note}` : `${me} says PRJ-${id} is finished and needs your sign-off.`,
+          roles: ["district manager"], feature: "projects-approve" } });
     }
   }
 
@@ -402,9 +418,19 @@ Deno.serve(async (req: Request) => {
       return move({ allowedFrom: ["in_progress"], to: "parked", kind: "parked", tell: forRequester("parked") });
     case "resume":
       return move({ allowedFrom: ["parked"], to: "in_progress", kind: "resumed", tell: forRequester("resumed") });
+    // From awaiting_signoff this is the sign-off; from in_progress / parked the
+    // DM is completing it himself, which is the same decision.
     case "complete":
-      return move({ allowedFrom: ["in_progress", "parked"], to: "completed", kind: "completed",
-        patch: { completed_at: now }, tell: forRequester("marked complete") });
+      return move({ allowedFrom: ["in_progress", "parked", "awaiting_signoff"], to: "completed", kind: "completed",
+        patch: { completed_at: now },
+        tell: forRequester(from === "awaiting_signoff" ? "approved as complete" : "marked complete") });
+    // Not finished yet: back to work, with a note saying what's left. The note
+    // goes in decision_note too, so the project's popup leads with it.
+    case "return_signoff":
+      return move({ allowedFrom: ["awaiting_signoff"], to: "in_progress", kind: "signoff_returned",
+        patch: { decided_by: me, decided_at: now, decision_note: note },
+        noteRequired: "Say what still needs doing.",
+        tell: forRequester("sent back") });
     case "outcome": {
       const outcome = String(b.outcome || "");
       if (!OUTCOMES.includes(outcome)) return json({ success: false, error: "Pick what happens to the project." }, 400);
