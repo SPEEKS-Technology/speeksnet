@@ -249,14 +249,14 @@ const SUBS: Record<Category, Sub[]> = {
     // requests still go up to the DM. Sharing one switch is right anyway: the
     // sub answers "do I want the requests that wait on me", and which kinds
     // those are is a fact about the role, not a thing to configure.
-    { key: "req_in",  label: "Requests Coming In", blurb: "Purchase and recycle requests, and delete requests, waiting on a verdict.",
-      kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request"],
+    { key: "req_in",  label: "Requests Coming In", blurb: "Purchase, recycle, delete and project requests waiting on a verdict.",
+      kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request", "project_request"],
       roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
     // Neutral wording: this sub reaches BOTH ends -- the store hears the DM's
     // verdict, the DM hears the store's reply -- so "the DM's answer" was wrong
     // for the one person most likely to read it.
-    { key: "req_out", label: "Verdicts And Replies", blurb: "Verdicts, notes and replies on purchase and recycle requests already sent.",
-      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply", "purchase_verdict"] },
+    { key: "req_out", label: "Verdicts And Replies", blurb: "Verdicts, notes and replies on purchase, recycle and project requests already sent.",
+      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply", "purchase_verdict", "project_decision"] },
   ],
   b2b: [
     // The stage events, moved here from `requests` with the same key, so a
@@ -378,6 +378,7 @@ const KIND_LABEL: Record<string, string> = {
   b2b_delete_request: "B2B Delete Request",
   purchase_verdict: "Purchase Request", claim_review_reminder: "Claims Review",
   title_sent_back: "Title Sent Back", callback_match: "Call Back",
+  project_request: "Project Request", project_decision: "Project",
 };
 
 // WHICH ROLES CAN ACTUALLY RECEIVE EACH CATEGORY.
@@ -414,8 +415,11 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // arrived regardless of this set — wants() reads muted_kinds, never
   // CATEGORY_ROLES, so a category absent from the popout still delivers if an
   // audience names the role. The audience is the thing to fix, and was.
+  // MOCD rejoined this one on 2026-11-17: they can ask for a project (the
+  // projects function), and the DM's verdict on it comes back as a
+  // project_decision in this category.
   requests: new Set([
-    "district manager", "ceo",
+    "district manager", "ceo", "mocd",
     "manager", "owner (manager)", "owner manager", "assistant manager",
   ]),
   // Everyone who can hold the Business-to-Business tab by default (its

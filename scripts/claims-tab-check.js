@@ -82,7 +82,9 @@ t('the old popup openers still work, through the tab', function () {
     return vis('ov-panel-claims') || 'oversight opener did nothing';
 });
 t('#claims is an accepted deep link', function () {
-    return /'claims'\]\.includes\(hash\)/.test(String(initWorkspace)) || 'claims missing from the hash list';
+    // Anywhere in the list, not necessarily last: Projects (2026-11) went in
+    // after it, and position in the list means nothing.
+    return /\[[^\]]*'claims'[^\]]*\]\.includes\(hash\)/.test(String(initWorkspace)) || 'claims missing from the hash list';
 });
 t('Ctrl+K has the tab', function () {
     var p = JUMP_PLACES.find(function (x) { return x.id === 'ws-claims'; });
