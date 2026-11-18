@@ -44775,7 +44775,7 @@ const FEATURE_CATALOG = [
     // to the right of settings … a slightly green hue"), drawn in Phase 3.
     // `def: []` for BOTH, every role including the DM: dev access is a per-person
     // grant, not a role (D2) — today Nick and Ethan, seeded as user overrides by
-    // migration 0187. The dev-tickets edge function reads the same keys with the
+    // migration 0188. The dev-tickets edge function reads the same keys with the
     // same defaults (DEFAULTS there); change one, change the other.
     // dev-release-publish is who may ship a release to production (Phase 6, Q3
     // still open) — catalogued now so the function can report it, granted to

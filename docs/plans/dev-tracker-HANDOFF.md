@@ -78,7 +78,7 @@ still open.
 
 ⚠️ There is also an **Ethan Frye** (Assistant Manager, LEE). Match on the id above, never on the first name "Ethan".
 
-**Migration number for Phase 1:** next free is **`0187`** as of 2026-11-18 (database max `0186_projects`; no open branch has anything higher — Ethan's December branch tops out at `0184`, which the DB already has). Re-check `list_migrations` and every open branch on the day you write it.
+**Migration number for Phase 1:** this said `0187` — and was wrong within hours: another session's `feat/projects-completion-signoff` (PR #581) took `0187_projects_signoff.sql` the same afternoon. Phase 1 is **`0188_dev_tracker`**. Re-check `list_migrations` **and every remote branch** (`git ls-tree` each) immediately before applying, not just when writing.
 
 **GitHub App permissions — one change from Phase 0 below:** the import (Phase 2) reads issues, comments and milestones, so the App needs **Issues: read** as well as Contents / Pull requests / Metadata read. The original list missed it.
 
@@ -135,6 +135,14 @@ Each phase is shippable on its own and gets its own PR into `pre-release`.
 - [x] Decide the people mapping: `Eckushnir` → Ethan Kushnir, `back707` → Nick — ids in §3a.
 
 ### Phase 1 — Data model + dev access
+> **Built 2026-11-18 on `feat/dev-tracker`** (all phases of this update stay on that one branch — Nick, 2026-11-18). Migration `0188_dev_tracker.sql`, function `supabase/functions/dev-tickets`, catalog entries next to `nav-settings` in `FEATURE_CATALOG`, checks in `scripts/dev-tracker-check.js`. Decisions made while building, beyond the draft below:
+> - Dev-created tickets start in **Backlog** (a dev has already triaged it); only Phase 3's intake lands in **Triage**.
+> - Tickets can be **assigned only to people who hold `dev-tracker`** — the GET returns them as `devs`.
+> - **Won't do needs a reason** (the reporter reads it); any other status can move to any other by hand until Phase 4 automates some.
+> - Only your own SPEEKSNET-written comments are editable; imported GitHub comments are the record.
+> - `edit` takes only the fields sent and is race-safe on `updated_at`; `status` is race-safe on the status it moved from.
+> - Types get a `dev_only` flag for later; none of the four seeded types uses it. `dev-release-publish` is granted to nobody until Q3.
+> - The two `dev-tracker` grants (Nick, Ethan) are seeded by the migration as ordinary `feature_overrides` user rows — visible and revocable in Feature Access.
 - Migration (next free number — check!): `dev_tickets`, `dev_ticket_comments`, `dev_ticket_events` (append-only history), `dev_ticket_types`, `dev_ticket_areas` (if Q1 = type+area), `dev_releases`, `dev_ticket_links` (commit / branch / PR refs), `github_branches` (cache), `github_people` (login → `users.id`), `github_sync_log`.
 - `dev_tickets` columns (draft): `id` (= SN number), `title`, `description`, `type`, `area`, `priority`, `status` (`triage`, `backlog`, `in_progress`, `in_review`, `on_prerelease`, `done`, `wont_do`), `assignee_id` (users.id), `reporter_id` (users.id) + names at the time, `stores` text[], `release_id`, `due`, `source` (`github_import` / `idea` / `dev`), `github_number`, `project_id` (link to Projects), timestamps.
 - Numbering per Q5: imported rows take their GitHub number; a sequence starting at 1000 for new ones.

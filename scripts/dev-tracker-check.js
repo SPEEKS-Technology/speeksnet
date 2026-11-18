@@ -2,7 +2,7 @@
 //
 //   powershell -File scripts/browser-check.ps1 dev-tracker-check.js
 //
-// Phase 1 is the data model (migration 0187) and the dev-tickets edge function;
+// Phase 1 is the data model (migration 0188) and the dev-tickets edge function;
 // the only browser-side piece so far is Feature Access. These pin down D2 —
 // dev access is a per-person grant, not a role — because a role default here
 // would quietly hand the tracker (and later, Publish) to every DM, CEO or
@@ -36,7 +36,7 @@ t('access: no role can publish a release by default', function () {
     return !who.length || 'on by default for: ' + who.join(', ');
 });
 t('access: a per-person grant switches the tracker on for that person only', function () {
-    // feature-access writes the subject lower-cased; 0187 seeds Nick and Ethan this way.
+    // feature-access writes the subject lower-cased; 0188 seeds Nick and Ethan this way.
     _featureOv = { role: {}, user: { 'dev-tracker': { 'nick hettinger': true, 'ethan kushnir': true } } };
     try {
         if (!sees('dev-tracker', 'manager', 'Nick Hettinger')) return 'Nick (a manager) not granted';

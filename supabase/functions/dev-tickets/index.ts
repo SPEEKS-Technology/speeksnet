@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 // ============================================================================
-// DEV-TICKETS — the Development tracker's tickets (migration 0187).
+// DEV-TICKETS — the Development tracker's tickets (migration 0188).
 // Plan: docs/plans/dev-tracker-HANDOFF.md (Phase 1). The page that uses this is
 // Phase 3 (dev.html, behind a green header button right of the settings cog).
 // ----------------------------------------------------------------------------
@@ -13,7 +13,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // WHO (D2): dev access is a per-person Feature Access switch, not a role.
 //   dev-tracker          see and work tickets       default: nobody — granted
-//                                                   per person (Nick, Ethan; 0187)
+//                                                   per person (Nick, Ethan; 0188)
 //   dev-release-publish  ship a release (Phase 6)   default: nobody — Q3 open
 // Resolved here exactly as the browser resolves them (user override > role
 // override > built-in default) — the Projects pattern. The DEFAULTS below MUST

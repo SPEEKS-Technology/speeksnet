@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0187 — DEVELOPMENT TRACKER, Phase 1: the data model (Nick, 2026-11-18).
+-- 0188 — DEVELOPMENT TRACKER, Phase 1: the data model (Nick, 2026-11-18).
 -- Plan and every decision behind it: docs/plans/dev-tracker-HANDOFF.md.
 --
 -- GitHub keeps the CODE; everything about the WORK — tickets, which branch and
@@ -7,8 +7,11 @@
 -- (Phase 7) production is reached only from here. This file is the tables;
 -- the dev-tickets edge function is the only thing that reads or writes them.
 --
--- 0187: database max was 0186_projects and no open branch had anything higher
--- on 2026-11-18 (Ethan's December branch stops at 0184, already applied).
+-- 0188, not 0187: written as 0187 (database max was 0186_projects), then the
+-- pre-apply sweep of every remote branch found 0187_projects_signoff.sql on
+-- feat/projects-completion-signoff (PR #581), written the same afternoon in
+-- another session and not yet applied. Trap 4 again — the sweep is the step
+-- that catches it, so don't skip it on the day.
 --
 -- TICKET NUMBERS (Q5). A ticket's id IS its number, shown as SN-<id>. Issues
 -- imported from GitHub (Phase 2) are inserted WITH their GitHub number, so a
@@ -230,8 +233,8 @@ create index if not exists github_sync_log_created_idx on public.github_sync_log
 -- Feature Access rows — visible, and revocable, in the Feature Access tool.
 -- subject is the lower-cased name, as feature-access writes it.
 insert into public.feature_overrides (feature_key, subject_type, subject, enabled, updated_by, updated_at) values
-  ('dev-tracker', 'user', 'nick hettinger', true, 'migration 0187', now()),
-  ('dev-tracker', 'user', 'ethan kushnir',  true, 'migration 0187', now())
+  ('dev-tracker', 'user', 'nick hettinger', true, 'migration 0188', now()),
+  ('dev-tracker', 'user', 'ethan kushnir',  true, 'migration 0188', now())
 on conflict (feature_key, subject_type, subject) do nothing;
 
 -- The Claude connector reads through column grants it recomputes (0142).
