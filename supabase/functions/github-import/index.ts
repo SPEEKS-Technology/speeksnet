@@ -217,12 +217,15 @@ Deno.serve(async (req: Request) => {
     const used = new Set<number>();
     const pairs: { milestone: any; release: any | null }[] = milestones.map((m: any) => {
       const t = norm(m.title);
-      // Either name inside the other: "v1.0.2 Season 1 Reloaded" is the
-      // "Season 1 Reloaded Update" milestone. 8+ characters, so a bare
-      // "v3.7.0" (normalised to nothing) never pairs with anything.
+      // The milestone's title inside the release's name, or the release's
+      // name opening the milestone's title: "v1.0.2 Season 1 Reloaded" is the
+      // "Season 1 Reloaded Update" milestone. Not the name anywhere inside the
+      // title — that paired "v2.2.0 July Update" with "Mini July Update" and
+      // "v2.1.1 Bug Fixes" with "June Update Patch/Bug Fixes" (dry run,
+      // 2026-11-18). 8+ characters, so a bare "v3.7.0" never pairs.
       const rel = pubReleases.find((r: any) => {
         const n = norm(r.name || "");
-        return !used.has(r.id) && t && n.length >= 8 && (n.includes(t) || t.includes(n));
+        return !used.has(r.id) && t && n.length >= 8 && (n.includes(t) || t.startsWith(n));
       }) || null;
       if (rel) used.add(rel.id);
       return { milestone: m, release: rel };
