@@ -2150,18 +2150,8 @@ function toggleCalendar() {
     }
     toggleModal('calendarDropdown');
 }
-// Recipients for Submit an Idea are read SERVER side now (the idea-submit edge
-// function reads the idea_submissions list and falls back to Ethan), so the
-// popup no longer fetches the list on open or rewrites a formsubmit _cc field.
-function toggleIdeaModal() {
-    // Pre-fill the submitter's name from their session so they don't retype it.
-    const nameEl = document.getElementById('ideaName');
-    if (nameEl) {
-        const u = sessionStorage.getItem('speeksUserName');
-        if (u && u.trim()) nameEl.value = u.trim();
-    }
-    toggleModal('ideaModal');
-}
+// toggleIdeaModal() lives with the rest of Submit a Ticket in "17. MODULE:
+// SUBMIT A TICKET". Recipients are read server side by idea-submit.
 
 function switchAnnTab(tab) {
     const isRecent = tab === 'recent';
@@ -12510,86 +12500,304 @@ function handleSignOut() {
     location.replace('index.html');
 }
 
-// --- 17. MODULE: IDEA SUBMISSION MODAL ---
-// Posts to the idea-submit edge function with fetch. It used to be a plain form
-// posted to formsubmit.co into a hidden iframe, which is why it "took forever"
-// (2026-11-05): the success screen waited on that free service's whole reply,
-// had no timeout, and showed "Submitted" on any iframe load — error pages too.
-// Now "Submitted" means the relay took the mail, and a failure says so.
+// --- 17. MODULE: SUBMIT A TICKET (was Submit an Idea) ---
+// The header lightbulb. Since 2026-11-19 (dev tracker Phase 3, D3) what a
+// store sends here becomes a ticket in the Development tracker's TRIAGE — not
+// just an email — and the submitter can follow it under "My Tickets". The
+// email to the idea_submissions list still goes out, now carrying the ticket
+// number and a link to it. Plan: docs/plans/dev-tracker-HANDOFF.md.
+//
+// Short on purpose: what kind, which part of SPEEKSNET (or "Not sure"), what's
+// going on, an optional file. No title box — the idea-submit function takes
+// the first line of the description, and a dev retitles it in triage.
+//
+// "A project I want to build" is not a ticket: a tool, extension or script
+// built NEXT to SPEEKSNET goes through Projects for the DM's approval. That
+// choice swaps the form for a button that opens the Projects request form,
+// carrying what they had typed. Offered only to people who can request a
+// project (Feature Access 'projects-request').
+//
+// Still fetch with a timeout and an honest error (2026-11-05: the old
+// formsubmit.co iframe sat on "Sending..." and said "Submitted" on any page
+// load). "Submitted" now means the ticket exists; the email is best-effort
+// after that, so a relay hiccup can't make someone send the ticket twice.
 let isIdeaSubmitting = false;
 const IDEA_SUBMIT_URL = `${_BASE}/idea-submit`;
 // Long enough for a 10 MB phone photo on store Wi-Fi, short enough that a dead
 // request ends in a message rather than a button stuck on "Sending...".
 const IDEA_SUBMIT_TIMEOUT_MS = 45000;
+// What the form offers before (or without) the server's lists — the same rows
+// 0188 seeded. The GET replaces them, so a type added in the table shows up.
+const IDEA_TYPES_FALLBACK = [
+    { key: 'bug', label: 'Bug' }, { key: 'suggestion', label: 'Suggestion' },
+    { key: 'improvement', label: 'Improvement' }, { key: 'task', label: 'Task' },
+];
+const IDEA_AREAS_FALLBACK = [
+    { key: 'b2b', label: 'B2B' }, { key: 'claims', label: 'Claims' }, { key: 'ebay', label: 'eBay & listings' },
+    { key: 'kpis', label: 'KPIs' }, { key: 'quickportal', label: 'QuickPortal' }, { key: 'operations', label: 'Operations' },
+    { key: 'callbacks', label: 'Callbacks' }, { key: 'other', label: 'Other' },
+];
+// The same statuses the devs see, worded for the person who asked.
+const IDEA_STATUS_WORDS = {
+    triage:        { label: 'Waiting for review', tone: 'wait'   },
+    backlog:       { label: 'Accepted',           tone: 'muted'  },
+    in_progress:   { label: 'Being worked on',    tone: 'go'     },
+    in_review:     { label: 'Being checked',      tone: 'violet' },
+    on_prerelease: { label: 'Being tested',       tone: 'teal'   },
+    done:          { label: 'Done',               tone: 'done'   },
+    wont_do:       { label: "Won't do",           tone: 'no'     },
+};
+const IDEA_PROJECT = '__project';
+let _ideaData = null;      // the GET: { me, types, areas, tickets }
+let _ideaLoading = false;
+let _ideaTab = 'new';
+
+function _ideaCanProject() {
+    return typeof _featureEffectiveVisible === 'function'
+        && _featureEffectiveVisible('projects-request', _b2bRoleClass(), _b2bUser()) === true;
+}
 
 function injectIdeaModal() {
-    if (!document.getElementById('ideaModal')) {
-        const modalHtml = `
-        <div class="modal-menu idea-menu" id="ideaModal">
-            <div class="modal-header">
-                <h3>Submit an Idea</h3>
-                <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    if (document.getElementById('ideaModal')) return;
+    const opt = list => list.map(x => `<option value="${escapeHtml(x.key)}">${escapeHtml(x.label)}</option>`).join('');
+    const modalHtml = `
+    <div class="modal-menu idea-menu" id="ideaModal">
+        <div class="modal-header">
+            <h3>Submit a Ticket</h3>
+            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="modal-content" style="padding: 25px;">
+            <div class="prj-seg idea-seg" role="tablist" aria-label="Submit a Ticket">
+                <button type="button" role="tab" class="prj-seg-btn on" id="ideaTabNew" onclick="ideaSetTab('new')">New Ticket</button>
+                <button type="button" role="tab" class="prj-seg-btn" id="ideaTabMine" onclick="ideaSetTab('mine')">My Tickets</button>
             </div>
-            <div class="modal-content" style="padding: 25px;">
+            <div id="ideaPaneNew">
                 <form id="ideaForm" onsubmit="submitIdea(event)">
-                    <div style="margin-bottom: 15px;">
-                        <label class="idea-label">Your Name</label>
-                        <input type="text" id="ideaName" name="Name" class="idea-input" required readonly aria-readonly="true" title="Pulled from your account" style="background:#f1f5f9; color:#475569; cursor:not-allowed;">
+                    <div class="idea-who" id="ideaWho"></div>
+                    <div class="idea-row">
+                        <div>
+                            <label class="idea-label" for="ideaType">What kind?</label>
+                            <select id="ideaType" name="Type" class="idea-input" onchange="ideaTypeChanged(true)">${opt(IDEA_TYPES_FALLBACK)}</select>
+                        </div>
+                        <div id="ideaAreaWrap">
+                            <label class="idea-label" for="ideaArea">Which part of SPEEKSNET?</label>
+                            <select id="ideaArea" name="Area" class="idea-input"><option value="">Not sure</option>${opt(IDEA_AREAS_FALLBACK)}</select>
+                        </div>
                     </div>
-                    <div style="margin-bottom: 15px;">
-                        <label class="idea-label">Category</label>
-                        <select id="ideaCategory" name="Category" class="idea-input">
-                            <option value="New Feature">New Feature</option>
-                            <option value="Process Improvement">Process Improvement</option>
-                            <option value="Bug Fix / Issue">Bug Fix / Issue</option>
-                            <option value="Other">Other</option>
-                        </select>
+                    <div id="ideaTicketFields">
+                        <div style="margin-bottom: 15px;">
+                            <label class="idea-label" for="ideaDesc">What's going on?</label>
+                            <textarea id="ideaDesc" name="Description" rows="5" class="idea-input" placeholder="What happened, or what you'd like changed. Start with one line that sums it up — it becomes the ticket's title."></textarea>
+                        </div>
+                        <div style="margin-bottom: 20px;">
+                            <label class="idea-label" for="ideaFile">Attach a File (Optional)</label>
+                            <input type="file" id="ideaFile" name="Attachment" class="idea-input" accept="image/*,.pdf,.doc,.docx" style="padding: 10px;">
+                        </div>
                     </div>
-                    <div style="margin-bottom: 15px;">
-                        <label class="idea-label">Idea Details</label>
-                        <textarea id="ideaDesc" name="Idea_Description" required rows="5" class="idea-input" placeholder="Describe your idea here..."></textarea>
+                    <div id="ideaProjectNote" class="idea-project-note" style="display:none;">
+                        A tool, extension or script built <b>next to</b> SPEEKSNET is a project, not a ticket.
+                        Projects go to the DM for approval first — nothing starts until it's approved.
+                        What you've typed comes with you.
                     </div>
-                    <div style="margin-bottom: 20px;">
-                        <label class="idea-label">Attach a File (Optional)</label>
-                        <input type="file" id="ideaFile" name="Attachment" class="idea-input" accept="image/*,.pdf,.doc,.docx" style="padding: 10px;">
-                    </div>
-                    <div style="display:flex; justify-content:flex-end; gap:10px;">
                     <div id="ideaError" role="alert" style="display:none; color:#d64545; font-size:13px; font-weight:600; margin-bottom:12px;"></div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px;">
                         <button type="button" class="btn-secondary" onclick="closeAllModals()">Cancel</button>
-                        <button type="submit" class="btn-primary" id="submitIdeaBtn">Submit Idea</button>
+                        <button type="submit" class="btn-primary" id="submitIdeaBtn">Submit Ticket</button>
                     </div>
                 </form>
                 <div id="ideaSuccess" style="display:none; text-align:center; padding: 30px 10px;">
                     <div style="font-size: 40px; margin-bottom: 10px;">🎉</div>
-                    <h3 style="color: var(--sage-professional); margin-bottom: 10px; font-weight: 800;">Idea Submitted!</h3>
-                    <p style="color: #666; font-size: 14px; margin-bottom: 20px; font-weight: 500;">Thanks for helping us improve SPEEKS.</p>
-                    <button class="btn-primary" onclick="closeAllModals(); setTimeout(() => { document.getElementById('ideaForm').style.display='block'; document.getElementById('ideaSuccess').style.display='none'; document.getElementById('ideaForm').reset(); }, 500);">Close</button>
+                    <h3 id="ideaSuccessHead" style="color: var(--sage-professional); margin-bottom: 10px; font-weight: 800;">Ticket Submitted!</h3>
+                    <p id="ideaSuccessText" style="color: #666; font-size: 14px; margin-bottom: 20px; font-weight: 500;">Thanks for helping us improve SPEEKS.</p>
+                    <div style="display:flex; justify-content:center; gap:10px;">
+                        <button type="button" class="btn-secondary" onclick="ideaSetTab('mine')">My Tickets</button>
+                        <button type="button" class="btn-primary" onclick="closeAllModals()">Close</button>
+                    </div>
                 </div>
             </div>
-        </div>`;
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+            <div id="ideaPaneMine" style="display:none;">
+                <div id="ideaMineBody"></div>
+            </div>
+        </div>
+    </div>`;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+// Opening always starts on a fresh New Ticket form — a finished submit left
+// on its "Submitted!" screen would otherwise greet the next ticket.
+function _ideaResetForm() {
+    const form = document.getElementById('ideaForm');
+    if (!form) return;
+    form.reset();
+    form.style.display = 'block';
+    document.getElementById('ideaSuccess').style.display = 'none';
+    const err = document.getElementById('ideaError');
+    if (err) { err.style.display = 'none'; err.textContent = ''; }
+    _ideaFillLists();
+    ideaTypeChanged();
+}
+
+function _ideaFillLists() {
+    const typeSel = document.getElementById('ideaType');
+    const areaSel = document.getElementById('ideaArea');
+    if (!typeSel || !areaSel) return;
+    const types = (_ideaData && _ideaData.types && _ideaData.types.length) ? _ideaData.types : IDEA_TYPES_FALLBACK;
+    const areas = (_ideaData && _ideaData.areas && _ideaData.areas.length) ? _ideaData.areas : IDEA_AREAS_FALLBACK;
+    const keepType = typeSel.value, keepArea = areaSel.value;
+    const opt = list => list.map(x => `<option value="${escapeHtml(x.key)}">${escapeHtml(x.label)}</option>`).join('');
+    typeSel.innerHTML = opt(types)
+        + (_ideaCanProject() ? `<option value="${IDEA_PROJECT}">A project I want to build →</option>` : '');
+    areaSel.innerHTML = '<option value="">Not sure</option>' + opt(areas);
+    if ([...typeSel.options].some(o => o.value === keepType)) typeSel.value = keepType;
+    if ([...areaSel.options].some(o => o.value === keepArea)) areaSel.value = keepArea;
+    const who = document.getElementById('ideaWho');
+    if (who) {
+        const name = (sessionStorage.getItem('speeksUserName') || '').trim();
+        const store = (sessionStorage.getItem('speeksUserStore') || '').trim();
+        who.textContent = name ? `Submitting as ${name}${store && store !== 'ALL' ? ' · ' + store : ''}` : '';
+    }
+}
+
+// The project choice swaps the ticket fields for an explanation, and the
+// submit button for one that opens the Projects form instead.
+function ideaTypeChanged(byUser) {
+    const isProject = document.getElementById('ideaType')?.value === IDEA_PROJECT;
+    const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+    // A refusal from the last submit doesn't belong to the next choice. Only
+    // when the person changed it — submitIdea's finally also calls this, to
+    // put the button back, and its error must stay.
+    if (byUser) {
+        const err = document.getElementById('ideaError');
+        if (err) { err.textContent = ''; err.style.display = 'none'; }
+    }
+    show('ideaAreaWrap', !isProject);
+    show('ideaProjectNote', isProject);
+    // The description stays: it's what they carry over to the project form.
+    const file = document.getElementById('ideaFile');
+    if (file) file.parentElement.style.display = isProject ? 'none' : '';
+    const btn = document.getElementById('submitIdeaBtn');
+    if (btn) btn.textContent = isProject ? 'Open the Project Request' : 'Submit Ticket';
+}
+
+function toggleIdeaModal() {
+    injectIdeaModal();
+    const opening = !document.getElementById('ideaModal').classList.contains('show');
+    if (opening) {
+        _ideaResetForm();
+        ideaSetTab('new');
+        ideaLoad();
+    }
+    toggleModal('ideaModal');
+}
+
+function ideaSetTab(tab) {
+    _ideaTab = tab === 'mine' ? 'mine' : 'new';
+    const on = (id, yes) => { const el = document.getElementById(id); if (el) el.classList.toggle('on', yes); };
+    on('ideaTabNew', _ideaTab === 'new');
+    on('ideaTabMine', _ideaTab === 'mine');
+    document.getElementById('ideaPaneNew').style.display = _ideaTab === 'new' ? '' : 'none';
+    document.getElementById('ideaPaneMine').style.display = _ideaTab === 'mine' ? '' : 'none';
+    if (_ideaTab === 'mine') {
+        // Coming here from "Submitted!": the form underneath goes back to blank.
+        if (document.getElementById('ideaSuccess').style.display !== 'none') _ideaResetForm();
+        _ideaRenderMine();
+    }
+}
+
+// The form's lists and My Tickets in one read. The form works without it (the
+// fallback lists), so a failure only shows on the My Tickets tab.
+async function ideaLoad() {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin || _ideaLoading) { _ideaRenderMine(); return; }
+    _ideaLoading = true;
+    _ideaRenderMine();
+    try {
+        const res = await fetch(`${IDEA_SUBMIT_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`);
+        _ideaData = json;
+        _ideaData.error = null;
+        _ideaFillLists();
+        ideaTypeChanged();
+    } catch (err) {
+        _ideaData = Object.assign({}, _ideaData || {}, { error: (err && err.message) || 'network error' });
+    } finally {
+        _ideaLoading = false;
+        _ideaRenderMine();
+    }
+}
+
+function _ideaRenderMine() {
+    const body = document.getElementById('ideaMineBody');
+    if (!body) return;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { body.innerHTML = '<div class="status-message">My Tickets needs a PIN sign-in. Sign out and back in with your PIN.</div>'; return; }
+    if (!_ideaData || (!_ideaData.tickets && !_ideaData.error)) {
+        body.innerHTML = '<div class="status-message">Loading your tickets…</div>';
+        return;
+    }
+    if (_ideaData.error && !_ideaData.tickets) {
+        body.innerHTML = `<div class="status-message">Couldn't load your tickets — ${escapeHtml(_ideaData.error)}. <button class="prj-link" onclick="ideaLoad()">Try again</button></div>`;
+        return;
+    }
+    const list = _ideaData.tickets || [];
+    if (!list.length) {
+        body.innerHTML = `<div class="status-message">${_ideaData.me && _ideaData.me.test
+            ? 'Test accounts can\'t submit tickets, so there\'s nothing here.'
+            : 'Nothing yet. Tickets you submit show up here, with where each one has got to.'}</div>`;
+        return;
+    }
+    const label = (rows, key) => { const x = (rows || []).find(r => r.key === key); return x ? x.label : (key || ''); };
+    body.innerHTML = `<ul class="idea-mine">${list.map(t => {
+        const s = IDEA_STATUS_WORDS[t.status] || { label: t.status, tone: 'muted' };
+        const bits = [label(_ideaData.types || IDEA_TYPES_FALLBACK, t.type), t.area ? label(_ideaData.areas || IDEA_AREAS_FALLBACK, t.area) : '', `sent ${_prjDate(t.created_at)}`].filter(Boolean);
+        return `<li class="idea-mine-row">
+            <div class="idea-mine-main">
+                <span class="idea-mine-id">SN-${escapeHtml(String(t.id))}</span>
+                <span class="idea-mine-title">${escapeHtml(t.title || '')}</span>
+                <span class="prj-chip prj-tone-${s.tone}">${escapeHtml(s.label)}</span>
+            </div>
+            <div class="idea-mine-meta">${escapeHtml(bits.join(' · '))}</div>
+            ${t.status === 'wont_do' && t.reason ? `<div class="idea-mine-why"><b>Why:</b> ${escapeHtml(t.reason)}</div>` : ''}
+        </li>`;
+    }).join('')}</ul>`;
+}
+
+// "A project I want to build": hand what they typed to the Projects form.
+// Another page → workspace.html#projects, which opens the form once Projects
+// has loaded (_prjOpenDraft). Already on the Workspace → switch tab and open.
+const IDEA_PROJECT_DRAFT_KEY = 'speeksPrjRequestDraft';
+function ideaGoProject() {
+    const desc = (document.getElementById('ideaDesc')?.value || '').trim();
+    try { sessionStorage.setItem(IDEA_PROJECT_DRAFT_KEY, desc); } catch (_) {}
+    closeAllModals();
+    if (document.querySelector('.ws-wrap') && typeof switchWorkspaceTab === 'function') {
+        switchWorkspaceTab('projects');
+    } else {
+        window.location.href = 'workspace.html#projects';
     }
 }
 
 async function submitIdea(ev) {
     if (ev) ev.preventDefault();
-    if (isIdeaSubmitting) return; // a double-click must not send the idea twice
+    if (document.getElementById('ideaType')?.value === IDEA_PROJECT) { ideaGoProject(); return; }
+    if (isIdeaSubmitting) return; // a double-click must not send the ticket twice
     const form = document.getElementById('ideaForm');
     const btn = document.getElementById('submitIdeaBtn');
     const errEl = document.getElementById('ideaError');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    const say = msg => { if (errEl) { errEl.textContent = msg; errEl.style.display = msg ? 'block' : 'none'; } };
+    say('');
 
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { say('Tickets need a PIN sign-in — sign out and back in with your PIN.'); return; }
+    if (!(document.getElementById('ideaDesc')?.value || '').trim()) { say("Describe what's going on first."); return; }
     // Checked here rather than left to the server: a 10 MB limit learnt after
-    // uploading 30 MB is the slow failure this rewrite exists to remove.
+    // uploading 30 MB is the slow failure the 2026-11-05 rewrite removed.
     const fileEl = document.getElementById('ideaFile');
     const f = fileEl && fileEl.files && fileEl.files[0];
-    if (f && f.size > 10 * 1024 * 1024) {
-        if (errEl) { errEl.textContent = 'That file is over 10 MB — please attach a smaller one.'; errEl.style.display = 'block'; }
-        return;
-    }
+    if (f && f.size > 10 * 1024 * 1024) { say('That file is over 10 MB — please attach a smaller one.'); return; }
 
     const fd = new FormData(form);
-    fd.append('Store', sessionStorage.getItem('speeksUserStore') || '');
 
     isIdeaSubmitting = true;
     btn.disabled = true;
@@ -12598,22 +12806,26 @@ async function submitIdea(ev) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), IDEA_SUBMIT_TIMEOUT_MS);
     try {
-        const res = await fetch(IDEA_SUBMIT_URL, { method: 'POST', body: fd, signal: ctl.signal });
+        const res = await fetch(IDEA_SUBMIT_URL, { method: 'POST', body: fd, headers: { 'x-user-pin': pin }, signal: ctl.signal });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || !json.success) throw new Error(json.error || `Server answered ${res.status}`);
+        const id = json.ticket && json.ticket.id;
         form.style.display = 'none';
+        document.getElementById('ideaSuccessHead').textContent = id ? `SN-${id} Submitted!` : 'Ticket Submitted!';
+        document.getElementById('ideaSuccessText').textContent =
+            'Thanks for helping us improve SPEEKS. You can follow it under My Tickets.';
         document.getElementById('ideaSuccess').style.display = 'block';
+        ideaLoad(); // so My Tickets has it
     } catch (e) {
-        const msg = e && e.name === 'AbortError'
+        say(e && e.name === 'AbortError'
             ? 'This is taking too long — check your connection and try again.'
-            : `Your idea did not send: ${(e && e.message) || e}`;
-        if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+            : `Your ticket did not send: ${(e && e.message) || e}`);
     } finally {
         clearTimeout(timer);
         isIdeaSubmitting = false;
         btn.disabled = false;
-        btn.innerText = 'Submit Idea';
         btn.style.opacity = '1';
+        ideaTypeChanged(); // puts the button's label back
     }
 }
 
@@ -34931,6 +35143,7 @@ async function prjLoad(quiet) {
         if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`);
         _prjData = json;
         prjRender();
+        _prjOpenDraft();
         // An open popup is redrawn from the fresh row, so a decision made
         // elsewhere shows up in it rather than leaving stale buttons behind.
         if (_prjOpenId != null && document.getElementById('prjDetailModal')?.classList.contains('show')) _prjRenderDetail();
@@ -34939,6 +35152,20 @@ async function prjLoad(quiet) {
     } finally {
         _prjLoading = false;
     }
+}
+
+// Sent here by Submit a Ticket's "A project I want to build" (ideaGoProject):
+// open the request form with what they had typed, once, after Projects has
+// loaded — the form's people picker needs the roster this read brings.
+function _prjOpenDraft() {
+    let draft = null;
+    try { draft = sessionStorage.getItem('speeksPrjRequestDraft'); } catch (_) {}
+    if (draft === null) return;
+    try { sessionStorage.removeItem('speeksPrjRequestDraft'); } catch (_) {}
+    if (!_prjCan('request')) return;
+    prjNew();
+    const el = document.getElementById('prjFDesc');
+    if (el && draft) el.value = draft;
 }
 
 // Realtime ping (_RT_TOOL_CHECKS.projects). Only refetches when the tab has
@@ -35394,8 +35621,8 @@ async function prjSubmitForm(btn) {
 //
 // Phase 3 of the plan. Tickets arrive three ways: a dev creates one here (lands
 // in Backlog), the GitHub import (Phase 2, SN-65…SN-575 keep their issue
-// numbers), and — next — Submit an Idea, reworked into ticket intake (lands
-// in Triage). Statuses move by hand until Phase 4 drives In review /
+// numbers), and Submit a Ticket — the header lightbulb, once Submit an Idea —
+// which lands in Triage (section 17, the idea-submit function). Statuses move by hand until Phase 4 drives In review /
 // On pre-release / Done from GitHub.
 
 const DEV_TICKETS_URL = `${_BASE}/dev-tickets`;
@@ -35490,12 +35717,23 @@ async function devLoad(quiet) {
         _devData = json;
         _devFillAreaFilter();
         devRender();
+        _devOpenFromHash();
         if (_devOpenId != null && document.getElementById('devDetailModal')?.classList.contains('show')) _devRenderDetail();
     } catch (err) {
         if (!_devData) body.innerHTML = `<div class="status-message">Couldn't load tickets — ${escapeHtml(err.message || 'network error')}. <button class="prj-link" onclick="devLoad()">Try again</button></div>`;
     } finally {
         _devLoading = false;
     }
+}
+
+// The Submit a Ticket email links to dev.html#SN-1234: open that ticket once,
+// on the first load. An unknown number leaves the list with nothing open.
+let _devHashDone = false;
+function _devOpenFromHash() {
+    if (_devHashDone) return;
+    _devHashDone = true;
+    const m = /^#(?:SN-)?(\d+)$/i.exec(window.location.hash || '');
+    if (m && _devById(m[1])) devOpen(Number(m[1]));
 }
 
 // Realtime ping (_RT_TOOL_CHECKS['dev-tickets']). Only on the page that shows them.
@@ -35657,7 +35895,7 @@ function _devRenderDetail() {
         foot.innerHTML = '';
         return;
     }
-    document.getElementById('devDetailEyebrow').textContent = `SN-${t.id}${t.github_number ? ` · was GitHub #${t.github_number}` : ''}`;
+    document.getElementById('devDetailEyebrow').textContent = `SN-${t.id}${t.github_number ? ` · was GitHub #${t.github_number}` : ''}${t.source === 'idea' ? ' · from Submit a Ticket' : ''}`;
     head.textContent = t.title;
     document.getElementById('devDetailSub').innerHTML =
         `${_devChip(DEV_STATUS, t.status)}${t.priority !== 'normal' ? ' ' + _devChip(DEV_PRIORITY, t.priority) : ''}`
@@ -35682,6 +35920,16 @@ function _devRenderDetail() {
         t.due ? ['Due', escapeHtml(_prjDate(t.due + 'T12:00:00'))] : null,
         t.closed_at ? ['Closed', escapeHtml(_prjDate(t.closed_at))] : null,
     ].filter(Boolean);
+
+    // Files sent with the ticket (0191). The links are signed per read and
+    // expire after a few hours — a reload brings fresh ones.
+    const files = (t.attachments || []).length ? `
+        <div class="prj-sec">
+            <div class="form-label-caps">Attachments</div>
+            <ul class="dev-links">${t.attachments.map(a => `<li>${a.url
+                ? `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(a.name || 'attachment')}</a>`
+                : escapeHtml(a.name || 'attachment') + ' <span class="prj-ev-when">link expired — reload</span>'}</li>`).join('')}</ul>
+        </div>` : '';
 
     const code = links.length ? `
         <div class="prj-sec">
@@ -35713,7 +35961,7 @@ function _devRenderDetail() {
         ${callout}
         ${t.description ? `<div class="prj-sec"><div class="form-label-caps">Description</div><div class="prj-sec-text">${escapeHtml(t.description)}</div></div>` : ''}
         <dl class="prj-facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
-        ${code}${talk}${timeline}`;
+        ${files}${code}${talk}${timeline}`;
 
     foot.innerHTML = _devFootHtml(t);
 }
@@ -44965,8 +45213,8 @@ const EMAIL_LIST_GROUPS = [
               desc: 'Who the month-end recycle report email is addressed to.' },
             { key: 'expense_report', label: 'Expense Reports',
               desc: 'Where a monthly expense report goes when the DM sends one.' },
-            { key: 'idea_submissions', label: 'Submit an Idea',
-              desc: 'Who receives an idea from the lightbulb in the top bar. '
+            { key: 'idea_submissions', label: 'Submit a Ticket',
+              desc: 'Who is emailed each ticket sent from the lightbulb in the top bar (it also lands in Triage on the Development page). '
                   + 'The first address is the To; any others are copied in.' },
         ],
     },

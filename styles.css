@@ -27847,3 +27847,30 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .dev-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .dev-table .dev-col-kind, .dev-table .dev-col-rel { display: none; }
 }
+
+/* =========================================================
+   SUBMIT A TICKET (was Submit an Idea) — dev tracker Phase 3
+   part 2, 2026-11-19. The popup on every page; its base
+   look is "3. SUBMIT AN IDEA" above. The tabs and status
+   chips reuse Projects' .prj-seg / .prj-chip.
+   ========================================================= */
+#ideaModal .idea-seg { margin-bottom: 16px; }
+#ideaModal .idea-who { font-size: 12.5px; font-weight: 600; color: #647082; margin-bottom: 14px; }
+#ideaModal .idea-who:empty { display: none; }
+#ideaModal .idea-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 15px; }
+#ideaModal .idea-row:has(> #ideaAreaWrap[style*="none"]) { grid-template-columns: 1fr; } /* the project choice hides Area */
+#ideaModal .idea-project-note {
+    background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; border-radius: 10px;
+    padding: 12px 14px; font-size: 13px; line-height: 1.5; margin-bottom: 16px;
+}
+#ideaModal .idea-mine { list-style: none; margin: 0; padding: 0; max-height: min(60vh, 460px); overflow-y: auto; }
+#ideaModal .idea-mine-row { border: 1px solid #eef1f5; border-radius: 10px; padding: 11px 13px; margin-bottom: 8px; background: #fff; }
+#ideaModal .idea-mine-main { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+#ideaModal .idea-mine-id { font-size: 11.5px; font-weight: 800; color: #8a94a3; white-space: nowrap; padding-top: 2px; }
+#ideaModal .idea-mine-title { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 700; color: #1c1f23; line-height: 1.35; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+#ideaModal .idea-mine-main .prj-chip { flex: 0 0 auto; }
+#ideaModal .idea-mine-meta { font-size: 12px; color: #8a94a3; margin-top: 4px; }
+#ideaModal .idea-mine-why { font-size: 12.5px; color: #7a271a; background: #fef3f2; border-radius: 8px; padding: 7px 10px; margin-top: 7px; line-height: 1.45; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+    #ideaModal .idea-row { grid-template-columns: 1fr; }
+}

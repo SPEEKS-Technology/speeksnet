@@ -153,6 +153,15 @@ Deno.serve(async (req: Request) => {
     ]);
     const err = [t, c, e, l, r, ty, ar].find((x) => x.error)?.error;
     if (err) return json({ success: false, error: err.message }, 500);
+    // Attachments (0191) are paths in the private idea-attachments bucket; each
+    // read signs a link good for a few hours — long enough to open it from a
+    // ticket left open on screen, short enough that a copied link dies.
+    const paths = (t.data || []).flatMap((x: any) => (Array.isArray(x.attachments) ? x.attachments : []).map((a: any) => String(a?.path || ""))).filter(Boolean);
+    const signedUrl = new Map<string, string>();
+    if (paths.length) {
+      const { data: s } = await sb.storage.from("idea-attachments").createSignedUrls(paths, 60 * 60 * 6);
+      (s || []).forEach((x: any) => { if (x.path && x.signedUrl) signedUrl.set(x.path, x.signedUrl); });
+    }
     return json({
       success: true,
       me: { id: viewer.id, name: viewer.name, role: viewer.role, test },
@@ -161,6 +170,7 @@ Deno.serve(async (req: Request) => {
         ...x,
         assignee_name: x.assignee_id ? nameOf(x.assignee_id, x.assignee_name) : x.assignee_name,
         reporter_name: nameOf(x.reporter_id, x.reporter_name),
+        attachments: (Array.isArray(x.attachments) ? x.attachments : []).map((a: any) => ({ name: a?.name, size: a?.size, type: a?.type, url: signedUrl.get(String(a?.path || "")) || null })),
       })),
       comments: (c.data || []).map((x: any) => ({ ...x, author_name: nameOf(x.author_id, x.author_name) })),
       events: e.data || [],

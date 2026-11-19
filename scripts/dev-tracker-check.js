@@ -230,3 +230,35 @@ t('header button: shown to a dev-tracker holder, hidden from everyone else', fun
         return btn.style.display === 'none' || 'shown to the CEO by default';
     } finally { _featureOv = { role: {}, user: {} }; btn.remove(); }
 });
+
+// ---- Phase 3 part 2: intake (Submit a Ticket) -------------------------------
+// Its popup has its own suite, submit-ticket-check.js. These are the two things
+// the tracker page gained for it.
+// replaceState, never location.hash = …: a fragment assignment is a navigation,
+// and headless --dump-dom sat waiting on it until the run was killed.
+t('intake: the email link dev.html#SN-n opens that ticket, once', function () {
+    var was = window.location.hash;
+    var setHash = function (h) { history.replaceState(null, '', window.location.pathname + window.location.search + h); };
+    try {
+        setHash('#SN-573');
+        devStage(); _devOpenId = null; _devHashDone = false;
+        _devOpenFromHash();
+        if (_devOpenId !== 573) return 'opened ' + _devOpenId;
+        _devOpenId = null;
+        _devOpenFromHash();
+        if (_devOpenId !== null) return 'opened again on a later load';
+        setHash('#SN-99999');
+        _devHashDone = false; _devOpenFromHash();
+        return _devOpenId === null || 'opened a ticket that does not exist';
+    } finally { setHash(was || ''); _devHashDone = true; }
+});
+t('intake: a submitted ticket says so, and lists its attachment', function () {
+    devStage();
+    _devData.tickets.push(Object.assign(devFixture().tickets[0], { id: 1010, status: 'triage', source: 'idea',
+        attachments: [{ name: 'photo.jpg', url: 'https://example.invalid/signed' }, { name: 'old.pdf', url: null }] }));
+    devOpen(1010);
+    if (!/from Submit a Ticket/.test(document.getElementById('devDetailEyebrow').textContent)) return 'eyebrow: ' + document.getElementById('devDetailEyebrow').textContent;
+    var a = document.querySelector('#devDetailBody a[href="https://example.invalid/signed"]');
+    if (!a || a.textContent !== 'photo.jpg') return 'no link to the attachment';
+    return /old\.pdf[\s\S]*expired/.test(document.getElementById('devDetailBody').textContent) || 'an unsigned attachment is not explained';
+});

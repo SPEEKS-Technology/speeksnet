@@ -127,3 +127,45 @@ function renderPane(width) {
         return ta.getBoundingClientRect().height >= 100 || 'description squashed to ' + Math.round(ta.getBoundingClientRect().height) + 'px';
     });
 });
+
+// ---- Submit a Ticket (Phase 3 part 2) ----------------------------------------
+// The real popup (injectIdeaModal), pulled into the stage and laid out in
+// place, since its look hangs off #ideaModal. Phone width is where it's used
+// most: a store employee with a photo.
+function ideaStage(width, tickets) {
+    var old = document.getElementById('ideaModal'); if (old) old.remove();
+    _ideaData = tickets ? { me: { name: 'Browser Check', test: false }, types: [{ key: 'bug', label: 'Bug' }], areas: [{ key: 'b2b', label: 'B2B' }], tickets: tickets } : null;
+    injectIdeaModal();
+    var m = document.getElementById('ideaModal');
+    var host = stage(width, '');
+    host.appendChild(m);
+    m.style.cssText = 'position:static;display:block;opacity:1;visibility:visible;transform:none;width:100%;max-width:100%;';
+    var was = sessionStorage.getItem('speeksUserPin');
+    sessionStorage.setItem('speeksUserPin', '9999');
+    try {
+        _ideaResetForm();
+        if (tickets) { ideaSetTab('mine'); }
+    } finally { if (was === null) sessionStorage.removeItem('speeksUserPin'); else sessionStorage.setItem('speeksUserPin', was); }
+    void host.offsetHeight;
+    return host;
+}
+[390, 820].forEach(function (w) {
+    t('submit a ticket @' + w + ': the form fits', function () {
+        var host = ideaStage(w);
+        var bad = overflowing(host);
+        var sel = document.getElementById('ideaArea').getBoundingClientRect();
+        if (sel.width < 100) return 'Area select squeezed to ' + Math.round(sel.width) + 'px';
+        return !bad.length || bad.slice(0, 4).join('; ');
+    });
+    t('submit a ticket @' + w + ': My Tickets fits a long title and a long reason', function () {
+        var host = ideaStage(w, [
+            { id: 1234, title: 'Supercalifragilisticexpialidocious-callback-refresh-after-match-v2 and then some more words', type: 'bug', area: 'b2b', status: 'on_prerelease', created_at: new Date().toISOString() },
+            { id: 1235, title: 'Short', type: 'bug', area: null, status: 'wont_do', reason: LONG, created_at: new Date().toISOString() },
+        ]);
+        var bad = overflowing(host);
+        if (bad.length) return bad.slice(0, 4).join('; ');
+        var chip = host.querySelector('.idea-mine-main .prj-chip').getBoundingClientRect();
+        return chip.width > 40 || 'status chip squeezed to ' + Math.round(chip.width) + 'px';
+    });
+});
+(function () { var m = document.getElementById('ideaModal'); if (m) m.remove(); _ideaData = null; })();
