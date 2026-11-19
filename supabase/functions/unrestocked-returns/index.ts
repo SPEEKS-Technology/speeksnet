@@ -428,6 +428,14 @@ async function collect(wantStores: string[], days: string[], openRows: any[], re
   // ticked Recycled In POS, is proof the unit came back — it cannot be recycled
   // out of stock it was never in. Approved but not yet ticked stays on the
   // mail: until the POS tick, nothing says the count was raised.
+  //
+  // Timed on the POS TICK, not on the request (2026-11-19). BAL #MO04-4137
+  // (PSVR2): the manager filed the recycle request at 3:24:35pm while
+  // processing the return, the refund landed at 3:25:26pm, and the unit was
+  // recycled in POS at 4:43pm — mailed as not restocked because the request
+  // was 51 seconds "early". Recycling out after the refund is what proves the
+  // unit was back on hand; when the request was typed doesn't. Compared as
+  // times, not strings (Shopify's "Z" vs Postgres's "+00:00").
   const recycled = new Map<string, any[]>();
   try {
     const rows = await sbGet(
@@ -442,7 +450,7 @@ async function collect(wantStores: string[], days: string[], openRows: any[], re
   }
   const recycledHow = (store: string, sku: string, refundAt: string): string | null => {
     const hit = (recycled.get(`${store}|${String(sku || "").trim()}`) || [])
-      .find((r) => !refundAt || String(r.created_at) > String(refundAt));
+      .find((r) => !refundAt || Date.parse(r.pos_done_at) > Date.parse(refundAt));
     return hit ? `recycled in POS ${chicagoDay(hit.pos_done_at)}${hit.pos_done_by ? ` by ${hit.pos_done_by}` : ""} (approved recycle request)` : null;
   };
 
