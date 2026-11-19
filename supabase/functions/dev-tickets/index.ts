@@ -142,7 +142,7 @@ Deno.serve(async (req: Request) => {
 
   // ---- read ----
   if (req.method === "GET") {
-    const [t, c, e, l, r, ty, ar] = await Promise.all([
+    const [t, c, e, l, r, ty, ar, br] = await Promise.all([
       sb.from("dev_tickets").select("*").order("id", { ascending: false }),
       sb.from("dev_ticket_comments").select("*").order("created_at", { ascending: true }),
       sb.from("dev_ticket_events").select("*").order("created_at", { ascending: true }),
@@ -150,8 +150,10 @@ Deno.serve(async (req: Request) => {
       sb.from("dev_releases").select("*").order("created_at", { ascending: false }),
       sb.from("dev_ticket_types").select("*").order("sort"),
       sb.from("dev_ticket_areas").select("*").order("sort"),
+      // Phase 5: the Branches tab's cache, kept by github-webhook (0193).
+      sb.from("github_branches").select("*").order("name"),
     ]);
-    const err = [t, c, e, l, r, ty, ar].find((x) => x.error)?.error;
+    const err = [t, c, e, l, r, ty, ar, br].find((x) => x.error)?.error;
     if (err) return json({ success: false, error: err.message }, 500);
     // Attachments (0191) are paths in the private idea-attachments bucket; each
     // read signs a link good for a few hours — long enough to open it from a
@@ -178,6 +180,7 @@ Deno.serve(async (req: Request) => {
       releases: r.data || [],
       types: ty.data || [],
       areas: ar.data || [],
+      branches: br.data || [],
       // id, name, store and role only — never a PIN.
       devs: devs.map((p) => ({ id: p.id, name: p.name, store: p.store, role: p.role })),
     });

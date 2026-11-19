@@ -45,6 +45,12 @@ param(
     #
     # Opt-in, same as -Html: without it every existing run is unchanged.
     [string]$WindowSize = "",
+    # -Js <a.js,b.js> / -Css <a.css>: extra repo files loaded AFTER speeks.js /
+    # styles.css. The Development suite (dev.html) is its own app -- dev.js and
+    # dev.css, no speeks.js -- so its checks need them in the page. Opt-in, like
+    # the others: without them every existing run is unchanged.
+    [string]$Js = "",
+    [string]$Css = "",
     [switch]$Keep,
     [int]$TimeoutMs = 20000
 )
@@ -83,6 +89,17 @@ if ($Html) {
     $pageMarkup = [regex]::Replace($pageMarkup, '(?is)<noscript.*?</noscript>', '')
 }
 
+# -Js / -Css: tags for the extra files, each checked to exist.
+$extraJs = ""; $extraCss = ""
+foreach ($j in ($Js -split ',' | Where-Object { $_.Trim() })) {
+    if (-not (Test-Path (Join-Path $repo $j.Trim()))) { Write-Error "Script not found: $j" }
+    $extraJs += '<script src="file:///' + $repoUrl + '/' + $j.Trim() + '"></script>' + [Environment]::NewLine
+}
+foreach ($c in ($Css -split ',' | Where-Object { $_.Trim() })) {
+    if (-not (Test-Path (Join-Path $repo $c.Trim()))) { Write-Error "Stylesheet not found: $c" }
+    $extraCss += '<link rel="stylesheet" href="file:///' + $repoUrl + '/' + $c.Trim() + '">' + [Environment]::NewLine
+}
+
 $harness = @"
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -90,7 +107,7 @@ $harness = @"
      overflow, wrapping and clipping are invisible to an assertion about HTML.
      Harmless to the string-based checks. -->
 <link rel="stylesheet" href="file:///$repoUrl/styles.css">
-</head><body>
+$extraCss</head><body>
 <div id="speeks-check-out">not-run</div>
 $pageMarkup
 <script>
@@ -156,7 +173,7 @@ $pageMarkup
   };
 </script>
 <script src="file:///$repoUrl/speeks.js"></script>
-<script>
+$extraJs<script>
   // Whole-file parse probe: these span the very start and the very end of
   // speeks.js, so if any of them is missing the file did not parse.
   t('speeks.js parses (first + last declarations hoisted)', function () {

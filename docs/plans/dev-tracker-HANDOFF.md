@@ -219,6 +219,52 @@ Each phase is shippable on its own and gets its own PR into `pre-release`.
 - **Done when:** opening and merging a real PR moves its ticket with no human touching the status.
 
 ### Phase 5 — Branches panel (D5)
+> **Built 2026-11-19 on `feat/dev-tracker`.** Migration **0193** applied; `github-webhook` and `dev-tickets` deployed. Nick's calls, asked at the start:
+> - Prefixes: **Bug → `fix/`, Suggestion and Improvement → `feat/`, Task → `chore/`**
+> - **Any fully merged branch** may be deleted, with no 14-day wait (main and pre-release never)
+> - **Tabs** (the suite's sidebar now)
+> - He'll raise the App's **Contents to Read and write** when told it's deployed
+>
+> - **`github_branches` is the panel's cache**, kept by `github-webhook`:
+>   - one branch's row on every delivery that touches it; every row on a push to pre-release or main, and in the reconcile
+>   - `ahead`/`behind` vs pre-release (compare API), last commit (message, author, date), newest PR (an open one wins), `ticket_id`
+>   - `kind` (base / release / ticket / untracked) and `merged`. Merged = ahead 0, or, for a squash merge, PR merged with nothing pushed after.
+>   - 0193 adds `merged`, `last_commit_message`, `pr_url` and **`marked_kind`/`marked_by*`**, a person's "release branch" say-so that the sync's upsert never overwrites.
+> - **Actions** (PIN POST to `github-webhook`; dev-tracker holders, real people only; each a `github_sync_log` **write** row naming who):
+>   - **`start_work`** creates `prefix/sn-<id>-<slug>` from pre-release's sha, links it, assigns the ticket to the presser if it was unassigned, and moves it to In progress as the presser.
+>   - **`delete_branch`** re-reads the branch from GitHub (never the cache), refuses unless fully merged and unprotected, then deletes the ref.
+>   - **`link_branch`** is a by-hand ticket link for a branch with no SN in its name.
+>   - **`mark_branch`** marks it as a release branch.
+> - Until the App has Contents write, start/delete fail with a plain "switch its Contents permission to Read and write" message (GitHub's 403 "not accessible by integration").
+> - Verified: one reconcile filled all 6 real branches correctly. `feat/projects-completion-signoff` shows as merged (deletable); `Main-December-Update-2---Ethan`, `feat/dev-tracker` and `feat/b2b-mass-recycle` show as needing a ticket.
+> - **Not yet exercised against GitHub:** Start work and Delete, which wait on the permission.
+>
+> **And the suite was rebuilt (Nick, mid-Phase 5):** *"I want the UI to be PERFECT. Polished, snappy, fluid … better than all the competitors … doesnt really need to be perfectly speeksnet themed since this will be just the developer suite."* He chose **dark with a sage accent** and an **app shell with its own bar**.
+> - **`dev.html` is its own app:** `dev.js` (one IIFE; the only global is `window.Dev`, for the checks) and `dev.css` (all `dv-*`). It loads no `speeks.js` (2.5 MB) and no `styles.css` (970 KB). The old "24c" module and its CSS are gone. `speeks.js` keeps only the header button and Submit a Ticket, and `styles.css` only `.dev-nav-btn` (plus two chip tones My Tickets uses). The cache-buster is **six pages** again; dev.html bumps `dev.js`/`dev.css` instead.
+> - **Layout:**
+>   - a slim top bar (search `/`, Live dot, New Ticket `C`, ← SPEEKSNET)
+>   - a sidebar of views: Triage, My Work, All Open, Backlog, In Progress, In Review, On Pre-release, Done, Branches, with counts; Triage and Branches show hot badges
+>   - a dense list, grouped by status where it helps
+>   - a **side panel**, not popups
+>   - narrow screens: icon sidebar, and the panel covers the list
+> - **Panel:**
+>   - inline title and description editing
+>   - Linear-style property rows (Status, Priority, Assignee, Type, Area, Release, Due, Stores) with searchable keyboard pickers
+>   - Won't Do asks why first
+>   - attachments, Code (PRs with checks, branches with a copy-git-command button, commits), **Start work** with fix/feat/chore and a live branch-name preview
+>   - one Activity feed interleaving history and comments (Ctrl+Enter to send, edit your own)
+> - **Fast:**
+>   - one GET, then every view, filter and search is local
+>   - writes are **optimistic**: the screen changes first, and a refusal puts it back with a toast
+>   - j/k selection only toggles classes
+>   - realtime on the existing `speeks-notify` channel (supabase-js pinned 2.45.4), muted 3 s after your own write
+>   - refetch when the tab becomes visible again
+>   - `history.replaceState` for `#view` / `#SN-n`, never a hash assignment (the headless trap)
+> - **Keys:** `/` search · `C` new · `J`/`K` move · `Enter` open · `Esc` close · `S`/`A`/`P` status, assignee, priority · `G` then `T M A B I R P D C` for views · `?` the sheet.
+> - **Gates unchanged:** no session → index.html; a 403 from dev-tickets → a "not switched on for you" screen; test accounts read only (no edit affordances shown).
+> - **Checks:** the runner gained `-Js`/`-Css`. Suites: `dev-tracker-check.js -Js dev.js -Css dev.css` 44, `dev-tracker-layout-check.js` 10 + 10 (narrow and `-WindowSize 1440,900`), `dev-tracker-page-check.js -Html dev.html` 6, and `dev-header-check.js -Html b2b.html` 6 for the door.
+>   - **Traps found:** the panel's slide-in measured mid-animation, so the layout check turns animations off. The harness page's scrollbar makes `innerWidth` lie, so it uses `clientWidth`. `.dv-app` is `position: fixed; inset: 0`, so no body padding can shift it.
+>   - Viewed in the preview with real data (276 tickets, 6 branches) at 1440 and at the pane's narrow width.
 - Every remote branch on the Development tab: linked ticket, ahead/behind `pre-release`, last commit and who, PR state, stale flag (merged and untouched 14+ days).
 - **Naming convention:** `fix/sn-1012-short-slug`, `feat/sn-…`, `chore/sn-…`, and `release/vX.Y.Z`. A **Start work** button on a ticket creates the branch from `pre-release` with the right name (first GitHub *write* — needs Contents write).
 - Branches with no ticket (e.g. `Main-December-Update-2---Ethan` today) are flagged: link to a ticket, or mark as a release branch. Merged-and-stale branches get a delete button (confirm first).

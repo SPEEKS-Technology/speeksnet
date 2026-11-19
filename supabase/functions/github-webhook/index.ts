@@ -10,9 +10,22 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //                                        GITHUB_WEBHOOK_SECRET
 //   POST ?trigger=cron&secret=…          the nightly reconcile (0192's cron):
 //                                        catches anything a delivery missed
-//   POST + x-user-pin {action:'reconcile'}  the same, from the Development
-//                                        page's "Sync with GitHub" (dev-tracker
-//                                        holders, real people only)
+//   POST + x-user-pin {action, …}        from the Development page, dev-tracker
+//                                        holders (real people only):
+//       reconcile                          "Sync with GitHub" — the nightly run, now
+//       start_work {ticket_id, prefix, slug}  Phase 5: create fix|feat|chore/
+//                                          sn-<id>-<slug> from pre-release
+//       delete_branch {name}               Phase 5: only a FULLY MERGED branch,
+//                                          never main / pre-release
+//       link_branch {name, ticket_id}      Phase 5: a branch with no SN in its name
+//       mark_branch {name, release}        Phase 5: "this is an update branch"
+//
+// PHASE 5 WRITES (D7: mechanical steps only). Creating and deleting a branch are
+// the first things SPEEKSNET does TO GitHub; they need the App's Contents
+// permission at Read and write. main and pre-release are protected (PRs
+// required, empty push allow-list, enforce_admins), so the App can't push to
+// them whatever it holds — Phase 7 is what opens main to it, deliberately.
+// Every write is a github_sync_log 'write' row naming who pressed it.
 //
 // WHAT IT DOES
 //   LINKS — "SN-1012" (or "sn-1012", "SN1012") in a branch name, a commit
@@ -158,6 +171,7 @@ async function signatureOk(raw: string, header: string | null): Promise<boolean>
 class Run {
   sb: Sb;
   live: boolean;
+  actor: { name: string; id: string | null } = { name: "GitHub", id: null };
   summary = { linked: 0, moved: [] as string[], checked: 0, errors: [] as string[] };
   private tickets = new Map<number, any>();
   private applied: string[] | null = null;
@@ -203,7 +217,7 @@ class Run {
     const { error } = await this.sb.from("dev_ticket_links").insert({ ticket_id: ticket.id, kind, ref, ...fields });
     if (error && !/duplicate key/i.test(error.message)) { this.summary.errors.push(error.message); return; }
     if (error) return; // a concurrent delivery got there first
-    await this.sb.from("dev_ticket_events").insert({ ticket_id: ticket.id, kind: "linked", actor_name: "GitHub", to_value: kind, note });
+    await this.sb.from("dev_ticket_events").insert({ ticket_id: ticket.id, kind: "linked", actor_name: this.actor.name, actor_id: this.actor.id, to_value: kind, note });
     this.summary.linked++;
   }
 
@@ -217,7 +231,7 @@ class Run {
       .update({ status: to, closed_at: to === "done" ? now : null, updated_at: now })
       .eq("id", ticket.id).eq("status", from).select("id, status, github_number").maybeSingle();
     if (!row) return; // someone moved it at the same moment — theirs stands
-    await this.sb.from("dev_ticket_events").insert({ ticket_id: ticket.id, kind: "status", actor_name: "GitHub", from_value: from, to_value: to, note });
+    await this.sb.from("dev_ticket_events").insert({ ticket_id: ticket.id, kind: "status", actor_name: this.actor.name, actor_id: this.actor.id, from_value: from, to_value: to, note });
     ticket.status = to;
     this.summary.moved.push(`SN-${ticket.id} ${from}→${to}`);
   }
@@ -362,6 +376,70 @@ class Run {
     else await this.sb.from("dev_releases").insert(row);
   }
 
+  // ---- the Branches panel cache (github_branches, 0193) ----
+  private prHeads: Map<string, any> | null = null;
+  // The newest PR per head branch, an open one winning over a closed one.
+  async prsByHead(): Promise<Map<string, any>> {
+    if (this.prHeads) return this.prHeads;
+    const prs = (await gh(`/repos/${REPO}/pulls?state=all&sort=updated&direction=desc&per_page=100`)) || [];
+    const m = new Map<string, any>();
+    for (const p of prs) {
+      const h = p.head?.repo?.full_name === REPO ? p.head?.ref : null;
+      if (!h) continue;
+      const had = m.get(h);
+      if (!had || (had.state !== "open" && p.state === "open")) m.set(h, p);
+    }
+    this.prHeads = m;
+    return m;
+  }
+  async branchRow(name: string) {
+    const path = name.split("/").map(encodeURIComponent).join("/");
+    const br = await gh(`/repos/${REPO}/branches/${path}`);
+    if (!br) { await this.sb.from("github_branches").delete().eq("name", name); return null; }
+    const isBase = name === "main" || name === "pre-release";
+    let ahead = 0, behind = 0;
+    if (name !== "pre-release") {
+      const c = await gh(`/repos/${REPO}/compare/pre-release...${path}`).catch(() => null);
+      if (c) { ahead = Number(c.ahead_by) || 0; behind = Number(c.behind_by) || 0; }
+    }
+    const pr = isBase ? null : (await this.prsByHead()).get(name) || null;
+    const prState = pr ? (pr.merged_at ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "open") : null;
+    // The ticket: SN-n in the name, else a by-hand link (link_branch).
+    let ticketId: number | null = (await this.ticketsFor(name))[0]?.id ?? null;
+    if (!ticketId) {
+      const { data: l } = await this.sb.from("dev_ticket_links").select("ticket_id").eq("kind", "branch").eq("ref", name).limit(1).maybeSingle();
+      ticketId = l ? Number(l.ticket_id) : null;
+    }
+    const { data: had } = await this.sb.from("github_branches").select("marked_kind").eq("name", name).maybeSingle();
+    const kind = isBase ? "base"
+      : (name.startsWith("release/") || had?.marked_kind === "release") ? "release"
+      : ticketId ? "ticket" : "untracked";
+    const sha = br.commit?.sha || null;
+    // Fully merged: nothing on it that pre-release lacks — or (a squash merge)
+    // its PR merged and nothing was pushed after.
+    const merged = !isBase && (ahead === 0 || (prState === "merged" && pr?.head?.sha === sha));
+    const row = {
+      name, sha, ahead, behind, kind, merged, ticket_id: ticketId,
+      last_commit_at: br.commit?.commit?.author?.date || br.commit?.commit?.committer?.date || null,
+      last_commit_author: br.commit?.author?.login || br.commit?.commit?.author?.name || null,
+      last_commit_message: String(br.commit?.commit?.message || "").split("\n")[0].slice(0, 200) || null,
+      pr_number: pr ? pr.number : null, pr_state: prState, pr_url: pr ? pr.html_url : null,
+      synced_at: new Date().toISOString(),
+    };
+    const { error } = await this.sb.from("github_branches").upsert(row, { onConflict: "name" });
+    if (error) this.summary.errors.push(`github_branches ${name}: ${error.message}`);
+    return row;
+  }
+  async syncAllBranches() {
+    const branches = await ghAll(`/repos/${REPO}/branches`);
+    for (const b of branches) await this.branchRow(b.name);
+    const live = branches.map((b: any) => b.name);
+    const { data: cached } = await this.sb.from("github_branches").select("name");
+    const gone = (cached || []).map((r: any) => r.name).filter((n: string) => !live.includes(n));
+    if (gone.length) await this.sb.from("github_branches").delete().in("name", gone);
+    return branches;
+  }
+
   // ---- the reconcile: everything a missed delivery would have done ----
   async reconcile(sinceIso: string) {
     const since = Date.parse(sinceIso);
@@ -377,6 +455,7 @@ class Run {
       for (const c of commits) await this.commit({ id: c.sha, message: c.commit?.message || "", url: c.html_url, author: c.author?.login || c.commit?.author?.name });
     }
     await this.reachedMain();
+    await this.syncAllBranches();
     return { prs: prs.length, branches: branches.length };
   }
 }
@@ -404,13 +483,22 @@ async function handleDelivery(sb: Sb, event: string, delivery: string | null, p:
         await run.branch(branch, p.after || null, !!p.deleted);
         if (!p.deleted) for (const c of p.commits || []) await run.commit({ id: c.id, message: c.message, url: c.url, author: c.author?.username || c.author?.name });
         if (branch === "main" && !p.deleted) await run.reachedMain();
+        // The panel: a push to pre-release or main changes every branch's
+        // ahead/behind; any other push changes just its own row.
+        if (p.deleted) await sb.from("github_branches").delete().eq("name", branch);
+        else if (branch === "pre-release" || branch === "main") await run.syncAllBranches();
+        else await run.branchRow(branch);
       }
     } else if (event === "create" && p.ref_type === "branch") {
       await run.branch(String(p.ref), null);
+      await run.branchRow(String(p.ref));
     } else if (event === "delete" && p.ref_type === "branch") {
       await run.branch(String(p.ref), null, true);
+      await sb.from("github_branches").delete().eq("name", String(p.ref));
     } else if (event === "pull_request" && p.pull_request) {
       await run.pr(p.pull_request, String(p.action || ""));
+      const head = p.pull_request.head;
+      if (head?.repo?.full_name === REPO && head?.ref) await run.branchRow(String(head.ref));
     } else if (event === "release" && ["published", "released", "edited"].includes(String(p.action))) {
       await run.release(p.release);
     }
@@ -444,6 +532,112 @@ async function runReconcile(sb: Sb, who: { name: string; id: string | null }, da
   });
   if (run.summary.linked || run.summary.moved.length) await broadcastChange();
   return { ok, since, counts, ...run.summary };
+}
+
+// ---- Phase 5: what a person can do to a branch ----------------------------
+export const BRANCH_PREFIXES = ["fix", "feat", "chore"];
+// Nick's call: Bug → fix; Suggestion, Improvement → feat; Task (and anything
+// else) → chore. The page suggests it; the person can change it.
+export const prefixFor = (type: string) => type === "bug" ? "fix" : (type === "suggestion" || type === "improvement") ? "feat" : "chore";
+export const slugify = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
+
+async function ghWrite(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; data: any }> {
+  const token = await appToken();
+  const r = await fetch(`${GH}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": UA, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await r.text();
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { message: text }; }
+  return { ok: r.ok, status: r.status, data };
+}
+const writeRefused = (status: number, data: any) =>
+  status === 403 && /not accessible by integration/i.test(String(data?.message || ""))
+    ? "The GitHub App can't write yet — switch its Contents permission to Read and write (GitHub → the speeksnet App → Permissions & events) and accept the update."
+    : `GitHub said ${status}: ${String(data?.message || "").slice(0, 200)}`;
+
+async function logWrite(sb: Sb, who: { name: string; id: string }, event: string, ok: boolean, detail: unknown) {
+  await sb.from("github_sync_log").insert({ kind: "write", event, ok, detail, actor_name: who.name, actor_id: who.id });
+}
+
+async function branchAction(sb: Sb, who: { name: string; id: string }, action: string, b: any): Promise<any> {
+  const run = new Run(sb, true);
+  run.actor = who;
+
+  if (action === "start_work") {
+    const id = Number(b.ticket_id);
+    const { data: t } = await sb.from("dev_tickets").select("id, title, type, status, assignee_id, github_number").eq("id", id).maybeSingle();
+    if (!t) return { success: false, status: 404, error: `SN-${id} doesn't exist.` };
+    if (t.status === "done" || t.status === "wont_do") return { success: false, error: "That ticket is closed — reopen it before starting work." };
+    const prefix = BRANCH_PREFIXES.includes(String(b.prefix)) ? String(b.prefix) : prefixFor(t.type);
+    const slug = slugify(b.slug || t.title);
+    if (!slug) return { success: false, error: "Give the branch a short name." };
+    const name = `${prefix}/sn-${id}-${slug}`;
+    const base = await gh(`/repos/${REPO}/git/ref/heads/pre-release`);
+    const sha = base?.object?.sha;
+    if (!sha) return { success: false, status: 502, error: "Couldn't read pre-release from GitHub." };
+    const w = await ghWrite("POST", `/repos/${REPO}/git/refs`, { ref: `refs/heads/${name}`, sha });
+    await logWrite(sb, who, "create_branch", w.ok, { branch: name, from: "pre-release", sha, ticket: id, status: w.status, error: w.ok ? undefined : w.data?.message });
+    if (!w.ok) {
+      if (w.status === 422) return { success: false, status: 409, error: `${name} already exists on GitHub.` };
+      return { success: false, status: 502, error: writeRefused(w.status, w.data) };
+    }
+    await run.link(t, "branch", name, { url: `https://github.com/${REPO}/tree/${name}`, title: name, state: "active", head_sha: sha }, `Branch ${name} (Start work)`);
+    // Whoever starts the work owns it, if nobody did.
+    if (!t.assignee_id) {
+      const { data: row } = await sb.from("dev_tickets").update({ assignee_id: who.id, assignee_name: who.name, updated_at: new Date().toISOString() })
+        .eq("id", id).is("assignee_id", null).select("id").maybeSingle();
+      if (row) await sb.from("dev_ticket_events").insert({ ticket_id: id, kind: "assigned", actor_name: who.name, actor_id: who.id, to_value: who.name });
+    }
+    await run.move(t, "in_progress", `Started work on ${name}`);
+    await run.branchRow(name);
+    return { success: true, branch: name, url: `https://github.com/${REPO}/tree/${name}` };
+  }
+
+  const name = String(b.name || "").trim();
+  if (!name) return { success: false, error: "Which branch?" };
+  const isBase = name === "main" || name === "pre-release";
+
+  if (action === "delete_branch") {
+    if (isBase) return { success: false, status: 403, error: `${name} can't be deleted from here.` };
+    // Fresh from GitHub, never the cache: the branch may have moved since.
+    const row = await run.branchRow(name);
+    if (!row) return { success: false, status: 404, error: `${name} is already gone.` };
+    const path = name.split("/").map(encodeURIComponent).join("/");
+    const br = await gh(`/repos/${REPO}/branches/${path}`);
+    if (br?.protected) return { success: false, status: 403, error: `${name} is protected on GitHub.` };
+    if (!row.merged) return { success: false, status: 409, error: `${name} has ${row.ahead} commit${row.ahead === 1 ? "" : "s"} that ${row.ahead === 1 ? "isn't" : "aren't"} on pre-release — only fully merged branches can be deleted here.` };
+    const w = await ghWrite("DELETE", `/repos/${REPO}/git/refs/heads/${path}`);
+    await logWrite(sb, who, "delete_branch", w.ok, { branch: name, sha: row.sha, status: w.status, error: w.ok ? undefined : w.data?.message });
+    if (!w.ok) return { success: false, status: 502, error: writeRefused(w.status, w.data) };
+    await sb.from("github_branches").delete().eq("name", name);
+    await sb.from("dev_ticket_links").update({ state: "deleted", updated_at: new Date().toISOString() }).eq("kind", "branch").eq("ref", name);
+    return { success: true, deleted: name };
+  }
+
+  if (action === "link_branch") {
+    if (isBase) return { success: false, error: `${name} isn't a ticket's branch.` };
+    const id = Number(b.ticket_id);
+    const { data: t } = await sb.from("dev_tickets").select("id, status, github_number").eq("id", id).maybeSingle();
+    if (!t) return { success: false, status: 404, error: `SN-${id} doesn't exist.` };
+    await run.link(t, "branch", name, { url: `https://github.com/${REPO}/tree/${name}`, title: name, state: "active" }, `Branch ${name} (linked by hand)`);
+    await logWrite(sb, who, "link_branch", true, { branch: name, ticket: id });
+    const row = await run.branchRow(name);
+    return { success: true, branch: row };
+  }
+
+  // mark_branch
+  if (isBase) return { success: false, error: `${name} is a base branch already.` };
+  const release = !!b.release;
+  const { error } = await sb.from("github_branches").update({
+    marked_kind: release ? "release" : null, marked_by: who.name, marked_by_id: who.id, marked_at: new Date().toISOString(),
+  }).eq("name", name);
+  if (error) return { success: false, status: 500, error: error.message };
+  await logWrite(sb, who, "mark_branch", true, { branch: name, release });
+  const row = await run.branchRow(name);
+  return { success: true, branch: row };
 }
 
 // Same user > role > default rule as dev-tickets; dev-tracker is off for every role.
@@ -499,8 +693,19 @@ Deno.serve(async (req: Request) => {
   }
   let b: any = {};
   try { b = await req.json(); } catch { /* empty body is fine */ }
-  if (String(b.action || "reconcile") !== "reconcile") return json({ success: false, error: "Unknown action" }, 400);
-  const days = Number(b.days) > 0 && Number(b.days) <= 30 ? Number(b.days) : undefined;
-  const r = await runReconcile(sb, { name: String(u.name), id: String(u.id) }, days);
-  return json({ success: r.ok, ...r });
+  const action = String(b.action || "reconcile");
+  const who = { name: String(u.name), id: String(u.id) };
+  if (action === "reconcile") {
+    const days = Number(b.days) > 0 && Number(b.days) <= 30 ? Number(b.days) : undefined;
+    const r = await runReconcile(sb, who, days);
+    return json({ success: r.ok, ...r });
+  }
+  if (!["start_work", "delete_branch", "link_branch", "mark_branch"].includes(action)) return json({ success: false, error: "Unknown action" }, 400);
+  try {
+    const r = await branchAction(sb, who, action, b);
+    if (r.success) await broadcastChange();
+    return json(r, r.success ? 200 : (r.status || 400));
+  } catch (e) {
+    return json({ success: false, error: (e as Error).message }, 500);
+  }
 });

@@ -32,10 +32,12 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 3. **Ship a JS/CSS change → bump the cache-buster in every HTML page.** Assets
    are served raw with a hand-maintained query string, e.g.
-   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The seven pages
+   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The six pages
    that carry it: `index.html`, `operations.html`, `b2b.html`, `workspace.html`, `stats.html`,
-   `docs.html`, `dev.html` (since 2026-11, the Development tracker). Forget this and users keep the old file.
+   `docs.html`. Forget this and users keep the old file.
    `grep -ho "speeks.js?v=[0-9a-z]*" *.html | sort | uniq -c` should print one line.
+   **`dev.html` is the exception:** it loads `dev.js` + `dev.css` (its own `?v=`),
+   never `speeks.js` — bump those when they change.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
    numbered from the same base, so there are two each of `0004`–`0009` and
@@ -70,7 +72,7 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 | `b2b.html` | **B2B lives here** since 2026-10: its own nav tab, full screen. The pane keeps id `#ops-pane-b2b`; `operations.html#b2b` forwards here. |
 | `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance, Claims, and **Projects** (`#projects`, 2026-11): approval and tracking for work *next to* SPEEKSNET — Claude-built tools, extensions, scripts; nothing starts until the DM approves it. `speeks.js` "24b. MODULE: PROJECTS", the `projects` edge function, migration `0186`. Three Feature Access keys (`nav-projects`, `projects-request`, `projects-approve`) whose defaults live in **both** `FEATURE_CATALOG` and the function's `DEFAULTS`. The DM, CEO and MOCD always see every project — by role (`SEES_ALL_ROLES` in the function), deliberately *not* a Feature Access switch — as does anyone holding `projects-approve`; everyone else is sent just the ones they asked for or are listed on. Filtered in the function, not the browser. Plan for what comes next: `docs/plans/projects-and-dev-tracker.md`. |
 | `stats.html` | Stats/reporting page. |
-| `dev.html` | **The Development tracker** (2026-11): tickets for SPEEKSNET itself, imported from GitHub Issues and replacing them. Only `dev-tracker` holders (Nick, Ethan — a per-person Feature Access grant, off for every role) see its green header button right of Settings, and the page and the `dev-tickets` function gate it too. `speeks.js` "24c. MODULE: DEVELOPMENT TRACKER", migration `0188`. Plan and phase log: `docs/plans/dev-tracker-HANDOFF.md`. |
+| `dev.html` | **The Development tracker** (2026-11): tickets for SPEEKSNET itself, imported from GitHub Issues and replacing them. Only `dev-tracker` holders (Nick, Ethan — a per-person Feature Access grant, off for every role) see its green header button right of Settings, and the page and the `dev-tickets` function gate it too. **Its own app** (2026-11-19, Nick: "PERFECT. Polished, snappy, fluid"): `dev.js` + `dev.css`, dark, full screen, keyboard-driven — **no `speeks.js`, no `styles.css`, no SPEEKSNET header** on this page. Functions `dev-tickets`, `github-webhook` (GitHub sync + branch actions), `idea-submit` (Submit a Ticket); migrations `0188`, `0191`–`0193`. Plan and phase log: `docs/plans/dev-tracker-HANDOFF.md`. |
 | `docs.html` | *Not* developer docs — the in-app Processes & Policies library (CMS-driven). |
 | `tv.html` | Retired. A redirect stub to `index.html`, kept only for the five wall TVs still bookmarked to it. The shop-floor board is now the Command Center card on the QuickPortal — see `STORE_BOARD_FEATURES`. |
 | `speeks.js` | The entire front end. See `docs/modules/README.md`. |
@@ -135,6 +137,14 @@ Projects has the same three (`projects-check.js`, `projects-layout-check.js`,
 plain, once with `-WindowSize 1440,900`: anything driven by a media query reads
 the *window*, not the stage a check builds, so a 1440px stage in headless
 Chrome's ~800px window is measured with phone CSS.
+
+The Development suite (`dev.html`) isn't `speeks.js`, so its checks load its
+own files with **`-Js dev.js -Css dev.css`** (runner options, opt-in):
+`dev-tracker-check.js`, `dev-tracker-layout-check.js` (twice, as above),
+`dev-tracker-page-check.js -Html dev.html`; plus `dev-header-check.js -Html
+b2b.html` for its door in the other pages' header. A check sets
+`window.DEV_NO_BOOT = true` so dev.js doesn't boot (and leave for index.html),
+and swaps the network once with `Dev.stub(fn)`.
 
 A `-Html` check that changes `sessionStorage` must put it back before the file
 ends: the page's own init runs after the check script, and a page gate reading a
