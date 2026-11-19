@@ -151,6 +151,11 @@ Each phase is shippable on its own and gets its own PR into `pre-release`.
 - **Done when:** a dev-switched user can create/edit/comment on tickets via the function; non-dev users get 403; checks pass.
 
 ### Phase 2 — Import from GitHub (one-off, dry run first)
+> **Built 2026-11-18 on `feat/dev-tracker`:** edge function `supabase/functions/github-import` (deployed). `GET` + a dev's PIN is the dry run (writes only a `github_sync_log` row); `POST {apply: true, open_in_closed: 'done'|'backlog'}` with a **real** dev PIN imports. Re-runnable — existing tickets are skipped, never overwritten — so run it once more just before Issues is switched off to catch late issues. The first dry run was also the first proof the App's private key works. Found and decided on the dry run (Nick, 2026-11-18):
+> - **190 of the 211 open issues sit in milestones that already closed** — the update shipped and the issues were never closed. Nick: import them as **Done**, each with a history note saying so (`open_in_closed: 'done'`). Leaves 21 genuinely open in Backlog; 248 done, 6 won't do.
+> - **Releases imported as-is:** 14 milestones + 43 tags, paired where a tag's name carries the milestone's title (4 pairs: Launch, Patch 1, Season 1 Reloaded, Main October — a looser match paired two wrongly and was tightened) → 53 `dev_releases` rows of history. Tickets attach to the milestone rows. Phase 6 creates releases properly from then on.
+> - GitHub had **no issue comments** at all; both logins map (no unmapped people); 10 unlabelled issues → Task; Area left blank on every import.
+> - The stored key's header didn't say `RSA` though the key is PKCS#1 — `appToken()` reads the format from the DER instead. Reuse it (Phase 4–6 need the same token).
 - Edge function `github-import` (or a one-off script run through the MCP), **dry-run mode by default** that reports counts and mapping without writing.
 - Import: all 275 issues (body, comments, state, labels → type, assignees → people via `github_people`, milestone → release), 14 milestones + 43 releases → `dev_releases` (with notes).
 - Label mapping: `Bug/Fix` → Bug, `Feature Update` → Suggestion/Feature, `Minor Update` → Improvement (adjust to Q1's list).
