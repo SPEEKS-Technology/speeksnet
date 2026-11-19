@@ -32,9 +32,9 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 3. **Ship a JS/CSS change → bump the cache-buster in every HTML page.** Assets
    are served raw with a hand-maintained query string, e.g.
-   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The six pages
+   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The seven pages
    that carry it: `index.html`, `operations.html`, `b2b.html`, `workspace.html`, `stats.html`,
-   `docs.html`. Forget this and users keep the old file.
+   `docs.html`, `dev.html` (since 2026-11, the Development tracker). Forget this and users keep the old file.
    `grep -ho "speeks.js?v=[0-9a-z]*" *.html | sort | uniq -c` should print one line.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
@@ -68,6 +68,7 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 | `b2b.html` | **B2B lives here** since 2026-10: its own nav tab, full screen. The pane keeps id `#ops-pane-b2b`; `operations.html#b2b` forwards here. |
 | `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance, Claims, and **Projects** (`#projects`, 2026-11): approval and tracking for work *next to* SPEEKSNET — Claude-built tools, extensions, scripts; nothing starts until the DM approves it. `speeks.js` "24b. MODULE: PROJECTS", the `projects` edge function, migration `0186`. Three Feature Access keys (`nav-projects`, `projects-request`, `projects-approve`) whose defaults live in **both** `FEATURE_CATALOG` and the function's `DEFAULTS`. The DM, CEO and MOCD always see every project — by role (`SEES_ALL_ROLES` in the function), deliberately *not* a Feature Access switch — as does anyone holding `projects-approve`; everyone else is sent just the ones they asked for or are listed on. Filtered in the function, not the browser. Plan for what comes next: `docs/plans/projects-and-dev-tracker.md`. |
 | `stats.html` | Stats/reporting page. |
+| `dev.html` | **The Development tracker** (2026-11): tickets for SPEEKSNET itself, imported from GitHub Issues and replacing them. Only `dev-tracker` holders (Nick, Ethan — a per-person Feature Access grant, off for every role) see its green header button right of Settings, and the page and the `dev-tickets` function gate it too. `speeks.js` "24c. MODULE: DEVELOPMENT TRACKER", migration `0188`. Plan and phase log: `docs/plans/dev-tracker-HANDOFF.md`. |
 | `docs.html` | *Not* developer docs — the in-app Processes & Policies library (CMS-driven). |
 | `tv.html` | Retired. A redirect stub to `index.html`, kept only for the five wall TVs still bookmarked to it. The shop-floor board is now the Command Center card on the QuickPortal — see `STORE_BOARD_FEATURES`. |
 | `speeks.js` | The entire front end. See `docs/modules/README.md`. |

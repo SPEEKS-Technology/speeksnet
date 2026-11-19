@@ -4436,6 +4436,7 @@ async function checkPIN() {
                 if (document.getElementById('ccWidget')) initBoardPage();
                 if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
                 if (typeof initB2bPage === 'function') initB2bPage();   // gated: a board is sent home
+                if (typeof initDevPage === 'function') initDevPage();   // gated the same way (dev-tracker)
                 return;
             }
 
@@ -4463,6 +4464,7 @@ async function checkPIN() {
             if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
             if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
             if (typeof initB2bPage === 'function') initB2bPage();
+            if (typeof initDevPage === 'function') initDevPage();
             // The morning mail's "Restocked Under Another SKU" link — a manager
             // on a phone signs in on it far more often than they arrive signed in.
             try { _restockHandleHash(); } catch (_) { /* not fatal to sign-in */ }
@@ -33577,6 +33579,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (document.getElementById('ccWidget')) initBoardPage();
             initOperations();
             initB2bPage();   // gated: a board that lands on b2b.html is sent home
+            initDevPage();   // gated the same way (dev-tracker)
             return;
         }
         initDashboardData();
@@ -33584,6 +33587,7 @@ document.addEventListener("DOMContentLoaded", () => {
         initWorkspace();
         initOperations();
         initB2bPage();
+        initDevPage();
         // A #jump=<feature> deep-link from the search box: land, then spotlight
         // the panel that was asked for.
         try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
@@ -34008,6 +34012,7 @@ document.addEventListener('click', async (e) => {
                         if (document.getElementById('ccWidget')) initBoardPage();
                         if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
                         if (typeof initB2bPage === 'function') initB2bPage();   // gated: a board is sent home
+                        if (typeof initDevPage === 'function') initDevPage();   // gated the same way (dev-tracker)
                         return;
                     }
                     if (typeof initDashboardData === 'function') initDashboardData();
@@ -34015,6 +34020,7 @@ document.addEventListener('click', async (e) => {
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
                     if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
                     if (typeof initB2bPage === 'function') initB2bPage();
+                    if (typeof initDevPage === 'function') initDevPage();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
                     if (typeof _statsOpenSaved === 'function') _statsOpenSaved();
@@ -35363,6 +35369,543 @@ async function prjSubmitForm(btn) {
         if (json.project) prjOpen(json.project.id);
     } catch (err) {
         _prjSay(err.message || "Couldn't send it.", true);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// ============================================================================
+// 24c. MODULE: DEVELOPMENT TRACKER (dev.html, 2026-11)
+// ============================================================================
+// Tickets for SPEEKSNET itself. Plan and decisions: docs/plans/dev-tracker-HANDOFF.md.
+// Server: the dev-tickets edge function (migration 0188) — it resolves the
+// person from the PIN, checks dev-tracker, and enforces everything this file
+// only draws (who can be assigned, Won't do needs a reason, edits lose a race
+// rather than overwrite one).
+//
+// WHO SEES IT (D2): dev-tracker is a per-person Feature Access switch, off for
+// every role — Nick and Ethan have it. Three gates, each for a different door:
+// the header button (#devTrackerBtn, data-feature-any), the page itself
+// (initDevPage — a URL can be typed), and the function (403 without it).
+//
+// THE LOOK (D9) is Projects', reused rather than copied: the .ws-head card,
+// the prj-seg filter, the prj-table list, the prj-detail / prj-form popups.
+// Only what Projects has no equivalent for is dev-*.
+//
+// Phase 3 of the plan. Tickets arrive three ways: a dev creates one here (lands
+// in Backlog), the GitHub import (Phase 2, SN-65…SN-575 keep their issue
+// numbers), and — next — Submit an Idea, reworked into ticket intake (lands
+// in Triage). Statuses move by hand until Phase 4 drives In review /
+// On pre-release / Done from GitHub.
+
+const DEV_TICKETS_URL = `${_BASE}/dev-tickets`;
+
+const DEV_STATUS = {
+    triage:        { label: 'Triage',         tone: 'wait'   },
+    backlog:       { label: 'Backlog',        tone: 'muted'  },
+    in_progress:   { label: 'In progress',    tone: 'go'     },
+    in_review:     { label: 'In review',      tone: 'violet' },
+    on_prerelease: { label: 'On pre-release', tone: 'teal'   },
+    done:          { label: 'Done',           tone: 'done'   },
+    wont_do:       { label: "Won't do",       tone: 'no'     },
+};
+// The segmented filter, in the order work moves. Done and Won't do share the
+// last button so the everyday views stay about live work.
+const DEV_VIEWS = [
+    { key: 'triage',        label: 'Triage',         statuses: ['triage'] },
+    { key: 'backlog',       label: 'Backlog',        statuses: ['backlog'] },
+    { key: 'in_progress',   label: 'In progress',    statuses: ['in_progress'] },
+    { key: 'in_review',     label: 'In review',      statuses: ['in_review'] },
+    { key: 'on_prerelease', label: 'On pre-release', statuses: ['on_prerelease'] },
+    { key: 'closed',        label: 'Done',           statuses: ['done', 'wont_do'] },
+];
+const DEV_PRIORITY = {
+    urgent: { label: 'Urgent', tone: 'no',    rank: 3 },
+    high:   { label: 'High',   tone: 'wait',  rank: 2 },
+    normal: { label: 'Normal', tone: 'muted', rank: 1 },
+    low:    { label: 'Low',    tone: 'muted', rank: 0 },
+};
+const DEV_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
+
+let _devData    = null;   // the last GET: { me, can, tickets, comments, events, links, releases, types, areas, devs }
+let _devLoading = false;
+let _devView    = null;   // a DEV_VIEWS key; null = pick (Triage if anything is waiting there)
+let _devSearch  = '';
+let _devArea    = '';
+let _devMine    = false;
+let _devOpenId  = null;   // ticket in the detail popup
+let _devEditId  = null;   // null = new ticket, else the one being edited
+let _devEditingComment = null;   // comment id being edited inline, if any
+
+function _devMe() { return (_devData && _devData.me) || { id: null, name: sessionStorage.getItem('speeksUserName') || '', test: false }; }
+function _devById(id) { return ((_devData && _devData.tickets) || []).find(t => Number(t.id) === Number(id)) || null; }
+function _devLabelOf(list, key) { const x = ((_devData && _devData[list]) || []).find(r => r.key === key); return x ? x.label : (key || ''); }
+function _devRelease(id) { return ((_devData && _devData.releases) || []).find(r => Number(r.id) === Number(id)) || null; }
+function _devReleaseLabel(r) {
+    if (!r) return '';
+    if (!r.version) return r.title || '';
+    return r.title && r.title !== r.version ? `${r.version} · ${r.title}` : r.version;
+}
+function _devIsMine(t) { const me = _devMe(); return !!(me.id && t.assignee_id && String(t.assignee_id) === String(me.id)); }
+function _devChip(map, key) {
+    const s = map[key] || { label: key, tone: 'muted' };
+    return `<span class="prj-chip prj-tone-${s.tone}">${escapeHtml(s.label)}</span>`;
+}
+
+// The page gate. Same shape as initB2bPage: the cached Feature Access answer
+// first, and only a "no" waits for a fresh read, so someone granted the tracker
+// a minute ago isn't bounced off a stale cache.
+async function initDevPage() {
+    if (!document.querySelector('.dev-wrap')) return;
+    const allowed = () => typeof _featureEffectiveVisible === 'function'
+        && _featureEffectiveVisible('dev-tracker', _b2bRoleClass(), _b2bUser()) === true;
+    if (!allowed()) {
+        try {
+            const json = await fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json());
+            if (json && json.success !== false) {
+                _featureOvRaw = json.data || [];
+                _featureOv = _buildFeatureOvMaps(_featureOvRaw);
+                try { localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv)); } catch (_) {}
+            }
+        } catch (_) { /* offline: the cached answer stands */ }
+        if (!allowed()) { window.location.replace('index.html'); return; }
+    }
+    devLoad();
+}
+
+async function devLoad(quiet) {
+    const body = document.getElementById('devBody');
+    if (!body || _devLoading) return;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) {
+        if (!_devData) body.innerHTML = '<div class="status-message">The tracker needs a PIN sign-in. Sign out and back in with your PIN.</div>';
+        return;
+    }
+    _devLoading = true;
+    if (!quiet && !_devData) body.innerHTML = '<div class="status-message">Loading tickets…</div>';
+    try {
+        const res = await fetch(`${DEV_TICKETS_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`);
+        _devData = json;
+        _devFillAreaFilter();
+        devRender();
+        if (_devOpenId != null && document.getElementById('devDetailModal')?.classList.contains('show')) _devRenderDetail();
+    } catch (err) {
+        if (!_devData) body.innerHTML = `<div class="status-message">Couldn't load tickets — ${escapeHtml(err.message || 'network error')}. <button class="prj-link" onclick="devLoad()">Try again</button></div>`;
+    } finally {
+        _devLoading = false;
+    }
+}
+
+// Realtime ping (_RT_TOOL_CHECKS['dev-tickets']). Only on the page that shows them.
+function devRealtimeRefresh() {
+    if (document.getElementById('devBody') && _devData) devLoad(true);
+}
+
+function _devFillAreaFilter() {
+    const sel = document.getElementById('devAreaFilter');
+    if (!sel || !_devData) return;
+    sel.innerHTML = '<option value="">All areas</option>'
+        + (_devData.areas || []).filter(a => a.active !== false).map(a => `<option value="${escapeHtml(a.key)}">${escapeHtml(a.label)}</option>`).join('')
+        + '<option value="__none">No area</option>';
+    sel.value = _devArea;
+}
+
+function devSetView(v)   { _devView = v; devRender(); }
+function devSetSearch(q) { _devSearch = String(q || ''); devRender(); }
+function devSetArea(a)   { _devArea = String(a || ''); devRender(); }
+function devSetMine(on)  { _devMine = !!on; devRender(); }
+
+// Search, area and Mine narrow every view; the counts on the filter buttons
+// follow them, so "Backlog · 3" means three that match.
+function _devFiltered() {
+    const all = (_devData && _devData.tickets) || [];
+    const q = _devSearch.trim().toLowerCase();
+    const num = (q.match(/^(?:sn-?|#)?(\d+)$/) || [])[1];
+    return all.filter(t => {
+        if (_devMine && !_devIsMine(t)) return false;
+        if (_devArea === '__none' ? !!t.area : (_devArea && t.area !== _devArea)) return false;
+        if (!q) return true;
+        if (num) return String(t.id) === num;
+        return `${t.title} ${t.description || ''}`.toLowerCase().includes(q);
+    });
+}
+
+function devRender() {
+    const body = document.getElementById('devBody');
+    if (!body || !_devData) return;
+    const all = _devData.tickets || [];
+    const rows0 = _devFiltered();
+
+    const open = all.filter(t => t.status !== 'done' && t.status !== 'wont_do').length;
+    const triage = all.filter(t => t.status === 'triage').length;
+    const sub = document.getElementById('devHeadSub');
+    if (sub) sub.textContent = `${open} open${triage ? ` · ${triage} waiting in triage` : ''}`;
+    const newBtn = document.getElementById('devNewBtn');
+    if (newBtn) newBtn.style.display = _devMe().test ? 'none' : '';
+
+    const counts = {};
+    DEV_VIEWS.forEach(v => { counts[v.key] = rows0.filter(t => v.statuses.includes(t.status)).length; });
+    if (!_devView || !DEV_VIEWS.some(v => v.key === _devView)) {
+        _devView = counts.triage ? 'triage' : counts.in_progress ? 'in_progress' : 'backlog';
+    }
+    const view = DEV_VIEWS.find(v => v.key === _devView);
+    const rank = t => (DEV_PRIORITY[t.priority] || DEV_PRIORITY.normal).rank;
+    const rows = rows0.filter(t => view.statuses.includes(t.status)).sort((a, b) => view.key === 'closed'
+        ? new Date(b.closed_at || b.updated_at) - new Date(a.closed_at || a.updated_at)
+        : (rank(b) - rank(a)) || (new Date(b.updated_at) - new Date(a.updated_at)));
+
+    const seg = `
+        <div class="prj-seg dev-seg" role="tablist" aria-label="Ticket status">
+            ${DEV_VIEWS.map(v => `<button type="button" role="tab" aria-selected="${v.key === _devView}"
+                class="prj-seg-btn dev-seg-btn${v.key === _devView ? ' on' : ''}" onclick="devSetView('${v.key}')">${escapeHtml(v.label)} · ${counts[v.key]}</button>`).join('')}
+        </div>`;
+
+    const filtered = _devSearch.trim() || _devArea || _devMine;
+    const list = rows.length ? `
+        <div class="prj-table-wrap">
+            <table class="cb-table prj-table dev-table">
+                <thead><tr>
+                    <th class="prj-col-id">#</th><th>Ticket</th><th class="dev-col-kind">Type · Area</th>
+                    <th class="prj-col-by">Assigned to</th><th class="dev-col-rel">Release</th><th class="prj-col-date">Updated</th>
+                </tr></thead>
+                <tbody>${rows.map(_devRowHtml).join('')}</tbody>
+            </table>
+        </div>`
+        : `<div class="status-message prj-empty">${filtered ? 'Nothing here matches.' : view.key === 'triage' ? 'Nothing waiting in triage.' : `Nothing in ${escapeHtml(view.label.toLowerCase())}.`}</div>`;
+
+    body.innerHTML = seg + list;
+}
+
+function _devRowHtml(t) {
+    const pr = t.priority && t.priority !== 'normal' ? _devChip(DEV_PRIORITY, t.priority) : '';
+    const st = t.status === 'wont_do' ? _devChip(DEV_STATUS, 'wont_do') : '';
+    const kind = [_devLabelOf('types', t.type), t.area ? _devLabelOf('areas', t.area) : ''].filter(Boolean)
+        .map(x => `<span class="prj-tag">${escapeHtml(x)}</span>`).join('');
+    return `
+        <tr class="cb-row prj-row${_devIsMine(t) ? ' prj-row-mine' : ''}" tabindex="0" onclick="devOpen(${Number(t.id)})"
+            onkeydown="if(event.key==='Enter'){devOpen(${Number(t.id)})}">
+            <td class="prj-col-id"><span class="prj-id">SN-${Number(t.id)}</span></td>
+            <td><b class="prj-row-title">${escapeHtml(t.title)}</b>${pr || st ? `<span class="dev-row-chips">${pr}${st}</span>` : ''}${t.description ? `<span class="prj-row-desc">${escapeHtml(t.description)}</span>` : ''}</td>
+            <td class="dev-col-kind"><span class="prj-tags">${kind}</span></td>
+            <td class="prj-col-by">${escapeHtml(t.assignee_name || '—')}</td>
+            <td class="dev-col-rel">${escapeHtml(_devReleaseLabel(_devRelease(t.release_id)) || '—')}</td>
+            <td class="prj-col-date">${escapeHtml(_prjDate(t.updated_at))}</td>
+        </tr>`;
+}
+
+// ---- detail popup ----------------------------------------------------------
+
+function devOpen(id) {
+    if (!_devById(id)) return;
+    _devOpenId = Number(id);
+    _devEditingComment = null;
+    _devRenderDetail();
+    const m = document.getElementById('devDetailModal');
+    if (m && !m.classList.contains('show')) toggleModal('devDetailModal');
+}
+
+function _devEventText(e) {
+    const st = k => (DEV_STATUS[k] || { label: k }).label;
+    switch (e.kind) {
+        case 'created':  return 'raised it';
+        case 'imported': return 'imported it from GitHub';
+        case 'edited':   return `edited ${e.note || 'it'}`;
+        case 'status':   return `moved it to ${st(e.to_value)}`;
+        case 'assigned': return e.to_value ? `assigned it to ${e.to_value}` : 'unassigned it';
+        case 'release': {
+            const r = _devRelease(e.to_value);
+            return r ? `put it in ${_devReleaseLabel(r)}` : 'took it out of its release';
+        }
+        case 'linked':   return `linked ${e.to_value || 'code'}`;
+        case 'unlinked': return `unlinked ${e.from_value || 'code'}`;
+        default:         return e.kind;
+    }
+}
+
+function _devCommentHtml(c) {
+    const me = _devMe();
+    const mine = c.source === 'speeksnet' && me.id && String(c.author_id || '') === String(me.id);
+    if (_devEditingComment === Number(c.id)) {
+        return `
+            <li class="dev-comment">
+                <textarea id="devCommentEdit" class="form-input-lg prj-note" rows="3" maxlength="20000">${escapeHtml(c.body)}</textarea>
+                <span class="dev-comment-acts">
+                    <button class="prj-link" onclick="devSaveComment(${Number(c.id)}, this)">Save</button>
+                    <button class="prj-link" onclick="devEditComment(null)">Cancel</button>
+                </span>
+            </li>`;
+    }
+    return `
+        <li class="dev-comment">
+            <span class="prj-ev-line"><b>${escapeHtml(c.author_name || '')}</b><span class="prj-ev-when">${escapeHtml(_prjDate(c.created_at))}${c.edited_at ? ' · edited' : ''}${c.source === 'github' ? ' · on GitHub' : ''}</span>
+                ${mine && !me.test ? `<button class="prj-link dev-comment-edit" onclick="devEditComment(${Number(c.id)})">Edit</button>` : ''}</span>
+            <span class="prj-ev-note">${escapeHtml(c.body)}</span>
+        </li>`;
+}
+
+function _devRenderDetail() {
+    const t = _devById(_devOpenId);
+    const head = document.getElementById('devDetailHead');
+    const body = document.getElementById('devDetailBody');
+    const foot = document.getElementById('devDetailFooter');
+    if (!head || !body || !foot) return;
+    if (!t) {
+        head.textContent = 'Ticket';
+        body.innerHTML = '<div class="status-message">This ticket no longer exists.</div>';
+        foot.innerHTML = '';
+        return;
+    }
+    document.getElementById('devDetailEyebrow').textContent = `SN-${t.id}${t.github_number ? ` · was GitHub #${t.github_number}` : ''}`;
+    head.textContent = t.title;
+    document.getElementById('devDetailSub').innerHTML =
+        `${_devChip(DEV_STATUS, t.status)}${t.priority !== 'normal' ? ' ' + _devChip(DEV_PRIORITY, t.priority) : ''}`
+        + ` <span>Raised by ${escapeHtml(t.reporter_name || '')}${t.reporter_store ? ` (${escapeHtml(t.reporter_store)})` : ''} · ${escapeHtml(_prjDate(t.created_at))}</span>`;
+
+    const events = ((_devData && _devData.events) || []).filter(e => Number(e.ticket_id) === Number(t.id));
+    const comments = ((_devData && _devData.comments) || []).filter(c => Number(c.ticket_id) === Number(t.id));
+    const links = ((_devData && _devData.links) || []).filter(l => Number(l.ticket_id) === Number(t.id));
+
+    // Why it won't be done is what the person who raised it most needs to read,
+    // so it sits at the top rather than down in the history.
+    const why = t.status === 'wont_do'
+        ? (events.filter(e => e.kind === 'status' && e.to_value === 'wont_do').pop() || {}).note : '';
+    const callout = why ? `<div class="prj-callout prj-tone-no"><b>Won't do:</b> ${escapeHtml(why)}</div>` : '';
+
+    const facts = [
+        ['Type', escapeHtml(_devLabelOf('types', t.type))],
+        ['Area', escapeHtml(t.area ? _devLabelOf('areas', t.area) : '—')],
+        ['Assigned to', escapeHtml(t.assignee_name || 'Nobody')],
+        ['Release', escapeHtml(_devReleaseLabel(_devRelease(t.release_id)) || '—')],
+        (t.stores || []).length ? ['Stores', (t.stores || []).map(s => `<span class="prj-tag">${escapeHtml(s)}</span>`).join('')] : null,
+        t.due ? ['Due', escapeHtml(_prjDate(t.due + 'T12:00:00'))] : null,
+        t.closed_at ? ['Closed', escapeHtml(_prjDate(t.closed_at))] : null,
+    ].filter(Boolean);
+
+    const code = links.length ? `
+        <div class="prj-sec">
+            <div class="form-label-caps">Code</div>
+            <ul class="dev-links">${links.map(l => `<li><span class="prj-tag">${escapeHtml(l.kind)}</span>
+                ${l.url ? `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.title || l.ref)}</a>` : escapeHtml(l.title || l.ref)}
+                ${l.state ? `<span class="prj-ev-when">${escapeHtml(l.state)}</span>` : ''}</li>`).join('')}</ul>
+        </div>` : '';
+
+    const talk = `
+        <div class="prj-sec">
+            <div class="form-label-caps">Comments${comments.length ? ` · ${comments.length}` : ''}</div>
+            ${comments.length ? `<ol class="dev-comments">${comments.map(_devCommentHtml).join('')}</ol>` : '<div class="dev-none">No comments yet.</div>'}
+        </div>`;
+
+    const timeline = events.length ? `
+        <div class="prj-sec">
+            <div class="form-label-caps">History</div>
+            <ol class="prj-timeline">
+                ${events.slice().reverse().map(e => `
+                    <li class="prj-ev dev-ev-${escapeHtml(e.kind)}${e.kind === 'status' ? ' dev-ev-to-' + escapeHtml(e.to_value || '') : ''}">
+                        <span class="prj-ev-line"><b>${escapeHtml(e.actor_name)}</b> ${escapeHtml(_devEventText(e))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
+                        ${e.note && e.kind !== 'edited' ? `<span class="prj-ev-note">${escapeHtml(e.note)}</span>` : ''}
+                    </li>`).join('')}
+            </ol>
+        </div>` : '';
+
+    body.innerHTML = `
+        ${callout}
+        ${t.description ? `<div class="prj-sec"><div class="form-label-caps">Description</div><div class="prj-sec-text">${escapeHtml(t.description)}</div></div>` : ''}
+        <dl class="prj-facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+        ${code}${talk}${timeline}`;
+
+    foot.innerHTML = _devFootHtml(t);
+}
+
+// The dev controls. Status and assignee are picked and saved together; the
+// note box is a comment, or — when the ticket is moving to Won't do — the
+// reason, which the function requires and the reporter reads.
+function _devFootHtml(t) {
+    const msg = '<span class="prj-msg" id="devMsg" role="status"></span>';
+    if (_devMe().test) return `${msg}<span class="dev-none">Test accounts can look but not change tickets.</span><button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button>`;
+    const devs = (_devData && _devData.devs) || [];
+    const assigneeKnown = !t.assignee_id || devs.some(d => d.id === t.assignee_id);
+    return `
+        <div class="prj-foot-rows">
+            <div class="dev-foot-ctl">
+                <label class="form-label-caps" for="devStatusSel">Status</label>
+                <select id="devStatusSel" class="kpi-select" onchange="_devNoteHint()">
+                    ${Object.entries(DEV_STATUS).map(([k, s]) => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${escapeHtml(s.label)}</option>`).join('')}
+                </select>
+                <label class="form-label-caps" for="devAssignSel">Assigned to</label>
+                <select id="devAssignSel" class="kpi-select">
+                    <option value="">Nobody</option>
+                    ${devs.map(d => `<option value="${escapeHtml(d.id)}" ${t.assignee_id === d.id ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}
+                    ${assigneeKnown ? '' : `<option value="${escapeHtml(t.assignee_id)}" selected>${escapeHtml(t.assignee_name || 'Someone')} (no access)</option>`}
+                </select>
+            </div>
+            <textarea id="devNote" class="form-input-lg prj-note" rows="2" maxlength="20000" placeholder="Add a comment…"></textarea>
+        </div>
+        <div class="prj-foot-btns">${msg}
+            <button class="btn-secondary prj-act" onclick="devEdit(${Number(t.id)})">Edit</button>
+            <button class="btn-secondary prj-act" onclick="devComment(this)">Comment</button>
+            <button class="btn-primary prj-act" onclick="devApply(this)">Save status</button>
+        </div>`;
+}
+
+function _devNoteHint() {
+    const to = document.getElementById('devStatusSel')?.value;
+    const note = document.getElementById('devNote');
+    if (note) note.placeholder = to === 'wont_do' ? "Why it won't be done — required; whoever raised it reads this" : 'Add a comment…';
+}
+
+function _devSay(text, bad) {
+    const formOpen = document.getElementById('devFormModal')?.classList.contains('show');
+    const m = document.getElementById(formOpen ? 'devFormMsg' : 'devMsg');
+    if (!m) return;
+    m.textContent = text || '';
+    m.classList.toggle('prj-msg-bad', !!bad);
+}
+
+async function _devPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const res = await fetch(DEV_TICKETS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`);
+    return json;
+}
+
+async function _devBusy(fn, okText) {
+    const buttons = document.querySelectorAll('#devDetailFooter button');
+    buttons.forEach(b => { b.disabled = true; });
+    _devSay('Saving…');
+    try {
+        await fn();
+        _rtMute('dev-tickets');
+        await devLoad(true);
+        _devSay(okText);
+    } catch (err) {
+        _devSay(err.message || "Couldn't save.", true);
+    } finally {
+        document.querySelectorAll('#devDetailFooter button').forEach(b => { b.disabled = false; });
+    }
+}
+
+// Status and assignee, whichever changed. A note goes with a status change (as
+// its reason); with nothing changed, it is pointed at the Comment button.
+async function devApply() {
+    const t = _devById(_devOpenId);
+    if (!t) return;
+    const to = document.getElementById('devStatusSel')?.value || t.status;
+    const who = document.getElementById('devAssignSel')?.value || '';
+    const note = (document.getElementById('devNote')?.value || '').trim();
+    const statusChanged = to !== t.status;
+    const assignChanged = who !== String(t.assignee_id || '');
+    if (!statusChanged && !assignChanged) { _devSay(note ? 'Nothing changed — use Comment to post the note.' : 'Nothing changed.', !!note); return; }
+    if (statusChanged && to === 'wont_do' && !note) { _devSay("Say why it won't be done — whoever raised it reads this.", true); document.getElementById('devNote')?.focus(); return; }
+    await _devBusy(async () => {
+        if (assignChanged) await _devPost({ action: 'assign', id: t.id, assignee_id: who || null });
+        if (statusChanged) await _devPost({ action: 'status', id: t.id, to, note });
+    }, 'Saved.');
+}
+
+async function devComment() {
+    const t = _devById(_devOpenId);
+    const body = (document.getElementById('devNote')?.value || '').trim();
+    if (!t) return;
+    if (!body) { _devSay('Write the comment first.', true); document.getElementById('devNote')?.focus(); return; }
+    await _devBusy(() => _devPost({ action: 'comment', id: t.id, body }), 'Comment posted.');
+}
+
+function devEditComment(id) { _devEditingComment = id == null ? null : Number(id); _devRenderDetail(); document.getElementById('devCommentEdit')?.focus(); }
+
+async function devSaveComment(id) {
+    const t = _devById(_devOpenId);
+    const body = (document.getElementById('devCommentEdit')?.value || '').trim();
+    if (!t) return;
+    if (!body) { _devSay("A comment can't be empty.", true); return; }
+    _devEditingComment = null;
+    await _devBusy(() => _devPost({ action: 'edit_comment', id: t.id, comment_id: id, body }), 'Comment updated.');
+}
+
+// ---- new / edit form -------------------------------------------------------
+
+function devNew() { _devEditId = null; _devFillForm(null); toggleModal('devFormModal'); }
+function devEdit(id) {
+    const t = _devById(id);
+    if (!t) return;
+    _devEditId = Number(id);
+    _devFillForm(t);
+    closeAllModals();
+    toggleModal('devFormModal');
+}
+
+function _devFillForm(t) {
+    const d = _devData || {};
+    const opt = (v, label, on) => `<option value="${escapeHtml(v)}" ${on ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    const fill = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+
+    // Inactive types/areas stay offered only to the ticket already wearing one.
+    fill('devFType', (d.types || []).filter(x => x.active !== false || (t && t.type === x.key))
+        .map(x => opt(x.key, x.label, t ? t.type === x.key : x.key === 'bug')).join(''));
+    fill('devFArea', opt('', '—', !t || !t.area) + (d.areas || []).filter(x => x.active !== false || (t && t.area === x.key))
+        .map(x => opt(x.key, x.label, t && t.area === x.key)).join(''));
+    fill('devFPriority', Object.entries(DEV_PRIORITY).reverse().map(([k, p]) => opt(k, p.label, (t ? t.priority : 'normal') === k)).join(''));
+    // Assignee lives in the form only for a new ticket; on an existing one it
+    // is the popup's control (the 'assign' action, with its own history line).
+    const me = _devMe();
+    fill('devFAssignee', opt('', 'Nobody', false) + (d.devs || []).map(p => opt(p.id, p.name, t ? t.assignee_id === p.id : p.id === me.id)).join(''));
+    const asg = document.getElementById('devFAssignee');
+    if (asg) asg.disabled = !!t;
+    // Releases still to ship, plus whichever one the ticket is already in.
+    fill('devFRelease', opt('', '—', !t || !t.release_id) + (d.releases || [])
+        .filter(r => r.status !== 'published' || (t && Number(t.release_id) === Number(r.id)))
+        .map(r => opt(r.id, _devReleaseLabel(r), t && Number(t.release_id) === Number(r.id))).join(''));
+    set('devFTitle', t && t.title);
+    set('devFDesc', t && t.description);
+    set('devFDue', t && t.due);
+    const picked = (t && t.stores) || [];
+    fill('devFStores', DEV_STORES.map(s => `<label class="dev-store"><input type="checkbox" value="${s}" ${picked.includes(s) ? 'checked' : ''}> ${s}</label>`).join(''));
+
+    const title = document.getElementById('devFormTitle');
+    if (title) title.textContent = t ? `Edit SN-${t.id}` : 'New Ticket';
+    const sub = document.getElementById('devFormSub');
+    if (sub) sub.textContent = t ? 'Changes save straight to the ticket.' : 'Lands in Backlog — it has already been triaged by you.';
+    const go = document.getElementById('devFormSubmit');
+    if (go) go.textContent = t ? 'Save changes' : 'Create ticket';
+    const fm = document.getElementById('devFormMsg');
+    if (fm) { fm.textContent = ''; fm.classList.remove('prj-msg-bad'); }
+}
+
+async function devSubmitForm(btn) {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const payload = {
+        action: _devEditId == null ? 'create' : 'edit',
+        id: _devEditId,
+        title: val('devFTitle'),
+        description: val('devFDesc'),
+        type: val('devFType'),
+        area: val('devFArea') || null,
+        priority: val('devFPriority') || 'normal',
+        release_id: val('devFRelease') ? Number(val('devFRelease')) : null,
+        due: val('devFDue') || null,
+        stores: Array.from(document.querySelectorAll('#devFStores input:checked')).map(i => i.value),
+    };
+    if (_devEditId == null) payload.assignee_id = val('devFAssignee') || null;
+    if (!payload.title) { _devSay('Give the ticket a title.', true); document.getElementById('devFTitle')?.focus(); return; }
+    if (!payload.type)  { _devSay('Pick a type.', true); return; }
+    if (btn) btn.disabled = true;
+    _devSay('Saving…');
+    try {
+        const json = await _devPost(payload);
+        _rtMute('dev-tickets');
+        closeAllModals();
+        await devLoad(true);
+        const id = json.ticket ? json.ticket.id : _devEditId;
+        if (id != null) devOpen(id);
+    } catch (err) {
+        _devSay(err.message || "Couldn't save it.", true);
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -45078,7 +45621,7 @@ function _faCatalog() {
 // same-origin) and read their data-feature tags directly — that's how a feature
 // living only on Operations shows up while you're on QuickPortal. Runs once per
 // open; results feed _faCatalog() via _faRemoteFeatures.
-const _FA_SHELLS = ['index.html', 'workspace.html', 'operations.html', 'b2b.html', 'docs.html', 'stats.html'];
+const _FA_SHELLS = ['index.html', 'workspace.html', 'operations.html', 'b2b.html', 'docs.html', 'stats.html', 'dev.html'];
 let _faRemoteFeatures = [];
 let _faScanned = false;
 
@@ -59697,10 +60240,10 @@ try { window.matchMedia(_compactMediaQuery()).addEventListener('change', functio
 //   - The tabs left are spaced evenly, each its own width ("same size but don't
 //     look aligned" ruled out equal boxes). A name shortens to its data-m only if
 //     the bar runs out of room, longest first.
-const _QP_PAGE_NAMES = { operations: 'Operations', workspace: 'Workspace', stats: 'Stats & Awards', docs: 'Processes & Policies', b2b: 'B2B' };
+const _QP_PAGE_NAMES = { operations: 'Operations', workspace: 'Workspace', stats: 'Stats & Awards', docs: 'Processes & Policies', b2b: 'B2B', dev: 'Development' };
 function _qpBackBar() {
     document.querySelectorAll('.qp-back').forEach(function (b) { b.remove(); });
-    const page = (location.pathname.match(/\/(operations|workspace|stats|docs|b2b)\.html/i) || [])[1];
+    const page = (location.pathname.match(/\/(operations|workspace|stats|docs|b2b|dev)\.html/i) || [])[1];
     const main = document.querySelector('.main-content');
     if (!page || !main) return;
     main.insertAdjacentHTML('afterbegin', '<nav class="qp-back" aria-label="Back to QuickPortal"><a href="index.html">'
@@ -59723,7 +60266,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (brand) {
         brand.classList.add('qp-home');
         brand.title = 'QuickPortal';
-        brand.addEventListener('click', function () { if (/\/(operations|workspace|stats|docs|b2b)\.html/i.test(location.pathname)) location.href = 'index.html'; });
+        brand.addEventListener('click', function () { if (/\/(operations|workspace|stats|docs|b2b|dev)\.html/i.test(location.pathname)) location.href = 'index.html'; });
     }
     _qpBackBar();
     _qpNavFit(); setTimeout(_qpNavFit, 1500); setTimeout(_qpNavFit, 4000);
@@ -60349,6 +60892,9 @@ const _RT_TOOL_CHECKS = {
     gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders', '_qpWReloadB2b'],
+    // The Development tracker (dev.html): the dev-tickets function broadcasts
+    // after every write; only an open tracker refetches.
+    'dev-tickets': ['devRealtimeRefresh'],
     // callback-match broadcasts when the SET of matches moves — a new one lights
     // the card, a sold unit clears it, both without a reload.
     callbackMatch: ['checkCallbackMatchReminders', '_cbRealtimeRefresh', '_qpWReloadCallbacks'],
