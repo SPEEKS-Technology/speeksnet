@@ -262,3 +262,57 @@ t('intake: a submitted ticket says so, and lists its attachment', function () {
     if (!a || a.textContent !== 'photo.jpg') return 'no link to the attachment';
     return /old\.pdf[\s\S]*expired/.test(document.getElementById('devDetailBody').textContent) || 'an unsigned attachment is not explained';
 });
+
+// ---- Phase 4: GitHub sync (github-webhook) -----------------------------------
+// The function moves tickets and fills dev_ticket_links; the page only shows
+// it. These pin down how a linked PR, its checks, a branch and a commit read.
+function devWithLinks() {
+    devStage();
+    _devData.links = [
+        { id: 1, ticket_id: 1003, kind: 'commit', ref: 'abcdef1234567890', url: 'https://github.com/x/commit/abcdef1', title: 'Fix the sort SN-1003' },
+        { id: 2, ticket_id: 1003, kind: 'branch', ref: 'fix/sn-1003-sort', url: 'https://github.com/x/tree/fix/sn-1003-sort', state: 'deleted' },
+        { id: 3, ticket_id: 1003, kind: 'pr', ref: '612', url: 'https://github.com/x/pull/612', title: 'B2B sort by brand', state: 'merged', base: 'pre-release', author: 'Eckushnir',
+          checks: [
+              { kind: 'migration', level: 'error', text: '0192 is already used in the database by 0192_dev_github_sync — renumber before applying' },
+              { kind: 'buster', level: 'warn', text: 'speeks.js changed but no page\'s cache-buster (?v=) was bumped' },
+              { kind: 'function', level: 'todo', text: 'Deploy the b2b-deals function' },
+              { kind: 'migration', level: 'ok', text: '0193_x — applied' },
+          ] },
+    ];
+    _devData.events.push({ id: 9, ticket_id: 1003, kind: 'linked', actor_name: 'GitHub', to_value: 'pr', note: 'PR #612: B2B sort by brand', created_at: new Date().toISOString() });
+    devOpen(1003);
+    return document.getElementById('devDetailBody');
+}
+t('sync: the PR comes first, then the branch, then the commit', function () {
+    var b = devWithLinks();
+    var kinds = Array.prototype.map.call(b.querySelectorAll('.dev-links > li .prj-tag'), function (x) { return x.textContent; }).join(',');
+    return kinds === 'PR,Branch,Commit' || kinds;
+});
+t('sync: a PR shows its state, where it merged, and who opened it', function () {
+    var li = devWithLinks().querySelector('.dev-link-pr');
+    if (!li) return 'no PR row';
+    if (!/#612 B2B sort by brand/.test(li.textContent)) return 'title: ' + li.textContent;
+    if (!li.querySelector('.prj-chip') || li.querySelector('.prj-chip').textContent !== 'Merged') return 'no Merged chip';
+    return /into pre-release · Eckushnir/.test(li.textContent) || 'no base/author';
+});
+t('sync: every check is listed, with its level as a class', function () {
+    var b = devWithLinks();
+    var lv = Array.prototype.map.call(b.querySelectorAll('.dev-check'), function (c) { return c.className.replace('dev-check dev-check-', ''); }).join(',');
+    return lv === 'error,warn,todo,ok' || lv;
+});
+t('sync: a deleted branch says so; a commit shows its short sha', function () {
+    var b = devWithLinks();
+    if (!/fix\/sn-1003-sort[\s\S]*Deleted/.test(b.textContent)) return 'no Deleted on the branch';
+    var sha = b.querySelector('.dev-sha');
+    return (sha && sha.textContent === 'abcdef1') || 'sha: ' + (sha && sha.textContent);
+});
+t('sync: history reads "GitHub linked a pull request"', function () {
+    var b = devWithLinks();
+    return /GitHub linked a pull request/.test(b.textContent) || 'history: ' + (b.querySelector('.prj-timeline') || {}).textContent;
+});
+t('sync: check text is escaped', function () {
+    devStage();
+    _devData.links = [{ id: 1, ticket_id: 1003, kind: 'pr', ref: '1', title: 'x', state: 'open', checks: [{ level: 'warn', text: '<img src=x onerror=alert(1)>' }] }];
+    devOpen(1003);
+    return !document.querySelector('#devDetailBody .dev-checks img') || 'a check became markup';
+});

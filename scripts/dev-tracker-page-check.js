@@ -79,3 +79,8 @@ t('page: the shared shell came along (settings, side panels, feature access)', f
 t('page: no nav tab claims to be active — the tracker has no nav tab', function () {
     return !document.querySelector('.nav-bar .nav-link.active') || 'a nav link is marked active';
 });
+t('page: Sync with GitHub sits in the card head, before New Ticket', function () {
+    var s = document.getElementById('devSyncBtn');
+    if (!s || !s.closest('.ws-head-controls')) return 'no #devSyncBtn in the head';
+    return s.nextElementSibling && s.nextElementSibling.id === 'devNewBtn' || 'not directly before New Ticket';
+});

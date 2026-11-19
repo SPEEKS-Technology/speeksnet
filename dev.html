@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261119b">
+  <link rel="stylesheet" href="styles.css?v=20261119c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261119b" defer></script>
+  <script src="speeks.js?v=20261119c" defer></script>
 </head>
 <body class="preload">
 
@@ -510,6 +510,7 @@
                   <input id="devSearch" class="dev-search" type="search" placeholder="Search tickets or SN-…" aria-label="Search tickets" oninput="devSetSearch(this.value)">
                   <select id="devAreaFilter" class="kpi-select dev-filter" aria-label="Area" onchange="devSetArea(this.value)"><option value="">All areas</option></select>
                   <label class="dev-mine"><input type="checkbox" id="devMineOnly" onchange="devSetMine(this.checked)"> Mine</label>
+                  <button id="devSyncBtn" type="button" class="dev-sync-btn" onclick="devSync(this)" title="Pull anything GitHub hasn't sent yet">Sync with GitHub</button>
                   <button id="devNewBtn" class="kpi-update-trigger-btn" onclick="devNew()">＋ New Ticket</button>
               </div>
           </div>

@@ -53,7 +53,10 @@ function fixture() {
         tickets: [T(573, 'backlog', { title: 'Supercalifragilisticexpialidocious-callback-refresh-after-match-v2' }), T(574, 'backlog', { status: 'wont_do' }), T(575, 'in_progress')],
         events: [{ id: 1, ticket_id: 573, kind: 'status', actor_name: 'Alexandra Longname-Hyphenated', to_value: 'wont_do', note: LONG, created_at: new Date().toISOString() }],
         comments: [{ id: 1, ticket_id: 573, body: LONG + ' ' + LONG, author_name: 'Nick Hettinger', author_id: 'n', source: 'speeksnet', created_at: new Date().toISOString() }],
-        links: [{ id: 1, ticket_id: 573, kind: 'pr', ref: '581', url: LONG, title: LONG, state: 'open' }],
+        links: [{ id: 1, ticket_id: 573, kind: 'pr', ref: '581', url: LONG, title: LONG, state: 'open', base: 'Main-December-Update-2---Ethan', author: 'Eckushnir',
+                 checks: [{ kind: 'migration', level: 'error', text: '0192 is also used on feat/some-very-long-branch-name-with-no-breaks-at-all (0192_another_migration_with_a_long_name) — renumber one of them' }, { kind: 'function', level: 'todo', text: 'Deploy the b2b-capture-releases-and-everything function' }] },
+               { id: 2, ticket_id: 573, kind: 'branch', ref: 'fix/sn-573-supercalifragilisticexpialidocious-callback-refresh-after-match', url: LONG, state: 'deleted' },
+               { id: 3, ticket_id: 573, kind: 'commit', ref: 'abcdef1234567890', url: LONG, title: LONG }],
     };
 }
 // The card as dev.html builds it.

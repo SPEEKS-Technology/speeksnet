@@ -46,7 +46,7 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
    branch here had at all — the Projects file was written as 0185 and caught
    only by `list_migrations`. Again 2026-11-19: the database held `0189` and
    `0190` that no branch, local or pushed, carried, so the dev tracker's
-   attachments file became `0191` (the max as of that day).
+   attachments file became `0191`, then the GitHub sync `0192` (the max as of that day).
    **The checkout is not the authority any more — the database is.** Unmerged
    branches apply migrations too: on 2026-10-16 pre-release's highest file was
    `0140` while Ethan's `Main-November-Update-2` had already applied `0141`–`0147`,

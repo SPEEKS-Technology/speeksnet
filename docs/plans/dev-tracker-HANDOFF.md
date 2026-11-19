@@ -191,6 +191,23 @@ Each phase is shippable on its own and gets its own PR into `pre-release`.
 - **Done when:** a store manager submits an idea and it appears in Triage for a dev; a dev moves it through statuses by hand; checks (3 suites) pass.
 
 ### Phase 4 — GitHub sync (read)
+> **Built 2026-11-19 on `feat/dev-tracker`.** `github-webhook` is deployed and migration **0192** is applied. Nick's calls, asked at the start:
+> - a pushed branch with SN-n → **In progress**
+> - a PR closed without merging → **back to In progress** (if it was In review and no other open PR points at the ticket)
+> - **Done = the work reaches `main`**, since GitHub Pages serves main and that's when it's live; not when a GitHub release is published
+>
+> - **`supabase/functions/github-webhook`.** A POST from GitHub is HMAC-checked against `GITHUB_WEBHOOK_SECRET` and answered at once; the work runs in `EdgeRuntime.waitUntil`, and every delivery writes a `github_sync_log` row. Handles `push`, `create`/`delete` (branches), `pull_request` and `release` (keeps `dev_releases` in step). `?trigger=cron&secret=…` and a PIN POST from the page run the **reconcile**: PRs updated since the last good run (with an hour's overlap), every branch (marking vanished ones deleted), commits on pre-release and main, then the reached-main check.
+> - **Linking.** `SN-n` anywhere in a branch name, a commit message or a PR **title**. In a PR **body**, only after a keyword (Fixes / Closes / Resolves / Refs / Part of / Ticket SN-n), because PR #580's own body lists SN-573 and SN-65…SN-575 as examples and a link moves a status. "Fixes #n" links only to an *imported* ticket (`github_number = n`), since issue and PR numbers share one counter. Merge commits ("Merge pull request …") don't link.
+> - **Status moves only forward** (rank triage < backlog < in progress < in review < on pre-release < done) and never touches Won't do. The one retreat is the closed-unmerged rule, which runs on the live delivery only, never the reconcile, so replaying an old PR can't undo a person's move. Draft PR → In progress; open → In review. Merged into pre-release → On pre-release; merged into main → Done; merged anywhere else → linked and logged only. On a push to `main`, every On pre-release ticket whose merged-PR or commit `sha` is in main (compare `sha...main` = ahead/identical) goes to Done.
+> - **Checks** on each linked PR, recomputed only when its head sha moves:
+>   - **New migration files**: applied, or `todo` if not yet. **`error`** if the number is used in the database by another name (`dev_applied_migrations()`, a service-role-only reader of `supabase_migrations.schema_migrations`), or on pre-release, main or any other open PR's branch.
+>   - `speeks.js`/`styles.css` changed with no `.html` patch adding a `?v=` → `warn`.
+>   - Each changed `supabase/functions/<name>/` → `todo` "Deploy the <name> function".
+> - **0192.** It adds `sha, head_sha, base, head, author, merged_at, checks, updated_at` to `dev_ticket_links`, plus `dev_applied_migrations()`, and the **nightly reconcile** cron `github-reconcile-nightly` (09:15 UTC). The cron's `?secret=` is the shared sync secret (§7 risk 1). It can only trigger a reconcile, which reads GitHub and makes idempotent, forward-only writes here.
+> - **Page.** The ticket popup's Code section lists the PR (state chip, "into <base> · <author>", the checks with ✓ • ! ✕), then branches (Deleted when gone), then commits (short sha). History reads "GitHub linked a pull request". A **Sync with GitHub** button in the card head runs the reconcile now.
+> - **Verified live:** an unsigned delivery is refused (401), as is a wrong cron secret (403). A reconcile read 8 PRs and 6 branches with the App token and linked nothing, correctly, since nothing on GitHub names an SN ticket yet.
+> - **Needs Nick (GitHub App settings, outward-facing):** turn the App's webhook **on** with URL `https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/github-webhook` and a secret. Store the same secret as the Supabase function secret `GITHUB_WEBHOOK_SECRET`. Subscribe to **Push, Pull request, Create, Delete, Release**. The existing read permissions cover all five.
+> - **Done when** (still to prove): a real PR naming an SN ticket moves it with nobody touching the status. Until the webhook is on, the nightly reconcile is the only feed.
 - Edge function `github-webhook`: verify the signature; handle `push`, `pull_request`, `create`/`delete` (branches), `release`. Nightly reconcile pull to catch missed deliveries (`github_sync_log`).
 - Linking: `SN-123` in a branch name, commit message or PR title/body attaches to the ticket.
 - Auto-status: PR opened → **In review**; merged to `pre-release` → **On pre-release**; shipped in a release → **Done**.

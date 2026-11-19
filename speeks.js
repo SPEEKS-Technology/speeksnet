@@ -35750,6 +35750,29 @@ function _devFillAreaFilter() {
     sel.value = _devArea;
 }
 
+// "Sync with GitHub": the nightly reconcile, now (github-webhook). For a
+// delivery GitHub missed, or to see a PR's checks without waiting.
+const DEV_SYNC_URL = `${_BASE}/github-webhook`;
+async function devSync(btn) {
+    const sub = document.getElementById('devHeadSub');
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+    try {
+        const res = await fetch(DEV_SYNC_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-pin': pin }, body: '{}' });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || (json.errors || [])[0] || `HTTP ${res.status}`);
+        const bits = [];
+        if (json.linked) bits.push(`${json.linked} linked`);
+        if ((json.moved || []).length) bits.push(`${json.moved.length} moved`);
+        if (sub) sub.textContent = `Synced with GitHub — ${bits.length ? bits.join(', ') : 'nothing new'}.`;
+        devLoad(true);
+    } catch (e) {
+        if (sub) sub.textContent = `Sync failed — ${(e && e.message) || e}`;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Sync with GitHub'; }
+    }
+}
+
 function devSetView(v)   { _devView = v; devRender(); }
 function devSetSearch(q) { _devSearch = String(q || ''); devRender(); }
 function devSetArea(a)   { _devArea = String(a || ''); devRender(); }
@@ -35844,6 +35867,34 @@ function devOpen(id) {
     if (m && !m.classList.contains('show')) toggleModal('devDetailModal');
 }
 
+// One linked branch / commit / PR in the ticket popup. A PR carries its state,
+// where it merges, and the changed-file checks github-webhook ran on it.
+const DEV_PR_STATE = {
+    open:    { label: 'Open',    tone: 'violet' },
+    draft:   { label: 'Draft',   tone: 'muted'  },
+    merged:  { label: 'Merged',  tone: 'done'   },
+    closed:  { label: 'Closed',  tone: 'no'     },
+    active:  { label: 'Active',  tone: 'go'     },
+    deleted: { label: 'Deleted', tone: 'muted'  },
+};
+const DEV_CHECK_MARK = { ok: '✓', todo: '•', warn: '!', error: '✕' };
+function _devLinkHtml(l) {
+    const a = (text) => l.url ? `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>` : escapeHtml(text);
+    if (l.kind === 'pr') {
+        const checks = Array.isArray(l.checks) ? l.checks : [];
+        return `<li class="dev-link dev-link-pr">
+            <span class="prj-tag">PR</span> ${a(`#${l.ref} ${l.title || ''}`.trim())}
+            ${l.state ? _devChip(DEV_PR_STATE, l.state) : ''}
+            ${l.base ? `<span class="prj-ev-when">into ${escapeHtml(l.base)}${l.author ? ' · ' + escapeHtml(l.author) : ''}</span>` : ''}
+            ${checks.length ? `<ul class="dev-checks">${checks.map(c => `<li class="dev-check dev-check-${escapeHtml(c.level || 'todo')}"><b aria-hidden="true">${DEV_CHECK_MARK[c.level] || '•'}</b> ${escapeHtml(c.text || '')}</li>`).join('')}</ul>` : ''}
+        </li>`;
+    }
+    if (l.kind === 'branch') {
+        return `<li class="dev-link"><span class="prj-tag">Branch</span> ${a(l.ref)} ${l.state === 'deleted' ? _devChip(DEV_PR_STATE, 'deleted') : ''}</li>`;
+    }
+    return `<li class="dev-link"><span class="prj-tag">Commit</span> <code class="dev-sha">${escapeHtml(String(l.ref || '').slice(0, 7))}</code> ${a(l.title || l.ref)}</li>`;
+}
+
 function _devEventText(e) {
     const st = k => (DEV_STATUS[k] || { label: k }).label;
     switch (e.kind) {
@@ -35856,7 +35907,7 @@ function _devEventText(e) {
             const r = _devRelease(e.to_value);
             return r ? `put it in ${_devReleaseLabel(r)}` : 'took it out of its release';
         }
-        case 'linked':   return `linked ${e.to_value || 'code'}`;
+        case 'linked':   return `linked ${({ pr: 'a pull request', branch: 'a branch', commit: 'a commit' })[e.to_value] || 'code'}`;
         case 'unlinked': return `unlinked ${e.from_value || 'code'}`;
         default:         return e.kind;
     }
@@ -35931,12 +35982,13 @@ function _devRenderDetail() {
                 : escapeHtml(a.name || 'attachment') + ' <span class="prj-ev-when">link expired — reload</span>'}</li>`).join('')}</ul>
         </div>` : '';
 
+    // Linked by github-webhook (Phase 4): PRs first, with their checks, then
+    // branches, then commits.
+    const order = { pr: 0, branch: 1, commit: 2 };
     const code = links.length ? `
         <div class="prj-sec">
             <div class="form-label-caps">Code</div>
-            <ul class="dev-links">${links.map(l => `<li><span class="prj-tag">${escapeHtml(l.kind)}</span>
-                ${l.url ? `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.title || l.ref)}</a>` : escapeHtml(l.title || l.ref)}
-                ${l.state ? `<span class="prj-ev-when">${escapeHtml(l.state)}</span>` : ''}</li>`).join('')}</ul>
+            <ul class="dev-links">${links.slice().sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9)).map(_devLinkHtml).join('')}</ul>
         </div>` : '';
 
     const talk = `
