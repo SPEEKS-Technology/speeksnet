@@ -101,9 +101,14 @@ async function appToken(): Promise<string> {
   const inst = Deno.env.get("GITHUB_APP_INSTALLATION_ID");
   const pem = Deno.env.get("GITHUB_APP_PRIVATE_KEY");
   if (!appId || !inst || !pem) throw new Error("The GitHub App secrets aren't all set (GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY).");
-  const isPkcs1 = /BEGIN RSA PRIVATE KEY/.test(pem);
   const body = pem.replace(/\\n/g, "\n").replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
   const der = Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
+  // Tell the formats apart by the DER itself, not the header line (the stored
+  // key's header didn't say RSA though the key was PKCS#1 — found on the first
+  // dry run, 2026-11-18). Both open SEQUENCE { INTEGER 0, … }; PKCS#8 follows
+  // with the algorithm SEQUENCE (0x30), PKCS#1 with the modulus INTEGER (0x02).
+  const hdr = der[1] & 0x80 ? 2 + (der[1] & 0x7f) : 2;
+  const isPkcs1 = der[hdr] === 0x02 && der[hdr + 3] === 0x02;
   const key = await crypto.subtle.importKey("pkcs8", isPkcs1 ? pkcs8(der) : der,
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const now = Math.floor(Date.now() / 1000);
