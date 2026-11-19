@@ -217,7 +217,13 @@ Deno.serve(async (req: Request) => {
     const used = new Set<number>();
     const pairs: { milestone: any; release: any | null }[] = milestones.map((m: any) => {
       const t = norm(m.title);
-      const rel = pubReleases.find((r: any) => !used.has(r.id) && t && norm(r.name || "").includes(t)) || null;
+      // Either name inside the other: "v1.0.2 Season 1 Reloaded" is the
+      // "Season 1 Reloaded Update" milestone. 8+ characters, so a bare
+      // "v3.7.0" (normalised to nothing) never pairs with anything.
+      const rel = pubReleases.find((r: any) => {
+        const n = norm(r.name || "");
+        return !used.has(r.id) && t && n.length >= 8 && (n.includes(t) || t.includes(n));
+      }) || null;
       if (rel) used.add(rel.id);
       return { milestone: m, release: rel };
     });
