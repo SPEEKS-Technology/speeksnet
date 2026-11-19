@@ -619,6 +619,11 @@ const PRODUCT_NOUNS = [
   // MPL's Milwaukee 3624-20 "M12 Green Laser- Cross Line & 4- Points", denied
   // 2026-10-05 "it's fine": a cross-line laser that says Laser, accused anyway.
   "laser",
+  // LEE's "Phonak D-Dry+ Hearing Aid Dryer Dehumidifier UV Sanitizer", denied
+  // 2026-11-19 "the item does specify what it is": three product words, none on
+  // this list, and a Type ("Electrical Hygiene Station") sharing none of them.
+  // The appliance family it belongs to came in with it.
+  "dryer", "dehumidifier", "humidifier", "sanitizer", "purifier", "cleaner",
 ];
 
 // ⚠️ PLURALS. The list is singular and the match used to be exact, so "Bargain
@@ -1737,6 +1742,46 @@ function advertisedSize(text: string): string {
   });
 }
 
+// ⚠️ HP'S "#ABA" IS A REGION CODE, NOT PART OF THE PART NUMBER. LEE's ProDesk
+// 600 G5 Mini (MO01-6285UV-QTY2-R3R4, denied 11-17 "#ABA is not needed for model
+// number"): photo 6's base label reads "Product No. 8TM81UC#ABA" and we offered
+// that whole string. The reviewer was right about the suffix — #ABA (US), #ABL
+// (Canada), #ABU (UK) is HP's localisation option, nobody types it, and it costs
+// 4 of 80 characters — and because it was the visible difference, the REAL fix
+// (85M→8TM, a T misread as a 5) was refused along with it. So a correction drops
+// the suffix unless the title already wrote one.
+function dropRegionSuffix(wrong: string, right: string): string {
+  if (/#[A-Z0-9]{3}\b/i.test(wrong)) return right;
+  return right.replace(/\b([A-Z0-9]{5,})#[A-Z0-9]{3}\b/gi, "$1");
+}
+
+// ⚠️ "WIFI ONLY" ON CELLULAR HARDWARE IS A SALES DECISION, NOT A MISTAKE. LEE's
+// iPad Pro 11" M5 (MO01-6239A-F1R1, denied 11-19 "Tablet is purposely being sold
+// as Wifi only"): photo 2 really does show an IMEI and a Cellular Data Number.
+// Ethan: a cellular tablet with a bad IMEI is sold as WiFi only, on purpose. A
+// photo can prove the modem is there; it can never prove the IMEI is clean, so
+// nothing we can see settles that the title is wrong. NAME_SYSTEM already tells
+// the name check not to report "WiFi Only" — this holds the photo and label
+// paths to the same rule, which never read that line.
+function soldWifiOnly(wrong: string): boolean {
+  return /\bwi-?\s?fi\s*only\b/i.test(wrong);
+}
+
+// ⚠️ SAY WHICH CHARACTER. A part number corrected by one character reads as two
+// unrelated codes side by side ("85M81UC" → "8TM81UC"), and the reviewer either
+// hunts for the difference or does not. Naming it is what makes it checkable
+// against the label in a glance.
+function oneCharSwap(wrong: string, right: string): string {
+  if (wrong.length !== right.length || wrong.length < 5 || !/\d/.test(wrong)) return "";
+  let diffs = 0, at = -1;
+  for (let i = 0; i < wrong.length; i++) {
+    if (wrong[i].toLowerCase() !== right[i].toLowerCase()) { diffs++; at = i; }
+  }
+  return diffs === 1
+    ? ` Only one character changes: the "${wrong[at]}" should be "${right[at]}".`
+    : "";
+}
+
 function identityFields(specs: Record<string, string> | undefined) {
   const out: Record<string, string> = {};
   for (const k of IDENTITY_FIELDS) if (specs && specs[k]) out[k] = specs[k];
@@ -2611,7 +2656,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // branch below — disputed, fix, the "already correct" drop — sees the real
     // one. See advertisedSize: 477GB is a 512GB drive.
     const rawRight = String(nameVerdict.correct_text || "").trim();
-    const right = advertisedSize(rawRight);
+    const right = dropRegionSuffix(wrong, advertisedSize(rawRight));
     const at = wrong ? title.indexOf(wrong) : -1;
     // ⚠️ A CORRECTION CAN BE A PLACEHOLDER, AND THE QUOTE CHECK CANNOT SEE IT.
     // WSP's truncated `"v (Neo Geo MVS,"` came back with the replacement
@@ -2697,7 +2742,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // is "Classic" that has to go, not "Aluminum". The photo's wording replaces
     // the same quoted span and goes through every guard the model's does.
     const rawShould = String(photo?.should_say || "").trim();
-    const should = advertisedSize(rawShould);
+    const should = dropRegionSuffix(wrong, advertisedSize(rawShould));
     const photoFix = !!seen && photo?.answer === "other" && !!should && should !== wrong
       && !/[\[\]<>{}]|\b(actual|correct|real|proper|insert|unknown|tbd|xxx+)\b/i.test(should)
       ? should : "";
@@ -2732,8 +2777,8 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // panel can put the picture beside the sentence.
     const evidence = (photoSaysOurs || photoFix) && photo?.photo
       ? { n: photo.photo, url: photo.url || null } : null;
-    if (photoBlind) {
-      // See photoBlind. Nothing to report.
+    if (photoBlind || soldWifiOnly(wrong)) {
+      // See photoBlind and soldWifiOnly. Nothing to report.
     } else if (saidBy && seen && photo?.answer === "listing") {
       // The photos show what the listing says, so the listing was right and our
       // knowledge was not. Nothing to report — counted by the sweep instead, so
@@ -2802,6 +2847,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
           : `"${wrong}" is not a real product name — it looks like "${right}" typed wrong`
             + (tidyWhy ? `. ${tidyWhy}.` : `, so nobody searching for it will find this listing.`))
           + (mixup ? ` ${mixup}.` : "")
+          + oneCharSwap(wrong, right)
           // Say so, or the reviewer sees the same typo in the Type field and
           // reads it as the listing disagreeing with us.
           + (respelling && echoed
@@ -3083,8 +3129,18 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // non-existent set, on a PSA 10 graded card. Caught in a dry run, never shipped.
   const dupRaw = original.match(/\b(\S+\s+\S+(?:\s+\S+)?)\s+\1\b/i)
     || original.match(/^(\S{2,})\s+\1\b/i);
+  // ⚠️ AND A REPEAT THE LISTING'S OWN FIELDS ALSO SAY IS THE NAME. LEE's "Dance
+  // Dance Revolution Max (Sony PlayStation 2 PS2, 2002)", denied 2026-11-19 "the
+  // dance always appears twice in each game in this series": a doubled first word
+  // is exactly the brand-typed-twice shape, and its Game Name field said "Dance
+  // Dance Revolution Max" all along. Tsum Tsum, Duran Duran and Bora Bora are the
+  // same — a field spelling the repeat out is the listing telling us it is real.
+  const saidInSpecs = (run: string) => Object.values(extra?.specs || {}).some(v =>
+    new RegExp(`\\b${run.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\b`, "i")
+      .test(String(v || "")));
   const dup = dupRaw && !/^['’]/.test(
-    original.slice((dupRaw.index || 0) + dupRaw[0].length)) ? dupRaw : null;
+    original.slice((dupRaw.index || 0) + dupRaw[0].length))
+    && !saidInSpecs(dupRaw[0]) ? dupRaw : null;
   if (dup) {
     findings.push({
       code: "repeated-phrase",
@@ -4340,6 +4396,10 @@ type FbRow = {
   note: string; by: string | null; at: string | null;
   codes: string[]; said: string[]; was: string; now: string; takenAt?: string | null;
   photos?: { n: number; url: string }[];
+  // The findings exactly as stored on the row when it was denied — the same
+  // objects the store's panel drew (says, warn, photo). The DM view renders
+  // them through the store's own _ltWhy so the two can never drift apart.
+  findings?: { code: string; says: string; warn?: string; photo?: { n: number; url: string | null } }[];
   specs: Record<string, string>;
   saysItself: { field: string; value: string } | null;
 };
@@ -4555,6 +4615,14 @@ async function feedbackFor(stores: string[], days: number) {
         said: (r.findings || []).map((f: any) => String(f?.says || "")).filter(Boolean),
         photos: (r.findings || []).filter((f: any) => f?.photo?.url)
           .map((f: any) => ({ n: Number(f.photo.n), url: String(f.photo.url) })),
+        // ⚠️ WHAT THE STORE SAW, NOT A SUMMARY OF IT. Ethan, 2026-11-19: "so I
+        // can see exactly what you show them." `said` flattens away the caution
+        // line and the photo; these are the objects the panel drew.
+        findings: (r.findings || []).filter((f: any) => f && f.says).map((f: any) => ({
+          code: String(f.code || ""), says: String(f.says),
+          ...(f.warn ? { warn: String(f.warn) } : {}),
+          ...(f.photo && f.photo.n ? { photo: { n: Number(f.photo.n), url: f.photo.url ? String(f.photo.url) : null } } : {}),
+        })),
         was: run.was, now: run.now,
         specs: keep,
         saysItself: listingSaysItself(run.was, specs),

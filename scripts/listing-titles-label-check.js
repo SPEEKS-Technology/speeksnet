@@ -146,7 +146,9 @@ console.log('\n== 4. Through the real decision ==');
     ok(f.code === 'name-wrong' && f.severity === 3, 'name-wrong, severity 3 — not "garbled"', f.code);
     ok(r.fixable && f.fixable, 'one click');
     ok(r.title === 'ADATA AD4U266638G19-B 8GB (1x8GB) RAM DDR4 2666MHz', 'the suggested title', r.title);
-    ok(/^The title says "AD4U266628G19-B"; it should be "AD4U266638G19-B"\. Look at photo 2: the stick's label reads AD4U266638G19-B\./.test(f.says),
+    // The one-character note (oneCharSwap, 2026-11-19) sits between the
+    // correction and the photo: it is what to look for when you open the photo.
+    ok(/^The title says "AD4U266628G19-B"; it should be "AD4U266638G19-B"\. Only one character changes: the "2" should be "3"\. Look at photo 2: the stick's label reads AD4U266638G19-B\./.test(f.says),
        'says what the photo shows', f.says);
     ok((f.says.match(/label reads/g) || []).length === 1, 'and says it once', f.says);
     ok(/MPN field \("AD4U266628G19-B"\) says otherwise, and approving corrects that field too/.test(f.says),
