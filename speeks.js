@@ -33636,10 +33636,15 @@ document.addEventListener("DOMContentLoaded", () => {
     // Asked of the ROLE, not the page, now that a board is on the ordinary pages.
     // The PIN pad still arrives when it is needed: a session that has expired has
     // no role either, so this reads false and injectGlobalAuth() runs.
+    // The idea popup is the exception, and it runs for a board too. It is static
+    // markup with no fetch or poller, so it costs a screen nothing until someone
+    // presses Send — and the picture-station iPad DOES have someone to press it:
+    // the Picture Guide's "Category missing?" link opens it. Left inside the guard
+    // below, that link did nothing at all on a store account (BAL, 2026-11-18).
+    injectIdeaModal();
     if (!_tvIsBoardRole()) {
         loadCMS();
         injectGlobalAuth();
-        injectIdeaModal();
         startAuthFetch();
     }
 
