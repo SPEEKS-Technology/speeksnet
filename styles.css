@@ -6938,6 +6938,9 @@ input.vr-up-input[type="file"] {
 }
 .recycle-pos-box input { margin: 0; width: 14px; height: 14px; cursor: pointer; accent-color: #059669; }
 .recycle-pos-box.is-done { color: #166534; }
+/* DM side: the box sits under the centred Review dropdown, so centre it too. */
+.recycle-pos-box.is-center { justify-content: center; }
+.recycle-pos-by.is-center { padding-left: 0; text-align: center; }
 /* width:0 + min-width:100% = fill the cell but contribute NOTHING to its width.
    The cell is nowrap and the column sizes to its widest line, so a stamp longer
    than "Recycled in POS" ("Jurell Guild · Oct 28") widened the Status column the

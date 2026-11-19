@@ -6,8 +6,8 @@
 // row and stacks each line into a card, so the column-shift test measures nothing.
 //
 // The rule being guarded (Ethan, 2026-10-28): the box appears only after the DM
-// has ruled For or Against store, it stamps who ticked it, and it lives on the
-// manager's side of the tool (the DM's review select is unchanged).
+// has ruled For or Against store, and it stamps who ticked it. Since 2026-11-19
+// the DM gets the same box under the Review dropdown, on every store's lines.
 
 var _sent = [];
 var _reply = { success: true };
@@ -68,10 +68,34 @@ t('manager: a ticked line is checked and shows who did it', function () {
     return true;
 });
 
-t('DM view has no POS box (unchanged)', function () {
+// Since 2026-11-19 the DM can tick it too, on every store's lines (Ethan): same
+// For/Against rule, the box sits under the Review dropdown, centred with it.
+t('DM: the box shows under Review on For/Against lines, every store', function () {
     _asRole('district manager');
-    var wrap = _render();
-    return wrap.querySelector('.recycle-pos-box') ? 'box shown on the DM side' : true;
+    var saved = ROWS;
+    ROWS = saved.concat([
+        { id: 'lee', store: 'LEE', sku: 'L-1', description: 'lee for', quantity: 1, cost: 1, created_at: _m(2), review_verdict: 'for', reviewed_at: _m(3) },
+        { id: 'bal', store: 'BAL', sku: 'B-1', description: 'bal against', quantity: 1, cost: 1, created_at: _m(2), review_verdict: 'against', reviewed_at: _m(3), pos_done_at: _m(4), pos_done_by: 'Ethan' },
+    ]);
+    try {
+        var wrap = _render();
+        var want = { 'P-1': false, 'A-1': true, 'F-1': true, 'D-1': false, 'I-1': false, 'L-1': true, 'B-1': true };
+        for (var sku in want) {
+            var tr = _rowOf(wrap, sku);
+            if (!tr) return 'no row for ' + sku + ' (store filter hid it?)';
+            var box = tr.querySelector('.recycle-pos-box input[type=checkbox]');
+            if (!!box !== want[sku]) return sku + ': box ' + (box ? 'shown' : 'missing');
+            if (box) {
+                var cell = box.closest('td');
+                if (!cell || !cell.querySelector('select, .dd-host')) return sku + ': box not in the Review cell';
+                if (!box.closest('.recycle-pos-box').classList.contains('is-center')) return sku + ': not centred';
+            }
+        }
+        var b = _rowOf(wrap, 'B-1');
+        if (!b.querySelector('.recycle-pos-box input').checked) return 'BAL ticked line not checked';
+        if ((b.querySelector('.recycle-pos-by') || {}).textContent.indexOf('Ethan') === -1) return 'BAL stamp missing';
+        return true;
+    } finally { ROWS = saved; }
 });
 
 // Ticking must not move a single column. The stamp ("Jurell Guild · Oct 28") is

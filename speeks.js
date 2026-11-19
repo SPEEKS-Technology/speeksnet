@@ -43260,6 +43260,22 @@ function renderMyRecycleTable() {
         const tOf = v => (v ? new Date(v).getTime() : 0);
         const NEW_DOT = '<span class="recycle-new-dot" title="New since you last looked"></span>';
         const lineIsNew = canReview ? tOf(r.created_at) > seenB : tOf(r.reviewed_at) > seenB;
+        // "Recycled in POS" (0159) — only once the DM has ruled For or Against,
+        // since that's the point the store is cleared to take it out of the
+        // POS. Stamped with who ticked it so the manager and ASM can see
+        // whether one of them already has, or neither. Hidden, not cleared,
+        // if the verdict later changes — see the migration header.
+        // Since 2026-11-19 the DM gets the same box under the Review dropdown,
+        // on every store's lines, so the DM can recycle a line out of the POS
+        // themself. Same set_pos_done action, which has never checked role.
+        let posBox = '';
+        if (verdict === 'for' || verdict === 'against') {
+            const done = !!r.pos_done_at;
+            posBox = `<label class="recycle-pos-box${done ? ' is-done' : ''}${canReview ? ' is-center' : ''}" title="${done ? 'Untick if this was ticked by mistake' : 'Tick once you have recycled this out of the POS'}">
+                <input type="checkbox" ${done ? 'checked' : ''} ${delPending ? 'disabled' : ''} onchange="setRecyclePosDone('${r.id}', this.checked, this)">
+                <span>Recycled in POS</span>
+            </label>${done ? `<div class="recycle-pos-by${canReview ? ' is-center' : ''}">${escapeHtml(r.pos_done_by || 'Unknown')} · ${fmtDate(r.pos_done_at)}</div>` : ''}`;
+        }
         let firstCell = '';
         if (canReview) {
             const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : verdict === 'denied' ? '#b91c1c' : '#94a3b8';
@@ -43270,7 +43286,7 @@ function renderMyRecycleTable() {
                 <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
                 <option value="ignore"${verdict === 'ignore' ? ' selected' : ''}>Ignore</option>
                 <option value="denied"${verdict === 'denied' ? ' selected' : ''}>Deny</option>
-            </select></span>`, 'text-align:center; white-space:nowrap;', 'Review');
+            </select></span>${posBox}`, 'text-align:center; white-space:nowrap;', 'Review');
         } else {
             // Manager-facing status: any verdict except "denied" means the DM
             // approved the recycle; no verdict yet = pending.
@@ -43279,19 +43295,6 @@ function renderMyRecycleTable() {
                 : verdict
                 ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:3px 10px; white-space:nowrap;">✓ Approved</span>`
                 : `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">⏳ Pending</span>`;
-            // "Recycled in POS" (0159) — only once the DM has ruled For or Against,
-            // since that's the point the store is cleared to take it out of the
-            // POS. Stamped with who ticked it so the manager and ASM can see
-            // whether one of them already has, or neither. Hidden, not cleared,
-            // if the verdict later changes — see the migration header.
-            let posBox = '';
-            if (verdict === 'for' || verdict === 'against') {
-                const done = !!r.pos_done_at;
-                posBox = `<label class="recycle-pos-box${done ? ' is-done' : ''}" title="${done ? 'Untick if this was ticked by mistake' : 'Tick once you have recycled this out of the POS'}">
-                    <input type="checkbox" ${done ? 'checked' : ''} ${delPending ? 'disabled' : ''} onchange="setRecyclePosDone('${r.id}', this.checked, this)">
-                    <span>Recycled in POS</span>
-                </label>${done ? `<div class="recycle-pos-by">${escapeHtml(r.pos_done_by || 'Unknown')} · ${fmtDate(r.pos_done_at)}</div>` : ''}`;
-            }
             firstCell = td('<span class="recycle-review-cell">' + (lineIsNew ? NEW_DOT : '') + chip + '</span>' + posBox, 'white-space:nowrap;', 'Status');
         }
         const struck = verdict === 'ignore' || verdict === 'denied';
@@ -43422,7 +43425,7 @@ function _recycleDeleteReqPanel(canReview) {
         `</div></div>`;
 }
 
-// Manager-side: tick / untick "Recycled in POS" on an approved line. Stamped
+// Manager and DM: tick / untick "Recycled in POS" on an approved line. Stamped
 // server-side with who and when; the row is patched in place on success so the
 // table doesn't flash a reload. On failure the box snaps back.
 async function setRecyclePosDone(id, done, box) {
