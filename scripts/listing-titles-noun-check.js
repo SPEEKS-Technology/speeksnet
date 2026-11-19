@@ -574,5 +574,27 @@ console.log('\n== The trade names the model number that still says it ==');
     ok(/impliedByCpu\(original, trimmed\)/.test(block), 'and missing-noun uses it in the trade sentence');
 }
 
+// =============================================================================
+console.log('\nLEE 2026-11-19: Phonak hearing-aid dryer, and Dance Dance Revolution');
+{
+    const T = 'Phonak D-Dry+ Hearing Aid Dryer Dehumidifier UV Sanitizer';
+    ok(src.includes('"dryer", "dehumidifier"'), 'dryer/dehumidifier are product nouns');
+    ['dryer', 'dehumidifier', 'sanitizer', 'hairdryer'].forEach(w =>
+        ok(isProductNoun(w), `"${w}" names the product`));
+    ok(T.toLowerCase().split(/[^a-z0-9+]+/).some(isProductNoun), 'the Phonak title names itself');
+
+    // The repeat rule, lifted from the source: the two regexes plus the guard.
+    const body = src.slice(src.indexOf('  const dupRaw = '), src.indexOf('  if (dup) {'));
+    const repeatOf = (original, specs) => new Function('original', 'extra',
+        body.replace(/const saidInSpecs = \(run: string\)/, 'const saidInSpecs = (run)') + '\nreturn dup;')
+        (original, { specs });
+    const DDR = 'Dance Dance Revolution Max (Sony PlayStation 2 PS2, 2002)';
+    ok(!repeatOf(DDR, { 'Game Name': 'Dance Dance Revolution Max', Genre: 'Dance' }),
+       'DDR: Game Name spells the repeat out, so it is not a mistake');
+    ok(!!repeatOf(DDR, { Genre: 'Dance' }), 'DDR with no Game Name field still reads as a repeat');
+    ok(!!repeatOf('3DR 3DR Solo S110A', { Brand: '3DR', Model: 'Solo' }),
+       'a brand typed twice is still caught (no field says "3DR 3DR")');
+}
+
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
 process.exit(fails ? 1 : 0);

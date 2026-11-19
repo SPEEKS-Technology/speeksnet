@@ -19347,6 +19347,20 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     color: #334155; line-height: 1.5; margin: 2px 0;
 }
 .lh-tool-ttl .lt-lab { flex-shrink: 0; }
+/* What the store saw — the store row's own Now / Suggested / reasons, framed as
+   a panel so it reads as a quotation of their screen, not as the DM's evidence.
+   White on the grey row, the same card the store's row sits on. */
+.lh-tool-saw {
+    margin: 6px 0 0; padding: 8px 10px; border-radius: 8px;
+    background: #fff; border: 1px solid #e2e8f0;
+    display: flex; flex-direction: column; gap: 3px; min-width: 0;
+}
+.lh-tool-saw-h {
+    font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    color: #64748b; margin: 0 0 2px;
+}
+.lh-tool-saw .lt-now, .lh-tool-saw .lt-new { font-size: 12px; }
+.lh-tool-saw .lt-cur, .lh-tool-saw .lt-sug { overflow-wrap: anywhere; }
 /* ⚠️ RED, NOT AMBER, AND IT IS A VERDICT ABOUT US. This line means the words we
    proposed removing are sitting in the listing's own spec field — the strongest
    evidence available here that the RULE was wrong, which is why the bar at the

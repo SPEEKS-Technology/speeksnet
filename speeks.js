@@ -68224,9 +68224,16 @@ function _ltWhy(f) {
     // had a sentence quoting the photo and believed the listing anyway.
     return (f || []).map(x => `<li>${_ecEsc(x.says || '')}</li>`
         + (x.warn ? `<li class="lt-caution">${_ecEsc(x.warn)}</li>` : '')
-        + (x.photo && x.photo.url ? `<li class="lt-evidence"><a href="${_ecEsc(x.photo.url)}" target="_blank" rel="noopener">
+        // ⚠️ THE IN-APP VIEWER, NOT A BARE LINK. Ethan, 2026-11-19: "I clicked on
+        // an image in listing health and got stuck. no way to get out of image."
+        // target=_blank in a window with no tab strip (the desktop app's pane, a
+        // home-screen app) replaces the page with a naked JPG and no way back.
+        // The lightbox has an ✕, backdrop click and Escape; Ctrl/Cmd/Shift-click
+        // still opens the full-size file in a real tab for anyone who wants it.
+        + (x.photo && x.photo.url ? `<li class="lt-evidence"><a href="${_ecEsc(x.photo.url)}" target="_blank" rel="noopener"
+            onclick="if (!event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); openAuditPhotoLightbox(this.href); }">
             <img src="${_ecEsc(x.photo.url)}" alt="Photo ${_ecEsc(String(x.photo.n))}" loading="lazy">
-            <span>Photo ${_ecEsc(String(x.photo.n))} — Open Full Size ↗</span></a></li>` : '')).join('');
+            <span>Photo ${_ecEsc(String(x.photo.n))} — Tap To Enlarge</span></a></li>` : '')).join('');
 }
 
 // The changed run, located as word indexes into BOTH titles. A word-level diff
@@ -68426,11 +68433,28 @@ function _lhToolEl() {
 // reader's own as cbMatchAdminUrl insists — this tool is the DM's, and the DM
 // is signed into all five.
 function _lhShopifyLink(r) {
+    // The server's own admin link first (feedbackFor builds it from the same
+    // domain map the edge function uses); the local map is the fallback.
+    if (r && /^https:\/\/admin\.shopify\.com\//.test(r.link || '')) {
+        return `<a class="ec-pill ec-pill-shopify" href="${_ecEsc(r.link)}"
+      target="_blank" rel="noopener">Open In Shopify${_EC_ICON_LINK}</a>`;
+    }
     const shop = CB_SHOP_DOMAINS[r && r.store];
     const id = String((r && r.productId) || '').split('/').pop();
     if (!shop || !/^[0-9]+$/.test(id)) return '';
     return `<a class="ec-pill ec-pill-shopify" href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/products/${id}"
-      target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>`;
+      target="_blank" rel="noopener">Open In Shopify${_EC_ICON_LINK}</a>`;
+}
+
+// The findings a denied row showed its reviewer. New rows carry them whole
+// (says / warn / photo); a payload from before 2026-11-19 has only the flat
+// sentences and photo list, which is rebuilt into the same shape so _ltWhy
+// draws either one.
+function _lhToolFindings(r) {
+    if (r && Array.isArray(r.findings) && r.findings.length) return r.findings;
+    const photos = (r && r.photos) || [];
+    return ((r && r.said) || []).map((s, i) => Object.assign({ says: s },
+        i === 0 && photos[0] ? { photo: photos[0] } : {}));
 }
 
 let _lhToolFb = null;
@@ -68621,13 +68645,30 @@ function renderListingHealthTool() {
             <div class="lh-tool-meta">
               <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
               <span>${_ecEsc(r.store || '')}</span>
-              <span>${_ecEsc(r.by || '')}</span>
+              <span>${_ecEsc(r.by || '')}${r.at ? ` · ${_ecEsc(_lhWhen(r.at))}` : ''}</span>
               ${_lhShopifyLink(r)}
             </div>
-            <div class="lh-tool-ttl"><span class="lt-lab">Title</span>
-              <span>${_ecEsc(r.current || '')}</span></div>
-            ${r.suggested ? `<div class="lh-tool-ttl"><span class="lt-lab">We said</span>
-              <span>${_ecEsc(r.suggested)}</span></div>` : ''}
+            <!-- ⚠️ WHAT THE STORE SAW, DRAWN THE WAY THEY SAW IT. Ethan,
+                 2026-11-19: "so I can see exactly what you show them." Same
+                 Now / Suggested lines and the same _ltWhy bullets (reason,
+                 caution, evidence photo) as the store's row, from the findings
+                 stored when it was denied — a paraphrase here would let the DM
+                 judge a sentence nobody at the store ever read. -->
+            <div class="lh-tool-saw">
+              <div class="lh-tool-saw-h">What ${_ecEsc(r.by ? r.by.split(' ')[0] : 'The Store')} Saw</div>
+              <div class="lt-now">
+                <span class="lt-lab">Now</span>
+                <span class="lt-cur">${r.suggested
+                  ? _ltGone(r.current, r.suggested) : _ecEsc(r.current || '')}</span>
+              </div>
+              <div class="lt-new">
+                <span class="lt-lab">Suggested</span>
+                ${r.suggested
+                  ? `<span class="lt-sug">${_ltDiff(r.current, r.suggested)}</span>`
+                  : `<span class="lt-nosug">No one-click fix was offered.</span>`}
+              </div>
+              <ul class="lt-why">${_ltWhy(_lhToolFindings(r))}</ul>
+            </div>
             ${r.saysItself ? `<div class="lh-tool-says">
               The listing itself already says this —
               <b>${_ecEsc(r.saysItself.field)} = ${_ecEsc(r.saysItself.value)}</b>
