@@ -91,12 +91,12 @@ t('list: no "Mine only" switch any more', function () {
 t('list: the status filter counts each group', function () {
     load('Pat Viewer', VIEWER);
     var got = segLabels().join(' | ');
-    return got === 'Awaiting approval · 3 | In progress · 2 | Completed · 1 | Closed · 2' || got;
+    return got === 'Awaiting Approval · 3 | In Progress · 2 | Completed · 1 | Closed · 2' || got;
 });
 t('list: lands on the first group with something in it', function () {
     load('Pat Viewer', VIEWER);
     var on = document.querySelector('#prjBody .prj-seg-btn.on');
-    return (on && /Awaiting approval/.test(on.textContent)) || 'landed on ' + (on && on.textContent);
+    return (on && /Awaiting Approval/.test(on.textContent)) || 'landed on ' + (on && on.textContent);
 });
 t('list: waiting requests, longest-waiting first', function () {
     load('Pat Viewer', VIEWER, 'approval');
@@ -214,11 +214,11 @@ t('actions: a request sent back — the requester edits and resubmits', function
 t('actions: a request sent back — the DM can still decline it, not approve it', function () {
     return expect(actions('Ethan', APPROVER, 3), 'decline');
 });
-t('actions: someone involved in a running project posts updates — no edit, no complete', function () {
-    return expect(actions('Kim WSP', MANAGER, 4), 'update');
+t('actions: someone involved in a running project posts updates or sends it for sign-off — no edit, no complete', function () {
+    return expect(actions('Kim WSP', MANAGER, 4), 'request_signoff,update');
 });
 t('actions: whoever asked for a running project can still edit it', function () {
-    return expect(actions('Sam LEE', MANAGER, 4), 'edit,update');
+    return expect(actions('Sam LEE', MANAGER, 4), 'edit,request_signoff,update');
 });
 t('actions: the DM on a running project — edit, update, park, complete', function () {
     return expect(actions('Ethan', APPROVER, 4), 'complete,edit,park,update');
@@ -422,6 +422,168 @@ t('form: resubmitting shows what the DM asked for', function () {
     var sub = document.getElementById('prjFormSub').textContent;
     var go = document.getElementById('prjFormSubmit').textContent;
     return (/Say what it costs/.test(sub) && go === 'Resubmit') || 'sub "' + sub + '", button "' + go + '"';
+});
+
+// ---- sign-off: the DM approves a finished project too (0187) --------------------
+// Ethan, 2026-11-18: "submit a tool for final approval". The people on a running
+// project send it for sign-off; the DM approves it as complete or sends it back.
+// The base fixture is left alone (other tests count it); these flip project 4
+// (Sam asked, Kim involved) into the state under test.
+
+function signoffFixture(me, can, status, extraEvents) {
+    _prjData = fixture(me, can);
+    var p = _prjById(4);
+    p.status = status;
+    if (status === 'in_progress' && extraEvents) {
+        p.decided_by = 'Ethan';
+        p.decision_note = 'The export button is still missing';
+    }
+    _prjData.events = _prjData.events.concat(extraEvents || []);
+    return p;
+}
+function signoffActions(me, can, status) {
+    signoffFixture(me, can, status);
+    var html = _prjActionsHtml(_prjById(4));
+    var acts = [];
+    html.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
+    if (/prjEdit\(/.test(html)) acts.push('edit');
+    return acts.sort().join(',');
+}
+
+t('sign-off: someone involved in a running project can send it for sign-off', function () {
+    return expect(signoffActions('Kim WSP', MANAGER, 'in_progress'), 'request_signoff,update');
+});
+t('sign-off: whoever asked can send it for sign-off too', function () {
+    return expect(signoffActions('Sam LEE', MANAGER, 'in_progress'), 'edit,request_signoff,update');
+});
+t('sign-off: the DM is not offered it — he completes it himself', function () {
+    return expect(signoffActions('Ethan', APPROVER, 'in_progress'), 'complete,edit,park,update');
+});
+t('sign-off: a parked project is resumed before it can be sent', function () {
+    return expect(actions('Alex OVL', MANAGER, 5), 'edit,update');
+});
+t('sign-off: someone not on the project cannot send it', function () {
+    return expect(signoffActions('Alex OVL', MANAGER, 'in_progress'), '');
+});
+t('sign-off: the DM on a finished project — approve as complete, send back, edit, update', function () {
+    return expect(signoffActions('Ethan', APPROVER, 'awaiting_signoff'), 'complete,edit,return_signoff,update');
+});
+t('sign-off: the requester waiting on sign-off can still edit and post updates, not decide', function () {
+    return expect(signoffActions('Sam LEE', MANAGER, 'awaiting_signoff'), 'edit,update');
+});
+t('sign-off: someone involved waiting on sign-off can post updates only', function () {
+    return expect(signoffActions('Kim WSP', MANAGER, 'awaiting_signoff'), 'update');
+});
+t('sign-off: a viewer gets nothing to press', function () {
+    return expect(signoffActions('Pat Viewer', VIEWER, 'awaiting_signoff'), '');
+});
+t('sign-off: it waits in Awaiting Approval, and counts on the DM\'s pip', function () {
+    pane();
+    signoffFixture('Ethan', APPROVER, 'awaiting_signoff');
+    _prjView = 'approval';
+    prjRender();
+    var ids = rowIds();
+    var pip = document.getElementById('prjWaitPip').textContent;
+    var chip = Array.prototype.some.call(document.querySelectorAll('#prjBody .prj-chip'), function (c) { return c.textContent === 'Awaiting Sign-Off'; });
+    return (ids.indexOf('PRJ-4') !== -1 && pip === '3' && chip) || 'rows ' + ids + ', pip ' + pip + ', chip ' + chip;
+});
+t('sign-off: it is not counted against the requester — it is waiting on the DM', function () {
+    pane();
+    signoffFixture('Sam LEE', MANAGER, 'awaiting_signoff');
+    _prjView = null;
+    prjRender();
+    var pip = document.getElementById('prjWaitPip');
+    return (pip.style.display === 'none' || pip.textContent === '0') || 'Sam\'s pip shows ' + pip.textContent;
+});
+t('sign-off: sending it back without saying what is left is stopped, and nothing is sent', function () {
+    // The form tests above leave their stand-in popup marked open, and _prjSay
+    // writes to whichever popup is open — close it, as the real page would be.
+    var form = document.getElementById('prjFormModal');
+    if (form) form.classList.remove('show');
+    detailDom();
+    signoffFixture('Ethan', APPROVER, 'awaiting_signoff');
+    _prjOpenId = 4;
+    _prjRenderDetail();
+    var before = window.__fetches.length;
+    prjAct('return_signoff');
+    var msg = (document.getElementById('prjMsg') || {}).textContent || '';
+    return (window.__fetches.length === before && /still needs doing/.test(msg)) || 'sent=' + (window.__fetches.length !== before) + ' msg="' + msg + '"';
+});
+t('sign-off: once sent back, the DM\'s note leads the popup', function () {
+    detailDom();
+    signoffFixture('Sam LEE', MANAGER, 'in_progress', [
+        { id: 3, project_id: 4, kind: 'signoff_requested', actor: 'Sam LEE', created_at: ago(1) },
+        { id: 4, project_id: 4, kind: 'signoff_returned', actor: 'Ethan', note: 'The export button is still missing', created_at: ago(0) },
+    ]);
+    _prjOpenId = 4;
+    _prjRenderDetail();
+    var c = document.querySelector('#prjDetailBody .prj-callout');
+    var hist = document.querySelector('.prj-timeline .prj-ev');
+    return (c && /sent it back/.test(c.textContent) && /export button/.test(c.textContent) && hist && /sent it back/.test(hist.textContent))
+        || 'callout "' + (c && c.textContent) + '", newest history "' + (hist && hist.textContent) + '"';
+});
+t('sign-off: the note stops leading once work moves on (an update after it)', function () {
+    detailDom();
+    signoffFixture('Sam LEE', MANAGER, 'in_progress', [
+        { id: 4, project_id: 4, kind: 'signoff_returned', actor: 'Ethan', note: 'x', created_at: ago(1) },
+        { id: 5, project_id: 4, kind: 'update', actor: 'Sam LEE', note: 'Added it', created_at: ago(0) },
+    ]);
+    _prjOpenId = 4;
+    _prjRenderDetail();
+    return !document.querySelector('#prjDetailBody .prj-callout') || 'stale callout still drawn';
+});
+
+// ---- capitalization: Title Case on buttons, tabs, chips (Ethan, 2026-11-18) -----
+// "Edit and Resubmit", not "Edit and resubmit". Short joining words stay lower.
+
+var MINOR = { a: 1, an: 1, and: 1, as: 1, at: 1, by: 1, for: 1, in: 1, into: 1, of: 1, on: 1, or: 1, the: 1, to: 1 };
+function notTitleCase(label) {
+    return String(label).replace(/[·\d＋+]/g, ' ').split(/[\s]+/).filter(Boolean).some(function (w, i) {
+        var first = w.split('-').some(function (part) { return /^[a-z]/.test(part) && !(i > 0 && MINOR[part]); });
+        return first;
+    });
+}
+function buttonLabels(html) {
+    var out = [];
+    html.replace(/<button[^>]*>([^<]+)<\/button>/g, function (_, txt) { out.push(txt.trim()); });
+    return out;
+}
+
+t('caps: every popup button is Title Case, in every state', function () {
+    var bad = [];
+    [['Ethan', APPROVER], ['Alex OVL', MANAGER], ['Sam LEE', MANAGER], ['Kim WSP', MANAGER]].forEach(function (who) {
+        [1, 2, 3, 4, 5, 6].forEach(function (id) {
+            _prjData = fixture(who[0], who[1]);
+            buttonLabels(_prjActionsHtml(_prjById(id))).forEach(function (l) { if (notTitleCase(l)) bad.push(l); });
+        });
+        ['in_progress', 'awaiting_signoff'].forEach(function (s) {
+            signoffFixture(who[0], who[1], s);
+            buttonLabels(_prjActionsHtml(_prjById(4))).forEach(function (l) { if (notTitleCase(l)) bad.push(l); });
+        });
+    });
+    return !bad.length || 'not Title Case: ' + bad.filter(function (l, i) { return bad.indexOf(l) === i; }).join(' | ');
+});
+t('caps: Ethan\'s example — "Edit and Resubmit"', function () {
+    _prjData = fixture('Alex OVL', MANAGER);
+    return /Edit and Resubmit/.test(_prjActionsHtml(_prjById(3))) || 'button text: ' + buttonLabels(_prjActionsHtml(_prjById(3))).join(' | ');
+});
+t('caps: status chips, filter tabs and outcomes are Title Case', function () {
+    var labels = Object.keys(PRJ_STATUS).map(function (k) { return PRJ_STATUS[k].label; })
+        .concat(PRJ_VIEWS.map(function (v) { return v.label; }))
+        .concat(Object.keys(PRJ_OUTCOME).map(function (k) { return PRJ_OUTCOME[k]; }));
+    var bad = labels.filter(notTitleCase);
+    return !bad.length || 'not Title Case: ' + bad.join(' | ');
+});
+t('caps: the request form\'s button and titles are Title Case in all three modes', function () {
+    var bad = [];
+    [null, fixture('Alex OVL', MANAGER).projects[2], fixture('Sam LEE', MANAGER).projects[3]].forEach(function (p) {
+        openForm('Alex OVL', MANAGER, p);
+        ['prjFormTitle', 'prjFormSubmit'].forEach(function (id) {
+            var txt = document.getElementById(id).textContent;
+            if (notTitleCase(txt)) bad.push(txt);
+        });
+    });
+    return !bad.length || 'not Title Case: ' + bad.join(' | ');
 });
 
 // ---- Feature Access: defaults, and the wiring that puts the tab in Workspace -----

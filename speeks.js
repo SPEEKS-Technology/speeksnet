@@ -34832,36 +34832,52 @@ function renderDistrictGoals() {
 //
 // Dialogs are in-page, never prompt()/confirm(): a decision carries a note, and
 // prompt() hangs the headless checks (CLAUDE.md, "Blocking dialogs are fatal").
+//
+// SIGN-OFF (0187, Ethan, 2026-11-18). He read Projects as "submit a tool for
+// final approval", and Nick agreed it should work that way: the people on a
+// project press "Submit for Sign-Off" when it is finished (awaiting_signoff),
+// and the DM approves it as complete or sends it back with a note. It sits in
+// the Awaiting Approval view, because that view is the DM's inbox. The DM can
+// still mark a running project complete himself — he is who signs off.
+//
+// CAPITALIZATION (Ethan, same email): buttons, tabs, status chips and popup
+// titles are Title Case like the rest of the site ("Edit and Resubmit", not
+// "Edit and resubmit"); short joining words (and, for, into, a, the) stay
+// lower case. Sentences — notes, placeholders, subtitles, history — do not.
 
 const PROJECTS_URL = `${_BASE}/projects`;
 
 const PRJ_STATUS = {
-    requested:         { label: 'Awaiting approval', tone: 'wait' },
-    changes_requested: { label: 'Changes requested', tone: 'warn' },
-    in_progress:       { label: 'In progress',       tone: 'go'   },
+    requested:         { label: 'Awaiting Approval', tone: 'wait' },
+    changes_requested: { label: 'Changes Requested', tone: 'warn' },
+    in_progress:       { label: 'In Progress',       tone: 'go'   },
     parked:            { label: 'Parked',            tone: 'muted' },
+    awaiting_signoff:  { label: 'Awaiting Sign-Off', tone: 'wait' },
     completed:         { label: 'Completed',         tone: 'done' },
     declined:          { label: 'Declined',          tone: 'no'   },
     withdrawn:         { label: 'Withdrawn',         tone: 'muted' },
 };
 // The segmented filter over the list, in Variance Replies' style. Declined and
-// withdrawn share "Closed" so the everyday views stay about live work.
+// withdrawn share "Closed" so the everyday views stay about live work. A
+// finished project waiting for sign-off is awaiting approval too — the DM's
+// inbox is one view, whether he is approving a start or a finish.
 const PRJ_VIEWS = [
-    { key: 'approval', label: 'Awaiting approval', statuses: ['requested', 'changes_requested'] },
-    { key: 'active',   label: 'In progress',       statuses: ['in_progress', 'parked'] },
+    { key: 'approval', label: 'Awaiting Approval', statuses: ['requested', 'changes_requested', 'awaiting_signoff'] },
+    { key: 'active',   label: 'In Progress',       statuses: ['in_progress', 'parked'] },
     { key: 'done',     label: 'Completed',         statuses: ['completed'] },
     { key: 'closed',   label: 'Closed',            statuses: ['declined', 'withdrawn'] },
 ];
 const PRJ_OUTCOME = {
     incorporate: 'Fold into SPEEKSNET',
-    standalone:  'Keep standalone',
-    retire:      'Retire it',
+    standalone:  'Keep Standalone',
+    retire:      'Retire It',
 };
 const PRJ_EVENT_LABEL = {
     created: 'requested it', edited: 'edited it', resubmitted: 'resubmitted it',
     approved: 'approved it', declined: 'declined it', changes_requested: 'asked for changes',
     withdrawn: 'withdrew it', update: 'posted an update', parked: 'parked it',
-    resumed: 'resumed it', completed: 'marked it complete', outcome: 'decided what happens next',
+    resumed: 'resumed it', signoff_requested: 'sent it for sign-off', signoff_returned: 'sent it back',
+    completed: 'marked it complete', outcome: 'decided what happens next',
 };
 
 let _prjData     = null;    // { me, can, people, projects, events } from the last GET
@@ -34929,7 +34945,7 @@ async function prjLoad(quiet) {
         // elsewhere shows up in it rather than leaving stale buttons behind.
         if (_prjOpenId != null && document.getElementById('prjDetailModal')?.classList.contains('show')) _prjRenderDetail();
     } catch (err) {
-        if (!_prjData) body.innerHTML = `<div class="status-message">Couldn't load projects — ${escapeHtml(err.message || 'network error')}. <button class="prj-link" onclick="prjLoad()">Try again</button></div>`;
+        if (!_prjData) body.innerHTML = `<div class="status-message">Couldn't load projects — ${escapeHtml(err.message || 'network error')}. <button class="prj-link" onclick="prjLoad()">Try Again</button></div>`;
     } finally {
         _prjLoading = false;
     }
@@ -34943,10 +34959,10 @@ function prjRealtimeRefresh() {
 
 function prjSetView(v) { _prjView = v; prjRender(); }
 
-// What is waiting on THIS person: requests for the approver, sent-back
-// requests for whoever asked.
+// What is waiting on THIS person: requests and sign-offs for the approver,
+// sent-back requests for whoever asked.
 function _prjWaitingOnMe(all) {
-    return all.filter(p => (_prjCan('approve') && p.status === 'requested')
+    return all.filter(p => (_prjCan('approve') && (p.status === 'requested' || p.status === 'awaiting_signoff'))
         || (p.status === 'changes_requested' && _prjIsRequester(p))).length;
 }
 
@@ -35079,13 +35095,17 @@ function _prjRenderDetail() {
         p.outcome ? ['Next', escapeHtml(PRJ_OUTCOME[p.outcome] || p.outcome)] : null,
     ].filter(Boolean);
 
-    // The last decision's note is the thing the requester most needs to read,
-    // so it sits at the top rather than down in the history.
-    const decision = p.decision_note && ['changes_requested', 'declined'].includes(p.status)
-        ? `<div class="prj-callout prj-tone-${PRJ_STATUS[p.status].tone}"><b>${escapeHtml(p.decided_by || 'DM')}:</b> ${escapeHtml(p.decision_note)}</div>`
-        : '';
-
     const events = ((_prjData && _prjData.events) || []).filter(e => Number(e.project_id) === Number(p.id));
+
+    // The last decision's note is the thing the requester most needs to read,
+    // so it sits at the top rather than down in the history. A sign-off that
+    // was sent back counts while the project is still running on from it —
+    // until the next thing happens to it (an update, another send).
+    const last = events[events.length - 1];
+    const sentBack = p.status === 'in_progress' && last && last.kind === 'signoff_returned';
+    const decision = p.decision_note && (['changes_requested', 'declined'].includes(p.status) || sentBack)
+        ? `<div class="prj-callout prj-tone-${sentBack ? 'warn' : PRJ_STATUS[p.status].tone}"><b>${escapeHtml(p.decided_by || 'DM')}${sentBack ? ' sent it back' : ''}:</b> ${escapeHtml(p.decision_note)}</div>`
+        : '';
     const timeline = events.length ? `
         <div class="prj-sec">
             <div class="form-label-caps">History</div>
@@ -35129,21 +35149,38 @@ function _prjActionsHtml(p) {
     if (p.status === 'requested') {
         if (approver) {
             rows = note('Note for the requester — required to decline or ask for changes');
-            btns = btn('Ask for changes', 'request_changes') + btn('Decline', 'decline', 'btn-secondary prj-danger') + btn('Approve and start', 'approve', 'btn-primary');
+            btns = btn('Ask for Changes', 'request_changes') + btn('Decline', 'decline', 'btn-secondary prj-danger') + btn('Approve and Start', 'approve', 'btn-primary');
         }
         if (mine) btns = btn('Withdraw', 'withdraw', 'kpi-cancel-btn') + editBtn('Edit') + btns;
     } else if (p.status === 'changes_requested') {
-        if (mine) btns = btn('Withdraw', 'withdraw', 'kpi-cancel-btn') + editBtn('Edit and resubmit', 'btn-primary');
+        if (mine) btns = btn('Withdraw', 'withdraw', 'kpi-cancel-btn') + editBtn('Edit and Resubmit', 'btn-primary');
         if (approver) { rows = note('Why it is declined'); btns += btn('Decline', 'decline', 'btn-secondary prj-danger'); }
     } else if (p.status === 'in_progress' || p.status === 'parked') {
-        if (owns || approver) { rows = note('Progress update, or a note to go with your decision'); btns = btn('Post update', 'update'); }
+        if (owns || approver) {
+            rows = note(approver ? 'Progress update, or a note to go with your decision'
+                : 'Progress update — or, when it is finished, what was done and where to find it');
+            btns = btn('Post Update', 'update');
+        }
         // Who's involved changes as the work goes on, so a running project stays
         // editable by whoever asked for it and by the DM (the function agrees).
         if (mine || approver) btns = editBtn('Edit') + btns;
         if (approver) {
             btns += p.status === 'parked' ? btn('Resume', 'resume') : btn('Park', 'park');
-            btns += btn('Mark complete', 'complete', 'btn-primary');
+            btns += btn('Mark Complete', 'complete', 'btn-primary');
+        } else if (owns && p.status === 'in_progress') {
+            // The people doing the work say when it is done; the DM signs it
+            // off (0187). Parked projects are resumed first — parked means
+            // nobody is on it.
+            btns += btn('Submit for Sign-Off', 'request_signoff', 'btn-primary');
         }
+    } else if (p.status === 'awaiting_signoff') {
+        if (owns || approver) {
+            rows = note(approver ? 'Note for the team — required to send it back'
+                : 'Anything to add while it waits for sign-off');
+            btns = btn('Post Update', 'update');
+        }
+        if (mine || approver) btns = editBtn('Edit') + btns;
+        if (approver) btns += btn('Send Back', 'return_signoff') + btn('Approve as Complete', 'complete', 'btn-primary');
     } else if (p.status === 'completed' && approver) {
         rows = `
             <div class="prj-outcome-row">
@@ -35153,7 +35190,7 @@ function _prjActionsHtml(p) {
                     ${Object.entries(PRJ_OUTCOME).map(([k, v]) => `<option value="${k}" ${p.outcome === k ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}
                 </select>
             </div>` + note('Anything to add (optional)');
-        btns = btn(p.outcome ? 'Update decision' : 'Save decision', 'outcome', 'btn-primary');
+        btns = btn(p.outcome ? 'Update Decision' : 'Save Decision', 'outcome', 'btn-primary');
     }
 
     if (!rows && !btns) return `${msg}<button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button>`;
@@ -35187,6 +35224,7 @@ async function _prjPost(payload) {
 const _PRJ_NOTE_REQUIRED = {
     decline: "Say why it's declined — the requester sees this.",
     request_changes: 'Say what needs to change.',
+    return_signoff: 'Say what still needs doing.',
     update: 'Write the update first.',
 };
 
@@ -35207,7 +35245,8 @@ async function prjAct(action, btn) {
         await _prjPost(payload);
         _rtMute('projects');
         await prjLoad(true);
-        _prjSay(action === 'update' ? 'Update posted.' : 'Saved.');
+        _prjSay(action === 'update' ? 'Update posted.'
+            : action === 'request_signoff' ? 'Sent to the DM for sign-off.' : 'Saved.');
     } catch (err) {
         _prjSay(err.message || "Couldn't save.", true);
     } finally {
@@ -35249,7 +35288,7 @@ function _prjFillForm(p) {
         : !p ? 'Goes to the DM for approval. Nothing starts until it is approved.'
         : 'Changes save straight to the project.';
     const go = document.getElementById('prjFormSubmit');
-    if (go) go.textContent = !p ? 'Send for approval' : resubmit ? 'Resubmit' : 'Save changes';
+    if (go) go.textContent = !p ? 'Send for Approval' : resubmit ? 'Resubmit' : 'Save Changes';
     const fm = document.getElementById('prjFormMsg');
     if (fm) { fm.textContent = ''; fm.classList.remove('prj-msg-bad'); }
 }
