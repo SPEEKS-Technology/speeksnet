@@ -391,6 +391,7 @@ async function collect(wantStores: string[], days: string[], openRows: any[], re
   const cleared: Array<{ key: string; how: string }> = [];
   const stats: Record<string, any> = {};
   const inDays = new Set(days);
+  const openKeys = new Set(openRows.map((r: any) => r.issue_key));
 
   // Phantom copies from the August duplicate incident — refunded with no
   // restock on purpose, because the real order shipped. Excluded by name, the
@@ -497,10 +498,18 @@ async function collect(wantStores: string[], days: string[], openRows: any[], re
         st.unrestocked_lines++;
         seen.add(c.key);
         try {
+          // Back on hand while still inside the lookback (2026-11-19): close an
+          // already-open row now. Before, it only dropped off the mail and sat
+          // open in the table until the refund aged out of the 3 days and the
+          // re-check below finally closed it (BAL #MO04-4137, open 11-19 → ~11-22).
           const v = await judge(shop, token, o, c, lost);
-          if (v.state === "flag" && recycledHow(store, c.sku, c.refundAt)) { st.back_by_hand++; continue; }
+          const rec = v.state === "flag" ? recycledHow(store, c.sku, c.refundAt) : null;
+          if (rec || v.state === "ok") {
+            st.back_by_hand++;
+            if (openKeys.has(c.key)) cleared.push({ key: c.key, how: rec || (v as any).how || "back in stock" });
+            continue;
+          }
           if (v.state === "flag") { found.push({ ...c, flag: v.flag }); st.flagged++; }
-          else if (v.state === "ok") st.back_by_hand++;
           else problems.push(`${store} ${c.orderName} ${c.sku}: ${v.why}`);
         } catch (e) {
           problems.push(`${store} ${c.orderName}: ${String(e).slice(0, 120)}`);
