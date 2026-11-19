@@ -194,12 +194,13 @@ Deno.serve(async (req: Request) => {
     if (tooHigh.length) throw new Error(`Issue numbers at or past 1000 would collide with SN-1000+: ${tooHigh.join(", ")}`);
 
     // ---- what's already here ----
-    const [{ data: people }, { data: types }, { data: haveT }, { data: haveC }, { data: haveR }] = await Promise.all([
+    const [{ data: people }, { data: types }, { data: haveT }, { data: haveC }, { data: haveR }, { data: haveE }] = await Promise.all([
       sb.from("github_people").select("login, user_id, name"),
       sb.from("dev_ticket_types").select("key"),
       sb.from("dev_tickets").select("id").lt("id", 1000),
       sb.from("dev_ticket_comments").select("github_comment_id").not("github_comment_id", "is", null),
       sb.from("dev_releases").select("id, version, github_milestone, github_release_id"),
+      sb.from("dev_ticket_events").select("ticket_id").lt("ticket_id", 1000),
     ]);
     const typeKeys = new Set((types || []).map((t: any) => t.key));
     for (const [, t] of LABEL_TYPE) if (!typeKeys.has(t)) throw new Error(`Ticket type '${t}' is missing from dev_ticket_types.`);
@@ -210,6 +211,7 @@ Deno.serve(async (req: Request) => {
       return p ? { id: p.user_id, name: p.name, mapped: true } : { id: null, name: login, mapped: false };
     };
     const haveTicket = new Set((haveT || []).map((r: any) => Number(r.id)));
+    const haveHistory = new Set((haveE || []).map((r: any) => Number(r.ticket_id)));
     const haveComment = new Set((haveC || []).map((r: any) => Number(r.github_comment_id)));
 
     // ---- releases: milestones and GitHub releases, paired by name ----
@@ -297,6 +299,10 @@ Deno.serve(async (req: Request) => {
       };
     });
     const fresh = plan.filter((p) => !haveTicket.has(p.row.id));
+    // Tickets that need their history written: the new ones, plus any earlier
+    // import left without — the first real run (2026-11-19) wrote every ticket
+    // and release, then failed on the events (see the note at the insert).
+    const needHistory = plan.filter((p) => !haveTicket.has(p.row.id) || !haveHistory.has(p.row.id));
     const issueNums = new Set(issues.map((i: any) => i.number));
     const commentPlan = ghComments
       .map((c: any) => ({ c, n: Number(String(c.issue_url || "").split("/").pop()) }))
@@ -317,7 +323,7 @@ Deno.serve(async (req: Request) => {
         highest_issue: Math.max(0, ...issues.map((i: any) => i.number)),
       },
       already_imported: { tickets: plan.length - fresh.length, releases: (haveR || []).length },
-      will_create: { tickets: fresh.length, comments: commentPlan.length, releases: relRows.length },
+      will_create: { tickets: fresh.length, comments: commentPlan.length, releases: relRows.length, history_for: needHistory.length },
       tickets: {
         by_type: tally(fresh.map((p) => p.row.type)),
         by_status: tally(fresh.map((p) => p.row.status)),
@@ -350,8 +356,13 @@ Deno.serve(async (req: Request) => {
     await chunked(sb, "dev_tickets", fresh.map((p) => ({ ...p.row, release_id: p.ms ? relByMs.get(p.ms.number) ?? null : null })));
 
     // History: raised on GitHub (dated then), closed (dated then), imported (now, by whoever ran it).
+    // EVERY row carries created_at. A bulk insert sends one column list for
+    // the whole batch, so a row without the key gets NULL, not the column's
+    // default — which is how the first real run failed: the 'imported' rows
+    // had no created_at while the others in the same batch did.
+    const now = new Date().toISOString();
     const events: any[] = [];
-    for (const p of fresh) {
+    for (const p of needHistory) {
       events.push({ ticket_id: p.row.id, kind: "created", actor_name: p.row.reporter_name, actor_id: p.row.reporter_id, to_value: "backlog", note: `Raised on GitHub as #${p.row.id}`, created_at: p.i.created_at });
       if (p.row.status === "done" || p.row.status === "wont_do") {
         events.push({
@@ -360,7 +371,7 @@ Deno.serve(async (req: Request) => {
           created_at: p.row.closed_at || p.i.updated_at,
         });
       }
-      events.push({ ticket_id: p.row.id, kind: "imported", actor_name: me.name, actor_id: me.id, to_value: p.row.status, note: `Imported from GitHub issue #${p.row.id}` });
+      events.push({ ticket_id: p.row.id, kind: "imported", actor_name: me.name, actor_id: me.id, to_value: p.row.status, note: `Imported from GitHub issue #${p.row.id}`, created_at: now });
     }
     await chunked(sb, "dev_ticket_events", events);
 
