@@ -3878,10 +3878,13 @@ function parseWeeklyEmail(msg) {
 
   // --- Buying Statistics. Bounded at PaytonAI: everything past it is prose,
   // including store names and figures quoted out of customer reviews.
-  var bs = _wkIdx(lines, /^buying statistics$/i, 0);
-  var stop = _wkIdx(lines, /^paytonai/i, bs < 0 ? 0 : bs);
-  if (bs < 0) return { ok: false, why: 'no "Buying Statistics" section' };
-  if (stop < 0) stop = lines.length;
+  // Both layouts, via _deBounds: PayMore dropped the section headings from the
+  // Day End Report on 2026-11-19, and the weekly shares its template. Written
+  // before any new-layout WEEKLY had arrived — if the first one fails here,
+  // compare it against the Day End layout notes on _deBounds.
+  var B = _deBounds(lines);
+  var bs = B.buy, stop = B.buyEnd;
+  if (bs < 0) return { ok: false, why: 'no "Buying Statistics" section (and not the 2026-11-19 layout either)' };
 
   var ci = _wkLabelIdx(lines, 'customer conversion rate', bs, stop);
   var di = _wkLabelIdx(lines, 'device conversion rate', bs, stop);
@@ -3901,17 +3904,17 @@ function parseWeeklyEmail(msg) {
   // Team Production table a few lines above, and "Total Value" would then read
   // one buyer's row. Anchored past the section heading, and matched as a whole
   // line, which the wide table header can never be.
-  var ps = _wkIdx(lines, /^processed stats$/i, 0);
+  var ps = B.proc;
   if (ps >= 0) {
     out.processedItems = _wkInt(_wkAfter(lines, 'devices processed', ps, lines.length));
-    out.processedValue = _wkMoney(_wkAfter(lines, 'total value', ps, lines.length));
+    out.processedValue = _wkMoney(_wkAfter(lines, B.oldLayout ? 'total value' : 'total value processed', ps, lines.length));
   }
 
   // --- Listed devices, the same count _deParse takes off the Day End Report
   // (see the note there): a Processed Stats card if the template has one, else
   // Team Production's "Total Listed Devices" summed. Null, not 0, on a report
   // without the column — the caller then falls back rather than writing a zero.
-  var listedCard = ps >= 0 ? _wkInt(_wkAfter(lines, 'total listed devices', ps, lines.length)) : null;
+  var listedCard = ps >= 0 && B.oldLayout ? _wkInt(_wkAfter(lines, 'total listed devices', ps, lines.length)) : null;
   var tpRows = _deTeamProduction(lines, null) || [];
   var hasListed = tpRows.some(function (r) { return r.listed != null; });
   out.listedDevices = listedCard != null ? listedCard
@@ -4016,10 +4019,91 @@ function _wkLabelIdx(lines, label, from, to) {
 
 // The value belongs to the line AFTER its label — except on the conversion
 // cards, where it comes before. Hence two readers, not one.
+//
+// ⚠️ OR ON THE SAME LINE. PayMore's 2026-11-19 redesign set the Buying block as
+// a two-column list — "Cash Spent $ 1,036▼ 71.4%" on one line — where every
+// other card still puts the figure on the next line. A line that STARTS with
+// the label and then carries a figure (+, -, $ or a digit) is taken too, so
+// "Total Value Processed" is never read as "Total Value" and the Team
+// Production header ("... Devices Processed Devices Repriced ...") never as a
+// value: neither has a figure after the label.
 function _wkAfter(lines, label, from, to) {
-  var i = _wkLabelIdx(lines, label, from, to);
-  if (i < 0 || i + 1 >= lines.length) return null;
-  return _wkLevels(lines[i + 1])[0] || null;
+  for (var i = Math.max(0, from); i < Math.min(lines.length, to); i++) {
+    var l = lines[i].toLowerCase();
+    if (l === label) {
+      return i + 1 < lines.length ? (_wkLevels(lines[i + 1])[0] || null) : null;
+    }
+    if (l.indexOf(label + ' ') === 0) {
+      var rest = lines[i].slice(label.length).trim();
+      if (/^[+\-$\d]/.test(rest)) return _wkLevels(rest)[0] || null;
+    }
+  }
+  return null;
+}
+
+// Where each block of a Day End / Weekly report starts and stops, for BOTH
+// layouts PayMore has sent.
+//
+// ⚠️ 2026-11-19: PAYMORE DROPPED EVERY SECTION HEADING. "Buying Statistics",
+// "Review Statistics", "Sales Statistics", "Customer Activity", "Inventory
+// Snapshot" and "Processed Stats" all went; the figures stayed, regrouped under
+// small card titles (CONVERSION, BUYING, PIPELINE, PRODUCTION ...). Every
+// reader here anchored on those headings, so that night's day_end_facts came
+// back with nothing but listed counts and Team Production — the Processed Stats
+// email went out with "—" in every Processed Value cell and $0 in the total.
+//
+// The new layout, top to bottom, and where each old section's figures went:
+//   Est. Gross Profit / Margin, Conversion fractions, BUYING, MISSED
+//     OPPORTUNITIES, Total Reviews, 5-Star Reviews (MTD), Ratings Breakdown
+//                                         -> all ABOVE "PaytonAI" (as before)
+//   PaytonAI prose                         -> unchanged; still the trap
+//   Gross Sales, Net Sales, Gross Margin   -> after PaytonAI, before BOPIS
+//   Total Customers + the five kinds       -> before "Total Cost of Inventory"
+//   PIPELINE: In Queue / Available / Live  -> the old Inventory Snapshot cards
+//   Team Production                        -> unchanged
+//   TOTAL VALUE PROCESSED, then PRODUCTION: DEVICES PROCESSED
+//                                          -> the old Processed Stats
+//
+// Old-layout mail resolves exactly as it always did — the heading is looked for
+// first — so a backfill across the change reads both sides.
+function _deBounds(lines) {
+  var idx = function (re, from) { return _wkIdx(lines, re, from || 0); };
+  var pay = idx(/^paytonai/i);
+  var b = { oldLayout: idx(/^buying statistics$/i) >= 0 };
+
+  if (b.oldLayout) {
+    b.buy = idx(/^buying statistics$/i);
+    b.buyEnd = idx(/^paytonai/i, b.buy);
+    b.rev = idx(/^review statistics$/i);
+    b.revEnd = b.rev < 0 ? -1 : idx(/^paytonai/i, b.rev);
+    b.sales = idx(/^sales statistics$/i);
+    b.salesEnd = b.sales < 0 ? -1 : idx(/^customer activity$/i, b.sales);
+    b.cust = idx(/^customer activity$/i);
+    b.custEnd = b.cust < 0 ? -1 : idx(/^inventory snapshot$/i, b.cust);
+    b.inv = idx(/^inventory snapshot$/i);
+    b.proc = idx(/^processed stats$/i);
+  } else {
+    // Recognised by the cards only the new layout has. Anything else is a
+    // THIRD layout, and every section then reports itself missing rather than
+    // reading the whole body as one block.
+    var isNew = idx(/^(pipeline|total value processed|missed opportunities)$/i) >= 0;
+    if (!isNew) {
+      b.buy = b.rev = b.sales = b.cust = b.inv = b.proc = -1;
+    } else {
+      b.buy = 0; b.buyEnd = pay;
+      b.rev = 0; b.revEnd = pay;
+      b.sales = pay < 0 ? 0 : pay;
+      b.salesEnd = idx(/^(pickup \(bopis\)|paymorex bopis)$/i, b.sales);
+      b.cust = idx(/^total customers$/i, b.sales);
+      b.custEnd = b.cust < 0 ? -1 : idx(/^(total cost of inventory|pipeline)$/i, b.cust);
+      b.inv = idx(/^pipeline$/i);
+      b.proc = idx(/^total value processed$/i);
+    }
+  }
+  ['buyEnd', 'revEnd', 'salesEnd', 'custEnd'].forEach(function (k) {
+    if (b[k] == null || b[k] < 0) b[k] = lines.length;
+  });
+  return b;
 }
 
 // "78/95" on its own line, within a card's height of the label above it.
@@ -4066,8 +4150,9 @@ function _wkInt(tok) {
 // upstream the Value column would fill with cost and still look like a number.
 // The $-shape check below is what actually catches that.
 function _wkAvailable(lines) {
-  var snap = _wkIdx(lines, /^inventory snapshot$/i, 0);
-  if (snap < 0) return { why: 'no "Inventory Snapshot" section' };
+  // "Inventory Snapshot" until 2026-11-18, "PIPELINE" from 11-19 (_deBounds).
+  var snap = _deBounds(lines).inv;
+  if (snap < 0) return { why: 'no "Inventory Snapshot" / "Pipeline" section' };
   var av = _wkIdx(lines, /^available$/i, snap);
   if (av < 0) return { why: 'no "Available" card' };
 
@@ -4237,7 +4322,10 @@ function _convMtd(ss, store, monthStart, end) {
 function _convFromBody(body) {
   var lines = _wkLines(body);
 
-  var from = _wkIdx(lines, /^buying statistics$/i, 0);
+  // Since 2026-11-19 the fractions sit at the top of the body under a bare
+  // "CONVERSION" card with no section heading; _deBounds knows both layouts.
+  var b = _deBounds(lines);
+  var from = b.buy;
   if (from < 0) return {};
   var to = _wkIdx(lines, /^(review statistics|paytonai)/i, from);
   if (to < 0) to = lines.length;
@@ -4453,15 +4541,16 @@ function _deParse(body) {
   var lines = _wkLines(body);
   var out = { warnings: [] };
   function warn(w) { out.warnings.push(w); }
+  // Section bounds for whichever layout this copy is (see _deBounds: PayMore
+  // dropped every section heading on 2026-11-19).
+  var B = _deBounds(lines);
 
   // --- Buying Statistics. Bounded above by PaytonAI, whose prose quotes store
   // names and dollar figures out of customer reviews and would otherwise be
   // read as data — the same trap the weekly parser documents.
-  var bs = _wkIdx(lines, /^buying statistics$/i, 0);
-  var bsEnd = _wkIdx(lines, /^paytonai/i, bs < 0 ? 0 : bs);
-  if (bs < 0) { warn('no "Buying Statistics" section'); }
+  var bs = B.buy, bsEnd = B.buyEnd;
+  if (bs < 0) { warn('no "Buying Statistics" section (and not the 2026-11-19 layout either)'); }
   else {
-    if (bsEnd < 0) bsEnd = lines.length;
     var ci = _wkLabelIdx(lines, 'customer conversion rate', bs, bsEnd);
     var di = _wkLabelIdx(lines, 'device conversion rate', bs, bsEnd);
     var cf = ci >= 0 ? _wkFraction(lines, ci) : null;
@@ -4488,14 +4577,14 @@ function _deParse(body) {
   // MTD line: both are bare counts a few lines apart, and reading the wrong one
   // turns a whole month into a single day. Bounded to the section, and the MTD
   // label is matched in full.
-  var rs = _wkIdx(lines, /^review statistics$/i, 0);
-  var rsEnd = _wkIdx(lines, /^paytonai/i, rs < 0 ? 0 : rs);
+  var rs = B.rev, rsEnd = B.revEnd;
   if (rs < 0) warn('no "Review Statistics" section');
   else {
-    if (rsEnd < 0) rsEnd = lines.length;
     out.fiveStarToday = _wkInt(_wkAfter(lines, '5 stars', rs, rsEnd));
     out.reviewsToday  = _wkInt(_wkAfter(lines, 'total reviews', rs, rsEnd));
+    // "(Month to Date)" until 2026-11-18, "(MTD)" from 11-19.
     out.fiveStarMtd   = _wkInt(_wkAfter(lines, '5-star reviews (month to date)', rs, rsEnd));
+    if (out.fiveStarMtd == null) out.fiveStarMtd = _wkInt(_wkAfter(lines, '5-star reviews (mtd)', rs, rsEnd));
     // Absent on older copies — a fact about the template, not a parse failure.
     if (out.fiveStarMtd == null) warn('no MTD 5-star line (pre-2026-08 template)');
   }
@@ -4503,22 +4592,20 @@ function _deParse(body) {
   // --- Sales Statistics. "Gross Margin" here is the SELL margin; the buying
   // section's is "Estimated Gross Margin". Two different numbers, and the only
   // thing separating them is which section you are anchored in.
-  var ss = _wkIdx(lines, /^sales statistics$/i, 0);
+  // Since 2026-11-19 the BOPIS cards below carry their own "Gross Sales", which
+  // is why salesEnd stops before them.
+  var ss = B.sales, ssEnd = B.salesEnd;
   if (ss < 0) warn('no "Sales Statistics" section');
   else {
-    var ssEnd = _wkIdx(lines, /^customer activity$/i, ss);
-    if (ssEnd < 0) ssEnd = lines.length;
     out.grossSales     = _wkMoney(_wkAfter(lines, 'gross sales', ss, ssEnd));
     out.netSales       = _wkMoney(_wkAfter(lines, 'net sales', ss, ssEnd));
     out.salesMarginPct = _wkPct(_wkAfter(lines, 'gross margin', ss, ssEnd));
   }
 
   // --- Customer Activity
-  var ca = _wkIdx(lines, /^customer activity$/i, 0);
+  var ca = B.cust, caEnd = B.custEnd;
   if (ca < 0) warn('no "Customer Activity" section');
   else {
-    var caEnd = _wkIdx(lines, /^inventory snapshot$/i, ca);
-    if (caEnd < 0) caEnd = lines.length;
     out.newCustomers      = _wkInt(_wkAfter(lines, 'new customers', ca, caEnd));
     out.returnCustomers   = _wkInt(_wkAfter(lines, 'return customers', ca, caEnd));
     out.recycleCustomers  = _wkInt(_wkAfter(lines, 'recycle customers', ca, caEnd));
@@ -4544,11 +4631,16 @@ function _deParse(body) {
   // Team Production table directly above, and "Total Value" would then read one
   // buyer's row instead of the store total. Anchored past the section heading
   // and matched as a whole line, which the wide table header never is.
-  var ps = _wkIdx(lines, /^processed stats$/i, 0);
+  // Since 2026-11-19 there is no section heading: "TOTAL VALUE PROCESSED" is
+  // the first card after Team Production, and DEVICES PROCESSED follows it
+  // under PRODUCTION. Anchoring on that card keeps the same guarantee — never
+  // the table's own "Devices Processed" column.
+  var ps = B.proc;
   if (ps < 0) warn('no "Processed Stats" section — listed items unavailable');
   else {
     out.devicesProcessed = _wkInt(_wkAfter(lines, 'devices processed', ps, lines.length));
-    out.processedValue   = _wkMoney(_wkAfter(lines, 'total value', ps, lines.length));
+    out.processedValue   = _wkMoney(_wkAfter(lines, B.oldLayout ? 'total value' : 'total value processed', ps, lines.length));
+    if (out.processedValue == null) warn('Processed value did not parse');
   }
 
   out.teamProduction = _deTeamProduction(lines, warn);
@@ -4561,7 +4653,7 @@ function _deParse(body) {
   // card on every one of 225 store-days checked (Aug–Sep 2026), so the table is
   // the whole store, not a leaderboard. Null — never 0 — on mail that predates
   // the column, so a missing figure cannot read as a day nobody listed.
-  var listedCard = ps >= 0 ? _wkInt(_wkAfter(lines, 'total listed devices', ps, lines.length)) : null;
+  var listedCard = ps >= 0 && B.oldLayout ? _wkInt(_wkAfter(lines, 'total listed devices', ps, lines.length)) : null;
   var tpRows = out.teamProduction || [];
   var hasListed = tpRows.some(function (r) { return r.listed != null; });
   out.listedDevices = listedCard != null ? listedCard
@@ -4575,7 +4667,7 @@ function _deParse(body) {
 // One Inventory Snapshot card's device count. Same three-column layout as the
 // Available card; only the anchor differs.
 function _deCardCount(lines, re) {
-  var snap = _wkIdx(lines, /^inventory snapshot$/i, 0);
+  var snap = _deBounds(lines).inv;   // Inventory Snapshot, or PIPELINE since 2026-11-19
   if (snap < 0) return null;
   var card = _wkIdx(lines, re, snap);
   if (card < 0) return null;
@@ -4668,7 +4760,7 @@ function _deTeamProduction(lines, warn) {
   // not cost us the member.
   var need = cols.filter(function (k) { return k !== 'time'; }).length;
 
-  var stop = _wkIdx(lines, /^processed stats$/i, head.end);
+  var stop = _wkIdx(lines, /^(processed stats|total value processed)$/i, head.end);
   if (stop < 0) stop = lines.length;
 
   var rows = [], pending = [], cells = [];
@@ -4724,7 +4816,9 @@ function _deTeamProduction(lines, warn) {
 function _deShoutouts(lines) {
   var five = _wkIdx(lines, /^5 star reviews\b.*praise/i, 0);
   if (five < 0) return null;
-  var stop = _wkIdx(lines, /^(sales statistics|customer activity|inventory snapshot)$/i, five);
+  // "Gross Sales" is the stop since 2026-11-19, when the Sales Statistics
+  // heading went: without it LEE's shoutouts swallowed "Gross Sales $ 7,089.66".
+  var stop = _wkIdx(lines, /^(sales statistics|customer activity|inventory snapshot|gross sales)$/i, five);
   if (stop < 0) stop = Math.min(lines.length, five + 40);
 
   var out = [];
