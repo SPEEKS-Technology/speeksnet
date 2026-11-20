@@ -471,6 +471,35 @@ const mailable = (r: Row, today: string) => NEED.includes(r.state) && !r.hush &&
 const dueSoon = (r: Row, today: string) =>
   !!r.due && !r.missed && r.due >= today && r.due <= addDaysIso(today, 1);
 
+// ONE BUCKET PER ROW (Ethan, 2026-11-20: "add returns and anything related to
+// returns as one column so the math on the emails to me and manager make
+// sense"). The digest used to count each column with its own filter, and the
+// act-now returns (returnRow, 2026-11-07) matched none of them — on 11-20 MPL's
+// manager mail said 9 need you while the DM's row added up to 3. Every row now
+// lands in exactly one bucket, with eBay case as the catch-all, so the columns
+// always sum to the manager's "need you". A refunded INR the carrier sent back
+// to us ("Returned to us after we refunded") counts as a return: the job is
+// restocking a returned device.
+const BUCKETS = ["disputes", "inrs", "cases", "returns", "mismatch", "payments"] as const;
+const BUCKET_WORD: Record<string, [string, string]> = {
+  disputes: ["dispute", "disputes"], inrs: ["item not received", "items not received"],
+  cases: ["eBay case", "eBay cases"], returns: ["return", "returns"],
+  mismatch: ["refund mismatch", "refund mismatches"], payments: ["unpaid order", "unpaid orders"],
+};
+function bucketOf(r: Row): string {
+  if (r.type === "dispute") return "disputes";
+  if (r.type === "mismatch") return "mismatch";
+  if (r.type === "payment") return "payments";
+  if (r.actNow || r.note === "returned_to_us") return "returns";
+  if (/item not received|refunded|delivered after/i.test(r.kindLabel)) return "inrs";
+  return "cases";
+}
+const bucketCounts = (list: Row[]) => {
+  const n: Record<string, number> = Object.fromEntries(BUCKETS.map((b) => [b, 0]));
+  for (const r of list) n[bucketOf(r)]++;
+  return n;
+};
+
 // Soonest deadline first, then oldest, then biggest. A thing closing tonight
 // belongs above a thing closing in three weeks whatever type it is — Ethan's
 // "deadline order, not type order".
@@ -601,6 +630,13 @@ function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { r
       <td style="font-size:12px;color:${C.faint};"><b style="color:${closing ? C.bad : C.ink};font-size:19px;">${closing}</b><br>due today</td>
       <td style="font-size:12px;color:${C.faint};text-align:right;"><b style="color:${C.ink};font-size:19px;">${money(total)}</b><br>at stake</td>
     </tr></table></td></tr>`;
+  // What the "need you" number is made of — the same buckets as the DM's table,
+  // so the two mails add up the same way.
+  if (list.length) {
+    const n = bucketCounts(list);
+    const parts = BUCKETS.filter((b) => n[b]).map((b) => `${n[b]} ${BUCKET_WORD[b][n[b] === 1 ? 0 : 1]}`);
+    body += `<tr><td style="padding:0 14px 12px;font-size:12.5px;color:${C.faint};line-height:1.6;">${esc(parts.join(" · "))}</td></tr>`;
+  }
 
   if (fresh.length) {
     body += sectionRow("New since yesterday");
@@ -671,8 +707,10 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
   // Fixed widths so the columns are even instead of each sizing to its own
   // header word: store 17%, Claims 14% (the longest word, which touched DUE at
   // 360px at an even 12%), the other six 11.5%.
-  const widths = ["17%", "11.5%", "11.5%", "11.5%", "11.5%", "11.5%", "14%", "11.5%"];
-  const head = ["Store", "Disp", "INR", "Case", "Mism", "Pay", "Claims", "Due"];
+  // 2026-11-20: Ret added (returns, see bucketOf); store narrowed 17%→14% to
+  // make room — a three-letter code still fits — and Claims keeps its 14%.
+  const widths = ["14%", "10.2%", "10.2%", "10.2%", "10.2%", "10.2%", "10.2%", "14%", "10.2%"];
+  const head = ["Store", "Disp", "INR", "Case", "Ret", "Mism", "Pay", "Claims", "Due"];
   const last = head.length - 1;
   let table = `<tr><td style="padding:14px 12px 6px;border-top:1px solid ${C.line};">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">
@@ -680,7 +718,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
 
   const shown = STORES.filter((s) => {
     const c = counts[s];
-    return c && (c.disputes || c.inrs || c.cases || c.mismatch || c.payments || c.claims || c.dueToday);
+    return c && (c.disputes || c.inrs || c.cases || c.returns || c.mismatch || c.payments || c.claims || c.dueToday);
   });
   const any = shown.length > 0;
   shown.forEach((s, i) => {
@@ -688,7 +726,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
     const lastRow = i === shown.length - 1;
     table += `<tr>
       <td width="${widths[0]}" style="padding:11px 3px;${rule(lastRow)}font-size:13px;font-weight:700;color:${C.ink};">${esc(s)}</td>
-      ${col(c.disputes, lastRow)}${col(c.inrs, lastRow)}${col(c.cases, lastRow)}${col(c.mismatch, lastRow)}${col(c.payments, lastRow)}${col(c.claims, lastRow, C.warn, widths[6])}${col(c.dueToday, lastRow, C.bad)}
+      ${col(c.disputes, lastRow)}${col(c.inrs, lastRow)}${col(c.cases, lastRow)}${col(c.returns, lastRow)}${col(c.mismatch, lastRow)}${col(c.payments, lastRow)}${col(c.claims, lastRow, C.warn, widths[7])}${col(c.dueToday, lastRow, C.bad)}
     </tr>`;
   });
   table += `</table></td></tr>`;
@@ -763,7 +801,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
     "What is still sitting with the managers",
     "Counts are items still needing a person to do something. Anything already answered or settled is left out.",
     body,
-    `Disp = disputes · INR = item not received · Case = eBay cases · Mism = refund mismatches · Pay = unpaid orders · Claims = claims over 7 days · Due = deadline today or tomorrow.<br>Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
+    `Disp = disputes · INR = item not received · Case = eBay cases · Ret = returns to handle today (back with us, needs our label, or sent back by the carrier) · Mism = refund mismatches · Pay = unpaid orders · Claims = claims over 7 days · Due = deadline today or tomorrow.<br>Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
   );
 }
 
@@ -1089,11 +1127,7 @@ Deno.serve(async (req: Request) => {
       for (const s of STORES) {
         const list = byStore[s];
         counts[s] = {
-          disputes: list.filter((r) => r.type === "dispute").length,
-          inrs: list.filter((r) => r.type === "ebay_case" && /item not received|refunded|delivered after|returned to us/i.test(r.kindLabel)).length,
-          cases: list.filter((r) => r.type === "ebay_case" && r.kindLabel === "eBay case").length,
-          mismatch: list.filter((r) => r.type === "mismatch").length,
-          payments: list.filter((r) => r.type === "payment").length,
+          ...bucketCounts(list),
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
           dueToday: list.filter((r) => dueSoon(r, today)).length,
         };
