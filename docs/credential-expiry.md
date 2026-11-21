@@ -17,11 +17,16 @@ the email goes to Ethan.
 | eBay refresh token, WSP | 2028-03-24 | Automatic | Same, `store=WSP` |
 | eBay refresh token, BAL | 2028-03-24 | Automatic | Same, `store=BAL` |
 | eBay refresh token, MPL | 2028-05-14 | Automatic | Same, `store=MPL` |
-| **speeksnet.com domain registration** | **unknown, needs a date** | Registrar | Renew at the registrar (or check auto-renew and the card on file). |
-| **Supabase CLI access token** (Ethan's PC, used for deploys only) | **unknown, needs a date** | supabase.com/dashboard/account/tokens | `npx supabase login` again. If the token has no expiry, mark the row inactive. |
+| speeksnet.com domain registration | *switched off* | Registrar | Renew at the registrar (or check auto-renew and the card on file). |
+| Supabase CLI access token (Ethan's PC, used for deploys only) | *switched off* | supabase.com/dashboard/account/tokens | `npx supabase login` again. |
 
-The two rows with no date never send an alert on their own, but every alert lists
-them at the bottom so they don't get forgotten.
+Ethan said on 2026-11-21 to ignore the domain and the CLI token for now. Their rows
+stay in the table with `active = false`. To watch one again, set `active = true` and
+give it an `expires_at`. Any active row without a date is listed at the bottom of
+every alert.
+
+**Recipients:** only Ethan (ethan.kushnir@speekstechnology.com), per his request on
+2026-11-21.
 
 ### Entering or changing a date by hand
 

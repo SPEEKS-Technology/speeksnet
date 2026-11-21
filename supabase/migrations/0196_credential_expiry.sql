@@ -90,6 +90,11 @@ insert into public.credential_expiry (key, name, what, used_by, renew_steps, exp
  null, 'Date unknown — tokens can be made with or without an expiry.', null)
 on conflict (key) do nothing;
 
+-- Same day, Ethan: ignore the domain registration and the CLI token for now.
+-- Kept as rows (switched off) so turning one back on is just active = true.
+update public.credential_expiry set active = false, updated_at = now()
+ where key in ('domain_speeksnet', 'supabase_cli_token');
+
 -- Pull the eBay dates in now so the first run already has them.
 update public.credential_expiry c
    set expires_at = s.refresh_token_expires_at, updated_at = now()
