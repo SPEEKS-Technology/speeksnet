@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { buildCredentialEmail, type CredRow } from "./email.ts";
 
 // =============================================================================
 // credential-expiry — Expiring Credentials email (2026-11-21, migration 0196)
@@ -52,8 +53,6 @@ function authed(url: URL) {
   return d === 0;
 }
 
-const esc = (s: unknown) =>
-  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // Calendar days in Central time, so "1 day left" means tomorrow on the wall clock.
 function chicagoDay(d: Date) {
@@ -71,8 +70,6 @@ function stageFor(left: number): string | null {
   for (const t of STAGES) if (left <= t) s = t;
   return s === null ? null : String(s);
 }
-const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" });
 
 async function relay(to: string, subject: string, html: string) {
   let status = 0;
@@ -111,45 +108,6 @@ async function refreshAuto(rows: any[]) {
       r.expires_at = exp;
     }
   }
-}
-
-function buildEmail(due: any[], undated: any[], today: string, test: boolean) {
-  const expired = due.filter((r) => r._left <= 0);
-  const soonest = Math.min(...due.map((r) => r._left));
-  const subject = (test ? "[TEST] " : "") + (expired.length
-    ? `Expired: ${expired.length === 1 ? expired[0].name : expired.length + " credentials"} — renew now`
-    : `${due.length === 1 ? due[0].name : due.length + " credentials"} expire${due.length === 1 ? "s" : ""} in ${soonest} day${soonest === 1 ? "" : "s"}`);
-
-  const card = (r: any) => {
-    const bad = r._left <= 0;
-    const tone = bad ? "#b42318" : r._left <= 7 ? "#b54708" : "#175cd3";
-    const when = bad
-      ? `Expired ${fmtDate(r.expires_at)}${r._left < 0 ? ` (${-r._left} day${r._left === -1 ? "" : "s"} ago)` : " (today)"}`
-      : `Expires ${fmtDate(r.expires_at)} — ${r._left} day${r._left === 1 ? "" : "s"} left`;
-    const steps = esc(r.renew_steps).replace(/\n/g, "<br>");
-    return `<div style="border:1px solid #e4e7ec;border-left:4px solid ${tone};border-radius:8px;padding:12px 14px;margin:0 0 12px;">
-      <div style="font-weight:700;font-size:15px;color:#101828;">${esc(r.name)}</div>
-      <div style="font-weight:700;color:${tone};margin:4px 0 8px;">${esc(when)}</div>
-      ${r.what ? `<div style="color:#475467;margin-bottom:6px;">${esc(r.what)}</div>` : ""}
-      ${r.used_by ? `<div style="color:#475467;margin-bottom:6px;"><b>Stops working if it lapses:</b> ${esc(r.used_by)}</div>` : ""}
-      <div style="color:#101828;margin-top:8px;"><b>How To Renew</b><br>${steps}</div>
-    </div>`;
-  };
-
-  const undatedHtml = undated.length
-    ? `<div style="margin-top:18px;color:#475467;font-size:13px;"><b>No Expiry Date On File</b> — these can expire but nobody has entered the date yet:
-       <ul style="margin:6px 0 0 18px;padding:0;">${undated.map((r) => `<li>${esc(r.name)}</li>`).join("")}</ul></div>`
-    : "";
-
-  const html = `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45;max-width:640px;">
-    <div style="font-size:18px;font-weight:800;color:#101828;margin-bottom:4px;">Expiring Credentials</div>
-    <div style="color:#475467;margin-bottom:14px;">${esc(fmtDate(today + "T18:00:00Z"))} — renew ${due.length === 1 ? "this" : "these"} before the site loses access.${test ? " <b>This is a test send.</b>" : ""}</div>
-    ${due.sort((a, b) => a._left - b._left).map(card).join("")}
-    ${undatedHtml}
-    <div style="margin-top:18px;color:#98a2b3;font-size:12px;">Sent by SPEEKSNET at 60, 30, 14, 7 and 1 days before expiry, then daily once expired.
-      Change who gets this in Email Recipients → System Alerts → Expiring Credentials.</div>
-  </div>`;
-  return { subject, html };
 }
 
 Deno.serve(async (req: Request) => {
@@ -199,7 +157,11 @@ Deno.serve(async (req: Request) => {
   const out: any[] = [];
   for (const [listKey, items] of byList) {
     const to = toOverride || (await recipients(listKey)).join(",");
-    const { subject, html } = buildEmail(items, undated, today, test);
+    const cred: CredRow[] = items.map((r) => ({
+      key: r.key, name: r.name, what: r.what, used_by: r.used_by,
+      renew_steps: r.renew_steps, expires_at: r.expires_at, left: r._left,
+    }));
+    const { subject, html } = buildCredentialEmail(cred, undated.map((r: any) => r.name), today, test);
     if (dryRun) { out.push({ listKey, to, subject, keys: items.map((r) => r.key), html }); continue; }
     const res = await relay(to, subject, html);
     out.push({ listKey, to, subject, keys: items.map((r) => r.key), ...res });
