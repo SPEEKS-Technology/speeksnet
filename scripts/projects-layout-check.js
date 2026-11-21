@@ -110,6 +110,26 @@ t('list: a long description is clipped to two lines in its row', function () {
     return d.getBoundingClientRect().height <= lh * 2 + 2 || 'description is ' + Math.round(d.getBoundingClientRect().height) + 'px tall';
 });
 
+// EVERY ROW TWO DESCRIPTION LINES TALL (Ethan, 2026-11-21): a one-line
+// description used to make a shorter row, so the list jumped between tabs.
+t('list @1440: a one-line description still takes two lines; rows match across tabs', function () {
+    renderPane(1440);
+    var heights = {};
+    ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+        prjSetView(v);
+        Array.prototype.forEach.call(document.querySelectorAll('#layout-host .prj-table tbody tr'), function (tr) {
+            heights[Math.round(tr.getBoundingClientRect().height)] = 1;
+        });
+    });
+    prjSetView('approval');
+    var d = document.querySelector('#layout-host .prj-row-desc');
+    if (!d) return 'no description drawn on Awaiting Approval';
+    var lh = parseFloat(getComputedStyle(d).lineHeight) || 17;
+    var tall = d.getBoundingClientRect().height >= lh * 2 - 1;
+    var hs = Object.keys(heights);
+    return (tall && hs.length === 1) || 'desc ' + Math.round(d.getBoundingClientRect().height) + 'px (line ' + lh + '), row heights ' + hs.join('/');
+});
+
 // ONE PILL SIZE PER COLUMN (Ethan, 2026-11-21): every status chip is as wide as
 // the widest one in view, and so is every name chip — on each tab, the longest
 // label still on one line.
