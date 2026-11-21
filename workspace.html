@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261121a">
+  <link rel="stylesheet" href="styles.css?v=20261121r">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <!-- Home-screen app + phone alerts (Alerts Hub, 2026-11-20). iOS reads the apple-* tags, Android the manifest. -->
   <link rel="manifest" href="manifest.json">
@@ -23,7 +23,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20261121a" defer></script>
+  <script src="speeks.js?v=20261121r" defer></script>
 </head>
 <body class="preload">
 
@@ -633,7 +633,7 @@
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="vr-body">
-              <div class="status-message">Loading variance replies…</div>
+              <div class="status-message">Loading Variance Replies…</div>
           </div>
       </div>
     </section>
@@ -651,7 +651,7 @@
                   <div class="ws-head-titles">
                       <span class="ws-head-eyebrow">Workspace</span>
                       <span class="ws-head-title">Projects</span>
-                      <span class="ws-head-sub">Tools and side projects next to SPEEKSNET — approved by the DM before work starts.</span>
+                      <span class="ws-head-sub">Tools and AI projects for the stores or SPEEKSNET — Needs approval from DM before production and before launch.</span>
                   </div>
               </div>
               <div class="ws-head-controls">
@@ -661,7 +661,7 @@
               </div>
           </div>
           <div class="ws-scroll" id="prjBody">
-              <div class="status-message">Loading projects…</div>
+              <div class="status-message">Loading Projects…</div>
           </div>
       </div>
     </section>
@@ -840,7 +840,7 @@
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="ag-body">
-              <div class="status-message">Loading aging inventory…</div>
+              <div class="status-message">Loading Aging Inventory…</div>
           </div>
       </div>
     </section>
@@ -864,7 +864,16 @@
                 <span class="tool-head-sub prj-detail-sub" id="prjDetailSub"></span>
             </div>
         </div>
+        <div class="tool-head-actions prj-head-actions">
+            <!-- Edit / Withdraw / Delete live here, off the bottom bar (Ethan,
+                 2026-11-21: the bar was "very chaotic"). Same ⋯ menu as B2B's
+                 deal screen. _prjRenderDetail fills it; hidden when empty. -->
+            <button class="prj-more" id="prjMoreBtn" style="display:none;" onclick="prjMoreToggle(event)" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <div class="prj-more-menu" id="prjMoreMenu" role="menu" hidden></div>
         <button class="modal-close-btn" onclick="closeAllModals()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
     </div>
     <div class="manage-content prj-detail-body" id="prjDetailBody"></div>
     <div class="manage-footer prj-detail-foot" id="prjDetailFooter"></div>
@@ -907,8 +916,10 @@
     </div>
     <div class="manage-footer flex-end">
         <span class="prj-msg" id="prjFormMsg" role="status"></span>
-        <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
-        <button class="btn-primary" id="prjFormSubmit" onclick="prjSubmitForm(this)">Send for Approval</button>
+        <!-- Cancel matches the submit button's size and shape (Ethan, 2026-11-21);
+             .prj-form-btn gives both one width — side-by-side buttons are one size. -->
+        <button class="btn-secondary prj-form-btn" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary prj-form-btn" id="prjFormSubmit" onclick="prjSubmitForm(this)">Send for Approval</button>
     </div>
 </div>
 
@@ -1439,7 +1450,7 @@
 
     <!-- EDIT PREVIOUS TAB -->
     <div class="manage-content" id="pnManageEdit" style="display:none;">
-        <div id="pnEditList"><div class="pn-loading">Loading patch notes...</div></div>
+        <div id="pnEditList"><div class="pn-loading">Loading Patch Notes...</div></div>
     </div>
 
     <div class="manage-footer pn-actions-bar" id="pnActionsBar">
@@ -1506,7 +1517,7 @@
 
     <div class="manage-content" id="awardsTabHistory" style="display:none;">
         <div id="awardsHistoryList" class="awards-history-list">
-            <div class="status-message">Loading history...</div>
+            <div class="status-message">Loading History...</div>
         </div>
     </div>
 
@@ -1534,7 +1545,7 @@
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
-      <div id="expBody"><div class="status-message">Loading expenses&hellip;</div></div>
+      <div id="expBody"><div class="status-message">Loading Expenses&hellip;</div></div>
     </div>
 </div>
 
@@ -1728,7 +1739,7 @@
 
     <!-- pane 2: notifications -->
     <div class="manage-content set-pane" id="settingsNotifyPane" hidden>
-      <div id="notifySettingsBody"><div class="ns-loading">Loading your settings…</div></div>
+      <div id="notifySettingsBody"><div class="ns-loading">Loading Your Settings…</div></div>
     </div>
 
     <!-- Shown only on a section that has something to save. The index has not. -->

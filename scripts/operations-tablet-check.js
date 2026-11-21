@@ -439,7 +439,7 @@ function _otOnBoard(fn) {
             return _otAsTablet(function () {
                 // Switch THEN seed THEN draw: switchOperationsTab calls pgLoad,
                 // which fetches, which the runner blocks — so it would otherwise
-                // leave a "Loading the photo sheets…" placeholder over the top.
+                // leave a "Loading the Photo Sheets…" placeholder over the top.
                 switchOperationsTab('pictureguide');
                 undo = _otSeedPg();
                 pgRender();

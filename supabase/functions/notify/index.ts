@@ -249,14 +249,25 @@ const SUBS: Record<Category, Sub[]> = {
     // requests still go up to the DM. Sharing one switch is right anyway: the
     // sub answers "do I want the requests that wait on me", and which kinds
     // those are is a fact about the role, not a thing to configure.
-    { key: "req_in",  label: "Requests Coming In", blurb: "Purchase, recycle, delete and project requests waiting on a verdict.",
-      kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request", "project_request"],
+    { key: "req_in",  label: "Requests Coming In", blurb: "Purchase, recycle and delete requests waiting on a verdict.",
+      kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request"],
       roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
     // Neutral wording: this sub reaches BOTH ends -- the store hears the DM's
     // verdict, the DM hears the store's reply -- so "the DM's answer" was wrong
     // for the one person most likely to read it.
-    { key: "req_out", label: "Verdicts And Replies", blurb: "Verdicts, notes and replies on purchase, recycle and project requests already sent.",
-      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply", "purchase_verdict", "project_decision"] },
+    { key: "req_out", label: "Verdicts And Replies", blurb: "Verdicts, notes and replies on purchase and recycle requests already sent.",
+      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply", "purchase_verdict"] },
+    // PROJECTS GET THEIR OWN SWITCH (Ethan, 2026-11-21: "a toggle … so people can
+    // turn it on or off specifically for project alerts"). Both directions in one:
+    // a project waiting on the DM (to start, or to sign off) and the DM's decision
+    // coming back to whoever asked. The kinds were briefly split across req_in /
+    // req_out (pre-release only, never deployed), so no saved muted_kinds row
+    // names this key's kinds under another sub. No `roles`: anyone who can ask
+    // for a project can be told about it — the category's roles already decide
+    // who sees Requests at all.
+    { key: "projects", label: "Project Alerts",
+      blurb: "Projects waiting on your approval or sign-off, and the DM's decisions on projects you asked for.",
+      kinds: ["project_request", "project_decision"] },
   ],
   b2b: [
     // The stage events, moved here from `requests` with the same key, so a

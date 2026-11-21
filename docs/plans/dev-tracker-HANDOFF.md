@@ -53,7 +53,7 @@ moves into SPEEKSNET, and shipping to production happens only from there.
 | Q4 | **Edge functions & migrations bypass GitHub** (deployed straight to Supabase). Lock those too? | Phase 6 just records them on the ship checklist; a later phase can deploy functions from a GitHub Action on merge to `main`. | Phase 6/7 |
 | Q5 | Ticket numbering. | Imported issues keep their GitHub number (`#573` → `SN-573`) so old commit/PR references resolve; new tickets start at **SN-1000** (GitHub shares one sequence between issues and PRs). | Phase 1 |
 | Q6 | What happens to closed GitHub issues after import, and when does Issues get switched off? | Import → verify counts in SPEEKSNET → comment "Moved to SN-n" on open issues and close them → an org admin turns Issues off. | Phase 2 |
-| Q7 | Should completed **Projects** with outcome "Fold into SPEEKSNET" spawn dev tickets automatically? | Yes, a "Create dev ticket" button on the completed project, linking both ways. | Phase 3 (nice-to-have) |
+| Q7 | Should completed **Projects** with outcome "Ready for SPEEKSNET" (was "Fold into SPEEKSNET", renamed 2026-11-21) spawn dev tickets automatically? | Yes, a "Create dev ticket" button on the completed project, linking both ways. **Ethan, 2026-11-21:** once the linked ticket ships, the project's outcome should read **"Pushed in vX.Y.Z"** (the release that carried it) instead of "Ready for SPEEKSNET". Later, not now. | Phase 3 (nice-to-have) |
 
 ---
 
