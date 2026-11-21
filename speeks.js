@@ -37664,7 +37664,7 @@ function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
     // Deleting a claim needs DM/CEO approval — the trash button sends a request, and a
     // claim already awaiting approval shows a pending badge instead.
     if (r.delete_requested_at) {
-        acts.push(`<span title="Waiting on DM/CEO approval" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
+        acts.push(`<span title="${escapeHtml('Waiting on DM/CEO approval' + (r.delete_reason ? ' — why: ' + r.delete_reason : ''))}" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
     } else {
         acts.push(`<button onclick="requestClaimDelete('${r.id}', ${!!hasChild})" title="Request deletion (a DM or CEO must approve)" style="display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:9px; cursor:pointer; font-size:17px; line-height:1;" onmouseover="this.style.background='#fee2e2';" onmouseout="this.style.background='#fff5f5';">🗑</button>`);
     }
@@ -39259,6 +39259,7 @@ function renderClaimsOversight() {
                     · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>${siteCopyBtn(r.case_number, 'case number')}
                     <span style="color:#94a3b8;"> — ${escapeHtml(r.reason_type || '')}</span>
                     <span style="color:#b45309; font-weight:700;"> · Requested by ${who}</span>
+                    <div style="margin-top:4px; font-size:12.5px; color:var(--slate-charcoal);"><span style="font-weight:800;">Why:</span> ${r.delete_reason ? escapeHtml(r.delete_reason) : '<span style="color:#94a3b8;">No reason given (asked before reasons were required)</span>'}</div>
                 </div>
                 <div style="display:flex; gap:8px;">
                     <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve Delete</button>
@@ -39537,25 +39538,63 @@ async function updateClaimStatus(id, status) {
 
 // Manager-side: request deletion. Claims are never deleted directly by a manager —
 // a DM/CEO must approve, so nothing is quietly removed.
-async function requestClaimDelete(id, hasChild) {
+//
+// SAY WHY (Ethan, 2026-11-21: "add a notes field when a user requests to delete
+// an insurance claim, so I know why they are trying to delete the claim"). The
+// plain confirm() became a small dialog with a required reason box; the reason
+// is stored on the claim (delete_reason, 0195) and shown on the DM's Delete
+// Requests list and in the notification. shopify-claims accepts a blank one
+// only so the pre-merge live page keeps working — this box is the gate.
+function requestClaimDelete(id, hasChild) {
+    document.getElementById('claimDelReqModal')?.remove();
     // Deleting an Item-Not-Received ticket that already has a loss claim removes
     // both (child cascades) — spell that out so it isn't a surprise.
-    const msg = hasChild
-        ? 'Request deletion of this Item-Not-Received ticket?\n\nThis also removes the loss claim opened on it. A DM or CEO must approve before anything is removed.'
-        : 'Request deletion of this claim?\n\nA DM or CEO must approve it before the claim is removed.';
-    if (!confirm(msg)) return;
-    try {
-        const res = await fetch(CLAIMS_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'request_delete', id, requested_by: sessionStorage.getItem('speeksUserName') || null }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
-        alert('Delete request sent. A DM or CEO will review it.');
-        fetchMyClaims();
-    } catch (e) {
-        alert('Could not send the request: ' + (e.message || e));
-    }
+    const lead = hasChild
+        ? 'This also removes the loss claim opened on this Item-Not-Received ticket. A DM or CEO must approve before anything is removed.'
+        : 'A DM or CEO must approve it before the claim is removed.';
+    const wrap = document.createElement('div');
+    wrap.id = 'claimDelReqModal';
+    wrap.style.cssText = 'position:fixed; inset:0; z-index:4200; background:rgba(2,6,23,.55); display:flex; align-items:center; justify-content:center; padding:16px;';
+    wrap.innerHTML = `
+        <div role="dialog" aria-modal="true" aria-labelledby="claimDelReqTitle" style="background:#fff; border-radius:14px; width:100%; max-width:440px; padding:20px; box-shadow:0 20px 50px rgba(2,6,23,.3); box-sizing:border-box;">
+            <div id="claimDelReqTitle" style="font-weight:800; font-size:16px; color:var(--slate-charcoal); margin-bottom:6px;">Request To Delete This Claim</div>
+            <div style="font-size:13px; color:#64748b; line-height:1.5; margin-bottom:12px;">${escapeHtml(lead)}</div>
+            <label for="claimDelReqReason" style="display:block; font-size:12px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">Why Should It Be Deleted?</label>
+            <textarea id="claimDelReqReason" rows="3" maxlength="500" placeholder="e.g. Opened on the wrong order, duplicate of another claim…" style="width:100%; box-sizing:border-box; font:inherit; font-size:14px; padding:9px 10px; border:1.5px solid #cbd5e1; border-radius:9px; resize:vertical;"></textarea>
+            <div id="claimDelReqErr" style="display:none; color:#b91c1c; font-size:12px; font-weight:700; margin-top:6px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; flex-wrap:wrap;">
+                <button type="button" data-act="cancel" style="font-size:13px; font-weight:800; border-radius:8px; padding:8px 14px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Cancel</button>
+                <button type="button" data-act="send" style="font-size:13px; font-weight:800; border-radius:8px; padding:8px 14px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Send Request</button>
+            </div>
+        </div>`;
+    document.body.appendChild(wrap);
+    const box = wrap.querySelector('#claimDelReqReason');
+    const err = wrap.querySelector('#claimDelReqErr');
+    const sendBtn = wrap.querySelector('[data-act="send"]');
+    const close = () => wrap.remove();
+    const showErr = (t) => { err.textContent = t; err.style.display = 'block'; };
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+    wrap.querySelector('[data-act="cancel"]').onclick = close;
+    wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    sendBtn.onclick = async () => {
+        const reason = box.value.trim();
+        if (!reason) { showErr('Say why this claim should be deleted.'); box.focus(); return; }
+        sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+        try {
+            const res = await fetch(CLAIMS_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'request_delete', id, reason, requested_by: sessionStorage.getItem('speeksUserName') || null }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+            close();
+            fetchMyClaims();   // the row's "🗑 Delete requested" badge is the confirmation
+        } catch (e) {
+            sendBtn.disabled = false; sendBtn.textContent = 'Send Request';
+            showErr('Could not send the request: ' + (e.message || e));
+        }
+    };
+    setTimeout(() => box.focus(), 0);
 }
 
 // DM/CEO-side: approve a pending delete request → permanently removes the claim.
@@ -39906,8 +39945,11 @@ async function checkAgingClaimsDM() {
         const which = pendingDelete.length <= 2
             ? pendingDelete.map(_clLabel).join(', ')
             : `${pendingDelete.length} claims`;
+        // One request: say why on the feed line too, so the DM can decide from it.
+        const why1 = pendingDelete.length === 1 && pendingDelete[0].delete_reason
+            ? ` Why: "${String(pendingDelete[0].delete_reason).trim()}"` : '';
         const line = `${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval — ${which}`
-            + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.`;
+            + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.${why1}`;
 
         // The snooze identity carries the pending delete ids, so a SECOND request
         // arrives as new information rather than being swallowed by a snooze taken

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claim Delete Reason Preview</title>
+<link rel="stylesheet" href="../styles.css?v=20261121a">
+<style>
+  body { background:#f1f5f9; padding:24px 16px; font-family:-apple-system,'Segoe UI',Roboto,sans-serif; }
+  .pv-wrap { max-width:900px; margin:0 auto; }
+  .pv-h { font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:#64748b; margin:0 0 10px; }
+  .pv-card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:18px; margin-bottom:26px; }
+  .pv-btns { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:22px; }
+  .pv-btns button { font-weight:800; font-size:13px; padding:8px 14px; border-radius:8px; border:1.5px solid #cbd5e1; background:#fff; cursor:pointer; }
+</style>
+<script>
+  // Throwaway preview (prototypes/ is never linked from the app). Real speeks.js,
+  // sample rows, every network call answered locally so nothing reaches Supabase.
+  window.fetch = function () {
+    return Promise.resolve({ ok: true, status: 200,
+      json: function () { return Promise.resolve({ success: true, data: [] }); },
+      text: function () { return Promise.resolve('{"success":true,"data":[]}'); } });
+  };
+  // A fake signed-in DM, or speeks.js bounces every page to index.html.
+  sessionStorage.setItem('speeksUnlocked', 'true');
+  sessionStorage.setItem('speeksUserRole', 'District Manager');
+  sessionStorage.setItem('speeksUserName', 'Preview');
+  sessionStorage.setItem('speeksUserStore', 'ALL');
+</script>
+<script src="../speeks.js?v=20261121a" defer></script>
+</head>
+<body>
+<div class="pv-wrap">
+  <div class="pv-btns">
+    <button onclick="requestClaimDelete('x', false)">Open: manager's delete box</button>
+    <button onclick="requestClaimDelete('x', true)">Open: INR ticket with a loss claim</button>
+  </div>
+  <div class="pv-h">What you see — Claims oversight, Delete Requests</div>
+  <div class="pv-card"><div id="claims-oversight-body"></div></div>
+</div>
+<script>
+  window.addEventListener('load', function () {
+    var now = new Date().toISOString();
+    _oversightAll = [
+      { id: 'a', store: 'OVL', case_number: '5389471050', reason_type: 'Item Not Received', status: 'in_progress', created_at: now,
+        delete_requested_at: now, delete_requested_by: 'Jordan (OVL Manager)', delete_reason: 'Duplicate — the same order already has a claim open under case 5389470112.' },
+      { id: 'b', store: 'MPL', case_number: '5386829438', reason_type: 'Damage', status: 'in_progress', created_at: now,
+        delete_requested_at: now, delete_requested_by: 'Casey (MPL Manager)', delete_reason: 'Opened on the wrong order by mistake.' },
+      { id: 'c', store: 'LEE', case_number: '5388789227', reason_type: 'Loss', status: 'in_progress', created_at: now,
+        delete_requested_at: now, delete_requested_by: 'Riley (LEE Manager)', delete_reason: null },
+    ];
+    _oversightReminders = [];
+    renderClaimsOversight();
+    requestClaimDelete('x', false);
+    document.getElementById('claimDelReqReason').value = 'Duplicate — the same order already has a claim open under case 5389470112.';
+  });
+</script>
+</body>
+</html>
