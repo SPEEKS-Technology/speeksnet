@@ -34984,7 +34984,7 @@ function prjRender() {
     // says so too, so an empty list never reads as "nobody has projects".
     const seesAll = _prjCan('seesAll');
     if (meta) meta.textContent = _prjCan('approve')
-        ? (waiting ? `${waiting} waiting on you` : 'Nothing waiting on you')
+        ? (waiting ? `${waiting} Waiting on You` : 'Nothing Waiting on You')
         : seesAll ? `${all.length} project${all.length === 1 ? '' : 's'}`
         : `${all.length} of yours`;
 
@@ -35006,9 +35006,12 @@ function prjRender() {
         <div class="prj-seg" role="tablist" aria-label="Project status">
             ${PRJ_VIEWS.map(v => `<button type="button" role="tab" aria-selected="${v.key === _prjView}"
                 class="prj-seg-btn${v.key === _prjView ? ' on' : ''}" onclick="prjSetView('${v.key}')">${escapeHtml(v.label)} · ${counts[v.key]}</button>`).join('')}
-            <span class="prj-seg-note">${seesAll
-                ? 'Every project in the district. Projects need DM approval before work starts.'
-                : "Projects you asked for or are part of. They need DM approval before work starts."}</span>
+            ${/* The DM / CEO / MOCD line ("Every project in the district…") is
+                 gone (Ethan, 2026-11-21): the header under the title already says
+                 projects need his approval. A manager keeps a short note, because
+                 their list is only their own and an empty one would otherwise
+                 read as "nobody has projects". */ seesAll ? ''
+                : '<span class="prj-seg-note">Projects you asked for or are part of.</span>'}
         </div>`;
 
     const list = rows.length ? `

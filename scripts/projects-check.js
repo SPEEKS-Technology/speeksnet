@@ -121,19 +121,19 @@ t('list: an empty group says so instead of drawing an empty table', function () 
 // "DM can see all of the projects. Everyone else can only see projects they are
 // involved in." The filtering is the function's; the page has to SAY which
 // list this is, or an empty one reads as "nobody has any projects".
-t('list: the DM is told it is every project in the district', function () {
+t('list: the DM gets no district note under the tabs (header says it), and a Waiting on You count', function () {
     load('Ethan', APPROVER);
-    var note = document.querySelector('#prjBody .prj-seg-note').textContent;
     var meta = document.getElementById('prjSubtitle').textContent;
-    return (/Every project in the district/.test(note) && /waiting on you/.test(meta)) || 'note "' + note + '" meta "' + meta + '"';
+    var noteEl = document.querySelector('#prjBody .prj-seg-note');
+    return (!noteEl && /Waiting on You/.test(meta)) || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
 });
 // CEO and MOCD see every project too, by role ("not a switch"), but don't
 // decide — so no "waiting on you", just how many there are.
 t('list: the CEO / MOCD see every project, counted, with nothing "waiting on you"', function () {
     load('Pat Viewer', { view: true, request: false, approve: false, seesAll: true });
-    var note = document.querySelector('#prjBody .prj-seg-note').textContent;
+    var noteEl = document.querySelector('#prjBody .prj-seg-note');
     var meta = document.getElementById('prjSubtitle').textContent;
-    return (/Every project in the district/.test(note) && meta === '8 projects') || 'note "' + note + '" meta "' + meta + '"';
+    return (!noteEl && meta === '8 projects') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
 });
 t('list: everyone else is told it is only their own projects', function () {
     load('Alex OVL', MANAGER);
