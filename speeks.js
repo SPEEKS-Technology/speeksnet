@@ -2144,7 +2144,7 @@ function toggleCalendar() {
             const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
             _scal.store = STORE_CODES.includes(s) ? s : STORE_CODES[0];
         }
-        if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the calendar…</div>');
+        if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the Calendar…</div>');
         else _scalRender();
         _scalLoad();
     }
@@ -14707,7 +14707,7 @@ async function openGpGoals(month) {
     closeAllModals();
     toggleModal('gpGoalsModal');
     const body = document.getElementById('gpGoalsBody');
-    if (body) body.innerHTML = '<div class="status-message">Loading the month…</div>';
+    if (body) body.innerHTML = '<div class="status-message">Loading the Month…</div>';
     try {
         _gpGoals = await _gpFetch(month);
     } catch (e) {
@@ -15499,7 +15499,7 @@ function _bdRender() {
     // even set the flag, and the fall-through below would flash "no figures for
     // this month" at somebody whose month is still in flight.
     if (!_bdData) {
-        body.innerHTML = '<div class="bd-empty">Loading the month&hellip;</div>';
+        body.innerHTML = '<div class="bd-empty">Loading the Month&hellip;</div>';
         return;
     }
     const d = _bdData;
@@ -19481,7 +19481,7 @@ function lgpwRender() {
         let body;
         if (d) body = _lgpwStoreHtml(s, d.payload, weekStart);
         else if (_lgpw.failed[s]) body = '<div class="lgpw-msg err">Couldn\'t load past weeks. Close and reopen to try again.</div>';
-        else body = '<div class="lgpw-msg">Loading past weeks…</div>';
+        else body = '<div class="lgpw-msg">Loading Past Weeks…</div>';
         return `<section class="lgpw-store">${head}${body}</section>`;
     }).join('');
 }
@@ -34944,7 +34944,7 @@ async function prjLoad(quiet) {
         return;
     }
     _prjLoading = true;
-    if (!quiet && !_prjData) body.innerHTML = '<div class="status-message">Loading projects…</div>';
+    if (!quiet && !_prjData) body.innerHTML = '<div class="status-message">Loading Projects…</div>';
     try {
         const res = await fetch(`${PROJECTS_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
         const json = await res.json().catch(() => ({}));
@@ -36181,7 +36181,7 @@ function mclToggleAllStores() {
 async function loadRequiredTasks() {
     const list = document.getElementById('mcl-list');
     if (!list) return;
-    list.innerHTML = '<div class="status-message">Loading required tasks…</div>';
+    list.innerHTML = '<div class="status-message">Loading Required Tasks…</div>';
     try {
         const res = await fetch(`${CHECKLIST_URL}?action=listRequired&v=${Date.now()}`);
         const data = await res.json();
@@ -36260,7 +36260,7 @@ async function loadStoreChecklistView(store) {
         out.innerHTML = `<div class="status-message" style="color:var(--red-alert);">No manager found for ${escapeHtml(store)} in the directory.</div>`;
         return;
     }
-    out.innerHTML = `<div class="status-message">Loading ${escapeHtml(store)}'s checklist…</div>`;
+    out.innerHTML = `<div class="status-message">Loading ${escapeHtml(store)}'s Checklist…</div>`;
     try {
         // The store's full checklist + the required-task master, so we can resolve
         // each global item back to its required-task id for deletion.
@@ -37626,7 +37626,7 @@ function renderManageItems() {
     const panel = document.getElementById('sc-panel-manage');
     if (!panel) return;
     if (!window._scCatalog || !window._auCatalog) {
-        panel.innerHTML = '<div class="status-message">Loading item catalog…</div>';
+        panel.innerHTML = '<div class="status-message">Loading Item Catalog…</div>';
         _ensureScCatalog();
         return;
     }
@@ -38171,7 +38171,7 @@ async function fetchMyClaims() {
         wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
         return;
     }
-    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading cases…</div>';
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading Cases…</div>';
     try {
         const res = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
@@ -39892,7 +39892,7 @@ function openClaimsOversight() {
 async function fetchAllClaims() {
     const body = document.getElementById('claims-oversight-body');
     if (!body) return;
-    body.innerHTML = '<div class="status-message">Loading all claims…</div>';
+    body.innerHTML = '<div class="status-message">Loading All Claims…</div>';
     try {
         const res = await fetch(`${CLAIMS_URL}?v=${Date.now()}`); // no stores param → every store
         const json = await res.json();
@@ -43006,7 +43006,7 @@ async function boxAdminDeleteItem(id, btn) {
 async function _loadBoxOrderData() {
     const container = document.getElementById('boxOrderItemsContainer');
     if (!container) return;
-    container.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:12px 0;">Loading items...</div>';
+    container.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:12px 0;">Loading Items...</div>';
     const h = { 'apikey': _SUPABASE_ANON_KEY, 'Authorization': `Bearer ${_SUPABASE_ANON_KEY}` };
     try {
         const [iRes, cRes] = await Promise.all([
@@ -43618,7 +43618,7 @@ async function fetchMyRecycleRequests() {
         wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
         return;
     }
-    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading requests…</div>';
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading Requests…</div>';
     try {
         const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
@@ -44674,7 +44674,7 @@ async function openEmailRecipients() {
     toggleModal('emailRecipientsModal');
     const body = document.getElementById('emailRecipientsBody');
     _erOpen = null; _erQuery = '';   // a fresh open starts collapsed and unfiltered
-    if (body) body.innerHTML = '<div class="status-message">Loading recipients…</div>';
+    if (body) body.innerHTML = '<div class="status-message">Loading Recipients…</div>';
     await _fetchEmailLists(true);
     renderEmailRecipients();
 }
@@ -46984,7 +46984,7 @@ const _vrFmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' 
 async function loadVarianceReplies() {
     const body = document.getElementById('vr-body');
     if (!body) return;
-    body.innerHTML = '<div class="status-message">Loading variance replies…</div>';
+    body.innerHTML = '<div class="status-message">Loading Variance Replies…</div>';
     const stores = _vrStores();
     if (!stores.length) {
         body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
@@ -48621,7 +48621,7 @@ async function loadAgingInventory() {
     const body = document.getElementById('ag-body');
     if (!body) return;
     if (!_agEnabled()) { body.innerHTML = '<div class="status-message">Aging Inventory is paused.</div>'; return; }
-    body.innerHTML = '<div class="status-message">Loading aging inventory…</div>';
+    body.innerHTML = '<div class="status-message">Loading Aging Inventory…</div>';
     const stores = _agIsDM() ? ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'] : _agMyStores();
     if (!stores.length) {
         body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
@@ -62202,7 +62202,7 @@ function _dmxEfficiencyPane() {
         + btn('This Week', back0)
         + '</div></div>';
 
-    if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
+    if (!rows) return head + '<div class="dmx-empty">Loading the Week…</div>';
     if (!rows.length) return head + '<div class="dmx-empty">No capacity data for this week.</div>';
 
     // Column order reads left to right as the story: who the store is and what it
@@ -64792,7 +64792,7 @@ window.openExpenses = openExpenses;
 
 async function loadExpenses() {
     const body = document.getElementById('expBody');
-    if (body && !_expData) body.innerHTML = '<div class="status-message">Loading expenses…</div>';
+    if (body && !_expData) body.innerHTML = '<div class="status-message">Loading Expenses…</div>';
     const pin = sessionStorage.getItem('speeksUserPin') || '';
     try {
         const q = `month=${encodeURIComponent(_expMonth || _expThisMonth())}`
@@ -65725,7 +65725,7 @@ async function _nsFetch() {
 async function loadNotifySettings() {
     const body = document.getElementById('notifySettingsBody');
     if (!body) return;
-    body.innerHTML = '<div class="ns-loading">Loading your settings…</div>';
+    body.innerHTML = '<div class="ns-loading">Loading Your Settings…</div>';
     if (!sessionStorage.getItem('speeksUserPin')) {
         body.innerHTML = '<div class="ns-loading">Sign in again to change these.</div>';
         return;
@@ -67651,11 +67651,11 @@ function _pqTrainHtml() {
         <div class="pqt-count">${t.done || 0} Graded · ${Math.max(0, t.left || 0)} To Go</div>
         <button type="button" class="pqt-x" onclick="pqTrainClose()" aria-label="Close">×</button>
       </div>`;
-    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading photos…</div>`;
+    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading Photos…</div>`;
     const err = t.err ? `<div class="pqt-err">${_ecEsc(t.err)}</div>` : '';
     const p = t.queue[t.i];
     if (!p) {
-        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the next photos…'
+        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the Next Photos…'
             : t.skipped ? `Done for now. The ${t.skipped} photo${t.skipped === 1 ? '' : 's'} you skipped will come back next time.`
             : `All caught up — every photo from the graded listings at ${_ecEsc(t.store)} has an answer.`}</div>`;
     }
@@ -68176,7 +68176,7 @@ function _pqcHtml() {
         <button type="button" class="pqt-x" onclick="pqConfirmClose()" aria-label="Close">×</button>
       </div>`;
     const err = c.err ? `<div class="pqt-err">${_ecEsc(c.err)}</div>` : '';
-    if (!d) return head + err + `<div class="pqt-empty">${c.busy ? 'Loading listings…' : ''}</div>`;
+    if (!d) return head + err + `<div class="pqt-empty">${c.busy ? 'Loading Listings…' : ''}</div>`;
     // Progress per sheet, busiest-with-least-gold first, each a way in.
     const target = d.target || 40;
     const sheetBtn = s => `<button type="button" class="pqc-sheet${s.slug === c.sheet ? ' pqc-sheet-on' : ''}"
@@ -68203,7 +68203,7 @@ function _pqcHtml() {
             `<span class="pqc-done-s" title="${s.confirmed} confirmed by you of ${s.graded} graded${count(s) < Math.min(target, s.graded) ? ' — the rest were dismissed, or their photos changed since the grade, so they can’t be confirmed' : ''}">✓ ${_ecEsc(s.name)} ${Math.min(count(s), Math.min(target, s.graded))}/${Math.min(target, s.graded)}${count(s) < Math.min(target, s.graded) ? ' (rest can’t be confirmed)' : ''}</span>`).join('')}</div>` : '');
     const l = _pqcListing();
     if (!l) {
-        return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
+        return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading Listings…'
             : c.forTraining ? 'Nothing left to confirm on this sheet. Pick another sheet above.'
             : `Nothing left here that you haven't already judged. Pick another sheet above, or
                <button type="button" class="pqt-btn" onclick="pqConfirmClose(); pqConfirmOpen('', true)">More For Training</button>`}</div>`;
