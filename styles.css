@@ -27670,12 +27670,22 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
    with whatever was over: at ~800px it was one letter a line ("SPEE / KS /
    Listin / g"). A floor on the table keeps Project readable; narrower than
    that the table scrolls inside its wrapper, as it already does on a phone. */
-.prj-table { min-width: 880px; }
+.prj-table { min-width: 960px; }
 .prj-table .prj-col-id     { width: 84px; }
 .prj-table .prj-col-people { width: 24%; }
 .prj-table .prj-col-by     { width: 150px; }
-.prj-table .prj-col-status { width: 170px; }
-.prj-table .prj-col-date   { width: 96px; text-align: right; }
+.prj-table .prj-col-status { width: 250px; }   /* fits "Completed · Ready for SPEEKSNET" */
+.prj-table .prj-col-date   { width: 96px; }
+/* CENTERED (Ethan, 2026-11-21): the four short columns — Who's Involved,
+   Requested By, Status, Updated — sit centred under their headers, header and
+   cell alike; # and Project stay left. The people chips are a flex row, so they
+   centre with justify-content rather than text-align. Has to outrank the
+   shared .cb-table th / td rules, hence the table class twice over. */
+.prj-table.cb-table th.prj-col-people, .prj-table.cb-table td.prj-col-people,
+.prj-table.cb-table th.prj-col-by,     .prj-table.cb-table td.prj-col-by,
+.prj-table.cb-table th.prj-col-status, .prj-table.cb-table td.prj-col-status,
+.prj-table.cb-table th.prj-col-date,   .prj-table.cb-table td.prj-col-date { text-align: center; }
+.prj-table td.prj-col-people .prj-tags { justify-content: center; }
 .prj-table td { color: var(--slate-charcoal); }
 .prj-table td.prj-col-by, .prj-table td.prj-col-date { color: var(--cb-muted); font-weight: 600; }
 .prj-row:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }

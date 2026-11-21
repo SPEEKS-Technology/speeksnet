@@ -110,6 +110,34 @@ t('list: a long description is clipped to two lines in its row', function () {
     return d.getBoundingClientRect().height <= lh * 2 + 2 || 'description is ' + Math.round(d.getBoundingClientRect().height) + 'px tall';
 });
 
+// CENTERED COLUMNS (Ethan, 2026-11-21): Who's Involved, Requested By, Status and
+// Updated sit centred under their headers, on every status tab — including the
+// Completed badge with its outcome ("Completed · Ready for SPEEKSNET"), which
+// once outgrew its column and sat off-centre.
+t('list @1440: the four short columns are centred under their headers, on every tab', function () {
+    renderPane(1440);
+    var bad = [];
+    ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+        prjSetView(v);
+        var row = document.querySelector('#layout-host .prj-table tbody tr');
+        if (!row) return;
+        ['prj-col-people', 'prj-col-by', 'prj-col-status', 'prj-col-date'].forEach(function (c) {
+            var th = document.querySelector('#layout-host th.' + c), td = row.querySelector('td.' + c);
+            var hr = document.createRange(); hr.selectNodeContents(th);
+            var kids = td.querySelectorAll('.prj-tag, .prj-chip');
+            var box;
+            if (kids.length) {
+                box = { l: 1e9, r: -1e9 };
+                Array.prototype.forEach.call(kids, function (k) { var b = k.getBoundingClientRect(); box.l = Math.min(box.l, b.left); box.r = Math.max(box.r, b.right); });
+            } else { var tr = document.createRange(); tr.selectNodeContents(td); var b = tr.getBoundingClientRect(); box = { l: b.left, r: b.right }; }
+            var h = hr.getBoundingClientRect();
+            var off = Math.abs((h.left + h.right) / 2 - (box.l + box.r) / 2);
+            if (off > 3) bad.push(v + ' ' + c + ' off by ' + Math.round(off) + 'px');
+        });
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+
 // The detail footer carries the most buttons (DM on a fresh request: note +
 // three decisions). On a narrow screen they must wrap, not run off the edge.
 [390, 820].forEach(function (w) {
