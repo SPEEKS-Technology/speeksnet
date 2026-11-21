@@ -42,7 +42,7 @@
 // 3.12.1 (2026-11-21): v3.12.0 was tagged and patch-noted on 2026-11-12 but this
 // line was never bumped from 3.11.0, so the site showed the older number. One up
 // in the third digit from the real last release: Projects polish + Phone Alerts.
-const APP_VERSION = '3.12.2';
+const APP_VERSION = '3.12.3';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
