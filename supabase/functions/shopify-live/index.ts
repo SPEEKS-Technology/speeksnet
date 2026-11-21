@@ -305,6 +305,78 @@ const num = (v: unknown) => {
 };
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// ============== CANCELLED ORDERS, FOR THE RETURN RATE (2026-11-21) ==============
+// Ethan: return rate = what came back over what we ACTUALLY sold — gross sales
+// with cancellations taken out, because a cancelled order was never shipped.
+//
+// ⚠️ SHOPIFY BOOKS A CANCELLATION AS A RETURN. Measured 2026-11-21 at OVL: every
+// order cancelled Nov 16-20 showed in `FROM sales` as a return on its CANCEL
+// date — even #KS01-16780, which was never paid and refunded $0 — while its sale
+// stayed in gross_sales on the day it was placed. So cancellations sit on BOTH
+// sides of returns/gross, and the rate has to take them out of both or a store
+// with lots of cancels reads as a store with lots of returns. The Refunds dollar
+// figure is left exactly as it was (it is Shopify's own number); only the rate
+// is cleaned.
+//
+// Exact, not estimated: the Orders API says WHICH orders were cancelled in the
+// span, then ShopifyQL is asked for those order ids only, so gross and returns
+// come back on the same basis and dates as the month's own totals.
+// `WHERE order_id IN (…)` takes bare numbers — quoted ids are a parse error.
+//
+// Only cancellations dated inside the span count, so the figure is fixed for a
+// given "through" day and is fetched once a day, carried like cmp.
+type CancelFigures = { through: string; orders: number; gross: number; returns: number };
+
+async function fetchCancels(
+  shop: string, token: string, from: string, to: string,
+): Promise<CancelFigures | null> {
+  const dayOf = (instant: string) => new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(instant));
+  try {
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    // updated_at, because a cancellation updates the order: every order
+    // cancelled on or after `from` was updated on or after it too.
+    for (let page = 0; page < 8; page++) {
+      const after: string = cursor ? `, after: "${cursor}"` : "";
+      const d = await gql(shop, token, `{
+        orders(first: 250, query: "status:cancelled updated_at:>=${from}"${after}) {
+          pageInfo { hasNextPage endCursor }
+          nodes { legacyResourceId cancelledAt }
+        }
+      }`);
+      const o = d?.orders;
+      for (const n of (o?.nodes ?? [])) {
+        if (!n?.cancelledAt) continue;
+        const day = dayOf(String(n.cancelledAt));
+        if (day >= from && day <= to && /^\d+$/.test(String(n.legacyResourceId))) ids.push(String(n.legacyResourceId));
+      }
+      if (!o?.pageInfo?.hasNextPage) break;
+      cursor = o.pageInfo.endCursor;
+    }
+    let gross = 0, returns = 0;
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100).join(", ");
+      const data = await gql(shop, token, `{
+        shopifyqlQuery(query: "FROM sales SHOW gross_sales, returns WHERE order_id IN (${chunk}) SINCE ${from} UNTIL ${to}") {
+          parseErrors tableData { rows }
+        }
+      }`);
+      const q = data?.shopifyqlQuery;
+      if (q?.parseErrors?.length) throw new Error(`ShopifyQL: ${q.parseErrors.join("; ")}`);
+      const row = (q?.tableData?.rows ?? [])[0] ?? null;
+      gross += num(row?.gross_sales);
+      returns += Math.abs(num(row?.returns));
+    }
+    return { through: to, orders: ids.length, gross: round2(gross), returns: round2(returns) };
+  } catch (_) {
+    // Dropped, never zeroed: a zero would quietly put the cancellations back
+    // into the rate. The page dashes the rate and the next pass retries.
+    return null;
+  }
+}
+
 // One finished comparison month for one store. Selling comes from Shopify;
 // `resale` and `paid` are the BUYING half and come from the sheet's own tables —
 // Shopify knows nothing about what was bought over the counter.
@@ -447,6 +519,13 @@ type DayMetrics = {
   mtdNet: number; mtdCogs: number; mtdGp: number; mtdOrders: number;
   mtdReturns: number; mtdMargin: number | null;
   pctOfGoal: number | null; paceIndex: number | null;
+  // RETURN RATE INPUTS (Ethan 2026-11-21). Gross sales month-to-date, and the
+  // part of gross and of returns that is really CANCELLED orders — see
+  // fetchCancels. Null when not known (orders fallback, or the cancel lookup
+  // failed), which the page dashes rather than showing a rate with the
+  // cancellations still inside it.
+  mtdGross?: number | null; mtdCxlGross?: number | null; mtdCxlReturns?: number | null;
+  mtdCxlOrders?: number | null;
 };
 
 type StoreMetrics = {
@@ -485,6 +564,9 @@ type StoreMetrics = {
   // path. Null means "no comparison available", which the UI states rather than
   // filling with zeros.
   cmp?: StoreCompare | null;
+  // Cancelled orders in the month-through-yesterday span, for the return rate.
+  // Once a day, carried forward like cmp. See fetchCancels.
+  cxl?: CancelFigures | null;
   // NET PROFIT, from October 2026 the figure the stores are graded on. See
   // loadNp / npFor. Absent on a row that cannot carry one (an orders-sourced
   // row has no cost of goods, so no GP, so no NP either).
@@ -622,7 +704,7 @@ async function fetchStore(
       // by construction: only the cron entry point reaches fetchStore at all.
       if (FORCE_ORDERS.has(code)) throw new Error("forced: fallback test hook");
       const data = await gql(shop, token, `{
-        shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, orders, returns GROUP BY day SINCE -${sinceDays}d UNTIL today ORDER BY day") {
+        shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, orders, returns, gross_sales GROUP BY day SINCE -${sinceDays}d UNTIL today ORDER BY day") {
           parseErrors
           tableData { rows }
         }
@@ -671,7 +753,8 @@ async function fetchStore(
     // Month-to-date as it stood at the CLOSE of the previous open day. Derived by
     // subtracting everything dated after it rather than re-summing, so the two
     // figures can never disagree about which days they include.
-    let afterNet = 0, afterCogs = 0, afterOrders = 0, afterReturns = 0;
+    let afterNet = 0, afterCogs = 0, afterOrders = 0, afterReturns = 0, afterGross = 0;
+    let mtdGross = 0;
     let pNet = 0, pCogs = 0, pOrders = 0, pReturns = 0;
 
     for (const r of rows) {
@@ -686,8 +769,10 @@ async function fetchStore(
       if (day.slice(0, 7) === monthPrefix) {
         base.mtdNet += net; base.mtdCogs += cogs; base.mtdOrders += ord;
         base.mtdReturns += ret;
+        mtdGross += num(r.gross_sales);
         if (day > pd.iso) {
           afterNet += net; afterCogs += cogs; afterOrders += ord; afterReturns += ret;
+          afterGross += num(r.gross_sales);
         }
       }
 
@@ -747,6 +832,10 @@ async function fetchStore(
         mtdGp: round2(pMtdNet - pMtdCogs),
         mtdOrders: pd.inMonth ? base.mtdOrders - afterOrders : 0,
         mtdReturns: pd.inMonth ? round2(base.mtdReturns - afterReturns) : 0,
+        // Only a ShopifyQL row has gross_sales; the orders fallback has no such
+        // figure, and a 0 would make every refund read as an infinite rate.
+        mtdGross: pd.inMonth && base.source === "shopifyql" ? round2(mtdGross - afterGross) : null,
+        mtdCxlGross: null, mtdCxlReturns: null, mtdCxlOrders: null,
         mtdMargin: pMtdNet > 0 ? round2((pMtdNet - pMtdCogs) / pMtdNet * 100) : null,
         // Filled in by refresh(), which is where the goal lives. Present as null
         // either way: the frontend overlays this object onto the live row, and a
@@ -1056,6 +1145,8 @@ function rollPrev(healthy: StoreMetrics[], goal: number, elapsedPct: number): Da
   const parts = healthy.map(m => m.prev).filter(Boolean) as DayMetrics[];
   if (!parts.length) return null;
   const sum = (f: (p: DayMetrics) => number) => round2(parts.reduce((a, p) => a + f(p), 0));
+  const sumAll = (f: (p: DayMetrics) => number | null | undefined) =>
+    parts.every(p => typeof f(p) === "number") ? round2(parts.reduce((a, p) => a + (f(p) as number), 0)) : null;
   const net = sum(p => p.netToday), cogs = sum(p => p.cogsToday);
   const orders = parts.reduce((a, p) => a + p.ordersToday, 0);
   const mtdNet = sum(p => p.mtdNet), mtdCogs = sum(p => p.mtdCogs);
@@ -1069,6 +1160,10 @@ function rollPrev(healthy: StoreMetrics[], goal: number, elapsedPct: number): Da
     mtdNet, mtdCogs, mtdGp,
     mtdOrders: parts.reduce((a, p) => a + p.mtdOrders, 0),
     mtdReturns: sum(p => p.mtdReturns),
+    // Null if ANY store lacks it: a district rate over four stores' gross and
+    // five stores' returns would be wrong in a way nobody could see.
+    mtdGross: sumAll(p => p.mtdGross), mtdCxlGross: sumAll(p => p.mtdCxlGross),
+    mtdCxlReturns: sumAll(p => p.mtdCxlReturns), mtdCxlOrders: sumAll(p => p.mtdCxlOrders),
     mtdMargin: mtdNet > 0 ? round2(mtdGp / mtdNet * 100) : null,
     pctOfGoal,
     paceIndex: pctOfGoal !== null && elapsedPct > 0
@@ -1147,6 +1242,31 @@ async function refresh(sb: any, now: Date, force: boolean) {
         if (b.lastYear) { m.cmp.lastYear.resale = b.lastYear[0]; m.cmp.lastYear.paid = b.lastYear[1]; }
       }
     }
+  }
+
+  // --- cancelled orders, for the Month tab's return rate ---------------------
+  // Same once-a-day carry as the comparisons, keyed on the day the span runs to.
+  // Only while the previous open day is in this month — on the 1st there is no
+  // Month tab to show it on.
+  if (pd.iso && pd.inMonth) {
+    const from = `${c.y}-${String(c.m).padStart(2, "0")}-01`;
+    const carriedCxl: Record<string, CancelFigures> = {};
+    for (const s of (prev?.stores ?? [])) {
+      if (s?.code && s.cxl && s.cxl.through === pd.iso) carriedCxl[s.code] = s.cxl;
+    }
+    await Promise.all(metrics.map(async (m) => {
+      if (m.error || m.source !== "shopifyql") return;
+      if (carriedCxl[m.code]) { m.cxl = carriedCxl[m.code]; }
+      else {
+        const s = stores.find((x: any) => SHOP_TO_CODE[x.shop] === m.code);
+        m.cxl = s ? await fetchCancels(s.shop, s.access_token, from, pd.iso) : null;
+      }
+      if (m.prev && m.cxl) {
+        m.prev.mtdCxlGross = m.cxl.gross;
+        m.prev.mtdCxlReturns = m.cxl.returns;
+        m.prev.mtdCxlOrders = m.cxl.orders;
+      }
+    }));
   }
 
   // Goal progress against SELLING-day progress, so "17% of goal" on day 5 reads

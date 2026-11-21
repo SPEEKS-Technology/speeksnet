@@ -13710,9 +13710,46 @@ function _lvViewGp(m) {
             mtdNet: p.mtdNet, mtdCogs: cogs, mtdGp: p.mtdGp, mtdOrders: p.mtdOrders,
             mtdReturns: p.mtdReturns, mtdMargin: p.mtdMargin,
             pctOfGoal: p.pctOfGoal, paceIndex: p.paceIndex,
+            // Return-rate inputs (see _lvReturnRate). Carried explicitly: a key
+            // left off this list keeps the LIVE row's value, which has none.
+            mtdGross: p.mtdGross, mtdCxlGross: p.mtdCxlGross,
+            mtdCxlReturns: p.mtdCxlReturns, mtdCxlOrders: p.mtdCxlOrders,
         });
     }
     return m;
+}
+// RETURN RATE, Month tab (Ethan 2026-11-21): what came back over what we
+// actually sold. Both sides have CANCELLED orders taken out — Shopify books a
+// cancellation as a return on the day it is cancelled while its sale stays in
+// gross sales, so left in, a cancel would count as sold AND as returned. The
+// Refunds dollar figure beside it stays Shopify's own number, cancels included.
+//   (returns - cancelled returns) / (gross sales - cancelled gross) x 100
+// shopify-live works the cancelled part out once a day (fetchCancels). Null —
+// shown as a dash — whenever any input is missing, never a rate with the
+// cancellations still inside it.
+function _lvReturnRate(v) {
+    if (!v) return null;
+    const g = v.mtdGross, cg = v.mtdCxlGross, r = v.mtdReturns, cr = v.mtdCxlReturns;
+    if ([g, cg, r, cr].some(x => x === null || x === undefined || !isFinite(Number(x)))) return null;
+    const sold = Number(g) - Number(cg);
+    if (!(sold > 0)) return null;
+    return Math.max(0, Number(r) - Number(cr)) / sold * 100;
+}
+function _lvReturnRateTitle(v) {
+    if (_lvReturnRate(v) === null) return 'Return rate shows once the feed carries gross sales and cancellations';
+    const sold = Number(v.mtdGross) - Number(v.mtdCxlGross);
+    const back = Math.max(0, Number(v.mtdReturns) - Number(v.mtdCxlReturns));
+    return 'Return rate: ' + _lvMoney(back, false) + ' returned of ' + _lvMoney(sold, false)
+        + ' actually sold (gross sales less ' + (Number(v.mtdCxlOrders) || 0) + ' cancelled orders, '
+        + _lvMoney(Number(v.mtdCxlGross) || 0, false) + '). Cancellations are left out of both sides.';
+}
+// "$1,234 · 2.1%" — the fee cells' shape and separator class (see _lvFeeHtml),
+// so the phone rule that hides .lv-of cannot run the two figures together.
+function _lvRefundRateHtml(v) {
+    const amt = v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—';
+    const rate = _lvIsMtd() ? _lvReturnRate(v) : null;
+    if (rate === null) return amt;
+    return amt + '<span class="lv-fee-sep"> &middot; </span><span class="lv-fee-pct">' + rate.toFixed(1) + '%</span>';
 }
 // How many days the selected view covers — the divisor behind "average per day".
 // Both finished views now measure the same thing: COMPLETE days. Only Today
@@ -16955,7 +16992,8 @@ function _lvRollupTiles(r, d, label, views) {
     const ordersSub = (r.returnsToday === null || r.returnsToday === undefined)
         ? avg
         : _lvSubPair('Average', _lvMoney(r.aov, true),
-                     'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
+                     'Refunds', (r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none')
+                        + (_lvIsMtd() && _lvReturnRate(r) !== null ? ' &middot; ' + _lvReturnRate(r).toFixed(1) + '%' : ''));
     return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday), r.aov === null ? label : ordersSub)
         + (r.npKind
@@ -17045,10 +17083,12 @@ function _lvStoreRow(v, d, foot, rev) {
             : trackCell(fc && fc.trackGp, v.gpToday, false)) + '</td>'
         // Refunds sits beside Orders because it is the other half of the same
         // count — what came back out of the till against what went in.
+        // On the Month tab the return rate rides beside it (_lvRefundRateHtml).
         + '<td class="lv-quietnum"' + (v.returnsToday === null || v.returnsToday === undefined
             ? ' title="This cache was written before the feed carried month-to-date'
-              + ' refunds — it fills in on the next refresh."' : '') + '>'
-        + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
+              + ' refunds — it fills in on the next refresh."'
+            : (_lvIsMtd() ? ' title="' + escapeHtml(_lvReturnRateTitle(v)) + '"' : '')) + '>'
+        + _lvRefundRateHtml(v) + '</td>'
         + (_lvFeeCols() ? _lvFeeCell(v, 'npBEbay', d, foot) + _lvFeeCell(v, 'npBShip', d, foot) : '')
         + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
         // Keyed off _lvNpKind(), like the header — not v.npKind, which a store
@@ -17535,6 +17575,8 @@ function _lvTestPayload() {
                 ordersToday: Math.round(prevNet / 165), returnsToday: 0,
                 marginToday: 40, aov: 165, mtdNet: prevMtdNet, mtdCogs: r2(prevMtdNet - prevMtdGp), mtdGp: prevMtdGp,
                 mtdOrders: Math.round(prevMtdNet / 165), mtdReturns: r2(prevMtdNet * 0.025),
+                mtdGross: r2(prevMtdNet * 1.12), mtdCxlGross: r2(prevMtdNet * 0.03),
+                mtdCxlReturns: r2(prevMtdNet * 0.012), mtdCxlOrders: 4 + si,
                 mtdMargin: prevMtdNet > 0 ? r2(prevMtdGp / prevMtdNet * 100) : null,
                 pctOfGoal: prevPct, paceIndex: prevPct !== null && prevElapsedPct > 0 ? Math.round(prevPct / prevElapsedPct * 100) : null,
             } : null,
@@ -17560,6 +17602,8 @@ function _lvTestPayload() {
         return { netToday: net, cogsToday: s(x => x.cogsToday), gpToday: s(x => x.gpToday), ordersToday: s(x => x.ordersToday),
             returnsToday: 0, marginToday: 40, aov: 165, mtdNet: mtd, mtdCogs: r2(mtd - gp), mtdGp: gp,
             mtdOrders: s(x => x.mtdOrders), mtdReturns: s(x => x.mtdReturns), mtdMargin: mtd > 0 ? r2(gp / mtd * 100) : null,
+            mtdGross: s(x => x.mtdGross), mtdCxlGross: s(x => x.mtdCxlGross),
+            mtdCxlReturns: s(x => x.mtdCxlReturns), mtdCxlOrders: s(x => x.mtdCxlOrders),
             pctOfGoal: r2(gp / dGoal * 100), paceIndex: prevElapsedPct > 0 ? Math.round(gp / dGoal * 100 / prevElapsedPct * 100) : null };
     })() : null;
     return {
