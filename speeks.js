@@ -34851,7 +34851,9 @@ const PRJ_STATUS = {
     requested:         { label: 'Awaiting Approval', tone: 'wait' },
     changes_requested: { label: 'Changes Requested', tone: 'warn' },
     in_progress:       { label: 'In Progress',       tone: 'go'   },
-    parked:            { label: 'Parked',            tone: 'muted' },
+    // "Pause", not "Park" (Ethan, 2026-11-21) — the label only; the stored
+    // status and the action key stay 'parked' / 'park'.
+    parked:            { label: 'Paused',            tone: 'muted' },
     awaiting_signoff:  { label: 'Awaiting Sign-Off', tone: 'wait' },
     completed:         { label: 'Completed',         tone: 'done' },
     declined:          { label: 'Declined',          tone: 'no'   },
@@ -34876,7 +34878,7 @@ const PRJ_OUTCOME = {
 const PRJ_EVENT_LABEL = {
     created: 'Requested It', edited: 'Edited It', resubmitted: 'Resubmitted It',
     approved: 'Approved It', declined: 'Declined It', changes_requested: 'Asked for Changes',
-    withdrawn: 'Withdrew It', update: 'Posted an Update', parked: 'Parked It',
+    withdrawn: 'Withdrew It', update: 'Posted an Update', parked: 'Paused It',
     resumed: 'Resumed It', signoff_requested: 'Sent It for Sign-Off', signoff_returned: 'Sent It Back',
     completed: 'Marked It Complete', outcome: 'Decided What Happens Next',
 };
@@ -34888,6 +34890,13 @@ let _prjOpenId   = null;    // the project in the detail popup
 let _prjEditId   = null;    // null = new request, else the project being edited
 let _prjPicked   = [];      // users.id values chosen in the form's people picker
 let _prjMenuIdx  = 0;       // highlighted row in the picker's menu
+// ALL / MINE (Ethan, 2026-11-21). Everyone sees the whole district's projects
+// now — "it'd be cool for them to get ideas from one another" — with this to
+// narrow to the ones you asked for or are on. Mine = the function's `mine`
+// flag (ids healed there); worked out here for a row without one.
+let _prjScope    = 'all';
+function _prjRowIsMine(p) { return typeof p.mine === 'boolean' ? p.mine : (_prjIsRequester(p) || _prjIsInvolved(p)); }
+function prjSetScope(s) { _prjScope = s === 'mine' ? 'mine' : 'all'; prjRender(); }
 
 function _prjMe() { return (_prjData && _prjData.me) || { id: null, name: sessionStorage.getItem('speeksUserName') || '' }; }
 function _prjCan(k) { return !!(_prjData && _prjData.can && _prjData.can[k]); }
@@ -34940,7 +34949,7 @@ async function prjLoad(quiet) {
         const res = await fetch(`${PROJECTS_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`);
-        _prjData = json;
+        _prjData = window._speeksTestSession ? _prjTestSample(json) : json;
         prjRender();
         // An open popup is redrawn from the fresh row, so a decision made
         // elsewhere shows up in it rather than leaving stale buttons behind.
@@ -34950,6 +34959,48 @@ async function prjLoad(quiet) {
     } finally {
         _prjLoading = false;
     }
+}
+
+// SAMPLE PROJECTS for a test session (TEST SESSION, top of file; Ethan,
+// 2026-11-21: "throw in some sample data from a couple of DM and a couple from
+// multiple managers"). The live read still runs — it supplies who you are, what
+// you can do and the people picker — and its projects are REPLACED, so a test
+// account never shows real ones and nothing here is ever written anywhere (a
+// test session refuses every save anyway). Every name but the DM's and the test
+// account's own is made up. Two rows are the test account's, so Mine has
+// something in it; ids start at 9001 so none can be mistaken for a real PRJ.
+function _prjTestSample(json) {
+    const me = (json.me && json.me.name) || 'Test Account';
+    const DM = 'Ethan Kushnir';
+    const day = 86400000;
+    const ago = d => new Date(Date.now() - d * day).toISOString();
+    const r = name => ({ id: null, name });
+    const P = (id, o) => Object.assign({ id, requested_by_id: null, created_at: ago(o.age), updated_at: ago(o.touched ?? o.age) }, o);
+    const projects = [
+        P(9001, { title: 'Wall TV Store Board Refresh', description: 'New Command Center layout for the five wall TVs — goals, listed today, and who is on shift, readable from across the floor.', status: 'in_progress', requested_by: DM, requested_store: 'CORP', involved: [r(DM), r('Jordan Lee')], age: 12, touched: 1, started_at: ago(12), decided_by: DM }),
+        P(9002, { title: 'Claude Prompt Pack for Titles', description: 'Saved prompts that turn a POS line into an eBay-ready title with the model, storage and carrier in the right order.', status: 'completed', outcome: 'incorporate', requested_by: DM, requested_store: 'CORP', involved: [r(DM)], age: 40, touched: 9, completed_at: ago(9), decided_by: DM }),
+        P(9003, { title: 'Trade-In Quote Calculator', description: 'Phone-sized page: pick the model and condition, get the buy range from the Margin Guide so new buyers quote the same way.', status: 'requested', requested_by: 'Alex Rivera', requested_store: 'OVL', involved: [r('Alex Rivera')], age: 2 }),
+        P(9004, { title: 'Shelf Label Printer Script', description: 'Prints shelf tags straight from a Shopify search so prices on the shelf match the site.', status: 'in_progress', requested_by: 'Sam Patel', requested_store: 'LEE', involved: [r('Sam Patel'), r(me)], age: 18, touched: 3, started_at: ago(15), decided_by: DM }),
+        P(9005, { title: 'Call Back Text Templates', description: 'Ready-to-send texts for when a call back item lands — one per category, with the store hours filled in.', status: 'awaiting_signoff', requested_by: 'Jordan Lee', requested_store: 'WSP', involved: [r('Jordan Lee')], age: 25, touched: 1, started_at: ago(20), decided_by: DM }),
+        P(9006, { title: 'Marketplace Photo Resizer', description: 'Batch-crops listing photos to the Facebook Marketplace size so they stop getting cut off.', status: 'changes_requested', requested_by: 'Casey Morgan', requested_store: 'MPL', involved: [r('Casey Morgan')], age: 6, touched: 4, decided_by: DM, decision_note: 'Say where the photos come from — the Picture Guide folder or the phone?' }),
+        P(9007, { title: 'Daily Huddle Checklist', description: 'A two-minute opening checklist on the QuickPortal: goals, call backs due, and anything the DM flagged overnight.', status: 'requested', requested_by: me, requested_store: (json.me && json.me.store) || null, involved: [r(me)], age: 1 }),
+        P(9008, { title: 'Holiday Price Tag Template', description: 'Red-and-white tag layout for December promos.', status: 'declined', requested_by: 'Taylor Brooks', requested_store: 'BAL', involved: [r('Taylor Brooks')], age: 30, touched: 28, decided_by: DM, decision_note: 'PayMore corporate sends the holiday tags — no need to make our own.' }),
+        P(9009, { title: 'Box Order Reorder Alerts', description: 'Ping the store when shipping boxes drop under two weeks of stock.', status: 'parked', requested_by: 'Alex Rivera', requested_store: 'OVL', involved: [r('Alex Rivera'), r('Sam Patel')], age: 35, touched: 10, started_at: ago(30), decided_by: DM }),
+    ];
+    let eid = 900000;   // a counter, so no two events share an id
+    const E = (project_id, kind, actor, d, extra) => Object.assign({ id: ++eid, project_id, kind, actor, created_at: ago(d) }, extra || {});
+    const events = [
+        E(9001, 'created', DM, 12, { to_status: 'in_progress' }), E(9001, 'update', 'Jordan Lee', 1, { note: 'Mock-up is on the WSP TV — goals row reads fine from the counter.' }),
+        E(9002, 'created', DM, 40, { to_status: 'in_progress' }), E(9002, 'completed', DM, 9.4), E(9002, 'outcome', DM, 9, { note: 'incorporate' }),
+        E(9003, 'created', 'Alex Rivera', 2, { to_status: 'requested' }),
+        E(9004, 'created', 'Sam Patel', 18, { to_status: 'requested' }), E(9004, 'approved', DM, 15, { note: 'Go for it — start with LEE.' }), E(9004, 'update', 'Sam Patel', 3, { note: 'Prints from the Shopify search now; working on the barcode.' }),
+        E(9005, 'created', 'Jordan Lee', 25, { to_status: 'requested' }), E(9005, 'approved', DM, 20), E(9005, 'signoff_requested', 'Jordan Lee', 1, { note: 'Templates are in the Call Backs tab under Texts.' }),
+        E(9006, 'created', 'Casey Morgan', 6, { to_status: 'requested' }), E(9006, 'changes_requested', DM, 4, { note: 'Say where the photos come from — the Picture Guide folder or the phone?' }),
+        E(9007, 'created', me, 1, { to_status: 'requested' }),
+        E(9008, 'created', 'Taylor Brooks', 30, { to_status: 'requested' }), E(9008, 'declined', DM, 28, { note: 'PayMore corporate sends the holiday tags — no need to make our own.' }),
+        E(9009, 'created', 'Alex Rivera', 35, { to_status: 'requested' }), E(9009, 'approved', DM, 30), E(9009, 'parked', DM, 10, { note: 'Pausing until the box order tool settles.' }),
+    ];
+    return Object.assign({}, json, { projects, events });
 }
 
 // Realtime ping (_RT_TOOL_CHECKS.projects). Only refetches when the tab has
@@ -34970,7 +35021,8 @@ function _prjWaitingOnMe(all) {
 function prjRender() {
     const body = document.getElementById('prjBody');
     if (!body || !_prjData) return;
-    const all = _prjData.projects || [];
+    const every = _prjData.projects || [];
+    const all = _prjScope === 'mine' ? every.filter(_prjRowIsMine) : every;
 
     // The DM ADDS a project rather than requesting one (Ethan, 2026-11-21):
     // his own go straight to In Progress — nobody to approve them but him.
@@ -34981,19 +35033,15 @@ function prjRender() {
         newBtn.textContent = _prjCan('approve') ? '＋ Add Project' : '＋ Request Project';
     }
 
-    const waiting = _prjWaitingOnMe(all);
+    const waiting = _prjWaitingOnMe(every);   // what waits on you, whatever the filter
     const pip = document.getElementById('prjWaitPip');
     if (pip) { pip.textContent = waiting; pip.style.display = waiting ? 'inline-flex' : 'none'; }
     const meta = document.getElementById('prjSubtitle');
-    // The DM, CEO and MOCD always get every project; everyone else gets only
-    // the ones they asked for or are on. The function decides (by role, not a
-    // switch — Nick, 2026-11-17) and says which in can.seesAll; the header
-    // says so too, so an empty list never reads as "nobody has projects".
-    const seesAll = _prjCan('seesAll');
+    // The DM's "N Waiting on You" stays; everyone else's count ("0 of yours")
+    // is gone (Ethan, 2026-11-21) — the status tabs already count.
     if (meta) meta.textContent = _prjCan('approve')
         ? (waiting ? `${waiting} Waiting on You` : 'Nothing Waiting on You')
-        : seesAll ? `${all.length} project${all.length === 1 ? '' : 's'}`
-        : `${all.length} of yours`;
+        : '';
 
     const counts = {};
     PRJ_VIEWS.forEach(v => { counts[v.key] = all.filter(p => v.statuses.includes(p.status)).length; });
@@ -35013,12 +35061,10 @@ function prjRender() {
         <div class="prj-seg" role="tablist" aria-label="Project status">
             ${PRJ_VIEWS.map(v => `<button type="button" role="tab" aria-selected="${v.key === _prjView}"
                 class="prj-seg-btn${v.key === _prjView ? ' on' : ''}" onclick="prjSetView('${v.key}')">${escapeHtml(v.label)} · ${counts[v.key]}</button>`).join('')}
-            ${/* The DM / CEO / MOCD line ("Every project in the district…") is
-                 gone (Ethan, 2026-11-21): the header under the title already says
-                 projects need his approval. A manager keeps a short note, because
-                 their list is only their own and an empty one would otherwise
-                 read as "nobody has projects". */ seesAll ? ''
-                : '<span class="prj-seg-note">Projects you asked for or are part of.</span>'}
+            <div class="prj-scope" role="group" aria-label="Whose projects">
+                <button type="button" class="prj-scope-btn${_prjScope === 'all' ? ' on' : ''}" aria-pressed="${_prjScope === 'all'}" onclick="prjSetScope('all')">All Projects</button>
+                <button type="button" class="prj-scope-btn${_prjScope === 'mine' ? ' on' : ''}" aria-pressed="${_prjScope === 'mine'}" onclick="prjSetScope('mine')">Mine</button>
+            </div>
         </div>`;
 
     const list = rows.length ? `
@@ -35040,7 +35086,7 @@ function _prjEmptyText(view) {
     // "of yours" for everyone but the DM — an empty list is about them, not the
     // district, and saying so stops "where did everyone's projects go?"
     // Title Case, like the rest of the tab's labels (Ethan, 2026-11-21).
-    const yours = _prjCan('seesAll') ? '' : ' of Yours';
+    const yours = _prjScope === 'mine' ? ' of Yours' : '';
     if (view === 'approval') return _prjCan('request') && !_prjCan('approve') ? `Nothing${yours} Waiting for Approval. Have an Idea? Request a Project.` : `Nothing${yours} Waiting for Approval.`;
     if (view === 'active') return `Nothing${yours} Under Way.`;
     if (view === 'done') return `Nothing${yours} Finished Yet.`;
@@ -35127,7 +35173,10 @@ function _prjRenderDetail() {
                 ${events.slice().reverse().map(e => `
                     <li class="prj-ev prj-ev-${escapeHtml(e.kind)}">
                         <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(e.kind === 'created' && e.to_status === 'in_progress' ? 'Posted It' /* the DM's own: no request (Ethan, 2026-11-21) */ : (PRJ_EVENT_LABEL[e.kind] || e.kind))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
-                        ${e.note && e.kind !== 'created' ? `<span class="prj-ev-note">${escapeHtml(e.note)}</span>` : ''}
+                        ${e.note && e.kind !== 'created' ? `<span class="prj-ev-note">${escapeHtml(e.kind === 'outcome'
+                            // The function stores "incorporate — note"; show the words the picker used.
+                            ? String(e.note).replace(/^(incorporate|standalone|retire)\b/, k => PRJ_OUTCOME[k] || k)
+                            : e.note)}</span>` : ''}
                     </li>`).join('')}
             </ol>
         </div>` : '';
@@ -35227,12 +35276,12 @@ function _prjActionsHtml(p) {
         else if (approver) { rows = note('Why it is declined'); btns = btn('Decline', 'decline', 'btn-secondary prj-danger'); }
     } else if (p.status === 'in_progress' || p.status === 'parked') {
         if (ownDm) {
-            btns = (p.status === 'parked' ? btn('Resume', 'resume') : btn('Park', 'park'))
+            btns = (p.status === 'parked' ? btn('Resume', 'resume') : btn('Pause', 'park'))
                 + btn('Mark Complete', 'complete', 'btn-primary');
         } else if (approver) {
             rows = note('Progress update, or a note to go with your decision');
             btns = btn('Post Update', 'update')
-                + (p.status === 'parked' ? btn('Resume', 'resume') : btn('Park', 'park'))
+                + (p.status === 'parked' ? btn('Resume', 'resume') : btn('Pause', 'park'))
                 + btn('Mark Complete', 'complete', 'btn-primary');
         } else if (owns) {
             rows = note('Progress update — or, when it is finished, what was done and where to find it');

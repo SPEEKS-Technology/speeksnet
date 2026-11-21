@@ -27648,6 +27648,22 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 .prj-seg-btn.on { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
 .prj-seg-btn:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }
 .prj-seg-note { font-size: 11.5px; font-weight: 600; color: #94a3b8; }
+/* All Projects / Mine (2026-11-21): a small two-way switch pushed to the right
+   end of the status row — a different kind of filter, so a different look from
+   the status tabs. Both halves one width (side-by-side pills are one size). */
+.prj-scope {
+    margin-left: auto; display: inline-grid; grid-template-columns: 1fr 1fr;
+    padding: 3px; border-radius: 10px; background: #f1f5f9; gap: 2px;
+}
+.prj-scope-btn {
+    font: inherit; font-size: 11.5px; font-weight: 800; padding: 6px 14px; border-radius: 8px;
+    border: 0; background: transparent; color: #64748b; cursor: pointer; white-space: nowrap;
+}
+.prj-scope-btn:hover { color: #334155; }
+.prj-scope-btn.on { background: #fff; color: #0f172a; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+.prj-scope-btn:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }
+/* The request form's Cancel and submit: one size and shape (Ethan, 2026-11-21). */
+#prjFormModal .prj-form-btn { min-width: 190px; padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: 700; white-space: nowrap; }
 
 .prj-table-wrap { border: 1px solid var(--cb-line); border-radius: 12px; overflow-x: auto; }
 /* Five fixed-width columns (500px + 24%) left Project — the one that matters —
@@ -27804,4 +27820,6 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .prj-seg-btn { min-width: 0; flex: 1 1 auto; }
     .prj-foot-btns > button { flex: 1 1 auto; }
     .prj-msg { flex-basis: 100%; }
+    /* Two 190px buttons don't fit a phone: share the row, still one size. */
+    #prjFormModal .prj-form-btn { min-width: 0; flex: 1 1 0; }
 }

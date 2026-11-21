@@ -300,7 +300,14 @@ Deno.serve(async (req: Request) => {
     // projects-approve (e.g. covering for Ethan), get every project; everyone
     // else gets the ones they asked for or are listed on. Done HERE, not in
     // the browser, so another manager's project never leaves the server.
-    if (!perms.seesAll) projects = projects.filter((x: any) => isMine(x, viewer) || isInvolved(x, viewer));
+    //
+    // EVERYONE SEES EVERY PROJECT NOW (Ethan, 2026-11-21: "it'd be cool for them
+    // to get ideas from one another"). Anyone with the tab gets the whole
+    // district's list; the page has an All / Mine filter. Seeing is all it is:
+    // every action below still checks mine / involved / approve, so another
+    // manager's project is read-only to you. Each row carries `mine` (asked for
+    // it or on it), worked out here where the ids are healed, for the filter.
+    projects = projects.map((x: any) => ({ ...x, mine: isMine(x, viewer) || isInvolved(x, viewer) }));
     const ids = new Set(projects.map((x: any) => x.id));
     return json({
       success: true,
@@ -500,7 +507,7 @@ Deno.serve(async (req: Request) => {
         noteRequired: "Say what needs to change.",
         tell: forRequester("needs changes") });
     case "park":
-      return move({ allowedFrom: ["in_progress"], to: "parked", kind: "parked", tell: forRequester("parked") });
+      return move({ allowedFrom: ["in_progress"], to: "parked", kind: "parked", tell: forRequester("paused") });   // "Pause" on the page (2026-11-21); the status stays 'parked'
     case "resume":
       return move({ allowedFrom: ["parked"], to: "in_progress", kind: "resumed", tell: forRequester("resumed") });
     // From awaiting_signoff this is the sign-off; from in_progress / parked the

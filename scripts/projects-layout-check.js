@@ -138,6 +138,22 @@ t('form: the description keeps its rows inside the popup body', function () {
     return ta.getBoundingClientRect().height >= 100 || 'textarea squashed to ' + Math.round(ta.getBoundingClientRect().height) + 'px';
 });
 
+// Cancel and the submit button are one size (Ethan, 2026-11-21) — and on a
+// phone they share the row instead of running off it. The @media rule follows
+// the real window, so this measures at the width the window actually is.
+t('form footer: Cancel and the submit button are the same size, inside the frame', function () {
+    var w = window.innerWidth > 900 ? 1440 : 390;
+    var host = stage(w, '<div id="prjFormModal" class="modal-menu manage-menu prj-form-modal show" style="position:static;transform:none;width:100%;max-width:100%;">'
+        + '<div class="manage-footer flex-end"><span class="prj-msg"></span>'
+        + '<button class="btn-secondary prj-form-btn">Cancel</button><button class="btn-primary prj-form-btn">Send for Approval</button></div></div>');
+    var bad = overflowing(host);
+    if (bad.length) return bad.slice(0, 3).join(' ; ');
+    var b = host.querySelectorAll('.prj-form-btn');
+    var r0 = b[0].getBoundingClientRect(), r1 = b[1].getBoundingClientRect();
+    return (Math.abs(r0.width - r1.width) < 1 && Math.abs(r0.height - r1.height) < 1 && r1.height < 50)
+        || '@' + w + ': cancel ' + Math.round(r0.width) + 'x' + Math.round(r0.height) + ', submit ' + Math.round(r1.width) + 'x' + Math.round(r1.height);
+});
+
 t('picker @390: a full set of long-named chips wraps inside the box', function () {
     _prjData = fixture();
     var host = stage(390, '<div class="manage-content prj-form" style="height:auto;"><div class="prj-people" id="prjFPeople"><span class="prj-people-chips" id="prjFChips"></span>'

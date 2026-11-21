@@ -31,6 +31,7 @@ var IDS = { 'Alex OVL': ALEX, 'Sam LEE': SAM, 'Kim WSP': KIM, 'Ethan': ETHAN, 'P
 function ref(name) { return { id: IDS[name], name: name }; }
 
 function fixture(me, can) {
+    _prjScope = 'all';   // every test starts on All Projects
     return {
         me: { id: IDS[me.trim()] || null, name: me, role: 'manager' },
         can: can,
@@ -84,9 +85,41 @@ var APPROVER = { view: true, request: true,  approve: true,  seesAll: true };
 
 // ---- the list ------------------------------------------------------------------
 
-t('list: no "Mine only" switch any more', function () {
-    load('Pat Viewer', VIEWER);
-    return !/mine only/i.test(document.getElementById('prjBody').textContent) || 'Mine only is still drawn';
+// ALL / MINE (Ethan, 2026-11-21): everyone sees every project, and can narrow
+// to the ones they asked for or are on.
+t('list: an All Projects / Mine switch, on All by default', function () {
+    load('Alex OVL', MANAGER);
+    var btns = Array.prototype.map.call(document.querySelectorAll('#prjBody .prj-scope-btn'), function (b) { return b.textContent.trim() + (b.classList.contains('on') ? '*' : ''); }).join(',');
+    return btns === 'All Projects*,Mine' || btns;
+});
+t('list: a manager on All sees other managers\' projects; Mine narrows to their own', function () {
+    load('Alex OVL', MANAGER, 'active');
+    var all = rowIds();
+    prjSetScope('mine');
+    var mine = rowIds();
+    var seg = segLabels().join(' | ');
+    prjSetScope('all');
+    return (all === 'PRJ-4,PRJ-5' && mine === 'PRJ-5' && /In Progress · 1/.test(seg)) || 'all ' + all + ' / mine ' + mine + ' / ' + seg;
+});
+t('list: the function\'s mine flag wins over the page\'s own guess', function () {
+    load('Alex OVL', MANAGER, 'active');
+    _prjById(4).mine = true;   // e.g. healed ids made it theirs
+    prjSetScope('mine');
+    var mine = rowIds();
+    prjSetScope('all');
+    return mine === 'PRJ-4,PRJ-5' || 'mine ' + mine;
+});
+t('list: an empty Mine group says "of Yours"; All does not', function () {
+    pane();
+    _prjData = fixture('Kim WSP', MANAGER);
+    _prjView = 'done';
+    prjSetScope('mine');
+    var mine = document.getElementById('prjBody').textContent;
+    prjSetScope('all');
+    _prjData.projects = [];
+    prjRender();
+    var all = document.getElementById('prjBody').textContent;
+    return (/Nothing of Yours Finished Yet/.test(mine) && /Nothing Finished Yet/.test(all) && !/of Yours/.test(all)) || mine.trim() + ' / ' + all.trim();
 });
 t('list: the status filter counts each group', function () {
     load('Pat Viewer', VIEWER);
@@ -116,7 +149,7 @@ t('list: an empty group says so instead of drawing an empty table', function () 
     _prjData.projects = _prjData.projects.filter(function (p) { return p.status !== 'completed'; });
     _prjView = 'done';
     prjRender();
-    return (!document.querySelector('#prjBody .prj-table') && /Nothing of Yours Finished Yet/.test(document.getElementById('prjBody').textContent)) || 'empty group drew a table';
+    return (!document.querySelector('#prjBody .prj-table') && /Nothing Finished Yet/.test(document.getElementById('prjBody').textContent)) || 'empty group drew a table';
 });
 // "DM can see all of the projects. Everyone else can only see projects they are
 // involved in." The filtering is the function's; the page has to SAY which
@@ -129,17 +162,19 @@ t('list: the DM gets no district note under the tabs (header says it), and a Wai
 });
 // CEO and MOCD see every project too, by role ("not a switch"), but don't
 // decide — so no "waiting on you", just how many there are.
-t('list: the CEO / MOCD see every project, counted, with nothing "waiting on you"', function () {
+// No "0 of yours" / "Projects you asked for or are part of." for anyone but the
+// DM's waiting count (Ethan, 2026-11-21) — the tabs count, the switch says whose.
+t('list: the CEO / MOCD get no count line and no note', function () {
     load('Pat Viewer', { view: true, request: false, approve: false, seesAll: true });
     var noteEl = document.querySelector('#prjBody .prj-seg-note');
     var meta = document.getElementById('prjSubtitle').textContent;
-    return (!noteEl && meta === '8 projects') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
+    return (!noteEl && meta === '') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
 });
-t('list: everyone else is told it is only their own projects', function () {
+t('list: a manager gets no "of yours" count and no "asked for" note', function () {
     load('Alex OVL', MANAGER);
-    var note = document.querySelector('#prjBody .prj-seg-note').textContent;
+    var noteEl = document.querySelector('#prjBody .prj-seg-note');
     var meta = document.getElementById('prjSubtitle').textContent;
-    return (/you asked for or are part of/.test(note) && /of yours$/.test(meta)) || 'note "' + note + '" meta "' + meta + '"';
+    return (!noteEl && meta === '') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
 });
 t('list: the DM\'s empty groups do not say "of yours"', function () {
     pane();
@@ -811,4 +846,44 @@ t('own: a DM project left waiting for approval just gets Start It, no decision n
     var f = ownDm('requested');
     var acts = []; f.innerHTML.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
     return (acts.join(',') === 'approve' && !f.querySelector('#prjNote') && /Start It/.test(f.textContent)) || acts.join(',') + ' note=' + !!f.querySelector('#prjNote');
+});
+
+// ---- Pause, sample data (Ethan, 2026-11-21) -----------------------------------
+
+t('pause: the button says Pause and the status says Paused — never Park', function () {
+    openDetail('Ethan', APPROVER, 4);
+    var bar = document.getElementById('prjDetailFooter').textContent;
+    openDetail('Ethan', APPROVER, 5);
+    var sub = document.getElementById('prjDetailSub').textContent;
+    var bar5 = document.getElementById('prjDetailFooter').textContent;
+    return (/Pause/.test(bar) && !/Park/.test(bar) && /Paused/.test(sub) && /Resume/.test(bar5)) || bar + ' / ' + sub;
+});
+t('sample: a test session gets made-up projects from the DM and several managers', function () {
+    var d = _prjTestSample({ success: true, me: { id: null, name: 'Test Manager OVL', store: 'OVL' }, can: MANAGER, people: [], projects: [{ id: 1, title: 'REAL ROW' }], events: [] });
+    var by = {};
+    d.projects.forEach(function (p) { by[p.requested_by] = (by[p.requested_by] || 0) + 1; });
+    var real = d.projects.some(function (p) { return p.title === 'REAL ROW'; });
+    var stores = {};
+    d.projects.forEach(function (p) { if (p.requested_store) stores[p.requested_store] = 1; });
+    var statuses = {};
+    d.projects.forEach(function (p) { statuses[p.status] = 1; });
+    return (!real && by['Ethan Kushnir'] >= 2 && Object.keys(stores).length >= 5 && Object.keys(statuses).length >= 6
+        && d.projects.every(function (p) { return p.id > 9000; })) || JSON.stringify({ real: real, by: by, stores: stores, statuses: statuses });
+});
+t('sample: the test account has projects of its own, so Mine is not empty', function () {
+    pane();
+    _prjData = _prjTestSample({ success: true, me: { id: null, name: 'Test Manager OVL', store: 'OVL' }, can: MANAGER, people: [], projects: [], events: [] });
+    _prjScope = 'mine';
+    _prjView = 'approval';
+    prjRender();
+    var ids = rowIds();
+    _prjScope = 'all';
+    return /PRJ-9007/.test(ids) || 'mine/approval: ' + ids;
+});
+t('sample: every sample event belongs to a sample project, with unique ids', function () {
+    var d = _prjTestSample({ me: { name: 'T' }, projects: [], events: [] });
+    var ids = {}; d.projects.forEach(function (p) { ids[p.id] = 1; });
+    var seen = {}, dup = [], orphan = [];
+    d.events.forEach(function (e) { if (seen[e.id]) dup.push(e.id); seen[e.id] = 1; if (!ids[e.project_id]) orphan.push(e.project_id); });
+    return (!dup.length && !orphan.length) || 'dup ' + dup + ' orphan ' + orphan;
 });

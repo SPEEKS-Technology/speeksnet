@@ -910,8 +910,10 @@
     </div>
     <div class="manage-footer flex-end">
         <span class="prj-msg" id="prjFormMsg" role="status"></span>
-        <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
-        <button class="btn-primary" id="prjFormSubmit" onclick="prjSubmitForm(this)">Send for Approval</button>
+        <!-- Cancel matches the submit button's size and shape (Ethan, 2026-11-21);
+             .prj-form-btn gives both one width — side-by-side buttons are one size. -->
+        <button class="btn-secondary prj-form-btn" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary prj-form-btn" id="prjFormSubmit" onclick="prjSubmitForm(this)">Send for Approval</button>
     </div>
 </div>
 
