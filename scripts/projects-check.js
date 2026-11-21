@@ -193,7 +193,7 @@ t('list: each row shows who is involved as names', function () {
 t('list: a completed project shows what happens to it next', function () {
     load('Pat Viewer', VIEWER, 'done');
     var chip = document.querySelector('#prjBody .prj-chip');
-    return (chip && /Fold into SPEEKSNET/.test(chip.textContent)) || 'chip ' + (chip && chip.textContent);
+    return (chip && /Ready for SPEEKSNET/.test(chip.textContent)) || 'chip ' + (chip && chip.textContent);
 });
 t('list: the request button shows only to someone who can request', function () {
     load('Pat Viewer', VIEWER);

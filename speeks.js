@@ -34870,7 +34870,10 @@ const PRJ_VIEWS = [
     { key: 'closed',   label: 'Closed',            statuses: ['declined', 'withdrawn'] },
 ];
 const PRJ_OUTCOME = {
-    incorporate: 'Fold into SPEEKSNET',
+    // "Ready for SPEEKSNET" (Ethan, 2026-11-21). Later, once the Development
+    // tracker ships a release that carries it, this is meant to read "Pushed in
+    // vX.Y.Z" (docs/plans/dev-tracker-HANDOFF.md, Q7).
+    incorporate: 'Ready for SPEEKSNET',
     standalone:  'Keep Standalone',
     retire:      'Retire It',
 };
