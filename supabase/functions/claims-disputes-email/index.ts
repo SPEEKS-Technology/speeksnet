@@ -104,6 +104,18 @@ const chicagoDay = (d: Date | string | null) => {
     timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
   }).format(dt);
 };
+// EBAY'S OWN CALENDAR DAY (2026-11-21). Every eBay return deadline is 11:59:59 PM
+// Pacific — 1:59 AM Central the NEXT day — so chicagoDay printed "Nov 21" for a
+// return eBay's page says is due Nov 20, and by 4pm on the 21st it had already
+// gone. The Pacific date is the day eBay means.
+const pacificDay = (d: Date | string | null) => {
+  if (!d) return "";
+  const dt = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(dt.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(dt);
+};
 const addDaysIso = (iso: string, n: number) => {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + n));
@@ -238,7 +250,7 @@ function returnRow(c: any): Row {
     due: c.due_on || "", link: "https://www.ebay.com/sh/ord/returns", linkLabel: "Open returns on eBay",
     quiet: null, missed: false,
     contestedSince: null, openedAt: c.opened_at || "",
-    actNow: true, respondBy: chicagoDay(c.respond_by),
+    actNow: true, respondBy: pacificDay(c.respond_by),
   } as Row;
 }
 
@@ -471,6 +483,21 @@ const mailable = (r: Row, today: string) => NEED.includes(r.state) && !r.hush &&
 const dueSoon = (r: Row, today: string) =>
   !!r.due && !r.missed && r.due >= today && r.due <= addDaysIso(today, 1);
 
+// RETURNS AT 4PM GO BY EBAY'S DATE (Ethan, 2026-11-21: "for anything returns, I
+// don't need send the label to show up on the 4pm one and I only need returns to
+// show up on the actual day they are due by eBay not by our due date which is
+// the moment they can do it"). An act-now return is "due" in our sense from the
+// moment it can be handled, which keeps it on every morning mail — right for the
+// morning, too noisy for the 4pm alert. So at 4pm:
+//   - "send the label" returns never appear;
+//   - a delivered return (refund the buyer) appears only on eBay's own deadline
+//     day (respondBy, the Pacific date — see pacificDay), not a day early.
+// Everything else keeps dueSoon. The morning mail is unchanged.
+const dueAt4pm = (r: Row, today: string) => {
+  if (r.actNow) return r.note === "return_delivered" && !!r.respondBy && r.respondBy === today;
+  return dueSoon(r, today);
+};
+
 // Soonest deadline first, then oldest, then biggest. A thing closing tonight
 // belongs above a thing closing in three weeks whatever type it is — Ethan's
 // "deadline order, not type order".
@@ -646,7 +673,7 @@ function managerNudge(store: string, rows: Row[], today: string) {
     // card that runs out today lands here too, and there is no reply to it.
     `${esc(STORE_NAME[store] || store)}. ${rows.length === 1 ? "This was" : "These were"} on your email this morning and ${rows.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when something closes today or tomorrow and nothing has changed since the morning email.<br>Answer it — or charge or cancel the order — and this stops. The next read of the site clears it by itself.`,
+    `Sent at 4:00 PM only when something closes today or tomorrow and nothing has changed since the morning email. Returns are only listed on eBay's own deadline day.<br>Answer it — or charge or cancel the order — and this stops. The next read of the site clears it by itself.`,
     true,
   );
 }
@@ -782,7 +809,7 @@ function dmDueToday(byStore: Record<string, Row[]>, today: string) {
     `${stores.length === 1 ? "One store has" : `${stores.length} stores have`} something whose deadline is today or tomorrow. ${
       stores.length === 1 ? "It was" : "They were"} on this morning's email and ${stores.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when a deadline falls today or tomorrow and the store has not dealt with it.<br>Nothing here can be cleared from this email — the store has to answer it, or charge or cancel the order, on the site.`,
+    `Sent at 4:00 PM only when a deadline falls today or tomorrow and the store has not dealt with it. Returns are only listed on eBay's own deadline day, and label requests are left off.<br>Nothing here can be cleared from this email — the store has to answer it, or charge or cancel the order, on the site.`,
     true,
   );
 }
@@ -800,6 +827,19 @@ async function sb(path: string, init?: RequestInit) {
   if (!res.ok) throw new Error(`${path} -> ${res.status} ${(await res.text()).slice(0, 200)}`);
   const t = await res.text();
   return t ? JSON.parse(t) : null;
+}
+
+// EVERY ROW, NOT THE FIRST 1,000. PostgREST caps a read at 1,000 rows whatever
+// limit= says, and says nothing when it does. Ordered by id so the pages never
+// overlap or skip.
+async function sbAll(path: string): Promise<any[]> {
+  const out: any[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const page = await sb(`${path}&order=id.asc&limit=1000&offset=${offset}`,
+      { headers: { Prefer: "return=representation" } }) || [];
+    out.push(...page);
+    if (page.length < 1000) return out;
+  }
 }
 
 async function recipients(key: string): Promise<string[]> {
@@ -985,8 +1025,11 @@ Deno.serve(async (req: Request) => {
 
     // Everything ever mailed, so "new" means new to the manager rather than new
     // to the database.
-    const seenRows = await sb(`hold_email_log?select=item_type,item_key,kind,state,sent_on&kind=eq.manager_daily`,
-      { headers: { Prefer: "return=representation" } }) || [];
+    // ⚠️ PAGED — see sbAll. This read used to be one request; the log passed
+    // 1,000 manager_daily rows on Oct 19, PostgREST silently returned only the
+    // first 1,000, today's rows were never among them, and so mailedToday was
+    // empty and neither 4pm mail sent a thing from Oct 28 to Nov 21.
+    const seenRows = await sbAll(`hold_email_log?select=item_type,item_key,kind,state,sent_on&kind=eq.manager_daily`);
     const seen = new Set(seenRows.map((r: any) => `${r.item_type}|${r.item_key}`));
     const mailedToday = new Set(seenRows.filter((r: any) => r.sent_on === today)
       .map((r: any) => `${r.item_type}|${r.item_key}`));
@@ -1031,7 +1074,7 @@ Deno.serve(async (req: Request) => {
     if (kind === "manager_nudge" || kind === "dm_due_today") {
       const dueNow: Record<string, Row[]> = {};
       for (const s of STORES) {
-        dueNow[s] = byStore[s].filter((r) => dueSoon(r, today) && mailedToday.has(`${r.type}|${r.key}`));
+        dueNow[s] = byStore[s].filter((r) => dueAt4pm(r, today) && mailedToday.has(`${r.type}|${r.key}`));
       }
       if (kind === "manager_nudge") {
         for (const s of STORES) {
@@ -1101,8 +1144,7 @@ Deno.serve(async (req: Request) => {
       // missed window (Ethan, 2026-09-23: "I don't want that to keep showing up
       // for me since I have no way to clear that"), so the log is what stops it
       // repeating every morning for the rest of the item's life.
-      const toldRows = await sb(`hold_email_log?select=item_type,item_key&kind=eq.dm_digest`,
-        { headers: { Prefer: "return=representation" } }) || [];
+      const toldRows = await sbAll(`hold_email_log?select=item_type,item_key&kind=eq.dm_digest`);
       const told = new Set(toldRows.map((r: any) => `${r.item_type}|${r.item_key}`));
       const newMissed = rows.filter((r) => r.missed && !told.has(`${r.type}|${r.key}`));
       // Resolutions the sites don't back up, waiting on the DM (0164). They

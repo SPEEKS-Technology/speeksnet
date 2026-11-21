@@ -9,15 +9,21 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261110q">
+  <link rel="stylesheet" href="styles.css?v=20261121r">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <!-- Home-screen app + phone alerts (Alerts Hub, 2026-11-20). iOS reads the apple-* tags, Android the manifest. -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="SPEEKSNET">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20261110s" defer></script>
+  <script src="speeks.js?v=20261121r" defer></script>
 </head>
 <body class="preload">
 
@@ -495,6 +501,13 @@
         <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-mobile="hide" data-feature="widget-ws-monthly-breakdown" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> Monthly Breakdown</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-mobile="hide" data-feature="widget-ws-weekly-kpis" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')"><svg viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg> Store KPIs</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-mobile="hide" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')"><svg viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg> Variance Replies</button>
+        <!-- Projects (2026-11): approval and tracking for work NEXT TO SPEEKSNET —
+             Claude-built tools, extensions, scripts. Nothing starts until the DM
+             approves it. Was its own projects.html page with a top-nav tab for a
+             day; Nick moved it here ("in workspace for now is fine"). The role
+             classes mirror nav-projects' default; data-feature lets Feature Access
+             move it either way. The pip counts what waits on whoever is looking. -->
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-mocd" data-mobile="hide" data-feature="nav-projects" id="ws-tab-projects" onclick="switchWorkspaceTab('projects')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg> Projects<span class="b2b-pip" id="prjWaitPip" style="display:none;">0</span></button>
         <!-- Aging Inventory: PAUSED (2026-10-06) while Ethan decides whether to keep it.
              Commented out rather than role-gated: applyRoleBasedUI shows a role-gated
              button from its role classes alone and never reads
@@ -620,7 +633,35 @@
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="vr-body">
-              <div class="status-message">Loading variance replies…</div>
+              <div class="status-message">Loading Variance Replies…</div>
+          </div>
+      </div>
+    </section>
+
+    <!-- ===== PROJECTS PANE ===== -->
+    <!-- speeks.js "24b. MODULE: PROJECTS"; server: the projects edge function,
+         migration 0186. Same frame as Variance Replies — .ws-head, a segmented
+         status filter, a .cb-table list — and flows with the page the same way
+         (ws-panel-projects), because a row opens a popup rather than expanding. -->
+    <section class="ws-pane" id="ws-pane-projects">
+      <div class="card ws-tool-panel ws-panel ws-panel-projects">
+          <div class="ws-head">
+              <div class="ws-head-main">
+                  <span class="ws-head-ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg></span>
+                  <div class="ws-head-titles">
+                      <span class="ws-head-eyebrow">Workspace</span>
+                      <span class="ws-head-title">Projects</span>
+                      <span class="ws-head-sub">Tools and AI projects for the stores or SPEEKSNET — Needs approval from DM before production and before launch.</span>
+                  </div>
+              </div>
+              <div class="ws-head-controls">
+                  <span id="prjSubtitle" class="ws-head-meta"></span>
+                  <!-- Shown only to whoever holds projects-request (prjRender sets display). -->
+                  <button id="prjNewBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="prjNew()">＋ Request Project</button>
+              </div>
+          </div>
+          <div class="ws-scroll" id="prjBody">
+              <div class="status-message">Loading Projects…</div>
           </div>
       </div>
     </section>
@@ -799,7 +840,7 @@
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="ag-body">
-              <div class="status-message">Loading aging inventory…</div>
+              <div class="status-message">Loading Aging Inventory…</div>
           </div>
       </div>
     </section>
@@ -807,6 +848,80 @@
       </div><!-- /.ws-panes -->
     </div><!-- /.ws-layout -->
   </div>
+
+<!-- ===== PROJECTS: PROJECT DETAIL =====
+     Outside the pane (a hidden .ws-pane would hide it) but inside .main-content,
+     so the SPA router carries it. Title / body / footer are filled by
+     _prjRenderDetail; the footer's buttons depend on who is looking and what
+     state the project is in (_prjActionsHtml). -->
+<div class="modal-menu manage-menu prj-detail-modal" id="prjDetailModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow" id="prjDetailEyebrow">Project</span>
+                <span class="tool-head-title" id="prjDetailHead">Project</span>
+                <span class="tool-head-sub prj-detail-sub" id="prjDetailSub"></span>
+            </div>
+        </div>
+        <div class="tool-head-actions prj-head-actions">
+            <!-- Edit / Withdraw / Delete live here, off the bottom bar (Ethan,
+                 2026-11-21: the bar was "very chaotic"). Same ⋯ menu as B2B's
+                 deal screen. _prjRenderDetail fills it; hidden when empty. -->
+            <button class="prj-more" id="prjMoreBtn" style="display:none;" onclick="prjMoreToggle(event)" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <div class="prj-more-menu" id="prjMoreMenu" role="menu" hidden></div>
+        <button class="modal-close-btn" onclick="closeAllModals()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+    </div>
+    <div class="manage-content prj-detail-body" id="prjDetailBody"></div>
+    <div class="manage-footer prj-detail-foot" id="prjDetailFooter"></div>
+</div>
+
+<!-- ===== PROJECTS: REQUEST / EDIT A PROJECT =====
+     One form for a new request, an edit, and a resubmit after the DM asked for
+     changes (_prjFillForm sets the wording). Three fields, on purpose (Nick,
+     2026-11-17: "as simple as Project Title, Project Description, and Who's
+     involved"). Who's involved is picked from the roster, not typed — real
+     users, sent as users.id (prjPeople*). Title and description are required;
+     the function refuses without them too. -->
+<div class="modal-menu manage-menu prj-form-modal" id="prjFormModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">Projects</span>
+                <span class="tool-head-title" id="prjFormTitle">Request a Project</span>
+                <span class="tool-head-sub" id="prjFormSub">Goes to the DM for approval. Nothing starts until it is approved.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content prj-form">
+        <label class="form-label-caps" for="prjFTitle">Project title</label>
+        <input id="prjFTitle" class="form-input-lg" maxlength="120" placeholder="Reprice queue helper">
+
+        <label class="form-label-caps" for="prjFDesc">Project description</label>
+        <textarea id="prjFDesc" class="form-input-lg" rows="6" maxlength="4000" placeholder="What it is, what it fixes, and anything it needs (money, accounts, data). Rough is fine."></textarea>
+
+        <label class="form-label-caps" for="prjFPeopleInput">Who's involved</label>
+        <div class="prj-people" id="prjFPeople" onclick="prjPeopleFocus(event)">
+            <span class="prj-people-chips" id="prjFChips"></span>
+            <input id="prjFPeopleInput" class="prj-people-input" autocomplete="off" placeholder="Type a name…"
+                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="prjFPeopleMenu"
+                oninput="prjPeopleSearch()" onkeydown="prjPeopleKey(event)" onfocus="prjPeopleSearch()" onblur="prjPeopleBlur()">
+        </div>
+        <div class="prj-people-menu" id="prjFPeopleMenu" role="listbox" hidden></div>
+    </div>
+    <div class="manage-footer flex-end">
+        <span class="prj-msg" id="prjFormMsg" role="status"></span>
+        <!-- Cancel matches the submit button's size and shape (Ethan, 2026-11-21);
+             .prj-form-btn gives both one width — side-by-side buttons are one size. -->
+        <button class="btn-secondary prj-form-btn" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary prj-form-btn" id="prjFormSubmit" onclick="prjSubmitForm(this)">Send for Approval</button>
+    </div>
+</div>
 
 <div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee">
     <div class="gi-panel-header">
@@ -1335,7 +1450,7 @@
 
     <!-- EDIT PREVIOUS TAB -->
     <div class="manage-content" id="pnManageEdit" style="display:none;">
-        <div id="pnEditList"><div class="pn-loading">Loading patch notes...</div></div>
+        <div id="pnEditList"><div class="pn-loading">Loading Patch Notes...</div></div>
     </div>
 
     <div class="manage-footer pn-actions-bar" id="pnActionsBar">
@@ -1402,7 +1517,7 @@
 
     <div class="manage-content" id="awardsTabHistory" style="display:none;">
         <div id="awardsHistoryList" class="awards-history-list">
-            <div class="status-message">Loading history...</div>
+            <div class="status-message">Loading History...</div>
         </div>
     </div>
 
@@ -1430,7 +1545,7 @@
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
-      <div id="expBody"><div class="status-message">Loading expenses&hellip;</div></div>
+      <div id="expBody"><div class="status-message">Loading Expenses&hellip;</div></div>
     </div>
 </div>
 
@@ -1624,7 +1739,7 @@
 
     <!-- pane 2: notifications -->
     <div class="manage-content set-pane" id="settingsNotifyPane" hidden>
-      <div id="notifySettingsBody"><div class="ns-loading">Loading your settings…</div></div>
+      <div id="notifySettingsBody"><div class="ns-loading">Loading Your Settings…</div></div>
     </div>
 
     <!-- Shown only on a section that has something to save. The index has not. -->

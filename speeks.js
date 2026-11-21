@@ -39,7 +39,10 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.11.0';
+// 3.12.1 (2026-11-21): v3.12.0 was tagged and patch-noted on 2026-11-12 but this
+// line was never bumped from 3.11.0, so the site showed the older number. One up
+// in the third digit from the real last release: Projects polish + Phone Alerts.
+const APP_VERSION = '3.12.1';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -220,6 +223,7 @@ const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
+const ALERTS_HUB_URL    = `${_BASE}/alerts-hub`;   // phone push (Alerts Hub, 2026-11-20)
 const DAILY_BRIEF_URL   = `${_BASE}/daily-brief`;
 const DISTRICT_WATCH_URL = `${_BASE}/district-watch`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
@@ -2144,7 +2148,7 @@ function toggleCalendar() {
             const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
             _scal.store = STORE_CODES.includes(s) ? s : STORE_CODES[0];
         }
-        if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the calendar…</div>');
+        if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the Calendar…</div>');
         else _scalRender();
         _scalLoad();
     }
@@ -7784,6 +7788,8 @@ function switchWorkspaceTab(name) {
         loadWorkspaceKpis();
     } else if (name === 'vreplies') {
         loadVarianceReplies();
+    } else if (name === 'projects') {
+        prjLoad();
     } else if (name === 'aging') {
         // Consume a DM-routed alert override ONCE per open, so the repeated
         // re-renders after adding items/notes don't re-consume it.
@@ -7814,7 +7820,7 @@ function initWorkspace() {
     // one (Ethan, 2026-10-06: "default the user to the first tab always"). That is
     // Claims & Disputes for managers and the DM, Monthly Breakdown for an ASM —
     // and whatever leads the strip if the order changes again.
-    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims'].includes(hash) ? hash : '';
+    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims', 'projects'].includes(hash) ? hash : '';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
     // fall back to the first visible tab.
@@ -14705,7 +14711,7 @@ async function openGpGoals(month) {
     closeAllModals();
     toggleModal('gpGoalsModal');
     const body = document.getElementById('gpGoalsBody');
-    if (body) body.innerHTML = '<div class="status-message">Loading the month…</div>';
+    if (body) body.innerHTML = '<div class="status-message">Loading the Month…</div>';
     try {
         _gpGoals = await _gpFetch(month);
     } catch (e) {
@@ -15497,7 +15503,7 @@ function _bdRender() {
     // even set the flag, and the fall-through below would flash "no figures for
     // this month" at somebody whose month is still in flight.
     if (!_bdData) {
-        body.innerHTML = '<div class="bd-empty">Loading the month&hellip;</div>';
+        body.innerHTML = '<div class="bd-empty">Loading the Month&hellip;</div>';
         return;
     }
     const d = _bdData;
@@ -19479,7 +19485,7 @@ function lgpwRender() {
         let body;
         if (d) body = _lgpwStoreHtml(s, d.payload, weekStart);
         else if (_lgpw.failed[s]) body = '<div class="lgpw-msg err">Couldn\'t load past weeks. Close and reopen to try again.</div>';
-        else body = '<div class="lgpw-msg">Loading past weeks…</div>';
+        else body = '<div class="lgpw-msg">Loading Past Weeks…</div>';
         return `<section class="lgpw-store">${head}${body}</section>`;
     }).join('');
 }
@@ -27277,6 +27283,7 @@ function _b2bPaintTotals() {
     // The workspace numbers block (2026-10 overhaul) -- same figures, its own markup.
     const ws = document.getElementById('b2bWsNums');
     if (ws) { ws.innerHTML = _b2bNumsInner(); ws.hidden = !_b2bModalItems.length; }
+    _b2bPaintSortBtn();
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
     // "Our offer" is the gross offer we make the client; the data-wipe discount
     // is shown as its own line and added back into the net below, rather than
@@ -28524,13 +28531,26 @@ function _b2bStagePricing(deal) {
 // the store move.
 function _b2bPricingTools(deal) {
     return `${_b2bPrintAllBtn(deal)}
-        ${!_b2bIsPreval() && _b2bModalItems.length > 1
-            ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+        ${''/* Always drawn, and shown or hidden by _b2bPaintSortBtn as the line
+                 count changes. It used to be drawn only when the deal OPENED
+                 with two lines or more, and this row is painted once -- so a
+                 deal opened empty and priced line by line never grew the
+                 button until a refresh (Haydn, 2026-11-09, on ReviveKC). */}
+        ${!_b2bIsPreval()
+            ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn" id="b2bSortBtn"
+                ${_b2bModalItems.length > 1 ? '' : 'style="display:none;"'}
                 title="Group by brand then model, highest value first at both levels"
                 onclick="b2bSortItems(this)">↕ Sort by brand</button>` : ''}
         ${_b2bMoveBtn(deal)}
         <button class="b2b-btn b2b-btn-secondary" id="b2bSaveNow" disabled style="display:none;"
             title="Post anything typed but not yet saved" onclick="b2bSaveNow()">Save</button>`;
+}
+
+// The brand sort needs two lines to do anything. Called from _b2bPaintTotals,
+// which runs after every add, delete and repaint of the sheet.
+function _b2bPaintSortBtn() {
+    const btn = document.getElementById('b2bSortBtn');
+    if (btn) btn.style.display = _b2bModalItems.length > 1 ? '' : 'none';
 }
 
 async function b2bSubmitPricing(id, btn) {
@@ -34775,6 +34795,812 @@ function renderDistrictGoals() {
 }
 
 // ============================================================================
+// 24b. MODULE: PROJECTS (the Projects tab of workspace.html, 2026-11)
+// ============================================================================
+// Approval and tracking for work that sits NEXT TO SPEEKSNET — Claude-built
+// tools, browser extensions, scripts — rather than in it (Nick, 2026-11-17).
+// The rule it exists for: no project starts until Ethan (DM) approves it.
+// Approving is starting (requested → in_progress); only he completes one, and
+// once it is done he records what happens to it — fold it into SPEEKSNET, keep
+// it standalone, or retire it.
+//
+// THREE FIELDS: title, description, who's involved ("as simple as Project
+// Title, Project Description, and Who's involved"). WHO'S INVOLVED IS PICKED
+// FROM THE ROSTER, never typed ("a token list of the employees at the company
+// so we can … have actual users attached"): the function sends the roster with
+// the board (id, name, store, role — no PINs) and stores users.id values.
+//
+// WHERE: a Workspace tab, in Workspace's own clothes — .ws-head, a segmented
+// status filter like Variance Replies', a .cb-table list. It was its own page
+// with a kanban board for a day; Nick asked for it to look like the rest of
+// the site and to live in Workspace "for now".
+//
+// Server: the `projects` edge function (migration 0186). Every name on a row is
+// resolved there from the PIN, and every permission is re-checked there against
+// the same three Feature Access keys the page uses — so the role checks below
+// only decide what is DRAWN:
+//   nav-projects       see the tab        manager, owner-manager, MOCD, DM, CEO
+//                      …but only the DM, CEO and MOCD see EVERY project —
+//                      always, by role, not a switch (plus anyone covering
+//                      approvals). Everyone else sees the ones they asked for
+//                      or are on. The function filters; can.seesAll says which.
+//   projects-request   ask for a project  manager, owner-manager, MOCD, DM
+//   projects-approve   decide             DM
+// Defaults live in FEATURE_CATALOG and in DEFAULTS in the function. Change one,
+// change both.
+//
+// Reads go out as a GET with x-user-pin, which a test session lets through;
+// every write is a POST, which a test session refuses at the fetch guard (TEST
+// SESSION, top of file) — so a test account sees the live list and changes
+// nothing.
+//
+// Dialogs are in-page, never prompt()/confirm(): a decision carries a note, and
+// prompt() hangs the headless checks (CLAUDE.md, "Blocking dialogs are fatal").
+//
+// SIGN-OFF (0187, Ethan, 2026-11-18). He read Projects as "submit a tool for
+// final approval", and Nick agreed it should work that way: the people on a
+// project press "Submit for Sign-Off" when it is finished (awaiting_signoff),
+// and the DM approves it as complete or sends it back with a note. It sits in
+// the Awaiting Approval view, because that view is the DM's inbox. The DM can
+// still mark a running project complete himself — he is who signs off.
+//
+// CAPITALIZATION (Ethan, same email): buttons, tabs, status chips and popup
+// titles are Title Case like the rest of the site ("Edit and Resubmit", not
+// "Edit and resubmit"); short joining words (and, for, into, a, the) stay
+// lower case. Sentences — notes, placeholders, subtitles, history — do not.
+
+const PROJECTS_URL = `${_BASE}/projects`;
+
+const PRJ_STATUS = {
+    requested:         { label: 'Awaiting Approval', tone: 'wait' },
+    changes_requested: { label: 'Changes Requested', tone: 'warn' },
+    in_progress:       { label: 'In Progress',       tone: 'go'   },
+    // "Pause", not "Park" (Ethan, 2026-11-21) — the label only; the stored
+    // status and the action key stay 'parked' / 'park'.
+    parked:            { label: 'Paused',            tone: 'muted' },
+    awaiting_signoff:  { label: 'Awaiting Sign-Off', tone: 'wait' },
+    completed:         { label: 'Completed',         tone: 'done' },
+    declined:          { label: 'Declined',          tone: 'no'   },
+    withdrawn:         { label: 'Withdrawn',         tone: 'muted' },
+};
+// The segmented filter over the list, in Variance Replies' style. Declined and
+// withdrawn share "Closed" so the everyday views stay about live work. A
+// finished project waiting for sign-off is awaiting approval too — the DM's
+// inbox is one view, whether he is approving a start or a finish.
+const PRJ_VIEWS = [
+    { key: 'approval', label: 'Awaiting Approval', statuses: ['requested', 'changes_requested', 'awaiting_signoff'] },
+    { key: 'active',   label: 'In Progress',       statuses: ['in_progress', 'parked'] },
+    { key: 'done',     label: 'Completed',         statuses: ['completed'] },
+    { key: 'closed',   label: 'Closed',            statuses: ['declined', 'withdrawn'] },
+];
+const PRJ_OUTCOME = {
+    // "Ready for SPEEKSNET" (Ethan, 2026-11-21). Later, once the Development
+    // tracker ships a release that carries it, this is meant to read "Pushed in
+    // vX.Y.Z" (docs/plans/dev-tracker-HANDOFF.md, Q7).
+    incorporate: 'Ready for SPEEKSNET',
+    standalone:  'Keep Standalone',
+    retire:      'Retire It',
+};
+// Title Case, like every other label on the tab (Ethan, 2026-11-21: "Posted It").
+const PRJ_EVENT_LABEL = {
+    created: 'Requested It', edited: 'Edited It', resubmitted: 'Resubmitted It',
+    approved: 'Approved It', declined: 'Declined It', changes_requested: 'Asked for Changes',
+    withdrawn: 'Withdrew It', update: 'Posted an Update', parked: 'Paused It',
+    resumed: 'Resumed It', signoff_requested: 'Sent It for Sign-Off', signoff_returned: 'Sent It Back',
+    completed: 'Marked It Complete', outcome: 'Decided What Happens Next',
+};
+
+let _prjData     = null;    // { me, can, people, projects, events } from the last GET
+let _prjLoading  = false;
+let _prjView     = null;    // a PRJ_VIEWS key; null = pick (the first view with anything in it)
+let _prjOpenId   = null;    // the project in the detail popup
+let _prjEditId   = null;    // null = new request, else the project being edited
+let _prjPicked   = [];      // users.id values chosen in the form's people picker
+let _prjMenuIdx  = 0;       // highlighted row in the picker's menu
+// ALL / MINE (Ethan, 2026-11-21). Everyone sees the whole district's projects
+// now — "it'd be cool for them to get ideas from one another" — with this to
+// narrow to the ones you asked for or are on. Mine = the function's `mine`
+// flag (ids healed there); worked out here for a row without one.
+let _prjScope    = 'all';
+function _prjRowIsMine(p) { return typeof p.mine === 'boolean' ? p.mine : (_prjIsRequester(p) || _prjIsInvolved(p)); }
+function prjSetScope(s) { _prjScope = s === 'mine' ? 'mine' : 'all'; prjRender(); }
+
+function _prjMe() { return (_prjData && _prjData.me) || { id: null, name: sessionStorage.getItem('speeksUserName') || '' }; }
+function _prjCan(k) { return !!(_prjData && _prjData.can && _prjData.can[k]); }
+function _prjSame(a, b) { return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase() && !!String(a || '').trim(); }
+function _prjById(id) { return ((_prjData && _prjData.projects) || []).find(p => Number(p.id) === Number(id)) || null; }
+function _prjPeople() { return (_prjData && _prjData.people) || []; }
+function _prjPerson(id) { return _prjPeople().find(p => p.id === id) || null; }
+
+// A ref (requester, or one of the people involved) is "me" by users.id when
+// both sides have one — the point of picking from the roster — and by name
+// only when one doesn't (a test account, or a row with no id).
+function _prjRefIsMe(id, name) {
+    const me = _prjMe();
+    if (id && me.id) return String(id) === String(me.id);
+    return _prjSame(name, me.name);
+}
+// [{id, name}] — the requester if the list is empty (the function stores it
+// that way; this only covers a row that somehow has none).
+function _prjInvolved(p) {
+    const list = (p && Array.isArray(p.involved)) ? p.involved.filter(r => r && (r.name || r.id)) : [];
+    return list.length ? list : (p && p.requested_by ? [{ id: p.requested_by_id || null, name: p.requested_by }] : []);
+}
+function _prjIsRequester(p) { return _prjRefIsMe(p.requested_by_id, p.requested_by); }
+function _prjIsInvolved(p) { return _prjInvolved(p).some(r => _prjRefIsMe(r.id, r.name)); }
+function _prjNameChips(refs) {
+    return refs.map(r => `<span class="prj-tag">${escapeHtml(r.name || '')}</span>`).join('');
+}
+
+function _prjDate(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+
+async function prjLoad(quiet) {
+    const body = document.getElementById('prjBody');
+    if (!body || _prjLoading) return;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    // No PIN: a session that never had one — scripts/test-login.html signs in
+    // by role alone. Say so rather than sit on "Loading" for ever; the function
+    // needs the PIN to know who is asking.
+    if (!pin) {
+        if (!_prjData) body.innerHTML = '<div class="status-message">Projects needs a PIN sign-in. Sign out and back in with your PIN (test accounts: 0000–0008).</div>';
+        return;
+    }
+    _prjLoading = true;
+    if (!quiet && !_prjData) body.innerHTML = '<div class="status-message">Loading Projects…</div>';
+    try {
+        const res = await fetch(`${PROJECTS_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`);
+        _prjData = window._speeksTestSession ? _prjTestSample(json) : json;
+        prjRender();
+        // An open popup is redrawn from the fresh row, so a decision made
+        // elsewhere shows up in it rather than leaving stale buttons behind.
+        if (_prjOpenId != null && document.getElementById('prjDetailModal')?.classList.contains('show')) _prjRenderDetail();
+    } catch (err) {
+        if (!_prjData) body.innerHTML = `<div class="status-message">Couldn't load projects — ${escapeHtml(err.message || 'network error')}. <button class="prj-link" onclick="prjLoad()">Try Again</button></div>`;
+    } finally {
+        _prjLoading = false;
+    }
+}
+
+// SAMPLE PROJECTS for a test session (TEST SESSION, top of file; Ethan,
+// 2026-11-21: "throw in some sample data from a couple of DM and a couple from
+// multiple managers"). The live read still runs — it supplies who you are, what
+// you can do and the people picker — and its projects are REPLACED, so a test
+// account never shows real ones and nothing here is ever written anywhere (a
+// test session refuses every save anyway). Every name but the DM's and the test
+// account's own is made up. Two rows are the test account's, so Mine has
+// something in it; ids start at 9001 so none can be mistaken for a real PRJ.
+function _prjTestSample(json) {
+    const me = (json.me && json.me.name) || 'Test Account';
+    const DM = 'Ethan Kushnir';
+    // PRJ-9007 is "the one you made", so it follows the same rule a real one
+    // would: a test DM's goes straight to In Progress (posted), anyone else's
+    // waits for approval. Because it is always the signed-in test account's,
+    // its name changes with the account (Test DM, Test Owner…) — on purpose.
+    const iDecide = !!(json.can && json.can.approve);
+    const ownStatus = iDecide ? 'in_progress' : 'requested';
+    const day = 86400000;
+    const ago = d => new Date(Date.now() - d * day).toISOString();
+    const r = name => ({ id: null, name });
+    const P = (id, o) => Object.assign({ id, requested_by_id: null, created_at: ago(o.age), updated_at: ago(o.touched ?? o.age) }, o);
+    const projects = [
+        P(9001, { title: 'Wall TV Store Board Refresh', description: 'New Command Center layout for the five wall TVs — goals, listed today, and who is on shift, readable from across the floor.', status: 'in_progress', requested_by: DM, requested_store: 'CORP', involved: [r(DM), r('Jordan Lee')], age: 12, touched: 1, started_at: ago(12), decided_by: DM }),
+        P(9002, { title: 'Claude Prompt Pack for Titles', description: 'Saved prompts that turn a POS line into an eBay-ready title with the model, storage and carrier in the right order.', status: 'completed', outcome: 'incorporate', requested_by: DM, requested_store: 'CORP', involved: [r(DM)], age: 40, touched: 9, completed_at: ago(9), decided_by: DM }),
+        P(9003, { title: 'Trade-In Quote Calculator', description: 'Phone-sized page: pick the model and condition, get the buy range from the Margin Guide so new buyers quote the same way.', status: 'requested', requested_by: 'Alex Rivera', requested_store: 'OVL', involved: [r('Alex Rivera')], age: 2 }),
+        P(9004, { title: 'Shelf Label Printer Script', description: 'Prints shelf tags straight from a Shopify search so prices on the shelf match the site.', status: 'in_progress', requested_by: 'Sam Patel', requested_store: 'LEE', involved: [r('Sam Patel'), r(me)], age: 18, touched: 3, started_at: ago(15), decided_by: DM }),
+        P(9005, { title: 'Call Back Text Templates', description: 'Ready-to-send texts for when a call back item lands — one per category, with the store hours filled in.', status: 'awaiting_signoff', requested_by: 'Jordan Lee', requested_store: 'WSP', involved: [r('Jordan Lee')], age: 25, touched: 1, started_at: ago(20), decided_by: DM }),
+        P(9006, { title: 'Marketplace Photo Resizer', description: 'Batch-crops listing photos to the Facebook Marketplace size so they stop getting cut off.', status: 'changes_requested', requested_by: 'Casey Morgan', requested_store: 'MPL', involved: [r('Casey Morgan')], age: 6, touched: 4, decided_by: DM, decision_note: 'Say where the photos come from — the Picture Guide folder or the phone?' }),
+        P(9007, { title: 'Daily Huddle Checklist', description: 'A two-minute opening checklist on the QuickPortal: goals, call backs due, and anything the DM flagged overnight.', status: ownStatus, requested_by: me, requested_store: (json.me && json.me.store) || null, involved: [r(me)], age: 1, ...(iDecide ? { started_at: ago(1), decided_by: me } : {}) }),
+        P(9008, { title: 'Holiday Price Tag Template', description: 'Red-and-white tag layout for December promos.', status: 'declined', requested_by: 'Taylor Brooks', requested_store: 'BAL', involved: [r('Taylor Brooks')], age: 30, touched: 28, decided_by: DM, decision_note: 'PayMore corporate sends the holiday tags — no need to make our own.' }),
+        P(9009, { title: 'Box Order Reorder Alerts', description: 'Ping the store when shipping boxes drop under two weeks of stock.', status: 'parked', requested_by: 'Alex Rivera', requested_store: 'OVL', involved: [r('Alex Rivera'), r('Sam Patel')], age: 35, touched: 10, started_at: ago(30), decided_by: DM }),
+    ];
+    let eid = 900000;   // a counter, so no two events share an id
+    const E = (project_id, kind, actor, d, extra) => Object.assign({ id: ++eid, project_id, kind, actor, created_at: ago(d) }, extra || {});
+    const events = [
+        E(9001, 'created', DM, 12, { to_status: 'in_progress' }), E(9001, 'update', 'Jordan Lee', 1, { note: 'Mock-up is on the WSP TV — goals row reads fine from the counter.' }),
+        E(9002, 'created', DM, 40, { to_status: 'in_progress' }), E(9002, 'completed', DM, 9.4), E(9002, 'outcome', DM, 9, { note: 'incorporate' }),
+        E(9003, 'created', 'Alex Rivera', 2, { to_status: 'requested' }),
+        E(9004, 'created', 'Sam Patel', 18, { to_status: 'requested' }), E(9004, 'approved', DM, 15, { note: 'Go for it — start with LEE.' }), E(9004, 'update', 'Sam Patel', 3, { note: 'Prints from the Shopify search now; working on the barcode.' }),
+        E(9005, 'created', 'Jordan Lee', 25, { to_status: 'requested' }), E(9005, 'approved', DM, 20), E(9005, 'signoff_requested', 'Jordan Lee', 1, { note: 'Templates are in the Call Backs tab under Texts.' }),
+        E(9006, 'created', 'Casey Morgan', 6, { to_status: 'requested' }), E(9006, 'changes_requested', DM, 4, { note: 'Say where the photos come from — the Picture Guide folder or the phone?' }),
+        E(9007, 'created', me, 1, { to_status: ownStatus }),
+        E(9008, 'created', 'Taylor Brooks', 30, { to_status: 'requested' }), E(9008, 'declined', DM, 28, { note: 'PayMore corporate sends the holiday tags — no need to make our own.' }),
+        E(9009, 'created', 'Alex Rivera', 35, { to_status: 'requested' }), E(9009, 'approved', DM, 30), E(9009, 'parked', DM, 10, { note: 'Pausing until the box order tool settles.' }),
+    ];
+    return Object.assign({}, json, { projects, events });
+}
+
+// Realtime ping (_RT_TOOL_CHECKS.projects). Only refetches when the tab has
+// been opened on this page — anywhere else there is nothing to redraw.
+function prjRealtimeRefresh() {
+    if (document.getElementById('prjBody') && _prjData) prjLoad(true);
+}
+
+function prjSetView(v) { _prjView = v; prjRender(); }
+
+// What is waiting on THIS person: requests and sign-offs for the approver,
+// sent-back requests for whoever asked.
+function _prjWaitingOnMe(all) {
+    return all.filter(p => (_prjCan('approve') && (p.status === 'requested' || p.status === 'awaiting_signoff'))
+        || (p.status === 'changes_requested' && _prjIsRequester(p))).length;
+}
+
+function prjRender() {
+    const body = document.getElementById('prjBody');
+    if (!body || !_prjData) return;
+    const every = _prjData.projects || [];
+    const all = _prjScope === 'mine' ? every.filter(_prjRowIsMine) : every;
+
+    // The DM ADDS a project rather than requesting one (Ethan, 2026-11-21):
+    // his own go straight to In Progress — nobody to approve them but him.
+    // Same form and people picker; the function skips the approval step.
+    const newBtn = document.getElementById('prjNewBtn');
+    if (newBtn) {
+        newBtn.style.display = _prjCan('request') || _prjCan('approve') ? '' : 'none';
+        newBtn.textContent = _prjCan('approve') ? '＋ Add Project' : '＋ Request Project';
+    }
+
+    const waiting = _prjWaitingOnMe(every);   // what waits on you, whatever the filter
+    const pip = document.getElementById('prjWaitPip');
+    if (pip) { pip.textContent = waiting; pip.style.display = waiting ? 'inline-flex' : 'none'; }
+    const meta = document.getElementById('prjSubtitle');
+    // No count line beside the button for anyone, the DM's "N Waiting on You"
+    // included (Ethan, 2026-11-21) — the tab's pip and the status tabs count.
+    if (meta) meta.textContent = '';
+
+    const counts = {};
+    PRJ_VIEWS.forEach(v => { counts[v.key] = all.filter(p => v.statuses.includes(p.status)).length; });
+    // First visit lands where there is something to look at: what's waiting
+    // first, then what's running.
+    if (!_prjView || !PRJ_VIEWS.some(v => v.key === _prjView)) {
+        _prjView = (PRJ_VIEWS.find(v => v.key !== 'closed' && counts[v.key]) || PRJ_VIEWS[0]).key;
+    }
+    const view = PRJ_VIEWS.find(v => v.key === _prjView);
+    const rows = all.filter(p => view.statuses.includes(p.status))
+        // Oldest request first (it has waited longest); everything else newest first.
+        .sort((a, b) => view.key === 'approval'
+            ? new Date(a.created_at) - new Date(b.created_at)
+            : new Date(b.updated_at) - new Date(a.updated_at));
+
+    const seg = `
+        <div class="prj-seg" role="tablist" aria-label="Project status">
+            ${PRJ_VIEWS.map(v => `<button type="button" role="tab" aria-selected="${v.key === _prjView}"
+                class="prj-seg-btn${v.key === _prjView ? ' on' : ''}" onclick="prjSetView('${v.key}')">${escapeHtml(v.label)} · ${counts[v.key]}</button>`).join('')}
+            <div class="prj-scope" role="group" aria-label="Whose projects">
+                <button type="button" class="prj-scope-btn${_prjScope === 'all' ? ' on' : ''}" aria-pressed="${_prjScope === 'all'}" onclick="prjSetScope('all')">All Projects</button>
+                <button type="button" class="prj-scope-btn${_prjScope === 'mine' ? ' on' : ''}" aria-pressed="${_prjScope === 'mine'}" onclick="prjSetScope('mine')">Mine</button>
+            </div>
+        </div>`;
+
+    const list = rows.length ? `
+        <div class="prj-table-wrap">
+            <table class="cb-table prj-table">
+                <thead><tr>
+                    <th class="prj-col-id">#</th><th>Project</th><th class="prj-col-people">Who's involved</th>
+                    <th class="prj-col-by">Requested by</th><th class="prj-col-status">Status</th><th class="prj-col-date">Updated</th>
+                </tr></thead>
+                <tbody>${rows.map(_prjRowHtml).join('')}</tbody>
+            </table>
+        </div>`
+        : `<div class="status-message prj-empty">${_prjEmptyText(view.key)}</div>`;
+
+    body.innerHTML = seg + list;
+    _prjEqualPills(body);
+}
+
+// ONE SIZE PER COLUMN (Ethan, 2026-11-21; his standing rule that pills side by
+// side are one width — the widest's). Every status chip in the list takes the
+// width of the widest one showing, and so does every name chip under Who's
+// Involved. Measured, not a fixed number, because the widest changes with the
+// tab: "Completed · Ready for SPEEKSNET" only shows under Completed, and a long
+// name only when that person is on a project in view.
+function _prjEqualPills(root) {
+    ['.prj-table .prj-chip', '.prj-table .prj-tag'].forEach(sel => {
+        const pills = Array.from(root.querySelectorAll(sel));
+        if (!pills.length) return;
+        pills.forEach(el => { el.style.width = ''; });
+        const w = Math.ceil(Math.max(...pills.map(el => el.getBoundingClientRect().width)));
+        if (w > 0) pills.forEach(el => { el.style.width = w + 'px'; });
+    });
+}
+
+function _prjEmptyText(view) {
+    // "of yours" for everyone but the DM — an empty list is about them, not the
+    // district, and saying so stops "where did everyone's projects go?"
+    // Title Case, like the rest of the tab's labels (Ethan, 2026-11-21).
+    const yours = _prjScope === 'mine' ? ' of Yours' : '';
+    if (view === 'approval') return _prjCan('request') && !_prjCan('approve') ? `Nothing${yours} Waiting for Approval. Have an Idea? Request a Project.` : `Nothing${yours} Waiting for Approval.`;
+    if (view === 'active') return `Nothing${yours} Under Way.`;
+    if (view === 'done') return `Nothing${yours} Finished Yet.`;
+    return `Nothing${yours} Declined or Withdrawn.`;
+}
+
+function _prjStatusChip(p) {
+    const s = PRJ_STATUS[p.status] || { label: p.status, tone: 'muted' };
+    const label = p.status === 'completed' && p.outcome ? `${s.label} · ${PRJ_OUTCOME[p.outcome] || p.outcome}` : s.label;
+    return `<span class="prj-chip prj-tone-${s.tone}">${escapeHtml(label)}</span>`;
+}
+
+function _prjRowHtml(p) {
+    // YOURS, IN GREEN (Ethan, 2026-11-21, "kind of like the customer callback
+    // sheet"): on All Projects, the ones you asked for or are on wear Call Backs'
+    // has-it look — sage tint, sage bar down the left. Not on Mine: every row
+    // there is yours, so the mark would say nothing.
+    const mine = _prjScope === 'all' && _prjRowIsMine(p);
+    return `
+        <tr class="cb-row prj-row${mine ? ' prj-row-mine' : ''}" tabindex="0" onclick="prjOpen(${Number(p.id)})"
+            onkeydown="if(event.key==='Enter'){prjOpen(${Number(p.id)})}">
+            <td class="prj-col-id"><span class="prj-id">PRJ-${Number(p.id)}</span></td>
+            <td><b class="prj-row-title">${escapeHtml(p.title)}</b>${p.description ? `<span class="prj-row-desc">${escapeHtml(p.description)}</span>` : ''}</td>
+            <td class="prj-col-people"><span class="prj-tags">${_prjNameChips(_prjInvolved(p))}</span></td>
+            <td class="prj-col-by">${escapeHtml(p.requested_by || '')}</td>
+            <td class="prj-col-status">${_prjStatusChip(p)}</td>
+            <td class="prj-col-date">${escapeHtml(_prjDate(p.status === 'requested' ? p.created_at : p.updated_at))}</td>
+        </tr>`;
+}
+
+// ---- detail popup ----------------------------------------------------------
+
+function prjOpen(id) {
+    if (!_prjById(id)) return;
+    _prjOpenId = Number(id);
+    _prjRenderDetail();
+    const m = document.getElementById('prjDetailModal');
+    if (m && !m.classList.contains('show')) toggleModal('prjDetailModal');
+}
+
+function _prjSection(label, text) {
+    if (!text) return '';
+    return `<div class="prj-sec"><div class="form-label-caps">${escapeHtml(label)}</div><div class="prj-sec-text">${escapeHtml(text)}</div></div>`;
+}
+
+function _prjRenderDetail() {
+    const p = _prjById(_prjOpenId);
+    const head = document.getElementById('prjDetailHead');
+    const body = document.getElementById('prjDetailBody');
+    const foot = document.getElementById('prjDetailFooter');
+    if (!head || !body || !foot) return;
+    if (!p) {
+        head.textContent = 'Project';
+        body.innerHTML = '<div class="status-message">This project no longer exists.</div>';
+        foot.innerHTML = '';
+        return;
+    }
+    document.getElementById('prjDetailEyebrow').textContent = `PRJ-${p.id}`;
+    head.textContent = p.title;
+    // "Posted by" for a project the DM put straight into In Progress — its
+    // created event went to in_progress, not requested (2026-11-21).
+    const posted = ((_prjData && _prjData.events) || []).some(e => e.project_id === p.id && e.kind === 'created' && e.to_status === 'in_progress');
+    document.getElementById('prjDetailSub').innerHTML =
+        `${_prjStatusChip(p)} <span>${posted ? 'Posted' : 'Requested'} by ${escapeHtml(p.requested_by)}${p.requested_store ? ` (${escapeHtml(p.requested_store)})` : ''} · ${escapeHtml(_prjDate(p.created_at))}</span>`;
+
+    const facts = [
+        ["Who's involved", _prjNameChips(_prjInvolved(p))],
+        p.started_at ? ['Approved', `${escapeHtml(_prjDate(p.started_at))}${p.decided_by ? ` by ${escapeHtml(p.decided_by)}` : ''}`] : null,
+        p.completed_at ? ['Completed', escapeHtml(_prjDate(p.completed_at))] : null,
+        p.outcome ? ['Next', escapeHtml(PRJ_OUTCOME[p.outcome] || p.outcome)] : null,
+    ].filter(Boolean);
+
+    const events = ((_prjData && _prjData.events) || []).filter(e => Number(e.project_id) === Number(p.id));
+
+    // The last decision's note is the thing the requester most needs to read,
+    // so it sits at the top rather than down in the history. A sign-off that
+    // was sent back counts while the project is still running on from it —
+    // until the next thing happens to it (an update, another send).
+    const last = events[events.length - 1];
+    const sentBack = p.status === 'in_progress' && last && last.kind === 'signoff_returned';
+    const decision = p.decision_note && (['changes_requested', 'declined'].includes(p.status) || sentBack)
+        ? `<div class="prj-callout prj-tone-${sentBack ? 'warn' : PRJ_STATUS[p.status].tone}"><b>${escapeHtml(p.decided_by || 'DM')}${sentBack ? ' sent it back' : ''}:</b> ${escapeHtml(p.decision_note)}</div>`
+        : '';
+    const timeline = events.length ? `
+        <div class="prj-sec">
+            <div class="form-label-caps">History</div>
+            <ol class="prj-timeline">
+                ${events.slice().reverse().map(e => `
+                    <li class="prj-ev prj-ev-${escapeHtml(e.kind)}">
+                        <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(e.kind === 'created' && e.to_status === 'in_progress' ? 'Posted It' /* the DM's own: no request (Ethan, 2026-11-21) */ : (PRJ_EVENT_LABEL[e.kind] || e.kind))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
+                        ${e.note && e.kind !== 'created' ? `<span class="prj-ev-note">${escapeHtml(e.kind === 'outcome'
+                            // The function stores "incorporate — note"; show the words the picker used.
+                            ? String(e.note).replace(/^(incorporate|standalone|retire)\b/, k => PRJ_OUTCOME[k] || k)
+                            : e.note)}</span>` : ''}
+                    </li>`).join('')}
+            </ol>
+        </div>` : '';
+
+    body.innerHTML = `
+        ${decision}
+        ${_prjSection('Description', p.description)}
+        <dl class="prj-facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+        ${p.outcome_note ? _prjSection('About what happens next', p.outcome_note) : ''}
+        ${timeline}`;
+
+    foot.innerHTML = _prjActionsHtml(p);
+    _prjFillMore(p);
+}
+
+// THE ACTION BAR, REWORKED (Ethan, 2026-11-21: "looks very chaotic" — up to six
+// buttons in one row: Delete, Edit, Withdraw, Ask for Changes, Decline, Approve).
+// Two places now:
+//   ⋯ menu (popup header, as on B2B's deal screen) — Edit, Withdraw, Delete:
+//     things you do to the project, not a step in its workflow.
+//   the bar — only the step this project is at, at most three buttons, the
+//     main one green on the right, the note box only when the step uses it.
+// The DM's OWN project gets no note box and no Post Update: the notes are how
+// he comments on other people's projects, not his own.
+// The function enforces the same table; this only decides what is drawn.
+
+// Things done TO the project: the ⋯ menu.
+function _prjMenuHtml(p) {
+    const approver = _prjCan('approve');
+    const mine = _prjIsRequester(p);
+    const live = ['requested', 'in_progress', 'parked', 'awaiting_signoff'].includes(p.status);
+    const item = (label, onclick, danger) =>
+        `<button type="button" role="menuitem" class="prj-act${danger ? ' danger' : ''}" onclick="${onclick}">${escapeHtml(label)}</button>`;
+    let out = '';
+    // changes_requested has its own "Edit and Resubmit" on the bar. The DM
+    // edits a project once it is under way, not someone's request while it
+    // waits on his decision — he asks for changes instead (as before).
+    if (live && (mine || (approver && p.status !== 'requested'))) out += item('Edit', `prjMoreClose(); prjEdit(${Number(p.id)})`);
+    // Not on the DM's own: he has Delete, and a second red item doing the same
+    // job is the clutter this menu exists to remove.
+    if (mine && !approver && ['requested', 'changes_requested'].includes(p.status)) out += item('Withdraw Request', "prjAct('withdraw', this)", true);
+    if (approver) out += item('Delete Project', "prjAct('delete', this)", true);
+    return out;
+}
+function _prjFillMore(p) {
+    const m = document.getElementById('prjMoreMenu');
+    const b = document.getElementById('prjMoreBtn');
+    const html = p ? _prjMenuHtml(p) : '';
+    if (m) { m.innerHTML = html; m.hidden = true; }
+    if (b) { b.style.display = html ? '' : 'none'; b.setAttribute('aria-expanded', 'false'); }
+}
+function prjMoreToggle(ev) {
+    if (ev) ev.stopPropagation();
+    const m = document.getElementById('prjMoreMenu');
+    if (!m) return;
+    m.hidden = !m.hidden;
+    document.getElementById('prjMoreBtn')?.setAttribute('aria-expanded', String(!m.hidden));
+}
+function prjMoreClose() {
+    const m = document.getElementById('prjMoreMenu');
+    if (m && !m.hidden) {
+        m.hidden = true;
+        document.getElementById('prjMoreBtn')?.setAttribute('aria-expanded', 'false');
+        m.querySelectorAll('.prj-armed').forEach(_prjDisarm);
+    }
+}
+document.addEventListener('click', (e) => {
+    if (!e.target.closest || !e.target.closest('#prjMoreMenu')) prjMoreClose();
+});
+
+// The step this project is at: the bar.
+function _prjActionsHtml(p) {
+    const approver = _prjCan('approve');
+    const mine = _prjIsRequester(p);
+    const owns = mine || _prjIsInvolved(p);
+    const ownDm = approver && mine;   // the DM's own project
+    const editBtn = (label, cls) =>
+        `<button class="${cls || 'btn-secondary'} prj-act" onclick="prjEdit(${Number(p.id)})">${escapeHtml(label)}</button>`;
+    const btn = (label, action, cls) =>
+        `<button class="${cls || 'btn-secondary'} prj-act" onclick="prjAct('${action}', this)">${escapeHtml(label)}</button>`;
+    const note = (placeholder) =>
+        `<textarea id="prjNote" class="form-input-lg prj-note" rows="2" maxlength="2000" placeholder="${escapeHtml(placeholder)}"></textarea>`;
+    const msg = '<span class="prj-msg" id="prjMsg" role="status"></span>';
+    let rows = '';
+    let btns = '';
+
+    if (p.status === 'requested') {
+        if (ownDm) {
+            // Only a project he made before Add Project skipped approval.
+            btns = btn('Start It', 'approve', 'btn-primary');
+        } else if (approver) {
+            rows = note('Note for the requester — required to decline or ask for changes');
+            btns = btn('Ask for Changes', 'request_changes') + btn('Decline', 'decline', 'btn-secondary prj-danger') + btn('Approve and Start', 'approve', 'btn-primary');
+        }
+    } else if (p.status === 'changes_requested') {
+        if (mine) btns = editBtn('Edit and Resubmit', 'btn-primary');
+        else if (approver) { rows = note('Why it is declined'); btns = btn('Decline', 'decline', 'btn-secondary prj-danger'); }
+    } else if (p.status === 'in_progress' || p.status === 'parked') {
+        if (ownDm) {
+            btns = (p.status === 'parked' ? btn('Resume', 'resume') : btn('Pause', 'park'))
+                + btn('Mark Complete', 'complete', 'btn-primary');
+        } else if (approver) {
+            rows = note('Progress update, or a note to go with your decision');
+            btns = btn('Post Update', 'update')
+                + (p.status === 'parked' ? btn('Resume', 'resume') : btn('Pause', 'park'))
+                + btn('Mark Complete', 'complete', 'btn-primary');
+        } else if (owns) {
+            rows = note('Progress update — or, when it is finished, what was done and where to find it');
+            btns = btn('Post Update', 'update');
+            // The people doing the work say when it is done; the DM signs it
+            // off (0187). Parked projects are resumed first — parked means
+            // nobody is on it.
+            if (p.status === 'in_progress') btns += btn('Submit for Sign-Off', 'request_signoff', 'btn-primary');
+        }
+    } else if (p.status === 'awaiting_signoff') {
+        if (ownDm) {
+            btns = btn('Mark Complete', 'complete', 'btn-primary');
+        } else if (approver) {
+            rows = note('Note for the team — required to send it back');
+            btns = btn('Post Update', 'update') + btn('Send Back', 'return_signoff') + btn('Approve as Complete', 'complete', 'btn-primary');
+        } else if (owns) {
+            rows = note('Anything to add while it waits for sign-off');
+            btns = btn('Post Update', 'update');
+        }
+    } else if (p.status === 'completed' && approver) {
+        rows = `
+            <div class="prj-outcome-row">
+                <label class="form-label-caps" for="prjOutcome">What happens to it now</label>
+                <select id="prjOutcome" class="kpi-select">
+                    <option value="">Choose…</option>
+                    ${Object.entries(PRJ_OUTCOME).map(([k, v]) => `<option value="${k}" ${p.outcome === k ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+                </select>
+            </div>` + note('Anything to add (optional)');
+        btns = btn(p.outcome ? 'Update Decision' : 'Save Decision', 'outcome', 'btn-primary');
+    }
+
+    // Nothing to do at this step: say whose move it is, and a Close.
+    if (!rows && !btns) {
+        const wait = p.status === 'requested' ? 'Waiting for the DM to approve it.'
+            : p.status === 'awaiting_signoff' ? 'Waiting for the DM to sign it off.'
+            : p.status === 'changes_requested' ? 'Sent back for changes.' : '';
+        return `<div class="prj-foot-btns">${msg}${wait ? `<span class="prj-foot-wait">${wait}</span>` : ''}<button class="btn-secondary prj-act" onclick="closeAllModals()">Close</button></div>`;   // a real button, like the rest (2026-11-21)
+    }
+    return `<div class="prj-foot-rows">${rows}</div><div class="prj-foot-btns">${msg}${btns}</div>`;
+}
+
+// PRESS TWICE (Ethan, 2026-11-21). Withdraw, Decline, Mark Complete / Approve
+// as Complete and Delete can't be undone — nothing leads out of withdrawn,
+// declined or completed, and a delete takes the history with it — so the first
+// press only arms the button ("Click Again to …") and the second does it. Not
+// confirm(): a native dialog hangs the headless check runner, and the site
+// keeps its decisions inside its own popups. Arming lapses after 4 seconds.
+const _PRJ_CONFIRM = { withdraw: 'Withdraw', decline: 'Decline', complete: 'Complete', delete: 'Delete' };
+function _prjArmed(action, btn) {
+    if (!_PRJ_CONFIRM[action] || !btn) return true;
+    if (btn.dataset.armed === '1') return true;
+    document.querySelectorAll('.prj-armed').forEach(_prjDisarm);
+    btn.dataset.armed = '1';
+    btn.dataset.label = btn.textContent;
+    btn.textContent = `Click Again to ${_PRJ_CONFIRM[action]}`;
+    btn.classList.add('prj-armed');
+    btn._prjTimer = setTimeout(() => _prjDisarm(btn), 4000);
+    _prjSay(action === 'delete' ? 'Deleting removes the project and its history for good.' : "This can't be undone.", true);
+    return false;
+}
+function _prjDisarm(btn) {
+    clearTimeout(btn._prjTimer);
+    if (btn.dataset.armed !== '1') return;
+    btn.dataset.armed = '';
+    btn.textContent = btn.dataset.label || btn.textContent;
+    btn.classList.remove('prj-armed');
+}
+
+// Both popups stay in the DOM when closed, so "the message line" is whichever
+// popup is open — the form's when it is up, the detail's otherwise.
+function _prjSay(text, bad) {
+    const formOpen = document.getElementById('prjFormModal')?.classList.contains('show');
+    const m = document.getElementById(formOpen ? 'prjFormMsg' : 'prjMsg');
+    if (!m) return;
+    m.textContent = text || '';
+    m.classList.toggle('prj-msg-bad', !!bad);
+}
+
+async function _prjPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const res = await fetch(PROJECTS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`);
+    return json;
+}
+
+// The note rules the function enforces, checked first so the person is told
+// before a round trip rather than after.
+const _PRJ_NOTE_REQUIRED = {
+    decline: "Say why it's declined — the requester sees this.",
+    request_changes: 'Say what needs to change.',
+    return_signoff: 'Say what still needs doing.',
+    update: 'Write the update first.',
+};
+
+async function prjAct(action, btn) {
+    const p = _prjById(_prjOpenId);
+    if (!p) return;
+    const note = (document.getElementById('prjNote')?.value || '').trim();
+    if (_PRJ_NOTE_REQUIRED[action] && !note) { _prjSay(_PRJ_NOTE_REQUIRED[action], true); document.getElementById('prjNote')?.focus(); return; }
+    const payload = { action, id: p.id, note };
+    if (action === 'outcome') {
+        payload.outcome = document.getElementById('prjOutcome')?.value || '';
+        if (!payload.outcome) { _prjSay('Pick what happens to it.', true); return; }
+    }
+    if (!_prjArmed(action, btn)) return;
+    if (btn) _prjDisarm(btn);
+    const buttons = document.querySelectorAll('#prjDetailFooter button');
+    buttons.forEach(b => { b.disabled = true; });
+    _prjSay(action === 'delete' ? 'Deleting…' : 'Saving…');
+    try {
+        await _prjPost(payload);
+        _rtMute('projects');
+        // A deleted project has no popup to come back to.
+        if (action === 'delete') { closeAllModals(); _prjOpenId = null; await prjLoad(true); return; }
+        await prjLoad(true);
+        _prjSay(action === 'update' ? 'Update posted.'
+            : action === 'request_signoff' ? 'Sent to the DM for sign-off.' : 'Saved.');
+    } catch (err) {
+        _prjSay(err.message || "Couldn't save.", true);
+    } finally {
+        document.querySelectorAll('#prjDetailFooter button').forEach(b => { b.disabled = false; });
+    }
+}
+
+// ---- request form (new, edit, resubmit) ------------------------------------
+
+function prjNew() { _prjEditId = null; _prjFillForm(null); toggleModal('prjFormModal'); }
+function prjEdit(id) {
+    const p = _prjById(id);
+    if (!p) return;
+    _prjEditId = Number(id);
+    _prjFillForm(p);
+    toggleModal('prjFormModal');
+}
+
+function _prjFillForm(p) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    set('prjFTitle', p && p.title);
+    set('prjFDesc', p && p.description);
+    set('prjFPeopleInput', '');
+    // Editing: the people already on it (those still on the roster — someone
+    // who has left can't be re-attached, and dropping them is the only
+    // sensible edit). New: whoever is asking.
+    const me = _prjMe();
+    _prjPicked = p
+        ? _prjInvolved(p).map(r => r.id).filter(id => id && _prjPerson(id))
+        : (me.id && _prjPerson(me.id) ? [me.id] : []);
+    _prjRenderPicked();
+    _prjCloseMenu();
+    const resubmit = p && p.status === 'changes_requested';
+    const adding = !p && _prjCan('approve');   // the DM's own: no approval step
+    const t = document.getElementById('prjFormTitle');
+    if (t) t.textContent = adding ? 'Add a Project' : !p ? 'Request a Project' : resubmit ? 'Edit and Resubmit' : 'Edit Project';
+    const sub = document.getElementById('prjFormSub');
+    if (sub) sub.textContent = resubmit
+        ? `${p.decided_by || 'The DM'} asked: ${p.decision_note || 'for changes'}`
+        : adding ? ''   // the DM needs no explanation of his own form (Ethan, 2026-11-21)
+        : !p ? 'Goes to the DM for approval. Nothing starts until it is approved.'
+        : 'Changes save straight to the project.';
+    const go = document.getElementById('prjFormSubmit');
+    if (go) go.textContent = adding ? 'Add Project' : !p ? 'Send for Approval' : resubmit ? 'Resubmit' : 'Save Changes';
+    const fm = document.getElementById('prjFormMsg');
+    if (fm) { fm.textContent = ''; fm.classList.remove('prj-msg-bad'); }
+}
+
+// ---- the people picker ("Who's involved") -----------------------------------
+// Chips for who's chosen, a search box, and a list of matches from the roster
+// under it. Type to filter (name, store or role); Enter or a click adds; × or
+// Backspace in an empty box removes. In the flow, not a floating dropdown, so
+// the popup's scrolling body can never clip it.
+
+function _prjRenderPicked() {
+    const wrap = document.getElementById('prjFChips');
+    if (!wrap) return;
+    wrap.innerHTML = _prjPicked.map(id => {
+        const p = _prjPerson(id);
+        const name = p ? p.name : 'Unknown';
+        return `<span class="prj-chip-pick">${escapeHtml(name)}${p && p.store ? `<i>${escapeHtml(p.store)}</i>` : ''}<button type="button" aria-label="Remove ${escapeHtml(name)}" onmousedown="event.preventDefault()" onclick="prjPeopleRemove('${escapeHtml(id)}')">×</button></span>`;
+    }).join('');
+    const input = document.getElementById('prjFPeopleInput');
+    if (input) input.placeholder = _prjPicked.length ? 'Add someone…' : 'Type a name…';
+}
+
+function _prjMatches() {
+    const q = (document.getElementById('prjFPeopleInput')?.value || '').trim().toLowerCase();
+    return _prjPeople()
+        .filter(p => !_prjPicked.includes(p.id))
+        .filter(p => !q || `${p.name} ${p.store} ${p.role}`.toLowerCase().includes(q))
+        .slice(0, 8);
+}
+
+function _prjCloseMenu() {
+    const menu = document.getElementById('prjFPeopleMenu');
+    if (menu) { menu.hidden = true; menu.innerHTML = ''; }
+    document.getElementById('prjFPeopleInput')?.setAttribute('aria-expanded', 'false');
+}
+
+function prjPeopleSearch() {
+    const menu = document.getElementById('prjFPeopleMenu');
+    if (!menu) return;
+    const list = _prjMatches();
+    _prjMenuIdx = Math.min(_prjMenuIdx, Math.max(0, list.length - 1));
+    if (!_prjPeople().length) {
+        menu.innerHTML = '<div class="prj-people-none">The roster didn\'t load — close this and try again.</div>';
+    } else if (!list.length) {
+        menu.innerHTML = '<div class="prj-people-none">No one by that name.</div>';
+    } else {
+        menu.innerHTML = list.map((p, i) => `
+            <button type="button" role="option" aria-selected="${i === _prjMenuIdx}" class="prj-people-opt${i === _prjMenuIdx ? ' on' : ''}"
+                onmousedown="event.preventDefault()" onclick="prjPeopleAdd('${escapeHtml(p.id)}')">
+                <span>${escapeHtml(p.name)}</span><i>${escapeHtml([p.store, p.role].filter(Boolean).join(' · '))}</i>
+            </button>`).join('');
+    }
+    menu.hidden = false;
+    document.getElementById('prjFPeopleInput')?.setAttribute('aria-expanded', 'true');
+}
+
+function prjPeopleAdd(id) {
+    if (!_prjPerson(id) || _prjPicked.includes(id) || _prjPicked.length >= 12) return;
+    _prjPicked.push(id);
+    const input = document.getElementById('prjFPeopleInput');
+    if (input) { input.value = ''; input.focus(); }
+    _prjMenuIdx = 0;
+    _prjRenderPicked();
+    prjPeopleSearch();
+}
+
+function prjPeopleRemove(id) {
+    _prjPicked = _prjPicked.filter(x => x !== id);
+    _prjRenderPicked();
+    if (!document.getElementById('prjFPeopleMenu')?.hidden) prjPeopleSearch();
+}
+
+function prjPeopleKey(e) {
+    const list = _prjMatches();
+    if (e.key === 'ArrowDown') { e.preventDefault(); _prjMenuIdx = Math.min(_prjMenuIdx + 1, list.length - 1); prjPeopleSearch(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); _prjMenuIdx = Math.max(_prjMenuIdx - 1, 0); prjPeopleSearch(); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (list[_prjMenuIdx]) prjPeopleAdd(list[_prjMenuIdx].id); }
+    else if (e.key === 'Escape') { e.stopPropagation(); _prjCloseMenu(); }
+    else if (e.key === 'Backspace' && !e.target.value && _prjPicked.length) { prjPeopleRemove(_prjPicked[_prjPicked.length - 1]); }
+    else { _prjMenuIdx = 0; }
+}
+
+// A click anywhere in the box (between chips) puts the cursor in the search.
+function prjPeopleFocus(e) {
+    if (e.target.closest('button')) return;
+    document.getElementById('prjFPeopleInput')?.focus();
+}
+// The options take mousedown preventDefault, so focus never leaves for a
+// click on one; anything else that takes focus closes the list.
+function prjPeopleBlur() { setTimeout(_prjCloseMenu, 120); }
+
+async function prjSubmitForm(btn) {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const payload = {
+        action: _prjEditId == null ? 'create' : 'edit',
+        id: _prjEditId,
+        title: val('prjFTitle'),
+        description: val('prjFDesc'),
+        involved: _prjPicked.slice(),
+    };
+    if (!payload.title)       { _prjSay('Give the project a title.', true); document.getElementById('prjFTitle')?.focus(); return; }
+    if (!payload.description) { _prjSay('Describe the project.', true); document.getElementById('prjFDesc')?.focus(); return; }
+    if (!payload.involved.length) { _prjSay("Add who's involved.", true); document.getElementById('prjFPeopleInput')?.focus(); return; }
+    if (btn) btn.disabled = true;
+    _prjSay('Sending…');
+    try {
+        const json = await _prjPost(payload);
+        _rtMute('projects');
+        closeAllModals();
+        // The DM's own lands In Progress, so show that list behind it.
+        if (payload.action === 'create' && json.project && json.project.status === 'in_progress') _prjView = 'active';
+        await prjLoad(true);
+        if (json.project) prjOpen(json.project.id);
+    } catch (err) {
+        _prjSay(err.message || "Couldn't send it.", true);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// ============================================================================
 // 25. MODULE: COMPANY INITIATIVES & STORE PROJECTS
 // ============================================================================
 
@@ -35387,7 +36213,7 @@ function mclToggleAllStores() {
 async function loadRequiredTasks() {
     const list = document.getElementById('mcl-list');
     if (!list) return;
-    list.innerHTML = '<div class="status-message">Loading required tasks…</div>';
+    list.innerHTML = '<div class="status-message">Loading Required Tasks…</div>';
     try {
         const res = await fetch(`${CHECKLIST_URL}?action=listRequired&v=${Date.now()}`);
         const data = await res.json();
@@ -35466,7 +36292,7 @@ async function loadStoreChecklistView(store) {
         out.innerHTML = `<div class="status-message" style="color:var(--red-alert);">No manager found for ${escapeHtml(store)} in the directory.</div>`;
         return;
     }
-    out.innerHTML = `<div class="status-message">Loading ${escapeHtml(store)}'s checklist…</div>`;
+    out.innerHTML = `<div class="status-message">Loading ${escapeHtml(store)}'s Checklist…</div>`;
     try {
         // The store's full checklist + the required-task master, so we can resolve
         // each global item back to its required-task id for deletion.
@@ -36832,7 +37658,7 @@ function renderManageItems() {
     const panel = document.getElementById('sc-panel-manage');
     if (!panel) return;
     if (!window._scCatalog || !window._auCatalog) {
-        panel.innerHTML = '<div class="status-message">Loading item catalog…</div>';
+        panel.innerHTML = '<div class="status-message">Loading Item Catalog…</div>';
         _ensureScCatalog();
         return;
     }
@@ -37377,7 +38203,7 @@ async function fetchMyClaims() {
         wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
         return;
     }
-    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading cases…</div>';
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading Cases…</div>';
     try {
         const res = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
@@ -37582,7 +38408,7 @@ function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
     // Deleting a claim needs DM/CEO approval — the trash button sends a request, and a
     // claim already awaiting approval shows a pending badge instead.
     if (r.delete_requested_at) {
-        acts.push(`<span title="Waiting on DM/CEO approval" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
+        acts.push(`<span title="${escapeHtml('Waiting on DM/CEO approval' + (r.delete_reason ? ' — why: ' + r.delete_reason : ''))}" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
     } else {
         acts.push(`<button onclick="requestClaimDelete('${r.id}', ${!!hasChild})" title="Request deletion (a DM or CEO must approve)" style="display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:9px; cursor:pointer; font-size:17px; line-height:1;" onmouseover="this.style.background='#fee2e2';" onmouseout="this.style.background='#fff5f5';">🗑</button>`);
     }
@@ -39098,7 +39924,7 @@ function openClaimsOversight() {
 async function fetchAllClaims() {
     const body = document.getElementById('claims-oversight-body');
     if (!body) return;
-    body.innerHTML = '<div class="status-message">Loading all claims…</div>';
+    body.innerHTML = '<div class="status-message">Loading All Claims…</div>';
     try {
         const res = await fetch(`${CLAIMS_URL}?v=${Date.now()}`); // no stores param → every store
         const json = await res.json();
@@ -39157,6 +39983,7 @@ function renderClaimsOversight() {
                     · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>${siteCopyBtn(r.case_number, 'case number')}
                     <span style="color:#94a3b8;"> — ${escapeHtml(r.reason_type || '')}</span>
                     <span style="color:#b45309; font-weight:700;"> · Requested by ${who}</span>
+                    <div style="margin-top:4px; font-size:12.5px; color:var(--slate-charcoal);"><span style="font-weight:800;">Why:</span> ${r.delete_reason ? escapeHtml(r.delete_reason) : '<span style="color:#94a3b8;">No reason given (asked before reasons were required)</span>'}</div>
                 </div>
                 <div style="display:flex; gap:8px;">
                     <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve Delete</button>
@@ -39435,25 +40262,63 @@ async function updateClaimStatus(id, status) {
 
 // Manager-side: request deletion. Claims are never deleted directly by a manager —
 // a DM/CEO must approve, so nothing is quietly removed.
-async function requestClaimDelete(id, hasChild) {
+//
+// SAY WHY (Ethan, 2026-11-21: "add a notes field when a user requests to delete
+// an insurance claim, so I know why they are trying to delete the claim"). The
+// plain confirm() became a small dialog with a required reason box; the reason
+// is stored on the claim (delete_reason, 0195) and shown on the DM's Delete
+// Requests list and in the notification. shopify-claims accepts a blank one
+// only so the pre-merge live page keeps working — this box is the gate.
+function requestClaimDelete(id, hasChild) {
+    document.getElementById('claimDelReqModal')?.remove();
     // Deleting an Item-Not-Received ticket that already has a loss claim removes
     // both (child cascades) — spell that out so it isn't a surprise.
-    const msg = hasChild
-        ? 'Request deletion of this Item-Not-Received ticket?\n\nThis also removes the loss claim opened on it. A DM or CEO must approve before anything is removed.'
-        : 'Request deletion of this claim?\n\nA DM or CEO must approve it before the claim is removed.';
-    if (!confirm(msg)) return;
-    try {
-        const res = await fetch(CLAIMS_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'request_delete', id, requested_by: sessionStorage.getItem('speeksUserName') || null }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
-        alert('Delete request sent. A DM or CEO will review it.');
-        fetchMyClaims();
-    } catch (e) {
-        alert('Could not send the request: ' + (e.message || e));
-    }
+    const lead = hasChild
+        ? 'This also removes the loss claim opened on this Item-Not-Received ticket. A DM or CEO must approve before anything is removed.'
+        : 'A DM or CEO must approve it before the claim is removed.';
+    const wrap = document.createElement('div');
+    wrap.id = 'claimDelReqModal';
+    wrap.style.cssText = 'position:fixed; inset:0; z-index:4200; background:rgba(2,6,23,.55); display:flex; align-items:center; justify-content:center; padding:16px;';
+    wrap.innerHTML = `
+        <div role="dialog" aria-modal="true" aria-labelledby="claimDelReqTitle" style="background:#fff; border-radius:14px; width:100%; max-width:440px; padding:20px; box-shadow:0 20px 50px rgba(2,6,23,.3); box-sizing:border-box;">
+            <div id="claimDelReqTitle" style="font-weight:800; font-size:16px; color:var(--slate-charcoal); margin-bottom:6px;">Request To Delete This Claim</div>
+            <div style="font-size:13px; color:#64748b; line-height:1.5; margin-bottom:12px;">${escapeHtml(lead)}</div>
+            <label for="claimDelReqReason" style="display:block; font-size:12px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">Why Should It Be Deleted?</label>
+            <textarea id="claimDelReqReason" rows="3" maxlength="500" placeholder="e.g. Opened on the wrong order, duplicate of another claim…" style="width:100%; box-sizing:border-box; font:inherit; font-size:14px; padding:9px 10px; border:1.5px solid #cbd5e1; border-radius:9px; resize:vertical;"></textarea>
+            <div id="claimDelReqErr" style="display:none; color:#b91c1c; font-size:12px; font-weight:700; margin-top:6px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; flex-wrap:wrap;">
+                <button type="button" data-act="cancel" style="font-size:13px; font-weight:800; border-radius:8px; padding:8px 14px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Cancel</button>
+                <button type="button" data-act="send" style="font-size:13px; font-weight:800; border-radius:8px; padding:8px 14px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Send Request</button>
+            </div>
+        </div>`;
+    document.body.appendChild(wrap);
+    const box = wrap.querySelector('#claimDelReqReason');
+    const err = wrap.querySelector('#claimDelReqErr');
+    const sendBtn = wrap.querySelector('[data-act="send"]');
+    const close = () => wrap.remove();
+    const showErr = (t) => { err.textContent = t; err.style.display = 'block'; };
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+    wrap.querySelector('[data-act="cancel"]').onclick = close;
+    wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    sendBtn.onclick = async () => {
+        const reason = box.value.trim();
+        if (!reason) { showErr('Say why this claim should be deleted.'); box.focus(); return; }
+        sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+        try {
+            const res = await fetch(CLAIMS_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'request_delete', id, reason, requested_by: sessionStorage.getItem('speeksUserName') || null }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+            close();
+            fetchMyClaims();   // the row's "🗑 Delete requested" badge is the confirmation
+        } catch (e) {
+            sendBtn.disabled = false; sendBtn.textContent = 'Send Request';
+            showErr('Could not send the request: ' + (e.message || e));
+        }
+    };
+    setTimeout(() => box.focus(), 0);
 }
 
 // DM/CEO-side: approve a pending delete request → permanently removes the claim.
@@ -39848,8 +40713,11 @@ async function checkAgingClaimsDM() {
             const which = pendingDelete.length <= 2
                 ? pendingDelete.map(_clLabel).join(', ')
                 : `${pendingDelete.length} claims`;
+            // One request: say why on the feed line too, so the DM can decide from it.
+            const why1 = pendingDelete.length === 1 && pendingDelete[0].delete_reason
+                ? ` Why: "${String(pendingDelete[0].delete_reason).trim()}"` : '';
             const line = `${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval — ${which}`
-                + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.`;
+                + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.${why1}`;
             bodyParts.push(escapeHtml(line));
             sumParts.push(line);
         }
@@ -42212,7 +43080,7 @@ async function boxAdminDeleteItem(id, btn) {
 async function _loadBoxOrderData() {
     const container = document.getElementById('boxOrderItemsContainer');
     if (!container) return;
-    container.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:12px 0;">Loading items...</div>';
+    container.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:12px 0;">Loading Items...</div>';
     const h = { 'apikey': _SUPABASE_ANON_KEY, 'Authorization': `Bearer ${_SUPABASE_ANON_KEY}` };
     try {
         const [iRes, cRes] = await Promise.all([
@@ -42824,7 +43692,7 @@ async function fetchMyRecycleRequests() {
         wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
         return;
     }
-    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading requests…</div>';
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading Requests…</div>';
     try {
         const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
@@ -43880,7 +44748,7 @@ async function openEmailRecipients() {
     toggleModal('emailRecipientsModal');
     const body = document.getElementById('emailRecipientsBody');
     _erOpen = null; _erQuery = '';   // a fresh open starts collapsed and unfiltered
-    if (body) body.innerHTML = '<div class="status-message">Loading recipients…</div>';
+    if (body) body.innerHTML = '<div class="status-message">Loading Recipients…</div>';
     await _fetchEmailLists(true);
     renderEmailRecipients();
 }
@@ -44175,6 +45043,12 @@ const FEATURE_CATALOG = [
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager', 'employee'] },
+    // Phone Alerts (Alerts Hub, 2026-11-20): the top block of Settings →
+    // Notifications that turns on push for this phone. DM only while Ethan
+    // pilots it (his phone + BAL). Widening it is a Feature Access change, not a
+    // code change; the alerts-hub function reads the same key and the same
+    // default, so the two cannot disagree (see PUSH_DEFAULT_ROLES there).
+    { key: 'notify-phone-alerts',      label: 'Phone Alerts (Push)',           tab: 'hotbar', group: 'Top Bar', def: ['district-manager'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -44327,6 +45201,17 @@ const FEATURE_CATALOG = [
     { key: 'tool-picture-manage',      label: 'Picture Guide — Edit (DM/CEO only)',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee'] },
+    // ---- Projects (the Workspace tab, 2026-11) ----
+    // Three switches, and the projects edge fn reads the SAME keys with the SAME
+    // defaults (DEFAULTS there) — change a def here, change it there. Defaults
+    // from Nick, 2026-11-17: the board for "store managers and up"; asking for
+    // "store managers and MOCD" (plus the DM, who runs his own projects too);
+    // deciding for the DM alone. Delegable: hand projects-approve to someone
+    // while Ethan is out and the approval emails follow it (audience_feature).
+    // The key kept its nav- name from the day Projects was its own page.
+    { key: 'nav-projects',             label: 'Projects — Workspace tab',      tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
+    { key: 'projects-request',         label: 'Projects — Request a Project',  tab: 'widgets', group: 'Workspace', def: ['district-manager', 'mocd', 'manager', 'owner-manager'] },
+    { key: 'projects-approve',         label: 'Projects — Approve and Complete (DM)', tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
     // toggles for two things — Upload, Categories, and the tab that contains
     // them — and a parent switch that can contradict its children is a way to
@@ -44595,7 +45480,9 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 // Tabbed sections keyed by their nav-link href → the sub-tab feature keys they
 // contain. A section's nav link shows if ANY of its sub-tabs is visible.
 const _SECTION_TABS = {
-    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory', 'tool-claims-store', 'tool-claims-oversight'],
+    // nav-projects (2026-11): the Projects tab is what puts MOCD on Workspace at
+    // all — none of the other tabs is theirs.
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory', 'tool-claims-store', 'tool-claims-oversight', 'nav-projects'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'ec-upload', 'ec-view-categories', 'ec-view-photos',
@@ -45400,6 +46287,7 @@ const JUMP_KEYWORDS = {
     'widget-ops-pictureguide':   'picture guide photo guide pictures photos what pictures to take shot list binder printout listing photos camera order of pictures lcd flaws cosmetic flaws',
     'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
+    'nav-projects':              'projects approval request pitch claude tool extension',
     'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
     'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
     'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
@@ -45466,6 +46354,7 @@ const JUMP_PLACES = [
     { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'page-b2b',    label: 'B2B Deals',             sub: 'Main navigation', kind: 'page', page: 'b2b.html',        keys: 'b2b business deals pickup quote listing wholesale bulk corporate' },
+    { id: 'ws-projects', label: 'Projects',           sub: 'Workspace',  kind: 'tab', feature: 'nav-projects',            page: 'workspace.html',  hash: 'projects',  fn: 'switchWorkspaceTab', keys: 'projects project approval approve request pitch claude tool extension side idea build' },
     { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles', 'ec-view-picture-quality'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
@@ -46175,7 +47064,7 @@ const _vrFmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' 
 async function loadVarianceReplies() {
     const body = document.getElementById('vr-body');
     if (!body) return;
-    body.innerHTML = '<div class="status-message">Loading variance replies…</div>';
+    body.innerHTML = '<div class="status-message">Loading Variance Replies…</div>';
     const stores = _vrStores();
     if (!stores.length) {
         body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
@@ -47812,7 +48701,7 @@ async function loadAgingInventory() {
     const body = document.getElementById('ag-body');
     if (!body) return;
     if (!_agEnabled()) { body.innerHTML = '<div class="status-message">Aging Inventory is paused.</div>'; return; }
-    body.innerHTML = '<div class="status-message">Loading aging inventory…</div>';
+    body.innerHTML = '<div class="status-message">Loading Aging Inventory…</div>';
     const stores = _agIsDM() ? ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'] : _agMyStores();
     if (!stores.length) {
         body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
@@ -59745,6 +60634,9 @@ const _RT_TOOL_CHECKS = {
     // checkListingGoalsDailyReminder is here so that when ONE person at a store
     // sets the roles, everyone else's "set today's goals" card clears at once.
     goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals', 'checkListingGoalsDailyReminder'],
+    // The projects fn broadcasts on every request and decision, so an open
+    // Projects board moves the card the moment Ethan approves it elsewhere.
+    projects:      ['prjRealtimeRefresh'],
 };
 
 // Re-run a tool's checks (sequentially, so any UI-refresh step runs after its
@@ -61390,7 +62282,7 @@ function _dmxEfficiencyPane() {
         + btn('This Week', back0)
         + '</div></div>';
 
-    if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
+    if (!rows) return head + '<div class="dmx-empty">Loading the Week…</div>';
     if (!rows.length) return head + '<div class="dmx-empty">No capacity data for this week.</div>';
 
     // Column order reads left to right as the story: who the store is and what it
@@ -63980,7 +64872,7 @@ window.openExpenses = openExpenses;
 
 async function loadExpenses() {
     const body = document.getElementById('expBody');
-    if (body && !_expData) body.innerHTML = '<div class="status-message">Loading expenses…</div>';
+    if (body && !_expData) body.innerHTML = '<div class="status-message">Loading Expenses…</div>';
     const pin = sessionStorage.getItem('speeksUserPin') || '';
     try {
         const q = `month=${encodeURIComponent(_expMonth || _expThisMonth())}`
@@ -64807,7 +65699,7 @@ const SETTINGS_SECTIONS = {
     notifications: {
         pane: 'settingsNotifyPane', back: true, footer: true,
         eyebrow: 'Settings', title: 'Notifications',
-        sub: 'Pick which SPEEKSNET alerts also reach your inbox.',
+        sub: 'Pick which SPEEKSNET alerts reach you, and where.',
         onOpen: () => loadNotifySettings(),
     },
 };
@@ -64913,7 +65805,7 @@ async function _nsFetch() {
 async function loadNotifySettings() {
     const body = document.getElementById('notifySettingsBody');
     if (!body) return;
-    body.innerHTML = '<div class="ns-loading">Loading your settings…</div>';
+    body.innerHTML = '<div class="ns-loading">Loading Your Settings…</div>';
     if (!sessionStorage.getItem('speeksUserPin')) {
         body.innerHTML = '<div class="ns-loading">Sign in again to change these.</div>';
         return;
@@ -64962,7 +65854,7 @@ function renderNotifySettings(d) {
     // categories are meaningless without both. The block below the switch dims
     // when it is off, so the state reads at a glance instead of being inferred
     // from a row of ticked boxes that aren't doing anything.
-    body.innerHTML = `${feedHtml}
+    body.innerHTML = `<div id="nsPush"></div>${feedHtml}
       <div class="ns-master ${on ? 'is-on' : ''}">
         <label class="ns-switch">
           <input type="checkbox" id="nsEnabled" ${on ? 'checked' : ''} onchange="_nsSyncEnabled()">
@@ -64986,7 +65878,168 @@ function renderNotifySettings(d) {
         </div>
       </div>`;
     _nsSyncEnabled();
+    _pushRender();
 }
+
+// ============================================================================
+// PHONE ALERTS — Alerts Hub phase 1 (2026-11-20, docs/alerts-hub-plan.md)
+// ============================================================================
+// The top block of Settings → Notifications. Acts on the spot rather than
+// waiting for Save: turning alerts on is a permission prompt plus a handshake
+// with the phone, not a preference, so there is nothing to hold back.
+//
+// iPhone only delivers web push to a site added to the Home Screen (iOS 16.4+),
+// and only from a tap — so requestPermission() is the FIRST await in
+// pushEnable(); a fetch before it loses the tap and iOS silently says no.
+// Android Chrome works straight from the browser. sw.js is push-only (no
+// cache) so the ?v= cache-buster keeps working — read its header first.
+function _pushEnv() {
+    const ua = navigator.userAgent || '';
+    const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    return { ios, android: /Android/.test(ua), standalone, supported };
+}
+
+function _pushDeviceName() {
+    const e = _pushEnv();
+    return e.ios ? 'iPhone' : e.android ? 'Android Phone' : 'This Computer';
+}
+
+function _pushKeyBytes(b64u) {
+    const pad = '='.repeat((4 - (b64u.length % 4)) % 4);
+    const bin = atob((b64u + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+
+async function _pushCurrentSub() {
+    if (!('serviceWorker' in navigator)) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+}
+
+function _pushNote(msg, kind) {
+    const n = document.getElementById('nsPushNote');
+    if (!n) return;
+    n.textContent = msg || '';
+    n.className = 'ns-push-note' + (kind ? ' is-' + kind : '');
+}
+
+async function _pushRender() {
+    const box = document.getElementById('nsPush');
+    if (!box) return;
+    // Feature Access gate (notify-phone-alerts, DM-only default). Not drawn at
+    // all for anyone else: an empty block, not a greyed one.
+    if (_featureEffectiveVisible('notify-phone-alerts', _jumpRoleClass(), sessionStorage.getItem('speeksUserName') || '') !== true) {
+        box.innerHTML = '';
+        return;
+    }
+    const env = _pushEnv();
+    const apos = String.fromCharCode(39);
+    let inner;
+    if (env.ios && !env.standalone) {
+        inner = `<div class="ns-hint ns-push-steps">On iPhone, alerts only work from the Home Screen app:<br>
+                 1. Tap <b>Share</b> → <b>Add to Home Screen</b><br>
+                 2. Open SPEEKSNET from the Home Screen and sign in<br>
+                 3. Come back here and tap <b>Turn On Phone Alerts</b></div>`;
+    } else if (!env.supported) {
+        inner = `<div class="ns-hint">This browser can${apos}t get phone alerts. Use Chrome on Android, or Safari → Add to Home Screen on iPhone.</div>`;
+    } else if (Notification.permission === 'denied') {
+        inner = `<div class="ns-hint">Alerts are blocked for SPEEKSNET on this device. Turn them on in the phone${apos}s Settings → Notifications → SPEEKSNET, then come back.</div>`;
+    } else {
+        let sub = null;
+        try { sub = await _pushCurrentSub(); } catch (_) { sub = null; }
+        inner = sub
+            ? `<div class="ns-push-state">Alerts On · ${_samEsc(_pushDeviceName())}</div>
+               <div class="ns-push-btns">
+                 <button type="button" class="btn-secondary" onclick="pushTest(this)">Send A Test</button>
+                 <button type="button" class="btn-ghost" onclick="pushDisable(this)">Turn Off</button>
+               </div>`
+            : `<div class="ns-hint">Get SPEEKSNET alerts on this device, like a text — only for work.</div>
+               <div class="ns-push-btns is-one">
+                 <button type="button" class="btn-primary" onclick="pushEnable(this)">Turn On Phone Alerts</button>
+               </div>`;
+    }
+    box.innerHTML = `<div class="ns-push">
+        <div class="ns-label">Phone alerts</div>
+        ${inner}
+        <div class="ns-push-note" id="nsPushNote"></div>
+      </div>`;
+}
+
+async function _pushPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const res = await fetch(ALERTS_HUB_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
+    return j;
+}
+
+async function pushEnable(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    _pushNote('Turning on…');
+    try {
+        const perm = await Notification.requestPermission();          // keep FIRST — see banner
+        if (perm !== 'granted') {
+            _pushNote(perm === 'denied' ? `Alerts were blocked. Allow them in the phone${apos}s settings.` : 'Alerts were not allowed.', 'err');
+            if (btn) btn.disabled = false;
+            return;
+        }
+        const reg = await navigator.serviceWorker.register('sw.js');
+        await navigator.serviceWorker.ready;
+        const kr = await fetch(`${ALERTS_HUB_URL}?action=key&v=${Date.now()}`);
+        const kj = await kr.json().catch(() => ({}));
+        if (!kj.publicKey) throw new Error(kj.error || 'Phone alerts are not set up yet');
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _pushKeyBytes(kj.publicKey) });
+        await _pushPost({ action: 'subscribe', subscription: sub.toJSON(), device: _pushDeviceName() });
+        await _pushRender();
+        _pushNote('On. Sending a test now…', 'ok');
+        await _pushPost({ action: 'test' });
+        _pushNote('Test sent — it should arrive in a few seconds.', 'ok');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t turn on — ${e.message || 'try again'}.`, 'err');
+        if (btn) btn.disabled = false;
+    }
+}
+window.pushEnable = pushEnable;
+
+async function pushTest(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    _pushNote('Sending…');
+    try {
+        const j = await _pushPost({ action: 'test' });
+        _pushNote(j.sent ? 'Test sent — it should arrive in a few seconds.' : 'Nothing was delivered. Turn alerts off and on again.', j.sent ? 'ok' : 'err');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t send — ${e.message || 'try again'}.`, 'err');
+    }
+    if (btn) btn.disabled = false;
+}
+window.pushTest = pushTest;
+
+async function pushDisable(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    try {
+        const sub = await _pushCurrentSub();
+        if (sub) {
+            try { await _pushPost({ action: 'unsubscribe', endpoint: sub.endpoint }); } catch (_) { /* still drop it locally */ }
+            await sub.unsubscribe();
+        }
+        await _pushRender();
+        _pushNote('Phone alerts are off for this device.');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t turn off — ${e.message || 'try again'}.`, 'err');
+        if (btn) btn.disabled = false;
+    }
+}
+window.pushDisable = pushDisable;
 
 // One category row. A category the function gave sub-switches for becomes a
 // disclosure: the category tick still governs the whole thing, and the caret
@@ -66839,11 +67892,11 @@ function _pqTrainHtml() {
         <div class="pqt-count">${t.done || 0} Graded · ${Math.max(0, t.left || 0)} To Go</div>
         <button type="button" class="pqt-x" onclick="pqTrainClose()" aria-label="Close">×</button>
       </div>`;
-    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading photos…</div>`;
+    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading Photos…</div>`;
     const err = t.err ? `<div class="pqt-err">${_ecEsc(t.err)}</div>` : '';
     const p = t.queue[t.i];
     if (!p) {
-        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the next photos…'
+        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the Next Photos…'
             : t.skipped ? `Done for now. The ${t.skipped} photo${t.skipped === 1 ? '' : 's'} you skipped will come back next time.`
             : `All caught up — every photo from the graded listings at ${_ecEsc(t.store)} has an answer.`}</div>`;
     }
@@ -67364,7 +68417,7 @@ function _pqcHtml() {
         <button type="button" class="pqt-x" onclick="pqConfirmClose()" aria-label="Close">×</button>
       </div>`;
     const err = c.err ? `<div class="pqt-err">${_ecEsc(c.err)}</div>` : '';
-    if (!d) return head + err + `<div class="pqt-empty">${c.busy ? 'Loading listings…' : ''}</div>`;
+    if (!d) return head + err + `<div class="pqt-empty">${c.busy ? 'Loading Listings…' : ''}</div>`;
     // Progress per sheet, busiest-with-least-gold first, each a way in.
     const target = d.target || 40;
     const sheetBtn = s => `<button type="button" class="pqc-sheet${s.slug === c.sheet ? ' pqc-sheet-on' : ''}"
@@ -67391,7 +68444,7 @@ function _pqcHtml() {
             `<span class="pqc-done-s" title="${s.confirmed} confirmed by you of ${s.graded} graded${count(s) < Math.min(target, s.graded) ? ' — the rest were dismissed, or their photos changed since the grade, so they can’t be confirmed' : ''}">✓ ${_ecEsc(s.name)} ${Math.min(count(s), Math.min(target, s.graded))}/${Math.min(target, s.graded)}${count(s) < Math.min(target, s.graded) ? ' (rest can’t be confirmed)' : ''}</span>`).join('')}</div>` : '');
     const l = _pqcListing();
     if (!l) {
-        return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading listings…'
+        return head + err + sheets + `<div class="pqt-empty">${c.busy ? 'Loading Listings…'
             : c.forTraining ? 'Nothing left to confirm on this sheet. Pick another sheet above.'
             : `Nothing left here that you haven't already judged. Pick another sheet above, or
                <button type="button" class="pqt-btn" onclick="pqConfirmClose(); pqConfirmOpen('', true)">More For Training</button>`}</div>`;
