@@ -18071,6 +18071,20 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     .settings-menu { width: calc(100% - 24px); }
     .settings-menu .manage-content { max-height: 62vh; }
 }
+/* PHONE SETTINGS SHEET (2026-11-21, when the cog came back to phones for Phone
+   Alerts). Two fixes, both scoped to Settings only:
+   1. .manage-footer sets display:flex, which beats the [hidden] attribute that
+      settingsGo() puts on the footer of the index page, so a Save Changes button
+      showed with nothing to save. [hidden] has to win.
+   2. Under 640px it is the same full-height sheet as every other tool (Ethan,
+      2026-11-21: a short sheet on the bottom half "looks weird" next to the
+      others, so do NOT size it to its content). Its body has to fill that
+      sheet instead of stopping at the desktop 70vh/62vh caps, so the Save bar
+      sits at the bottom edge rather than floating halfway down. */
+.settings-menu .manage-footer[hidden] { display: none; }
+@media (max-width: 640px) {
+    .modal-menu.settings-menu > .manage-content { flex: 1 1 auto; max-height: none; min-height: 0; }
+}
 
 /* Email-alert status badge in the User Permissions rows (read-only — each
    person sets their own from the nav cog; this only exposes who WON'T hear
