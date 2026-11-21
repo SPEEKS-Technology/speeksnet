@@ -35087,6 +35087,23 @@ function prjRender() {
         : `<div class="status-message prj-empty">${_prjEmptyText(view.key)}</div>`;
 
     body.innerHTML = seg + list;
+    _prjEqualPills(body);
+}
+
+// ONE SIZE PER COLUMN (Ethan, 2026-11-21; his standing rule that pills side by
+// side are one width — the widest's). Every status chip in the list takes the
+// width of the widest one showing, and so does every name chip under Who's
+// Involved. Measured, not a fixed number, because the widest changes with the
+// tab: "Completed · Ready for SPEEKSNET" only shows under Completed, and a long
+// name only when that person is on a project in view.
+function _prjEqualPills(root) {
+    ['.prj-table .prj-chip', '.prj-table .prj-tag'].forEach(sel => {
+        const pills = Array.from(root.querySelectorAll(sel));
+        if (!pills.length) return;
+        pills.forEach(el => { el.style.width = ''; });
+        const w = Math.ceil(Math.max(...pills.map(el => el.getBoundingClientRect().width)));
+        if (w > 0) pills.forEach(el => { el.style.width = w + 'px'; });
+    });
 }
 
 function _prjEmptyText(view) {

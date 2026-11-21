@@ -110,6 +110,31 @@ t('list: a long description is clipped to two lines in its row', function () {
     return d.getBoundingClientRect().height <= lh * 2 + 2 || 'description is ' + Math.round(d.getBoundingClientRect().height) + 'px tall';
 });
 
+// ONE PILL SIZE PER COLUMN (Ethan, 2026-11-21): every status chip is as wide as
+// the widest one in view, and so is every name chip — on each tab, the longest
+// label still on one line.
+t('list @1440: status pills are one width, name pills are one width, on every tab', function () {
+    renderPane(1440);
+    var bad = [];
+    ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+        prjSetView(v);
+        ['.prj-chip', '.prj-tag'].forEach(function (sel) {
+            var els = document.querySelectorAll('#layout-host .prj-table ' + sel);
+            if (els.length < 2) return;
+            var widths = {}, tall = 0;
+            Array.prototype.forEach.call(els, function (e) {
+                var r = e.getBoundingClientRect();
+                widths[Math.round(r.width)] = 1;
+                if (r.height > 26) tall++;
+            });
+            var ws = Object.keys(widths);
+            if (ws.length !== 1) bad.push(v + ' ' + sel + ' widths ' + ws.join('/'));
+            if (tall) bad.push(v + ' ' + sel + ': ' + tall + ' wrapped');
+        });
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+
 // CENTERED COLUMNS (Ethan, 2026-11-21): Who's Involved, Requested By, Status and
 // Updated sit centred under their headers, on every status tab — including the
 // Completed badge with its outcome ("Completed · Ready for SPEEKSNET"), which
