@@ -83,6 +83,10 @@ const LIST_KEYS = new Set([
   // — boosts staff record in the Marketplace Lister. Empty, it falls back to
   // claims_disputes_dm.
   "fb_boosts",
+  // credential_expiry: the 7:50am Expiring Credentials mail (credential-expiry,
+  // 0196, 2026-11-21) — a key/secret/token is within 60 days of expiring.
+  // Empty, it falls back to Ethan.
+  "credential_expiry",
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

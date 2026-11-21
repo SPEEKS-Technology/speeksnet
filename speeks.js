@@ -43943,6 +43943,13 @@ const EMAIL_LIST_GROUPS = [
               desc: 'The nightly PayMore Day End Report failing to reach the Buy tab.' },
             { key: 'summary_weekly_alert', label: 'Weekly Summary Import',
               desc: 'The Monday Summary tab update failing or coming up short. Its revenue and cost come off the Net Profit tab from October 2026.' },
+            // credential_expiry: credential-expiry fn (0196, 2026-11-21). The
+            // rows it watches are public.credential_expiry; inventory in
+            // docs/credential-expiry.md.
+            { key: 'credential_expiry', label: 'Expiring Credentials',
+              desc: '7:50am, only when a key, secret or token the site uses (the Microsoft mail secret, '
+                  + 'each store\'s eBay connection, and more) is 60, 30, 14, 7 or 1 days from expiring — '
+                  + 'then every day once it has expired — with how to renew it.' },
             // 'b2b_quote_ready' went with the CEO mini CRM (0151, 2026-10-21):
             // its email is switched off, and "a quote is ready to send" now
             // reaches the approvers through their own notification settings
