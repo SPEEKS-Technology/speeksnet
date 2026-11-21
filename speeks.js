@@ -39,7 +39,10 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.11.0';
+// 3.12.1 (2026-11-21): v3.12.0 was tagged and patch-noted on 2026-11-12 but this
+// line was never bumped from 3.11.0, so the site showed the older number. One up
+// in the third digit from the real last release: Projects polish + Phone Alerts.
+const APP_VERSION = '3.12.1';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -220,6 +223,7 @@ const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
+const ALERTS_HUB_URL    = `${_BASE}/alerts-hub`;   // phone push (Alerts Hub, 2026-11-20)
 const DAILY_BRIEF_URL   = `${_BASE}/daily-brief`;
 const DISTRICT_WATCH_URL = `${_BASE}/district-watch`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
@@ -38404,7 +38408,7 @@ function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
     // Deleting a claim needs DM/CEO approval — the trash button sends a request, and a
     // claim already awaiting approval shows a pending badge instead.
     if (r.delete_requested_at) {
-        acts.push(`<span title="Waiting on DM/CEO approval" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
+        acts.push(`<span title="${escapeHtml('Waiting on DM/CEO approval' + (r.delete_reason ? ' — why: ' + r.delete_reason : ''))}" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
     } else {
         acts.push(`<button onclick="requestClaimDelete('${r.id}', ${!!hasChild})" title="Request deletion (a DM or CEO must approve)" style="display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:9px; cursor:pointer; font-size:17px; line-height:1;" onmouseover="this.style.background='#fee2e2';" onmouseout="this.style.background='#fff5f5';">🗑</button>`);
     }
@@ -39979,6 +39983,7 @@ function renderClaimsOversight() {
                     · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>${siteCopyBtn(r.case_number, 'case number')}
                     <span style="color:#94a3b8;"> — ${escapeHtml(r.reason_type || '')}</span>
                     <span style="color:#b45309; font-weight:700;"> · Requested by ${who}</span>
+                    <div style="margin-top:4px; font-size:12.5px; color:var(--slate-charcoal);"><span style="font-weight:800;">Why:</span> ${r.delete_reason ? escapeHtml(r.delete_reason) : '<span style="color:#94a3b8;">No reason given (asked before reasons were required)</span>'}</div>
                 </div>
                 <div style="display:flex; gap:8px;">
                     <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve Delete</button>
@@ -40257,25 +40262,63 @@ async function updateClaimStatus(id, status) {
 
 // Manager-side: request deletion. Claims are never deleted directly by a manager —
 // a DM/CEO must approve, so nothing is quietly removed.
-async function requestClaimDelete(id, hasChild) {
+//
+// SAY WHY (Ethan, 2026-11-21: "add a notes field when a user requests to delete
+// an insurance claim, so I know why they are trying to delete the claim"). The
+// plain confirm() became a small dialog with a required reason box; the reason
+// is stored on the claim (delete_reason, 0195) and shown on the DM's Delete
+// Requests list and in the notification. shopify-claims accepts a blank one
+// only so the pre-merge live page keeps working — this box is the gate.
+function requestClaimDelete(id, hasChild) {
+    document.getElementById('claimDelReqModal')?.remove();
     // Deleting an Item-Not-Received ticket that already has a loss claim removes
     // both (child cascades) — spell that out so it isn't a surprise.
-    const msg = hasChild
-        ? 'Request deletion of this Item-Not-Received ticket?\n\nThis also removes the loss claim opened on it. A DM or CEO must approve before anything is removed.'
-        : 'Request deletion of this claim?\n\nA DM or CEO must approve it before the claim is removed.';
-    if (!confirm(msg)) return;
-    try {
-        const res = await fetch(CLAIMS_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'request_delete', id, requested_by: sessionStorage.getItem('speeksUserName') || null }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
-        alert('Delete request sent. A DM or CEO will review it.');
-        fetchMyClaims();
-    } catch (e) {
-        alert('Could not send the request: ' + (e.message || e));
-    }
+    const lead = hasChild
+        ? 'This also removes the loss claim opened on this Item-Not-Received ticket. A DM or CEO must approve before anything is removed.'
+        : 'A DM or CEO must approve it before the claim is removed.';
+    const wrap = document.createElement('div');
+    wrap.id = 'claimDelReqModal';
+    wrap.style.cssText = 'position:fixed; inset:0; z-index:4200; background:rgba(2,6,23,.55); display:flex; align-items:center; justify-content:center; padding:16px;';
+    wrap.innerHTML = `
+        <div role="dialog" aria-modal="true" aria-labelledby="claimDelReqTitle" style="background:#fff; border-radius:14px; width:100%; max-width:440px; padding:20px; box-shadow:0 20px 50px rgba(2,6,23,.3); box-sizing:border-box;">
+            <div id="claimDelReqTitle" style="font-weight:800; font-size:16px; color:var(--slate-charcoal); margin-bottom:6px;">Request To Delete This Claim</div>
+            <div style="font-size:13px; color:#64748b; line-height:1.5; margin-bottom:12px;">${escapeHtml(lead)}</div>
+            <label for="claimDelReqReason" style="display:block; font-size:12px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">Why Should It Be Deleted?</label>
+            <textarea id="claimDelReqReason" rows="3" maxlength="500" placeholder="e.g. Opened on the wrong order, duplicate of another claim…" style="width:100%; box-sizing:border-box; font:inherit; font-size:14px; padding:9px 10px; border:1.5px solid #cbd5e1; border-radius:9px; resize:vertical;"></textarea>
+            <div id="claimDelReqErr" style="display:none; color:#b91c1c; font-size:12px; font-weight:700; margin-top:6px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; flex-wrap:wrap;">
+                <button type="button" data-act="cancel" style="font-size:13px; font-weight:800; border-radius:8px; padding:8px 14px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Cancel</button>
+                <button type="button" data-act="send" style="font-size:13px; font-weight:800; border-radius:8px; padding:8px 14px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Send Request</button>
+            </div>
+        </div>`;
+    document.body.appendChild(wrap);
+    const box = wrap.querySelector('#claimDelReqReason');
+    const err = wrap.querySelector('#claimDelReqErr');
+    const sendBtn = wrap.querySelector('[data-act="send"]');
+    const close = () => wrap.remove();
+    const showErr = (t) => { err.textContent = t; err.style.display = 'block'; };
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+    wrap.querySelector('[data-act="cancel"]').onclick = close;
+    wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    sendBtn.onclick = async () => {
+        const reason = box.value.trim();
+        if (!reason) { showErr('Say why this claim should be deleted.'); box.focus(); return; }
+        sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+        try {
+            const res = await fetch(CLAIMS_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'request_delete', id, reason, requested_by: sessionStorage.getItem('speeksUserName') || null }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+            close();
+            fetchMyClaims();   // the row's "🗑 Delete requested" badge is the confirmation
+        } catch (e) {
+            sendBtn.disabled = false; sendBtn.textContent = 'Send Request';
+            showErr('Could not send the request: ' + (e.message || e));
+        }
+    };
+    setTimeout(() => box.focus(), 0);
 }
 
 // DM/CEO-side: approve a pending delete request → permanently removes the claim.
@@ -40670,8 +40713,11 @@ async function checkAgingClaimsDM() {
             const which = pendingDelete.length <= 2
                 ? pendingDelete.map(_clLabel).join(', ')
                 : `${pendingDelete.length} claims`;
+            // One request: say why on the feed line too, so the DM can decide from it.
+            const why1 = pendingDelete.length === 1 && pendingDelete[0].delete_reason
+                ? ` Why: "${String(pendingDelete[0].delete_reason).trim()}"` : '';
             const line = `${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval — ${which}`
-                + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.`;
+                + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.${why1}`;
             bodyParts.push(escapeHtml(line));
             sumParts.push(line);
         }
@@ -44997,6 +45043,12 @@ const FEATURE_CATALOG = [
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager', 'employee'] },
+    // Phone Alerts (Alerts Hub, 2026-11-20): the top block of Settings →
+    // Notifications that turns on push for this phone. DM only while Ethan
+    // pilots it (his phone + BAL). Widening it is a Feature Access change, not a
+    // code change; the alerts-hub function reads the same key and the same
+    // default, so the two cannot disagree (see PUSH_DEFAULT_ROLES there).
+    { key: 'notify-phone-alerts',      label: 'Phone Alerts (Push)',           tab: 'hotbar', group: 'Top Bar', def: ['district-manager'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -65647,7 +65699,7 @@ const SETTINGS_SECTIONS = {
     notifications: {
         pane: 'settingsNotifyPane', back: true, footer: true,
         eyebrow: 'Settings', title: 'Notifications',
-        sub: 'Pick which SPEEKSNET alerts also reach your inbox.',
+        sub: 'Pick which SPEEKSNET alerts reach you, and where.',
         onOpen: () => loadNotifySettings(),
     },
 };
@@ -65802,7 +65854,7 @@ function renderNotifySettings(d) {
     // categories are meaningless without both. The block below the switch dims
     // when it is off, so the state reads at a glance instead of being inferred
     // from a row of ticked boxes that aren't doing anything.
-    body.innerHTML = `${feedHtml}
+    body.innerHTML = `<div id="nsPush"></div>${feedHtml}
       <div class="ns-master ${on ? 'is-on' : ''}">
         <label class="ns-switch">
           <input type="checkbox" id="nsEnabled" ${on ? 'checked' : ''} onchange="_nsSyncEnabled()">
@@ -65826,7 +65878,168 @@ function renderNotifySettings(d) {
         </div>
       </div>`;
     _nsSyncEnabled();
+    _pushRender();
 }
+
+// ============================================================================
+// PHONE ALERTS — Alerts Hub phase 1 (2026-11-20, docs/alerts-hub-plan.md)
+// ============================================================================
+// The top block of Settings → Notifications. Acts on the spot rather than
+// waiting for Save: turning alerts on is a permission prompt plus a handshake
+// with the phone, not a preference, so there is nothing to hold back.
+//
+// iPhone only delivers web push to a site added to the Home Screen (iOS 16.4+),
+// and only from a tap — so requestPermission() is the FIRST await in
+// pushEnable(); a fetch before it loses the tap and iOS silently says no.
+// Android Chrome works straight from the browser. sw.js is push-only (no
+// cache) so the ?v= cache-buster keeps working — read its header first.
+function _pushEnv() {
+    const ua = navigator.userAgent || '';
+    const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    return { ios, android: /Android/.test(ua), standalone, supported };
+}
+
+function _pushDeviceName() {
+    const e = _pushEnv();
+    return e.ios ? 'iPhone' : e.android ? 'Android Phone' : 'This Computer';
+}
+
+function _pushKeyBytes(b64u) {
+    const pad = '='.repeat((4 - (b64u.length % 4)) % 4);
+    const bin = atob((b64u + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+
+async function _pushCurrentSub() {
+    if (!('serviceWorker' in navigator)) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+}
+
+function _pushNote(msg, kind) {
+    const n = document.getElementById('nsPushNote');
+    if (!n) return;
+    n.textContent = msg || '';
+    n.className = 'ns-push-note' + (kind ? ' is-' + kind : '');
+}
+
+async function _pushRender() {
+    const box = document.getElementById('nsPush');
+    if (!box) return;
+    // Feature Access gate (notify-phone-alerts, DM-only default). Not drawn at
+    // all for anyone else: an empty block, not a greyed one.
+    if (_featureEffectiveVisible('notify-phone-alerts', _jumpRoleClass(), sessionStorage.getItem('speeksUserName') || '') !== true) {
+        box.innerHTML = '';
+        return;
+    }
+    const env = _pushEnv();
+    const apos = String.fromCharCode(39);
+    let inner;
+    if (env.ios && !env.standalone) {
+        inner = `<div class="ns-hint ns-push-steps">On iPhone, alerts only work from the Home Screen app:<br>
+                 1. Tap <b>Share</b> → <b>Add to Home Screen</b><br>
+                 2. Open SPEEKSNET from the Home Screen and sign in<br>
+                 3. Come back here and tap <b>Turn On Phone Alerts</b></div>`;
+    } else if (!env.supported) {
+        inner = `<div class="ns-hint">This browser can${apos}t get phone alerts. Use Chrome on Android, or Safari → Add to Home Screen on iPhone.</div>`;
+    } else if (Notification.permission === 'denied') {
+        inner = `<div class="ns-hint">Alerts are blocked for SPEEKSNET on this device. Turn them on in the phone${apos}s Settings → Notifications → SPEEKSNET, then come back.</div>`;
+    } else {
+        let sub = null;
+        try { sub = await _pushCurrentSub(); } catch (_) { sub = null; }
+        inner = sub
+            ? `<div class="ns-push-state">Alerts On · ${_samEsc(_pushDeviceName())}</div>
+               <div class="ns-push-btns">
+                 <button type="button" class="btn-secondary" onclick="pushTest(this)">Send A Test</button>
+                 <button type="button" class="btn-ghost" onclick="pushDisable(this)">Turn Off</button>
+               </div>`
+            : `<div class="ns-hint">Get SPEEKSNET alerts on this device, like a text — only for work.</div>
+               <div class="ns-push-btns is-one">
+                 <button type="button" class="btn-primary" onclick="pushEnable(this)">Turn On Phone Alerts</button>
+               </div>`;
+    }
+    box.innerHTML = `<div class="ns-push">
+        <div class="ns-label">Phone alerts</div>
+        ${inner}
+        <div class="ns-push-note" id="nsPushNote"></div>
+      </div>`;
+}
+
+async function _pushPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const res = await fetch(ALERTS_HUB_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
+    return j;
+}
+
+async function pushEnable(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    _pushNote('Turning on…');
+    try {
+        const perm = await Notification.requestPermission();          // keep FIRST — see banner
+        if (perm !== 'granted') {
+            _pushNote(perm === 'denied' ? `Alerts were blocked. Allow them in the phone${apos}s settings.` : 'Alerts were not allowed.', 'err');
+            if (btn) btn.disabled = false;
+            return;
+        }
+        const reg = await navigator.serviceWorker.register('sw.js');
+        await navigator.serviceWorker.ready;
+        const kr = await fetch(`${ALERTS_HUB_URL}?action=key&v=${Date.now()}`);
+        const kj = await kr.json().catch(() => ({}));
+        if (!kj.publicKey) throw new Error(kj.error || 'Phone alerts are not set up yet');
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _pushKeyBytes(kj.publicKey) });
+        await _pushPost({ action: 'subscribe', subscription: sub.toJSON(), device: _pushDeviceName() });
+        await _pushRender();
+        _pushNote('On. Sending a test now…', 'ok');
+        await _pushPost({ action: 'test' });
+        _pushNote('Test sent — it should arrive in a few seconds.', 'ok');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t turn on — ${e.message || 'try again'}.`, 'err');
+        if (btn) btn.disabled = false;
+    }
+}
+window.pushEnable = pushEnable;
+
+async function pushTest(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    _pushNote('Sending…');
+    try {
+        const j = await _pushPost({ action: 'test' });
+        _pushNote(j.sent ? 'Test sent — it should arrive in a few seconds.' : 'Nothing was delivered. Turn alerts off and on again.', j.sent ? 'ok' : 'err');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t send — ${e.message || 'try again'}.`, 'err');
+    }
+    if (btn) btn.disabled = false;
+}
+window.pushTest = pushTest;
+
+async function pushDisable(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    try {
+        const sub = await _pushCurrentSub();
+        if (sub) {
+            try { await _pushPost({ action: 'unsubscribe', endpoint: sub.endpoint }); } catch (_) { /* still drop it locally */ }
+            await sub.unsubscribe();
+        }
+        await _pushRender();
+        _pushNote('Phone alerts are off for this device.');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t turn off — ${e.message || 'try again'}.`, 'err');
+        if (btn) btn.disabled = false;
+    }
+}
+window.pushDisable = pushDisable;
 
 // One category row. A category the function gave sub-switches for becomes a
 // disclosure: the category tick still governs the whole thing, and the caret

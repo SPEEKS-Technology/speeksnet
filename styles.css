@@ -18051,6 +18051,21 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .settings-menu .manage-footer .btn-primary { flex: 0 0 auto; }
 .ns-save-note.is-ok  { color: #1f9d57; }
 .ns-save-note.is-err { color: #d64545; }
+/* ---- Phone alerts block (Alerts Hub phase 1, 2026-11-20) ----
+   Sits above the email settings and acts on the spot (no Save). Side-by-side
+   buttons are one width, the widest's, on an equal-column grid (Ethan's pill
+   rule, 11-08). */
+.ns-push { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid #e9eef2; }
+.ns-push-steps { line-height: 1.8; }
+.ns-push-state { font-size: 13.5px; font-weight: 750; color: #1f9d57; margin-top: 2px; }
+.ns-push-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.ns-push-btns.is-one { grid-template-columns: 1fr; }
+.ns-push-btns button { width: 100%; }
+.ns-push-btns button:disabled { opacity: .55; cursor: default; transform: none; }
+.ns-push-note { font-size: 12px; font-weight: 700; color: #8a97a4; margin-top: 8px; min-height: 1em; }
+.ns-push-note:empty { display: none; }
+.ns-push-note.is-ok  { color: #1f9d57; }
+.ns-push-note.is-err { color: #d64545; }
 
 @media (max-width: 600px) {
     .settings-menu { width: calc(100% - 24px); }
