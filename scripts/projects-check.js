@@ -154,11 +154,12 @@ t('list: an empty group says so instead of drawing an empty table', function () 
 // "DM can see all of the projects. Everyone else can only see projects they are
 // involved in." The filtering is the function's; the page has to SAY which
 // list this is, or an empty one reads as "nobody has any projects".
-t('list: the DM gets no district note under the tabs (header says it), and a Waiting on You count', function () {
+t('list: the DM gets no district note and no "Waiting on You" line — the tab pip still counts', function () {
     load('Ethan', APPROVER);
     var meta = document.getElementById('prjSubtitle').textContent;
     var noteEl = document.querySelector('#prjBody .prj-seg-note');
-    return (!noteEl && /Waiting on You/.test(meta)) || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
+    var pip = document.getElementById('prjWaitPip').textContent;
+    return (!noteEl && meta === '' && pip !== '' && pip !== '0') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '" pip ' + pip;
 });
 // CEO and MOCD see every project too, by role ("not a switch"), but don't
 // decide — so no "waiting on you", just how many there are.
@@ -886,4 +887,33 @@ t('sample: every sample event belongs to a sample project, with unique ids', fun
     var seen = {}, dup = [], orphan = [];
     d.events.forEach(function (e) { if (seen[e.id]) dup.push(e.id); seen[e.id] = 1; if (!ids[e.project_id]) orphan.push(e.project_id); });
     return (!dup.length && !orphan.length) || 'dup ' + dup + ' orphan ' + orphan;
+});
+
+// ---- yours in green, Close is a button, a test DM posts (Ethan, 2026-11-21) ----
+
+t('mine: on All Projects your rows are marked; others are not', function () {
+    load('Alex OVL', MANAGER, 'active');
+    var marked = Array.prototype.map.call(document.querySelectorAll('#prjBody tbody tr'), function (tr) {
+        return tr.querySelector('.prj-id').textContent + (tr.classList.contains('prj-row-mine') ? '*' : '');
+    }).join(',');
+    return marked === 'PRJ-4,PRJ-5*' || marked;
+});
+t('mine: on Mine nothing is marked — every row there is yours', function () {
+    load('Alex OVL', MANAGER, 'active');
+    prjSetScope('mine');
+    var n = document.querySelectorAll('#prjBody tbody tr.prj-row-mine').length;
+    prjSetScope('all');
+    return n === 0 || n + ' rows marked on Mine';
+});
+t('close: the popup\'s Close is a real button (btn-secondary), not a bare word', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var c = Array.prototype.find.call(document.querySelectorAll('#prjDetailFooter button'), function (b) { return /closeAllModals/.test(b.getAttribute('onclick') || ''); });
+    return (c && c.classList.contains('btn-secondary') && !c.classList.contains('kpi-cancel-btn')) || (c ? c.className : 'no Close');
+});
+t('sample: a test DM\'s own sample project is In Progress and posted; a manager\'s waits', function () {
+    var dm = _prjTestSample({ me: { name: 'Test DM' }, can: APPROVER, projects: [], events: [] });
+    var mg = _prjTestSample({ me: { name: 'Test Manager' }, can: MANAGER, projects: [], events: [] });
+    var p1 = dm.projects.find(function (p) { return p.id === 9007; }), p2 = mg.projects.find(function (p) { return p.id === 9007; });
+    var e1 = dm.events.find(function (e) { return e.project_id === 9007 && e.kind === 'created'; });
+    return (p1.status === 'in_progress' && e1.to_status === 'in_progress' && p2.status === 'requested') || p1.status + ' / ' + e1.to_status + ' / ' + p2.status;
 });

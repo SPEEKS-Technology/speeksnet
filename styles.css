@@ -27687,6 +27687,11 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 .prj-table.cb-table th.prj-col-date,   .prj-table.cb-table td.prj-col-date { text-align: center; }
 .prj-table td.prj-col-people .prj-tags { justify-content: center; }
 .prj-table td { color: var(--slate-charcoal); }
+/* Yours, on All Projects (2026-11-21): Call Backs' .cb-row-hasit look, the same
+   sage tint and left bar, so "this one is mine" reads the same across the site. */
+.prj-table .prj-row-mine { background: var(--cb-sage-tint); }
+.prj-table .prj-row-mine > td:first-child { box-shadow: inset 3px 0 0 var(--cb-sage); }
+.prj-table .prj-row-mine:hover { background: #ddf1e5; }
 .prj-table td.prj-col-by, .prj-table td.prj-col-date { color: var(--cb-muted); font-weight: 600; }
 .prj-row:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
 .prj-row-title { display: block; font-weight: 800; overflow-wrap: anywhere; }

@@ -34975,6 +34975,12 @@ async function prjLoad(quiet) {
 function _prjTestSample(json) {
     const me = (json.me && json.me.name) || 'Test Account';
     const DM = 'Ethan Kushnir';
+    // PRJ-9007 is "the one you made", so it follows the same rule a real one
+    // would: a test DM's goes straight to In Progress (posted), anyone else's
+    // waits for approval. Because it is always the signed-in test account's,
+    // its name changes with the account (Test DM, Test Owner…) — on purpose.
+    const iDecide = !!(json.can && json.can.approve);
+    const ownStatus = iDecide ? 'in_progress' : 'requested';
     const day = 86400000;
     const ago = d => new Date(Date.now() - d * day).toISOString();
     const r = name => ({ id: null, name });
@@ -34986,7 +34992,7 @@ function _prjTestSample(json) {
         P(9004, { title: 'Shelf Label Printer Script', description: 'Prints shelf tags straight from a Shopify search so prices on the shelf match the site.', status: 'in_progress', requested_by: 'Sam Patel', requested_store: 'LEE', involved: [r('Sam Patel'), r(me)], age: 18, touched: 3, started_at: ago(15), decided_by: DM }),
         P(9005, { title: 'Call Back Text Templates', description: 'Ready-to-send texts for when a call back item lands — one per category, with the store hours filled in.', status: 'awaiting_signoff', requested_by: 'Jordan Lee', requested_store: 'WSP', involved: [r('Jordan Lee')], age: 25, touched: 1, started_at: ago(20), decided_by: DM }),
         P(9006, { title: 'Marketplace Photo Resizer', description: 'Batch-crops listing photos to the Facebook Marketplace size so they stop getting cut off.', status: 'changes_requested', requested_by: 'Casey Morgan', requested_store: 'MPL', involved: [r('Casey Morgan')], age: 6, touched: 4, decided_by: DM, decision_note: 'Say where the photos come from — the Picture Guide folder or the phone?' }),
-        P(9007, { title: 'Daily Huddle Checklist', description: 'A two-minute opening checklist on the QuickPortal: goals, call backs due, and anything the DM flagged overnight.', status: 'requested', requested_by: me, requested_store: (json.me && json.me.store) || null, involved: [r(me)], age: 1 }),
+        P(9007, { title: 'Daily Huddle Checklist', description: 'A two-minute opening checklist on the QuickPortal: goals, call backs due, and anything the DM flagged overnight.', status: ownStatus, requested_by: me, requested_store: (json.me && json.me.store) || null, involved: [r(me)], age: 1, ...(iDecide ? { started_at: ago(1), decided_by: me } : {}) }),
         P(9008, { title: 'Holiday Price Tag Template', description: 'Red-and-white tag layout for December promos.', status: 'declined', requested_by: 'Taylor Brooks', requested_store: 'BAL', involved: [r('Taylor Brooks')], age: 30, touched: 28, decided_by: DM, decision_note: 'PayMore corporate sends the holiday tags — no need to make our own.' }),
         P(9009, { title: 'Box Order Reorder Alerts', description: 'Ping the store when shipping boxes drop under two weeks of stock.', status: 'parked', requested_by: 'Alex Rivera', requested_store: 'OVL', involved: [r('Alex Rivera'), r('Sam Patel')], age: 35, touched: 10, started_at: ago(30), decided_by: DM }),
     ];
@@ -34999,7 +35005,7 @@ function _prjTestSample(json) {
         E(9004, 'created', 'Sam Patel', 18, { to_status: 'requested' }), E(9004, 'approved', DM, 15, { note: 'Go for it — start with LEE.' }), E(9004, 'update', 'Sam Patel', 3, { note: 'Prints from the Shopify search now; working on the barcode.' }),
         E(9005, 'created', 'Jordan Lee', 25, { to_status: 'requested' }), E(9005, 'approved', DM, 20), E(9005, 'signoff_requested', 'Jordan Lee', 1, { note: 'Templates are in the Call Backs tab under Texts.' }),
         E(9006, 'created', 'Casey Morgan', 6, { to_status: 'requested' }), E(9006, 'changes_requested', DM, 4, { note: 'Say where the photos come from — the Picture Guide folder or the phone?' }),
-        E(9007, 'created', me, 1, { to_status: 'requested' }),
+        E(9007, 'created', me, 1, { to_status: ownStatus }),
         E(9008, 'created', 'Taylor Brooks', 30, { to_status: 'requested' }), E(9008, 'declined', DM, 28, { note: 'PayMore corporate sends the holiday tags — no need to make our own.' }),
         E(9009, 'created', 'Alex Rivera', 35, { to_status: 'requested' }), E(9009, 'approved', DM, 30), E(9009, 'parked', DM, 10, { note: 'Pausing until the box order tool settles.' }),
     ];
@@ -35040,11 +35046,9 @@ function prjRender() {
     const pip = document.getElementById('prjWaitPip');
     if (pip) { pip.textContent = waiting; pip.style.display = waiting ? 'inline-flex' : 'none'; }
     const meta = document.getElementById('prjSubtitle');
-    // The DM's "N Waiting on You" stays; everyone else's count ("0 of yours")
-    // is gone (Ethan, 2026-11-21) — the status tabs already count.
-    if (meta) meta.textContent = _prjCan('approve')
-        ? (waiting ? `${waiting} Waiting on You` : 'Nothing Waiting on You')
-        : '';
+    // No count line beside the button for anyone, the DM's "N Waiting on You"
+    // included (Ethan, 2026-11-21) — the tab's pip and the status tabs count.
+    if (meta) meta.textContent = '';
 
     const counts = {};
     PRJ_VIEWS.forEach(v => { counts[v.key] = all.filter(p => v.statuses.includes(p.status)).length; });
@@ -35103,7 +35107,11 @@ function _prjStatusChip(p) {
 }
 
 function _prjRowHtml(p) {
-    const mine = _prjIsRequester(p) || _prjIsInvolved(p);
+    // YOURS, IN GREEN (Ethan, 2026-11-21, "kind of like the customer callback
+    // sheet"): on All Projects, the ones you asked for or are on wear Call Backs'
+    // has-it look — sage tint, sage bar down the left. Not on Mine: every row
+    // there is yours, so the mark would say nothing.
+    const mine = _prjScope === 'all' && _prjRowIsMine(p);
     return `
         <tr class="cb-row prj-row${mine ? ' prj-row-mine' : ''}" tabindex="0" onclick="prjOpen(${Number(p.id)})"
             onkeydown="if(event.key==='Enter'){prjOpen(${Number(p.id)})}">
@@ -35321,7 +35329,7 @@ function _prjActionsHtml(p) {
         const wait = p.status === 'requested' ? 'Waiting for the DM to approve it.'
             : p.status === 'awaiting_signoff' ? 'Waiting for the DM to sign it off.'
             : p.status === 'changes_requested' ? 'Sent back for changes.' : '';
-        return `<div class="prj-foot-btns">${msg}${wait ? `<span class="prj-foot-wait">${wait}</span>` : ''}<button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button></div>`;
+        return `<div class="prj-foot-btns">${msg}${wait ? `<span class="prj-foot-wait">${wait}</span>` : ''}<button class="btn-secondary prj-act" onclick="closeAllModals()">Close</button></div>`;   // a real button, like the rest (2026-11-21)
     }
     return `<div class="prj-foot-rows">${rows}</div><div class="prj-foot-btns">${msg}${btns}</div>`;
 }
