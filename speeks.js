@@ -43947,9 +43947,8 @@ const EMAIL_LIST_GROUPS = [
             // rows it watches are public.credential_expiry; inventory in
             // docs/credential-expiry.md.
             { key: 'credential_expiry', label: 'Expiring Credentials',
-              desc: '7:50am, only when a key, secret or token the site uses (the Microsoft mail secret, '
-                  + 'each store\'s eBay connection, and more) is 60, 30, 14, 7 or 1 days from expiring — '
-                  + 'then every day once it has expired — with how to renew it.' },
+              desc: 'One email, a week before a key, secret or token the site uses expires (the '
+                  + 'Microsoft mail secret, each store\'s eBay connection), naming which one.' },
             // 'b2b_quote_ready' went with the CEO mini CRM (0151, 2026-10-21):
             // its email is switched off, and "a quote is ready to send" now
             // reaches the approvers through their own notification settings

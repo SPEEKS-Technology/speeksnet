@@ -20,6 +20,9 @@
 --   notify_list       = the Email Recipients list told about this row ("who to
 --                       tell"). Default 'credential_expiry'.
 --
+-- ⚠️ SUPERSEDED SAME DAY (Ethan): ONE email, 7 days before, nothing else — no
+-- 60/30/14/1, no daily repeats once expired. The fn holds that rule; the
+-- paragraph below describes the first build.
 -- ALERT STAGES: 60, 30, 14, 7, 1 days before, then daily once expired. The fn
 -- sends when a row enters a NEW stage (not "when days_left = 30 exactly"), so a
 -- missed cron day delays a warning by a day instead of skipping it. alert_for

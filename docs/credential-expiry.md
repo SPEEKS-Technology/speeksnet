@@ -3,9 +3,11 @@
 Written 2026-11-21. The alert is the `credential-expiry` edge function, run daily at
 7:50am Central (cron `credential-expiry-750am`, migration `0196`). It reads
 `public.credential_expiry` and emails the **Expiring Credentials** list (Email
-Recipients → System Alerts) at **60, 30, 14, 7 and 1 days** before a date, then
-**every day once it has expired**. Each email says how to renew. If the list is empty
-the email goes to Ethan.
+Recipients → System Alerts) **once, 7 days before** a credential expires, naming
+which one. There are no earlier warnings, no renew steps (Ethan asks Claude for
+those) and no repeats once it has expired (Ethan, 2026-11-21). Renewing, which means
+moving the date, arms it again for next time. If the list is empty the email goes to
+Ethan.
 
 ## What is watched (rows in `credential_expiry`)
 
@@ -37,8 +39,8 @@ update credential_expiry set expires_at = '2027-08-14', updated_at = now()
  where key = 'domain_speeksnet';
 ```
 
-Renewing a credential means moving its date. Moving the date resets the warning
-stages automatically, so nothing else needs touching. To stop watching a row, set
+Renewing a credential means moving its date. That re-arms the one-week warning
+automatically, so nothing else needs touching. To stop watching a row, set
 `active = false`. To send one row's alerts to a different list, set `notify_list` to
 another Email Recipients list key. Add the key to the email-recipients function's
 `LIST_KEYS` too, or the panel can't edit it.
@@ -69,4 +71,6 @@ another Email Recipients list key. Add the key to the email-recipients function'
 …/functions/v1/credential-expiry?secret=<ops>&test=1&to=<addr>     a sample of every dated row to one address
 ```
 
-A send with `to=` doesn't record the stage, so the real list still gets its warning.
+A send with `to=` doesn't count as the warning, so the real list still gets it.
+The renew steps are kept in each row's `renew_steps` for reference; the email no
+longer shows them.

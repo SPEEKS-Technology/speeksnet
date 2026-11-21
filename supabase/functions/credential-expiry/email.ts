@@ -6,7 +6,8 @@
 // fb-boost-report): same palette, dark header with the bar tile, 3px sage rule,
 // soft footer. Copied rather than shared because every report function carries
 // its own copy. Ethan, 2026-11-21: "designed like all of our other Speeks email
-// reports".
+// reports" — then: just the token(s) expiring this week, no how-to-renew (he
+// asks Claude for that), so no summary tiles or renew cards either.
 
 export type CredRow = {
   key: string;
@@ -53,14 +54,6 @@ const box = (inner: string) =>
 const td = (inner: string, align = 'left', extra = '') =>
   `<td align="${align}" style="padding:11px 8px;border-bottom:1px solid ${C.line2};font-size:13px;color:${C.charcoal};text-align:${align};vertical-align:top;${extra}">${inner}</td>`;
 
-function tile(label: string, value: string, note = '', color: string = C.charcoal) {
-  return `<td width="33%" align="center" valign="top" style="vertical-align:top;padding:14px 6px;background:${C.soft};border:1px solid ${C.line};border-radius:12px;">
-    <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${C.faint};">${label}</div>
-    <div style="font-size:20px;font-weight:800;color:${color};margin-top:4px;">${value}</div>
-    ${note ? sub(note) : ''}
-  </td>`;
-}
-
 // Red once expired or a week out, amber inside 30 days, plain beyond.
 const toneOf = (left: number) => (left <= 7 ? C.red : left <= 30 ? C.amber : C.charcoal);
 const leftText = (left: number) =>
@@ -91,34 +84,11 @@ export function buildCredentialEmail(rows: CredRow[], undated: string[], todayYm
       ${td(leftText(r.left), 'center', `font-size:15px;font-weight:800;color:${toneOf(r.left)};white-space:nowrap;`)}
     </tr>`).join('');
 
-  // One renew card per DISTINCT set of steps — the five eBay stores share one
-  // procedure, so they get one card naming all five rather than five copies.
-  const groups = new Map<string, CredRow[]>();
-  for (const r of due) {
-    const k = r.key.startsWith('ebay_refresh_') ? 'ebay' : r.key;
-    (groups.get(k) || groups.set(k, []).get(k)!).push(r);
-  }
-  const renewCards = [...groups.entries()].map(([k, rs]) => {
-    const first = rs[0];
-    const title = k === 'ebay'
-      ? `eBay Connections &nbsp;${rs.map((r) => badge(r.key.slice(-3))).join(' ')}`
-      : esc(first.name);
-    const steps = k === 'ebay'
-      ? 'Open https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/ebay-oauth?store=&lt;STORE&gt;&amp;secret=&lt;ops secret&gt; and sign in with that store\'s eBay account. The new expiry date is picked up automatically.'
-      : esc(first.renew_steps).replace(/\n/g, '<br>');
-    return `<tr><td style="padding:14px 16px;border-bottom:1px solid ${C.line2};">
-      <div style="font-size:13.5px;font-weight:800;color:${C.charcoal};">${title}</div>
-      ${k !== 'ebay' && first.what ? `<div style="font-size:12px;font-weight:600;color:${C.muted};margin-top:4px;line-height:1.45;">${esc(first.what)}</div>` : ''}
-      <div style="font-size:12.5px;color:${C.charcoal};margin-top:8px;line-height:1.55;">${steps}</div>
-    </td></tr>`;
-  }).join('');
-
   const undatedHtml = undated.length
     ? `${heading('No Date On File', 'Can Expire, Date Not Entered')}
        ${box(undated.map((n) => `<tr>${td(esc(n))}</tr>`).join(''))}`
     : '';
 
-  const within30 = due.filter((r) => r.left > 0 && r.left <= 30).length;
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:${C.app};font-family:Inter,Arial,Helvetica,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.app};padding:20px 10px;"><tr><td align="center">
@@ -129,26 +99,18 @@ export function buildCredentialEmail(rows: CredRow[], undated: string[], todayYm
       <td valign="middle" style="padding-left:13px;">
         <div style="font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#6ee7a7;">Speeks Technology${test ? ' &middot; Test Send' : ''}</div>
         <div style="font-size:20px;font-weight:800;letter-spacing:-.02em;color:#ffffff;margin-top:2px;">Expiring Credentials</div>
-        <div style="font-size:12.5px;font-weight:600;color:rgba(255,255,255,.66);margin-top:2px;">${esc(fmtDate(todayYmd + 'T18:00:00Z'))} &middot; Renew before the site loses access</div>
+        <div style="font-size:12.5px;font-weight:600;color:rgba(255,255,255,.66);margin-top:2px;">${esc(fmtDate(todayYmd + 'T18:00:00Z'))} &middot; Renew within the week</div>
       </td>
     </tr></table>
   </td></tr>
   <tr><td style="height:3px;background:${C.sage};font-size:0;line-height:0;">&nbsp;</td></tr>
   <tr><td style="padding:14px 12px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="6" style="border-collapse:separate;"><tr>
-      ${tile('Expired', String(expired.length), '', expired.length ? C.red : C.charcoal)}
-      ${tile('Within 30 Days', String(within30), '', within30 ? C.amber : C.charcoal)}
-      ${tile('Next To Expire', soonest.left <= 0 ? 'Expired' : plural(soonest.left, 'Day'), esc(fmtDate(soonest.expires_at)), toneOf(soonest.left))}
-    </tr></table>
-
-    ${heading('Credentials', 'Soonest First')}
+    ${heading('Expiring This Week')}
     ${box(`<tr>${th('Credential', 'left', '52%')}${th('Expires', 'center', '24%')}${th('Days Left', 'center', '24%')}</tr>${tableRows}`)}
 
-    ${heading('How To Renew')}
-    ${box(renewCards)}
     ${undatedHtml}
   </td></tr>
-  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:${C.footBg};">Generated automatically by Speeks &middot; Sent 60, 30, 14, 7 and 1 days before a credential expires, then daily once expired. Change who gets it in Email Recipients &rarr; System Alerts &rarr; Expiring Credentials.</td></tr>
+  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:${C.footBg};">Generated automatically by Speeks &middot; Sent once, a week before a key, secret or token the site uses expires. Change who gets it in Email Recipients &rarr; System Alerts &rarr; Expiring Credentials.</td></tr>
 </table></td></tr></table></body></html>`;
   return { subject, html };
 }

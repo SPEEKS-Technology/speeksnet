@@ -12,13 +12,18 @@ import { buildCredentialEmail, type CredRow } from "./email.ts";
 //
 // Daily at 7:50am Central (cron credential-expiry-750am):
 //   1. refresh auto rows (eBay refresh-token expiry off ebay_stores),
-//   2. work out each row's stage — 60 / 30 / 14 / 7 / 1 days left, or expired,
-//   3. mail a row's notify_list when it ENTERS a new stage, and every day once
-//      expired. Rows due on the same morning for the same list share one mail.
+//   2. mail a row's notify_list ONCE, when it comes within 7 days of expiring.
+//      Rows due on the same morning for the same list share one mail.
 //
-// Stage-entry, not "days_left == 30": a cron day lost to an outage delays a
-// warning by a day instead of skipping it. alert_for pins the stage to the
-// expiry date it was raised for, so renewing (a later date) starts over clean.
+// ONE WARNING PER EXPIRY, A WEEK OUT (Ethan, 2026-11-21): "I just need this a
+// week before a certain token expires" — no 60/30/14 run-up, no how-to-renew
+// (he asks Claude), no daily repeats once expired. The first build had all
+// three; they were taken out at his word.
+//
+// "Within 7 days", not "days_left == 7": a cron day lost to an outage delays the
+// warning by a day instead of skipping it, and a row added already inside the
+// week still gets its one mail. alert_for pins the warning to the expiry date it
+// was sent for, so renewing (a later date) arms it again for next time.
 //
 // Rows with no date are never alerted on by themselves — they're listed at the
 // foot of any mail that does go, so the gap stays visible.
@@ -39,7 +44,7 @@ const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
   "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
 const DEFAULT_LIST = "credential_expiry";
 const FALLBACK_TO = "ethan.kushnir@speekstechnology.com";
-const STAGES = [60, 30, 14, 7, 1];
+const WARN_DAYS = 7;
 
 const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const json = (b: unknown, s = 200) =>
@@ -63,12 +68,9 @@ function daysLeft(expires: string, today: string) {
   const b = Date.parse(chicagoDay(new Date(expires)) + "T12:00:00Z");
   return Math.round((b - a) / 86400000);
 }
-// The tightest threshold the row has reached, or null if more than 60 days out.
+// "7" once inside the warning week (expired included), else null.
 function stageFor(left: number): string | null {
-  if (left <= 0) return "expired";
-  let s: number | null = null;
-  for (const t of STAGES) if (left <= t) s = t;
-  return s === null ? null : String(s);
+  return left <= WARN_DAYS ? String(WARN_DAYS) : null;
 }
 
 async function relay(to: string, subject: string, html: string) {
@@ -140,9 +142,8 @@ Deno.serve(async (req: Request) => {
   const isDue = (r: any) => {
     if (!r._stage) return false;
     if (r.last_alert_on === today) return false;                  // one mail a day at most
-    if (r._stage === "expired") return true;                      // daily once expired
     const sameExpiry = r.alert_for && Date.parse(r.alert_for) === Date.parse(r.expires_at);
-    return !(sameExpiry && r.alert_stage === r._stage);           // entered a new stage
+    return !(sameExpiry && r.alert_stage === r._stage);           // not yet warned for this date
   };
   const due = test ? rows.filter((r: any) => r.expires_at) : rows.filter(isDue);
   if (!due.length) return json({ today, sent: 0, note: "nothing due", undated: undated.map((r: any) => r.key) });
