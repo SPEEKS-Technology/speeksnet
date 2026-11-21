@@ -35151,9 +35151,12 @@ function _prjActionsHtml(p) {
             rows = note('Note for the requester — required to decline or ask for changes');
             btns = btn('Ask for Changes', 'request_changes') + btn('Decline', 'decline', 'btn-secondary prj-danger') + btn('Approve and Start', 'approve', 'btn-primary');
         }
-        if (mine) btns = btn('Withdraw', 'withdraw', 'kpi-cancel-btn') + editBtn('Edit') + btns;
+        // Withdraw is red and sits after Edit (Ethan, 2026-11-21): it used to
+        // wear kpi-cancel-btn, first in the row — the same look and place as
+        // every popup's Cancel — and one click closed the request for good.
+        if (mine) btns = editBtn('Edit') + btn('Withdraw', 'withdraw', 'btn-secondary prj-danger') + btns;
     } else if (p.status === 'changes_requested') {
-        if (mine) btns = btn('Withdraw', 'withdraw', 'kpi-cancel-btn') + editBtn('Edit and Resubmit', 'btn-primary');
+        if (mine) btns = btn('Withdraw', 'withdraw', 'btn-secondary prj-danger') + editBtn('Edit and Resubmit', 'btn-primary');
         if (approver) { rows = note('Why it is declined'); btns += btn('Decline', 'decline', 'btn-secondary prj-danger'); }
     } else if (p.status === 'in_progress' || p.status === 'parked') {
         if (owns || approver) {
@@ -35193,8 +35196,41 @@ function _prjActionsHtml(p) {
         btns = btn(p.outcome ? 'Update Decision' : 'Save Decision', 'outcome', 'btn-primary');
     }
 
-    if (!rows && !btns) return `${msg}<button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button>`;
+    const close = '<button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button>';
+    // Delete: the DM only, in every state, first in the row and red, behind the
+    // same press-twice confirm (Ethan, 2026-11-21 — a junk or test request had
+    // no way off the board). On a closed project it is the only action, so it
+    // keeps a Close beside it.
+    if (approver) btns = btn('Delete', 'delete', 'btn-secondary prj-danger') + (btns || close);
+    if (!rows && !btns) return `${msg}${close}`;
     return `<div class="prj-foot-rows">${rows}</div><div class="prj-foot-btns">${msg}${btns}</div>`;
+}
+
+// PRESS TWICE (Ethan, 2026-11-21). Withdraw, Decline, Mark Complete / Approve
+// as Complete and Delete can't be undone — nothing leads out of withdrawn,
+// declined or completed, and a delete takes the history with it — so the first
+// press only arms the button ("Click Again to …") and the second does it. Not
+// confirm(): a native dialog hangs the headless check runner, and the site
+// keeps its decisions inside its own popups. Arming lapses after 4 seconds.
+const _PRJ_CONFIRM = { withdraw: 'Withdraw', decline: 'Decline', complete: 'Complete', delete: 'Delete' };
+function _prjArmed(action, btn) {
+    if (!_PRJ_CONFIRM[action] || !btn) return true;
+    if (btn.dataset.armed === '1') return true;
+    document.querySelectorAll('#prjDetailFooter .prj-armed').forEach(_prjDisarm);
+    btn.dataset.armed = '1';
+    btn.dataset.label = btn.textContent;
+    btn.textContent = `Click Again to ${_PRJ_CONFIRM[action]}`;
+    btn.classList.add('prj-armed');
+    btn._prjTimer = setTimeout(() => _prjDisarm(btn), 4000);
+    _prjSay(action === 'delete' ? 'Deleting removes the project and its history for good.' : "This can't be undone.", true);
+    return false;
+}
+function _prjDisarm(btn) {
+    clearTimeout(btn._prjTimer);
+    if (btn.dataset.armed !== '1') return;
+    btn.dataset.armed = '';
+    btn.textContent = btn.dataset.label || btn.textContent;
+    btn.classList.remove('prj-armed');
 }
 
 // Both popups stay in the DOM when closed, so "the message line" is whichever
@@ -35238,12 +35274,16 @@ async function prjAct(action, btn) {
         payload.outcome = document.getElementById('prjOutcome')?.value || '';
         if (!payload.outcome) { _prjSay('Pick what happens to it.', true); return; }
     }
+    if (!_prjArmed(action, btn)) return;
+    if (btn) _prjDisarm(btn);
     const buttons = document.querySelectorAll('#prjDetailFooter button');
     buttons.forEach(b => { b.disabled = true; });
-    _prjSay('Saving…');
+    _prjSay(action === 'delete' ? 'Deleting…' : 'Saving…');
     try {
         await _prjPost(payload);
         _rtMute('projects');
+        // A deleted project has no popup to come back to.
+        if (action === 'delete') { closeAllModals(); _prjOpenId = null; await prjLoad(true); return; }
         await prjLoad(true);
         _prjSay(action === 'update' ? 'Update posted.'
             : action === 'request_signoff' ? 'Sent to the DM for sign-off.' : 'Saved.');

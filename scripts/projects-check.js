@@ -200,7 +200,7 @@ function actions(me, can, id) {
 function expect(got, want) { return got === want || 'got [' + got + '], want [' + want + ']'; }
 
 t('actions: the DM on a fresh request — approve, decline, ask for changes', function () {
-    return expect(actions('Ethan', APPROVER, 2), 'approve,decline,request_changes');
+    return expect(actions('Ethan', APPROVER, 2), 'approve,decline,delete,request_changes');
 });
 t('actions: the requester on their own fresh request — edit or withdraw, no decision', function () {
     return expect(actions('Alex OVL', MANAGER, 1), 'edit,withdraw');
@@ -212,7 +212,7 @@ t('actions: a request sent back — the requester edits and resubmits', function
     return expect(actions('Alex OVL', MANAGER, 3), 'edit,withdraw');
 });
 t('actions: a request sent back — the DM can still decline it, not approve it', function () {
-    return expect(actions('Ethan', APPROVER, 3), 'decline');
+    return expect(actions('Ethan', APPROVER, 3), 'decline,delete');
 });
 t('actions: someone involved in a running project posts updates or sends it for sign-off — no edit, no complete', function () {
     return expect(actions('Kim WSP', MANAGER, 4), 'request_signoff,update');
@@ -221,19 +221,19 @@ t('actions: whoever asked for a running project can still edit it', function () 
     return expect(actions('Sam LEE', MANAGER, 4), 'edit,request_signoff,update');
 });
 t('actions: the DM on a running project — edit, update, park, complete', function () {
-    return expect(actions('Ethan', APPROVER, 4), 'complete,edit,park,update');
+    return expect(actions('Ethan', APPROVER, 4), 'complete,delete,edit,park,update');
 });
 t('actions: the DM on a parked project — resume rather than park', function () {
-    return expect(actions('Ethan', APPROVER, 5), 'complete,edit,resume,update');
+    return expect(actions('Ethan', APPROVER, 5), 'complete,delete,edit,resume,update');
 });
 t('actions: the DM on a completed project — decides what happens to it', function () {
-    return expect(actions('Ethan', APPROVER, 6), 'outcome,outcome-picker');
+    return expect(actions('Ethan', APPROVER, 6), 'delete,outcome,outcome-picker');
 });
 t('actions: anyone else on a completed project — nothing to press', function () {
     return expect(actions('Sam LEE', MANAGER, 6), '');
 });
-t('actions: declined is final — no buttons for anyone', function () {
-    return expect(actions('Ethan', APPROVER, 7) + '|' + actions('Sam LEE', MANAGER, 7), '|');
+t('actions: declined is final — nothing but the DM\'s Delete', function () {
+    return expect(actions('Ethan', APPROVER, 7) + '|' + actions('Sam LEE', MANAGER, 7), 'delete|');
 });
 // The point of real users: identity is the id, not the spelling.
 t('actions: a different person who happens to share a name is NOT the requester', function () {
@@ -457,7 +457,7 @@ t('sign-off: whoever asked can send it for sign-off too', function () {
     return expect(signoffActions('Sam LEE', MANAGER, 'in_progress'), 'edit,request_signoff,update');
 });
 t('sign-off: the DM is not offered it — he completes it himself', function () {
-    return expect(signoffActions('Ethan', APPROVER, 'in_progress'), 'complete,edit,park,update');
+    return expect(signoffActions('Ethan', APPROVER, 'in_progress'), 'complete,delete,edit,park,update');
 });
 t('sign-off: a parked project is resumed before it can be sent', function () {
     return expect(actions('Alex OVL', MANAGER, 5), 'edit,update');
@@ -466,7 +466,7 @@ t('sign-off: someone not on the project cannot send it', function () {
     return expect(signoffActions('Alex OVL', MANAGER, 'in_progress'), '');
 });
 t('sign-off: the DM on a finished project — approve as complete, send back, edit, update', function () {
-    return expect(signoffActions('Ethan', APPROVER, 'awaiting_signoff'), 'complete,edit,return_signoff,update');
+    return expect(signoffActions('Ethan', APPROVER, 'awaiting_signoff'), 'complete,delete,edit,return_signoff,update');
 });
 t('sign-off: the requester waiting on sign-off can still edit and post updates, not decide', function () {
     return expect(signoffActions('Sam LEE', MANAGER, 'awaiting_signoff'), 'edit,update');
@@ -629,4 +629,71 @@ t('wiring: a realtime ping refreshes an open list', function () {
 });
 t('wiring: Jump search lands on the Workspace tab', function () {
     return JUMP_PLACES.some(function (p) { return p.page === 'workspace.html' && p.hash === 'projects' && p.kind === 'tab'; }) || 'no Jump entry for workspace.html#projects';
+});
+
+// ---- can't-undo actions: red, after Edit, press twice; DM can delete (2026-11-21) ----
+
+function footBtn(action) {
+    return document.querySelector('#prjDetailFooter button[onclick*="prjAct(\'' + action + '\'"]');
+}
+t('undo-proof: Withdraw is red and comes after Edit, not dressed as Cancel', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var w = footBtn('withdraw');
+    if (!w) return 'no Withdraw button';
+    if (w.classList.contains('kpi-cancel-btn')) return 'Withdraw still wears kpi-cancel-btn';
+    if (!w.classList.contains('prj-danger')) return 'Withdraw is not red';
+    var html = document.getElementById('prjDetailFooter').innerHTML;
+    return html.indexOf('prjEdit(') < html.indexOf("prjAct('withdraw'") || 'Withdraw comes before Edit';
+});
+t('undo-proof: the first press of Withdraw only arms it — nothing is sent', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var w = footBtn('withdraw');
+    var before = window.__fetches.length;
+    prjAct('withdraw', w);
+    var sent = window.__fetches.length !== before;
+    var armed = /click again/i.test(w.textContent) && w.classList.contains('prj-armed');
+    _prjDisarm(w);
+    return (!sent && armed) || 'sent=' + sent + ' label="' + w.textContent + '"';
+});
+t('undo-proof: the second press of Withdraw sends it', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var w = footBtn('withdraw');
+    prjAct('withdraw', w);
+    var before = window.__fetches.length;
+    prjAct('withdraw', w);
+    return window.__fetches.length > before || 'the second press sent nothing';
+});
+t('undo-proof: Decline and Mark Complete arm first too', function () {
+    var bad = [];
+    [['decline', 2], ['complete', 4]].forEach(function (c) {
+        openDetail('Ethan', APPROVER, c[1]);
+        var note = document.getElementById('prjNote'); if (note) note.value = 'reason';
+        var b = footBtn(c[0]);
+        var before = window.__fetches.length;
+        prjAct(c[0], b);
+        if (window.__fetches.length !== before) bad.push(c[0] + ' sent on the first press');
+        if (b) _prjDisarm(b);
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+t('undo-proof: Approve and Start and Post Update still go on one press', function () {
+    openDetail('Ethan', APPROVER, 2);
+    var before = window.__fetches.length;
+    prjAct('approve', footBtn('approve'));
+    return window.__fetches.length > before || 'approve waited for a second press';
+});
+t('delete: the DM gets Delete on every project, closed ones included (with a Close)', function () {
+    var missing = [];
+    for (var id = 1; id <= 8; id++) {
+        openDetail('Ethan', APPROVER, id);
+        if (!footBtn('delete')) missing.push('PRJ-' + id);
+    }
+    openDetail('Ethan', APPROVER, 7);
+    var close = /closeAllModals\(\)/.test(document.getElementById('prjDetailFooter').innerHTML);
+    return (missing.length === 0 && close) || 'no Delete on ' + missing.join(',') + (close ? '' : '; no Close on a declined one');
+});
+t('delete: managers never get Delete, even on their own request', function () {
+    var shown = [];
+    [1, 3, 5, 8].forEach(function (id) { openDetail('Alex OVL', MANAGER, id); if (footBtn('delete')) shown.push('PRJ-' + id); });
+    return shown.length === 0 || 'Delete drawn for a manager on ' + shown.join(',');
 });
