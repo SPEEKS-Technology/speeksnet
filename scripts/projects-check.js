@@ -31,6 +31,7 @@ var IDS = { 'Alex OVL': ALEX, 'Sam LEE': SAM, 'Kim WSP': KIM, 'Ethan': ETHAN, 'P
 function ref(name) { return { id: IDS[name], name: name }; }
 
 function fixture(me, can) {
+    _prjScope = 'all';   // every test starts on All Projects
     return {
         me: { id: IDS[me.trim()] || null, name: me, role: 'manager' },
         can: can,
@@ -84,9 +85,41 @@ var APPROVER = { view: true, request: true,  approve: true,  seesAll: true };
 
 // ---- the list ------------------------------------------------------------------
 
-t('list: no "Mine only" switch any more', function () {
-    load('Pat Viewer', VIEWER);
-    return !/mine only/i.test(document.getElementById('prjBody').textContent) || 'Mine only is still drawn';
+// ALL / MINE (Ethan, 2026-11-21): everyone sees every project, and can narrow
+// to the ones they asked for or are on.
+t('list: an All Projects / Mine switch, on All by default', function () {
+    load('Alex OVL', MANAGER);
+    var btns = Array.prototype.map.call(document.querySelectorAll('#prjBody .prj-scope-btn'), function (b) { return b.textContent.trim() + (b.classList.contains('on') ? '*' : ''); }).join(',');
+    return btns === 'All Projects*,Mine' || btns;
+});
+t('list: a manager on All sees other managers\' projects; Mine narrows to their own', function () {
+    load('Alex OVL', MANAGER, 'active');
+    var all = rowIds();
+    prjSetScope('mine');
+    var mine = rowIds();
+    var seg = segLabels().join(' | ');
+    prjSetScope('all');
+    return (all === 'PRJ-4,PRJ-5' && mine === 'PRJ-5' && /In Progress · 1/.test(seg)) || 'all ' + all + ' / mine ' + mine + ' / ' + seg;
+});
+t('list: the function\'s mine flag wins over the page\'s own guess', function () {
+    load('Alex OVL', MANAGER, 'active');
+    _prjById(4).mine = true;   // e.g. healed ids made it theirs
+    prjSetScope('mine');
+    var mine = rowIds();
+    prjSetScope('all');
+    return mine === 'PRJ-4,PRJ-5' || 'mine ' + mine;
+});
+t('list: an empty Mine group says "of Yours"; All does not', function () {
+    pane();
+    _prjData = fixture('Kim WSP', MANAGER);
+    _prjView = 'done';
+    prjSetScope('mine');
+    var mine = document.getElementById('prjBody').textContent;
+    prjSetScope('all');
+    _prjData.projects = [];
+    prjRender();
+    var all = document.getElementById('prjBody').textContent;
+    return (/Nothing of Yours Finished Yet/.test(mine) && /Nothing Finished Yet/.test(all) && !/of Yours/.test(all)) || mine.trim() + ' / ' + all.trim();
 });
 t('list: the status filter counts each group', function () {
     load('Pat Viewer', VIEWER);
@@ -116,30 +149,33 @@ t('list: an empty group says so instead of drawing an empty table', function () 
     _prjData.projects = _prjData.projects.filter(function (p) { return p.status !== 'completed'; });
     _prjView = 'done';
     prjRender();
-    return (!document.querySelector('#prjBody .prj-table') && /Nothing of yours finished yet/.test(document.getElementById('prjBody').textContent)) || 'empty group drew a table';
+    return (!document.querySelector('#prjBody .prj-table') && /Nothing Finished Yet/.test(document.getElementById('prjBody').textContent)) || 'empty group drew a table';
 });
 // "DM can see all of the projects. Everyone else can only see projects they are
 // involved in." The filtering is the function's; the page has to SAY which
 // list this is, or an empty one reads as "nobody has any projects".
-t('list: the DM is told it is every project in the district', function () {
+t('list: the DM gets no district note and no "Waiting on You" line — the tab pip still counts', function () {
     load('Ethan', APPROVER);
-    var note = document.querySelector('#prjBody .prj-seg-note').textContent;
     var meta = document.getElementById('prjSubtitle').textContent;
-    return (/Every project in the district/.test(note) && /waiting on you/.test(meta)) || 'note "' + note + '" meta "' + meta + '"';
+    var noteEl = document.querySelector('#prjBody .prj-seg-note');
+    var pip = document.getElementById('prjWaitPip').textContent;
+    return (!noteEl && meta === '' && pip !== '' && pip !== '0') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '" pip ' + pip;
 });
 // CEO and MOCD see every project too, by role ("not a switch"), but don't
 // decide — so no "waiting on you", just how many there are.
-t('list: the CEO / MOCD see every project, counted, with nothing "waiting on you"', function () {
+// No "0 of yours" / "Projects you asked for or are part of." for anyone but the
+// DM's waiting count (Ethan, 2026-11-21) — the tabs count, the switch says whose.
+t('list: the CEO / MOCD get no count line and no note', function () {
     load('Pat Viewer', { view: true, request: false, approve: false, seesAll: true });
-    var note = document.querySelector('#prjBody .prj-seg-note').textContent;
+    var noteEl = document.querySelector('#prjBody .prj-seg-note');
     var meta = document.getElementById('prjSubtitle').textContent;
-    return (/Every project in the district/.test(note) && meta === '8 projects') || 'note "' + note + '" meta "' + meta + '"';
+    return (!noteEl && meta === '') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
 });
-t('list: everyone else is told it is only their own projects', function () {
+t('list: a manager gets no "of yours" count and no "asked for" note', function () {
     load('Alex OVL', MANAGER);
-    var note = document.querySelector('#prjBody .prj-seg-note').textContent;
+    var noteEl = document.querySelector('#prjBody .prj-seg-note');
     var meta = document.getElementById('prjSubtitle').textContent;
-    return (/you asked for or are part of/.test(note) && /of yours$/.test(meta)) || 'note "' + note + '" meta "' + meta + '"';
+    return (!noteEl && meta === '') || 'note "' + (noteEl && noteEl.textContent) + '" meta "' + meta + '"';
 });
 t('list: the DM\'s empty groups do not say "of yours"', function () {
     pane();
@@ -148,7 +184,7 @@ t('list: the DM\'s empty groups do not say "of yours"', function () {
     _prjView = 'active';
     prjRender();
     var txt = document.getElementById('prjBody').textContent;
-    return (/Nothing under way/.test(txt) && !/of yours/.test(txt)) || txt.trim();
+    return (/Nothing Under Way/.test(txt) && !/of yours/i.test(txt)) || txt.trim();
 });
 t('list: each row shows who is involved as names', function () {
     load('Pat Viewer', VIEWER, 'active');
@@ -158,7 +194,7 @@ t('list: each row shows who is involved as names', function () {
 t('list: a completed project shows what happens to it next', function () {
     load('Pat Viewer', VIEWER, 'done');
     var chip = document.querySelector('#prjBody .prj-chip');
-    return (chip && /Fold into SPEEKSNET/.test(chip.textContent)) || 'chip ' + (chip && chip.textContent);
+    return (chip && /Ready for SPEEKSNET/.test(chip.textContent)) || 'chip ' + (chip && chip.textContent);
 });
 t('list: the request button shows only to someone who can request', function () {
     load('Pat Viewer', VIEWER);
@@ -190,7 +226,8 @@ t('list: titles and descriptions are escaped', function () {
 
 function actions(me, can, id) {
     _prjData = fixture(me, can);
-    var html = _prjActionsHtml(_prjById(id));
+    // The bar and the ⋯ menu together: every action this person has.
+    var html = _prjActionsHtml(_prjById(id)) + _prjMenuHtml(_prjById(id));
     var acts = [];
     html.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
     if (/prjEdit\(/.test(html)) acts.push('edit');
@@ -200,7 +237,7 @@ function actions(me, can, id) {
 function expect(got, want) { return got === want || 'got [' + got + '], want [' + want + ']'; }
 
 t('actions: the DM on a fresh request — approve, decline, ask for changes', function () {
-    return expect(actions('Ethan', APPROVER, 2), 'approve,decline,request_changes');
+    return expect(actions('Ethan', APPROVER, 2), 'approve,decline,delete,request_changes');
 });
 t('actions: the requester on their own fresh request — edit or withdraw, no decision', function () {
     return expect(actions('Alex OVL', MANAGER, 1), 'edit,withdraw');
@@ -212,7 +249,7 @@ t('actions: a request sent back — the requester edits and resubmits', function
     return expect(actions('Alex OVL', MANAGER, 3), 'edit,withdraw');
 });
 t('actions: a request sent back — the DM can still decline it, not approve it', function () {
-    return expect(actions('Ethan', APPROVER, 3), 'decline');
+    return expect(actions('Ethan', APPROVER, 3), 'decline,delete');
 });
 t('actions: someone involved in a running project posts updates or sends it for sign-off — no edit, no complete', function () {
     return expect(actions('Kim WSP', MANAGER, 4), 'request_signoff,update');
@@ -221,36 +258,36 @@ t('actions: whoever asked for a running project can still edit it', function () 
     return expect(actions('Sam LEE', MANAGER, 4), 'edit,request_signoff,update');
 });
 t('actions: the DM on a running project — edit, update, park, complete', function () {
-    return expect(actions('Ethan', APPROVER, 4), 'complete,edit,park,update');
+    return expect(actions('Ethan', APPROVER, 4), 'complete,delete,edit,park,update');
 });
 t('actions: the DM on a parked project — resume rather than park', function () {
-    return expect(actions('Ethan', APPROVER, 5), 'complete,edit,resume,update');
+    return expect(actions('Ethan', APPROVER, 5), 'complete,delete,edit,resume,update');
 });
 t('actions: the DM on a completed project — decides what happens to it', function () {
-    return expect(actions('Ethan', APPROVER, 6), 'outcome,outcome-picker');
+    return expect(actions('Ethan', APPROVER, 6), 'delete,outcome,outcome-picker');
 });
 t('actions: anyone else on a completed project — nothing to press', function () {
     return expect(actions('Sam LEE', MANAGER, 6), '');
 });
-t('actions: declined is final — no buttons for anyone', function () {
-    return expect(actions('Ethan', APPROVER, 7) + '|' + actions('Sam LEE', MANAGER, 7), '|');
+t('actions: declined is final — nothing but the DM\'s Delete', function () {
+    return expect(actions('Ethan', APPROVER, 7) + '|' + actions('Sam LEE', MANAGER, 7), 'delete|');
 });
 // The point of real users: identity is the id, not the spelling.
 t('actions: a different person who happens to share a name is NOT the requester', function () {
     _prjData = fixture('Alex OVL', MANAGER);
     _prjData.me = { id: 'u-someone-else', name: 'Alex OVL' };
-    var html = _prjActionsHtml(_prjById(1));
+    var html = _prjActionsHtml(_prjById(1)) + _prjMenuHtml(_prjById(1));
     return !/withdraw/.test(html) || 'a namesake got the requester\'s buttons';
 });
 t('actions: a renamed requester keeps their buttons (same id, new name)', function () {
     _prjData = fixture('Alex OVL', MANAGER);
     _prjData.me = { id: ALEX, name: 'Alexandra OVL' };
-    return /withdraw/.test(_prjActionsHtml(_prjById(1))) || 'lost the buttons on a rename';
+    return /withdraw/.test(_prjMenuHtml(_prjById(1))) || 'lost the buttons on a rename';
 });
 t('actions: with no id on either side, the name decides (test accounts)', function () {
     _prjData = fixture('Alex OVL', MANAGER);
     _prjData.me = { id: null, name: ' alex ovl ' };
-    return /withdraw/.test(_prjActionsHtml(_prjById(1))) || 'name fallback failed';
+    return /withdraw/.test(_prjMenuHtml(_prjById(1))) || 'name fallback failed';
 });
 
 // ---- note rules are enforced before the network ---------------------------------
@@ -263,6 +300,7 @@ function detailDom() {
         document.body.appendChild(host);
     }
     host.innerHTML = '<div id="prjDetailEyebrow"></div><div id="prjDetailHead"></div><div id="prjDetailSub"></div>'
+        + '<button id="prjMoreBtn"></button><div id="prjMoreMenu" hidden></div>'
         + '<div id="prjDetailBody"></div><div id="prjDetailFooter"></div>';
     return host;
 }
@@ -307,7 +345,7 @@ t('detail: lists everyone involved, including someone who has left', function ()
 t('detail: history is newest first', function () {
     openDetail('Pat Viewer', VIEWER, 4);
     var first = document.querySelector('.prj-timeline .prj-ev');
-    return (first && /approved/.test(first.textContent)) || 'first entry: ' + (first && first.textContent);
+    return (first && /Approved It/.test(first.textContent)) || 'first entry: ' + (first && first.textContent.trim());
 });
 
 // ---- request form + the roster picker -------------------------------------------
@@ -443,7 +481,7 @@ function signoffFixture(me, can, status, extraEvents) {
 }
 function signoffActions(me, can, status) {
     signoffFixture(me, can, status);
-    var html = _prjActionsHtml(_prjById(4));
+    var html = _prjActionsHtml(_prjById(4)) + _prjMenuHtml(_prjById(4));
     var acts = [];
     html.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
     if (/prjEdit\(/.test(html)) acts.push('edit');
@@ -457,7 +495,7 @@ t('sign-off: whoever asked can send it for sign-off too', function () {
     return expect(signoffActions('Sam LEE', MANAGER, 'in_progress'), 'edit,request_signoff,update');
 });
 t('sign-off: the DM is not offered it — he completes it himself', function () {
-    return expect(signoffActions('Ethan', APPROVER, 'in_progress'), 'complete,edit,park,update');
+    return expect(signoffActions('Ethan', APPROVER, 'in_progress'), 'complete,delete,edit,park,update');
 });
 t('sign-off: a parked project is resumed before it can be sent', function () {
     return expect(actions('Alex OVL', MANAGER, 5), 'edit,update');
@@ -466,7 +504,7 @@ t('sign-off: someone not on the project cannot send it', function () {
     return expect(signoffActions('Alex OVL', MANAGER, 'in_progress'), '');
 });
 t('sign-off: the DM on a finished project — approve as complete, send back, edit, update', function () {
-    return expect(signoffActions('Ethan', APPROVER, 'awaiting_signoff'), 'complete,edit,return_signoff,update');
+    return expect(signoffActions('Ethan', APPROVER, 'awaiting_signoff'), 'complete,delete,edit,return_signoff,update');
 });
 t('sign-off: the requester waiting on sign-off can still edit and post updates, not decide', function () {
     return expect(signoffActions('Sam LEE', MANAGER, 'awaiting_signoff'), 'edit,update');
@@ -519,7 +557,7 @@ t('sign-off: once sent back, the DM\'s note leads the popup', function () {
     _prjRenderDetail();
     var c = document.querySelector('#prjDetailBody .prj-callout');
     var hist = document.querySelector('.prj-timeline .prj-ev');
-    return (c && /sent it back/.test(c.textContent) && /export button/.test(c.textContent) && hist && /sent it back/.test(hist.textContent))
+    return (c && /sent it back/.test(c.textContent) && /export button/.test(c.textContent) && hist && /Sent It Back/.test(hist.textContent))
         || 'callout "' + (c && c.textContent) + '", newest history "' + (hist && hist.textContent) + '"';
 });
 t('sign-off: the note stops leading once work moves on (an update after it)', function () {
@@ -629,4 +667,253 @@ t('wiring: a realtime ping refreshes an open list', function () {
 });
 t('wiring: Jump search lands on the Workspace tab', function () {
     return JUMP_PLACES.some(function (p) { return p.page === 'workspace.html' && p.hash === 'projects' && p.kind === 'tab'; }) || 'no Jump entry for workspace.html#projects';
+});
+
+// ---- can't-undo actions: red, after Edit, press twice; DM can delete (2026-11-21) ----
+
+function footBtn(action) {
+    // The bar or the ⋯ menu — wherever the action lives now.
+    return document.querySelector('#prj-detail-host button[onclick*="prjAct(\'' + action + '\'"]');
+}
+t('undo-proof: Withdraw is in the ⋯ menu, red, and not on the bar', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var w = document.querySelector('#prjMoreMenu button[onclick*="prjAct(\'withdraw\'"]');
+    if (!w) return 'no Withdraw in the menu';
+    if (!w.classList.contains('danger')) return 'Withdraw is not red';
+    return !/prjAct\('withdraw'/.test(document.getElementById('prjDetailFooter').innerHTML) || 'Withdraw is still on the bar';
+});
+t('undo-proof: the first press of Withdraw only arms it — nothing is sent', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var w = footBtn('withdraw');
+    var before = window.__fetches.length;
+    prjAct('withdraw', w);
+    var sent = window.__fetches.length !== before;
+    var armed = /click again/i.test(w.textContent) && w.classList.contains('prj-armed');
+    _prjDisarm(w);
+    return (!sent && armed) || 'sent=' + sent + ' label="' + w.textContent + '"';
+});
+t('undo-proof: the second press of Withdraw sends it', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var w = footBtn('withdraw');
+    prjAct('withdraw', w);
+    var before = window.__fetches.length;
+    prjAct('withdraw', w);
+    return window.__fetches.length > before || 'the second press sent nothing';
+});
+t('undo-proof: Decline and Mark Complete arm first too', function () {
+    var bad = [];
+    [['decline', 2], ['complete', 4]].forEach(function (c) {
+        openDetail('Ethan', APPROVER, c[1]);
+        var note = document.getElementById('prjNote'); if (note) note.value = 'reason';
+        var b = footBtn(c[0]);
+        var before = window.__fetches.length;
+        prjAct(c[0], b);
+        if (window.__fetches.length !== before) bad.push(c[0] + ' sent on the first press');
+        if (b) _prjDisarm(b);
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+t('undo-proof: Approve and Start and Post Update still go on one press', function () {
+    openDetail('Ethan', APPROVER, 2);
+    var before = window.__fetches.length;
+    prjAct('approve', footBtn('approve'));
+    return window.__fetches.length > before || 'approve waited for a second press';
+});
+t('delete: the DM gets Delete on every project, closed ones included (with a Close)', function () {
+    var missing = [];
+    for (var id = 1; id <= 8; id++) {
+        openDetail('Ethan', APPROVER, id);
+        if (!footBtn('delete')) missing.push('PRJ-' + id);
+    }
+    openDetail('Ethan', APPROVER, 7);
+    var close = /closeAllModals\(\)/.test(document.getElementById('prjDetailFooter').innerHTML);
+    return (missing.length === 0 && close) || 'no Delete on ' + missing.join(',') + (close ? '' : '; no Close on a declined one');
+});
+t('delete: managers never get Delete, even on their own request', function () {
+    var shown = [];
+    [1, 3, 5, 8].forEach(function (id) { openDetail('Alex OVL', MANAGER, id); if (footBtn('delete')) shown.push('PRJ-' + id); });
+    return shown.length === 0 || 'Delete drawn for a manager on ' + shown.join(',');
+});
+
+// ---- the DM adds, Title Case empties (Ethan, 2026-11-21) ----------------------
+
+t('add: the DM\'s button says Add Project; a manager\'s says Request Project', function () {
+    load('Ethan', APPROVER);
+    var dm = document.getElementById('prjNewBtn');
+    var dmTxt = dm.textContent, dmShown = dm.style.display !== 'none';
+    load('Alex OVL', MANAGER);
+    var mgr = document.getElementById('prjNewBtn').textContent;
+    return (dmShown && /Add Project/.test(dmTxt) && /Request Project/.test(mgr)) || 'dm "' + dmTxt + '" shown=' + dmShown + ', manager "' + mgr + '"';
+});
+t('add: the DM\'s new-project form is Add a Project, with no explanation line', function () {
+    openForm('Ethan', APPROVER, null);
+    var title = document.getElementById('prjFormTitle').textContent;
+    var sub = document.getElementById('prjFormSub').textContent;
+    var go = document.getElementById('prjFormSubmit').textContent;
+    return (title === 'Add a Project' && go === 'Add Project' && sub === '') || [title, sub, go].join(' | ');
+});
+t('add: a manager\'s new-project form still sends it for approval', function () {
+    openForm('Alex OVL', MANAGER, null);
+    return document.getElementById('prjFormSubmit').textContent === 'Send for Approval' || document.getElementById('prjFormSubmit').textContent;
+});
+t('add: History reads "Posted It" for a project the DM made in progress', function () {
+    detailDom();
+    _prjData = fixture('Ethan', APPROVER);
+    _prjData.events = [{ id: 9, project_id: 4, kind: 'created', actor: 'Ethan', to_status: 'in_progress', created_at: ago(1) }];
+    _prjOpenId = 4;
+    _prjRenderDetail();
+    var txt = document.getElementById('prjDetailBody').textContent;
+    var sub = document.getElementById('prjDetailSub').textContent;
+    return (/Ethan\s*Posted It/.test(txt) && !/requested it/i.test(txt) && /Posted by/.test(sub)) || txt.slice(0, 300) + ' | sub: ' + sub;
+});
+t('caps: every empty-list message is Title Case, for the DM and for a manager', function () {
+    var bad = [];
+    [['Ethan', APPROVER], ['Alex OVL', MANAGER]].forEach(function (who) {
+        ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+            pane();
+            _prjData = fixture(who[0], who[1]);
+            _prjData.projects = [];
+            _prjView = v;
+            prjRender();
+            var el = document.querySelector('#prjBody .prj-empty');
+            var txt = el ? el.textContent.trim() : '(none)';
+            txt.split(/[.?]\s*/).filter(Boolean).forEach(function (s) { if (notTitleCase(s)) bad.push(txt); });
+        });
+    });
+    return !bad.length || 'not Title Case: ' + bad.join(' | ');
+});
+
+// ---- the reworked action bar (Ethan, 2026-11-21: "very chaotic") -------------
+
+function barButtons() {
+    return Array.prototype.filter.call(document.querySelectorAll('#prjDetailFooter button'), function (b) { return !/closeAllModals/.test(b.getAttribute('onclick') || ''); });
+}
+t('bar: at most three buttons, for every role on every project', function () {
+    var bad = [];
+    [['Ethan', APPROVER], ['Alex OVL', MANAGER], ['Sam LEE', MANAGER], ['Kim WSP', MANAGER], ['Pat Viewer', VIEWER]].forEach(function (who) {
+        for (var id = 1; id <= 8; id++) {
+            openDetail(who[0], who[1], id);
+            var n = barButtons().length;
+            if (n > 3) bad.push(who[0] + ' PRJ-' + id + ': ' + n);
+        }
+    });
+    ['in_progress', 'awaiting_signoff', 'parked'].forEach(function (s) {
+        detailDom(); signoffFixture('Ethan', APPROVER, s); _prjOpenId = 4; _prjRenderDetail();
+        if (barButtons().length > 3) bad.push('Ethan ' + s + ': ' + barButtons().length);
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+t('bar: Edit, Withdraw and Delete are never on the bar — they are in the ⋯ menu', function () {
+    var bad = [];
+    for (var id = 1; id <= 8; id++) {
+        openDetail('Ethan', APPROVER, id);
+        var bar = document.getElementById('prjDetailFooter').innerHTML;
+        if (/prjAct\('(delete|withdraw)'/.test(bar)) bad.push('PRJ-' + id + ' bar has delete/withdraw');
+        if (/>Edit</.test(bar)) bad.push('PRJ-' + id + ' bar has Edit');
+        var btn = document.getElementById('prjMoreBtn');
+        if (!btn || btn.style.display === 'none') bad.push('PRJ-' + id + ' no ⋯ for the DM');
+    }
+    return bad.length === 0 || bad.join('; ');
+});
+t('bar: someone with nothing on the menu gets no ⋯ button', function () {
+    openDetail('Pat Viewer', VIEWER, 4);
+    return document.getElementById('prjMoreBtn').style.display === 'none' || '⋯ shown with an empty menu';
+});
+t('bar: a requester waiting on the DM is told so, with a Close', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var f = document.getElementById('prjDetailFooter');
+    return (/Waiting for the DM/.test(f.textContent) && /closeAllModals/.test(f.innerHTML)) || f.textContent;
+});
+function ownDm(status) {
+    detailDom();
+    _prjData = fixture('Ethan', APPROVER);
+    var p = _prjById(4);
+    p.status = status; p.requested_by = 'Ethan'; p.requested_by_id = ETHAN; p.involved = [ref('Ethan')];
+    _prjOpenId = 4;
+    _prjRenderDetail();
+    return document.getElementById('prjDetailFooter');
+}
+t('own: the DM\'s own running project has no note box and no Post Update', function () {
+    var bad = [];
+    ['in_progress', 'parked', 'awaiting_signoff'].forEach(function (s) {
+        var f = ownDm(s);
+        if (f.querySelector('#prjNote')) bad.push(s + ' has a note box');
+        if (/prjAct\('update'/.test(f.innerHTML)) bad.push(s + ' has Post Update');
+        if (!/prjAct\('complete'/.test(f.innerHTML)) bad.push(s + ' has no Mark Complete');
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+t('own: a DM project left waiting for approval just gets Start It, no decision note', function () {
+    var f = ownDm('requested');
+    var acts = []; f.innerHTML.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
+    return (acts.join(',') === 'approve' && !f.querySelector('#prjNote') && /Start It/.test(f.textContent)) || acts.join(',') + ' note=' + !!f.querySelector('#prjNote');
+});
+
+// ---- Pause, sample data (Ethan, 2026-11-21) -----------------------------------
+
+t('pause: the button says Pause and the status says Paused — never Park', function () {
+    openDetail('Ethan', APPROVER, 4);
+    var bar = document.getElementById('prjDetailFooter').textContent;
+    openDetail('Ethan', APPROVER, 5);
+    var sub = document.getElementById('prjDetailSub').textContent;
+    var bar5 = document.getElementById('prjDetailFooter').textContent;
+    return (/Pause/.test(bar) && !/Park/.test(bar) && /Paused/.test(sub) && /Resume/.test(bar5)) || bar + ' / ' + sub;
+});
+t('sample: a test session gets made-up projects from the DM and several managers', function () {
+    var d = _prjTestSample({ success: true, me: { id: null, name: 'Test Manager OVL', store: 'OVL' }, can: MANAGER, people: [], projects: [{ id: 1, title: 'REAL ROW' }], events: [] });
+    var by = {};
+    d.projects.forEach(function (p) { by[p.requested_by] = (by[p.requested_by] || 0) + 1; });
+    var real = d.projects.some(function (p) { return p.title === 'REAL ROW'; });
+    var stores = {};
+    d.projects.forEach(function (p) { if (p.requested_store) stores[p.requested_store] = 1; });
+    var statuses = {};
+    d.projects.forEach(function (p) { statuses[p.status] = 1; });
+    return (!real && by['Ethan Kushnir'] >= 2 && Object.keys(stores).length >= 5 && Object.keys(statuses).length >= 6
+        && d.projects.every(function (p) { return p.id > 9000; })) || JSON.stringify({ real: real, by: by, stores: stores, statuses: statuses });
+});
+t('sample: the test account has projects of its own, so Mine is not empty', function () {
+    pane();
+    _prjData = _prjTestSample({ success: true, me: { id: null, name: 'Test Manager OVL', store: 'OVL' }, can: MANAGER, people: [], projects: [], events: [] });
+    _prjScope = 'mine';
+    _prjView = 'approval';
+    prjRender();
+    var ids = rowIds();
+    _prjScope = 'all';
+    return /PRJ-9007/.test(ids) || 'mine/approval: ' + ids;
+});
+t('sample: every sample event belongs to a sample project, with unique ids', function () {
+    var d = _prjTestSample({ me: { name: 'T' }, projects: [], events: [] });
+    var ids = {}; d.projects.forEach(function (p) { ids[p.id] = 1; });
+    var seen = {}, dup = [], orphan = [];
+    d.events.forEach(function (e) { if (seen[e.id]) dup.push(e.id); seen[e.id] = 1; if (!ids[e.project_id]) orphan.push(e.project_id); });
+    return (!dup.length && !orphan.length) || 'dup ' + dup + ' orphan ' + orphan;
+});
+
+// ---- yours in green, Close is a button, a test DM posts (Ethan, 2026-11-21) ----
+
+t('mine: on All Projects your rows are marked; others are not', function () {
+    load('Alex OVL', MANAGER, 'active');
+    var marked = Array.prototype.map.call(document.querySelectorAll('#prjBody tbody tr'), function (tr) {
+        return tr.querySelector('.prj-id').textContent + (tr.classList.contains('prj-row-mine') ? '*' : '');
+    }).join(',');
+    return marked === 'PRJ-4,PRJ-5*' || marked;
+});
+t('mine: on Mine nothing is marked — every row there is yours', function () {
+    load('Alex OVL', MANAGER, 'active');
+    prjSetScope('mine');
+    var n = document.querySelectorAll('#prjBody tbody tr.prj-row-mine').length;
+    prjSetScope('all');
+    return n === 0 || n + ' rows marked on Mine';
+});
+t('close: the popup\'s Close is a real button (btn-secondary), not a bare word', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var c = Array.prototype.find.call(document.querySelectorAll('#prjDetailFooter button'), function (b) { return /closeAllModals/.test(b.getAttribute('onclick') || ''); });
+    return (c && c.classList.contains('btn-secondary') && !c.classList.contains('kpi-cancel-btn')) || (c ? c.className : 'no Close');
+});
+t('sample: a test DM\'s own sample project is In Progress and posted; a manager\'s waits', function () {
+    var dm = _prjTestSample({ me: { name: 'Test DM' }, can: APPROVER, projects: [], events: [] });
+    var mg = _prjTestSample({ me: { name: 'Test Manager' }, can: MANAGER, projects: [], events: [] });
+    var p1 = dm.projects.find(function (p) { return p.id === 9007; }), p2 = mg.projects.find(function (p) { return p.id === 9007; });
+    var e1 = dm.events.find(function (e) { return e.project_id === 9007 && e.kind === 'created'; });
+    return (p1.status === 'in_progress' && e1.to_status === 'in_progress' && p2.status === 'requested') || p1.status + ' / ' + e1.to_status + ' / ' + p2.status;
 });

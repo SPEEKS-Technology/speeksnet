@@ -110,6 +110,79 @@ t('list: a long description is clipped to two lines in its row', function () {
     return d.getBoundingClientRect().height <= lh * 2 + 2 || 'description is ' + Math.round(d.getBoundingClientRect().height) + 'px tall';
 });
 
+// EVERY ROW TWO DESCRIPTION LINES TALL (Ethan, 2026-11-21): a one-line
+// description used to make a shorter row, so the list jumped between tabs.
+t('list @1440: a one-line description still takes two lines; rows match across tabs', function () {
+    renderPane(1440);
+    var heights = {};
+    ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+        prjSetView(v);
+        Array.prototype.forEach.call(document.querySelectorAll('#layout-host .prj-table tbody tr'), function (tr) {
+            heights[Math.round(tr.getBoundingClientRect().height)] = 1;
+        });
+    });
+    prjSetView('approval');
+    var d = document.querySelector('#layout-host .prj-row-desc');
+    if (!d) return 'no description drawn on Awaiting Approval';
+    var lh = parseFloat(getComputedStyle(d).lineHeight) || 17;
+    var tall = d.getBoundingClientRect().height >= lh * 2 - 1;
+    var hs = Object.keys(heights);
+    return (tall && hs.length === 1) || 'desc ' + Math.round(d.getBoundingClientRect().height) + 'px (line ' + lh + '), row heights ' + hs.join('/');
+});
+
+// ONE PILL SIZE PER COLUMN (Ethan, 2026-11-21): every status chip is as wide as
+// the widest one in view, and so is every name chip — on each tab, the longest
+// label still on one line.
+t('list @1440: status pills are one width, name pills are one width, on every tab', function () {
+    renderPane(1440);
+    var bad = [];
+    ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+        prjSetView(v);
+        ['.prj-chip', '.prj-tag'].forEach(function (sel) {
+            var els = document.querySelectorAll('#layout-host .prj-table ' + sel);
+            if (els.length < 2) return;
+            var widths = {}, tall = 0;
+            Array.prototype.forEach.call(els, function (e) {
+                var r = e.getBoundingClientRect();
+                widths[Math.round(r.width)] = 1;
+                if (r.height > 26) tall++;
+            });
+            var ws = Object.keys(widths);
+            if (ws.length !== 1) bad.push(v + ' ' + sel + ' widths ' + ws.join('/'));
+            if (tall) bad.push(v + ' ' + sel + ': ' + tall + ' wrapped');
+        });
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+
+// CENTERED COLUMNS (Ethan, 2026-11-21): Who's Involved, Requested By, Status and
+// Updated sit centred under their headers, on every status tab — including the
+// Completed badge with its outcome ("Completed · Ready for SPEEKSNET"), which
+// once outgrew its column and sat off-centre.
+t('list @1440: the four short columns are centred under their headers, on every tab', function () {
+    renderPane(1440);
+    var bad = [];
+    ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+        prjSetView(v);
+        var row = document.querySelector('#layout-host .prj-table tbody tr');
+        if (!row) return;
+        ['prj-col-people', 'prj-col-by', 'prj-col-status', 'prj-col-date'].forEach(function (c) {
+            var th = document.querySelector('#layout-host th.' + c), td = row.querySelector('td.' + c);
+            var hr = document.createRange(); hr.selectNodeContents(th);
+            var kids = td.querySelectorAll('.prj-tag, .prj-chip');
+            var box;
+            if (kids.length) {
+                box = { l: 1e9, r: -1e9 };
+                Array.prototype.forEach.call(kids, function (k) { var b = k.getBoundingClientRect(); box.l = Math.min(box.l, b.left); box.r = Math.max(box.r, b.right); });
+            } else { var tr = document.createRange(); tr.selectNodeContents(td); var b = tr.getBoundingClientRect(); box = { l: b.left, r: b.right }; }
+            var h = hr.getBoundingClientRect();
+            var off = Math.abs((h.left + h.right) / 2 - (box.l + box.r) / 2);
+            if (off > 3) bad.push(v + ' ' + c + ' off by ' + Math.round(off) + 'px');
+        });
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+
 // The detail footer carries the most buttons (DM on a fresh request: note +
 // three decisions). On a narrow screen they must wrap, not run off the edge.
 [390, 820].forEach(function (w) {
@@ -136,6 +209,22 @@ t('form: the description keeps its rows inside the popup body', function () {
         + '<label class="form-label-caps">C</label><div class="prj-people"><input class="prj-people-input"></div></div>');
     var ta = host.querySelector('textarea');
     return ta.getBoundingClientRect().height >= 100 || 'textarea squashed to ' + Math.round(ta.getBoundingClientRect().height) + 'px';
+});
+
+// Cancel and the submit button are one size (Ethan, 2026-11-21) — and on a
+// phone they share the row instead of running off it. The @media rule follows
+// the real window, so this measures at the width the window actually is.
+t('form footer: Cancel and the submit button are the same size, inside the frame', function () {
+    var w = window.innerWidth > 900 ? 1440 : 390;
+    var host = stage(w, '<div id="prjFormModal" class="modal-menu manage-menu prj-form-modal show" style="position:static;transform:none;width:100%;max-width:100%;">'
+        + '<div class="manage-footer flex-end"><span class="prj-msg"></span>'
+        + '<button class="btn-secondary prj-form-btn">Cancel</button><button class="btn-primary prj-form-btn">Send for Approval</button></div></div>');
+    var bad = overflowing(host);
+    if (bad.length) return bad.slice(0, 3).join(' ; ');
+    var b = host.querySelectorAll('.prj-form-btn');
+    var r0 = b[0].getBoundingClientRect(), r1 = b[1].getBoundingClientRect();
+    return (Math.abs(r0.width - r1.width) < 1 && Math.abs(r0.height - r1.height) < 1 && r1.height < 50)
+        || '@' + w + ': cancel ' + Math.round(r0.width) + 'x' + Math.round(r0.height) + ', submit ' + Math.round(r1.width) + 'x' + Math.round(r1.height);
 });
 
 t('picker @390: a full set of long-named chips wraps inside the box', function () {

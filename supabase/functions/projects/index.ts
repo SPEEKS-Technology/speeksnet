@@ -80,10 +80,17 @@ const lc = (v: unknown) => String(v ?? "").toLowerCase().trim();
 type Viewer = { id: string | null; name: string; role: string; store: string; test: boolean };
 type Perms = { view: boolean; request: boolean; approve: boolean; seesAll: boolean };
 
-async function permsFor(sb: ReturnType<typeof createClient>, v: Viewer): Promise<Perms> {
+// The overrides are read once per request and handed to permsFrom, so the
+// roster filter below (pickable) can resolve every person's access without a
+// query each.
+type Overrides = any[];
+async function loadOverrides(sb: ReturnType<typeof createClient>): Promise<Overrides> {
   const { data } = await sb.from("feature_overrides")
     .select("feature_key, subject_type, subject, enabled")
     .in("feature_key", Object.keys(DEFAULTS));
+  return data || [];
+}
+function permsFrom(data: Overrides, v: { name: string; role: string }): Perms {
   const slug = roleSlug(v.role);
   const allowed = (key: string) => {
     const rows = (data || []).filter((r: any) => r.feature_key === key);
@@ -154,12 +161,28 @@ const clip = (v: unknown, max: number) => {
 // attached"), so the browser sends users.id values and this resolves them. The
 // shop-floor board accounts (role 'store') are not people and are left out;
 // test accounts live in test_users and so are never in here at all.
+//
+// ONLY PEOPLE WHO CAN OPEN PROJECTS (Ethan, 2026-11-21: Projects is for the
+// store managers, MOCD and him, "and no one else"). The roster used to leave
+// out only the 'store' accounts, so a manager could put their ASM on a project
+// the ASM could never open — every read 403s without the tab. Now the picker
+// offers exactly the people whose Feature Access lets them see the tab, so
+// handing someone nav-projects is also what puts them in the picker.
+//
+// Two lists, so: the ROSTER (everyone but the store accounts) is what names
+// and ids are resolved against — a current name for someone already on a
+// project, the PIN-reset heal below — and the PICKABLE people are the roster
+// filtered to who can open Projects, which is all the picker offers and all
+// that create/edit will attach.
 type Person = { id: string; name: string; store: string; role: string };
-async function loadPeople(sb: ReturnType<typeof createClient>): Promise<Person[]> {
+async function loadRoster(sb: ReturnType<typeof createClient>): Promise<Person[]> {
   const { data } = await sb.from("users").select("id, name, store, role").order("name");
   return (data || [])
     .filter((r: any) => lc(r.role) !== "store")
     .map((r: any) => ({ id: String(r.id), name: String(r.name || "").trim(), store: String(r.store || ""), role: String(r.role || "") }));
+}
+function pickable(roster: Person[], overrides: Overrides): Person[] {
+  return roster.filter((r) => permsFrom(overrides, r).view);
 }
 type Ref = { id: string | null; name: string };
 // Ids → [{id, name}] against the roster. Unknown ids are dropped (a stale tab
@@ -194,6 +217,37 @@ function isInvolved(p: any, v: Viewer): boolean {
   return (Array.isArray(p.involved) ? p.involved : []).some((r: any) =>
     (r?.id && v.id) ? String(r.id) === v.id : lc(r?.name) === lc(v.name));
 }
+
+// A PIN RESET KEEPS YOUR PROJECTS (Ethan, 2026-11-21). auth keeps a person's
+// users.id only while they keep their PIN, so a PIN reset in Manage Users hands
+// them a NEW id — and the id-only match above then locked them out of every
+// project they had asked for or were on: no list, no edit, no sign-off.
+//
+// Not fixed by loosening the match to names: the browser's own check
+// (_prjIsRequester) is id-only on purpose, so two people who share a name can't
+// act on each other's projects (projects-check.js, "a namesake is NOT the
+// requester"). Instead an ORPHANED id — one no users row carries any more — is
+// re-pointed at the one person on the roster with that stored name. A live id
+// is never touched, so namesakes stay apart; an orphan with no single owner
+// (two people of that name, or the person has left) stays as it was. Done on
+// the read and before every write, so the browser receives ids that compare.
+function heal(p: any, roster: Person[]): any {
+  const live = new Set(roster.map((r) => r.id));
+  const owner = (id: unknown, name: unknown): string | null => {
+    if (!id || live.has(String(id))) return null;
+    const same = roster.filter((r) => lc(r.name) === lc(name));
+    return same.length === 1 ? same[0].id : null;
+  };
+  const reqId = owner(p.requested_by_id, p.requested_by);
+  return {
+    ...p,
+    requested_by_id: reqId ?? p.requested_by_id,
+    involved: (Array.isArray(p.involved) ? p.involved : []).map((r: any) => {
+      const nid = owner(r?.id, r?.name);
+      return nid ? { ...r, id: nid } : r;
+    }),
+  };
+}
 // The three fields a project carries (Nick, 2026-11-17: "as simple as Project
 // Title, Project Description, and Who's involved"). Used by create and edit.
 function fields(b: any, people: Person[], fallback: Ref) {
@@ -220,19 +274,22 @@ Deno.serve(async (req: Request) => {
   }
   if (!u) return json({ success: false, error: "That PIN isn't recognised." }, 401);
   const viewer: Viewer = { id: (u as any).id ? String((u as any).id) : null, name: String(u.name || "").trim(), role: String(u.role || ""), store: String(u.store || ""), test };
-  const perms = await permsFor(sb, viewer);
+  const overrides = await loadOverrides(sb);
+  const perms = permsFrom(overrides, viewer);
   if (!perms.view && !perms.request) return json({ success: false, error: "Projects isn't switched on for you." }, 403);
 
   // ---- read: the list ----
   if (req.method === "GET") {
-    const [p, e, people] = await Promise.all([
+    const [p, e, roster] = await Promise.all([
       sb.from("projects").select("*").order("created_at", { ascending: false }),
       sb.from("project_events").select("*").order("created_at", { ascending: true }),
-      loadPeople(sb),
+      loadRoster(sb),
     ]);
     if (p.error) return json({ success: false, error: p.error.message }, 500);
-    const byId = new Map(people.map((x) => [x.id, x]));
-    let projects = (p.data || []).map((x: any) => {
+    const people = pickable(roster, overrides);
+    const byId = new Map(roster.map((x) => [x.id, x]));
+    let projects = (p.data || []).map((raw: any) => {
+      const x = heal(raw, roster);
       const req = x.requested_by_id ? byId.get(String(x.requested_by_id)) : undefined;
       return { ...x, involved: freshen(x.involved, byId), requested_by: req ? req.name : x.requested_by };
     });
@@ -243,7 +300,14 @@ Deno.serve(async (req: Request) => {
     // projects-approve (e.g. covering for Ethan), get every project; everyone
     // else gets the ones they asked for or are listed on. Done HERE, not in
     // the browser, so another manager's project never leaves the server.
-    if (!perms.seesAll) projects = projects.filter((x: any) => isMine(x, viewer) || isInvolved(x, viewer));
+    //
+    // EVERYONE SEES EVERY PROJECT NOW (Ethan, 2026-11-21: "it'd be cool for them
+    // to get ideas from one another"). Anyone with the tab gets the whole
+    // district's list; the page has an All / Mine filter. Seeing is all it is:
+    // every action below still checks mine / involved / approve, so another
+    // manager's project is read-only to you. Each row carries `mine` (asked for
+    // it or on it), worked out here where the ids are healed, for the filter.
+    projects = projects.map((x: any) => ({ ...x, mine: isMine(x, viewer) || isInvolved(x, viewer) }));
     const ids = new Set(projects.map((x: any) => x.id));
     return json({
       success: true,
@@ -271,15 +335,26 @@ Deno.serve(async (req: Request) => {
 
   // ---- create ----
   if (action === "create") {
-    if (!perms.request) return json({ success: false, error: "Requesting projects isn't switched on for you." }, 403);
-    const f = fields(b, await loadPeople(sb), meRef);
+    if (!perms.request && !perms.approve) return json({ success: false, error: "Requesting projects isn't switched on for you." }, 403);
+    const f = fields(b, pickable(await loadRoster(sb), overrides), meRef);
     if (!f.title) return json({ success: false, error: "Give the project a title." }, 400);
     if (!f.description) return json({ success: false, error: "Describe the project." }, 400);
+    // THE DM ADDS, HE DOESN'T REQUEST (Ethan, 2026-11-21). Whoever holds
+    // projects-approve would only be asking themselves, so their project is
+    // approved as it's made: straight to in_progress, decided and started now,
+    // and no "waiting for approval" email to themselves.
+    const direct = perms.approve;
     const { data: row, error } = await sb.from("projects").insert({
-      ...f, status: "requested", requested_by: me, requested_by_id: viewer.id, requested_store: viewer.store || null,
+      ...f, status: direct ? "in_progress" : "requested",
+      requested_by: me, requested_by_id: viewer.id, requested_store: viewer.store || null,
+      ...(direct ? { decided_by: me, decided_at: now, started_at: now } : {}),
     }).select().single();
     if (error) return json({ success: false, error: error.message }, 500);
-    await sb.from("project_events").insert({ project_id: row.id, kind: "created", actor: me, to_status: "requested" });
+    await sb.from("project_events").insert({ project_id: row.id, kind: "created", actor: me, to_status: row.status });
+    if (direct) {
+      await broadcastChange("projects");
+      return json({ success: true, project: row });
+    }
     const blurb = f.description!.length > 160 ? f.description!.slice(0, 157) + "…" : f.description;
     await queueNotification(sb, {
       kind: "project_request", priority: "high",
@@ -294,9 +369,14 @@ Deno.serve(async (req: Request) => {
   // Everything else acts on one project.
   const id = Number(b.id);
   if (!Number.isFinite(id)) return json({ success: false, error: "Missing project id" }, 400);
-  const { data: p, error: pErr } = await sb.from("projects").select("*").eq("id", id).maybeSingle();
+  const [{ data: raw, error: pErr }, roster] = await Promise.all([
+    sb.from("projects").select("*").eq("id", id).maybeSingle(),
+    loadRoster(sb),
+  ]);
   if (pErr) return json({ success: false, error: pErr.message }, 500);
-  if (!p) return json({ success: false, error: "That project no longer exists." }, 404);
+  if (!raw) return json({ success: false, error: "That project no longer exists." }, 404);
+  // Same heal as the read, so a PIN-reset requester is still the requester here.
+  const p = heal(raw, roster);
 
   const mine = isMine(p, viewer);
   // Anyone listed as involved is on the project: they post its updates.
@@ -357,7 +437,7 @@ Deno.serve(async (req: Request) => {
         return json({ success: false, error: "A finished or closed project can't be edited." }, 409);
       }
       // Empty falls back to whoever asked, as it did on create.
-      const f = fields(b, await loadPeople(sb), { id: p.requested_by_id ? String(p.requested_by_id) : null, name: p.requested_by });
+      const f = fields(b, pickable(roster, overrides), { id: p.requested_by_id ? String(p.requested_by_id) : null, name: p.requested_by });
       if (!f.title || !f.description) return json({ success: false, error: "A project needs a title and a description." }, 400);
       // Editing a request that was sent back IS resubmitting it.
       if (from === "changes_requested") {
@@ -400,6 +480,18 @@ Deno.serve(async (req: Request) => {
   // -- approver --
   if (!perms.approve) return json({ success: false, error: "Only the DM can decide on projects." }, 403);
   switch (action) {
+    // DELETE (Ethan, 2026-11-21). A junk or test request used to have no way
+    // out but Closed forever. The DM only, from any state, behind a
+    // press-twice confirm in the browser. Its history goes with it
+    // (project_events cascades, 0186) — deleting is for things that should never
+    // have been on the board; a real project that ended is Declined, Withdrawn
+    // or Completed and stays as the record.
+    case "delete": {
+      const { error } = await sb.from("projects").delete().eq("id", id);
+      if (error) return json({ success: false, error: error.message }, 500);
+      await broadcastChange("projects");
+      return json({ success: true, deleted: id });
+    }
     case "approve":
       return move({ allowedFrom: ["requested"], to: "in_progress", kind: "approved",
         patch: { decided_by: me, decided_at: now, decision_note: note, started_at: now },
@@ -415,7 +507,7 @@ Deno.serve(async (req: Request) => {
         noteRequired: "Say what needs to change.",
         tell: forRequester("needs changes") });
     case "park":
-      return move({ allowedFrom: ["in_progress"], to: "parked", kind: "parked", tell: forRequester("parked") });
+      return move({ allowedFrom: ["in_progress"], to: "parked", kind: "parked", tell: forRequester("paused") });   // "Pause" on the page (2026-11-21); the status stays 'parked'
     case "resume":
       return move({ allowedFrom: ["parked"], to: "in_progress", kind: "resumed", tell: forRequester("resumed") });
     // From awaiting_signoff this is the sign-off; from in_progress / parked the

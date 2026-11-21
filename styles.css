@@ -27636,6 +27636,9 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 /* Status filter: Variance Replies' "Needs replies · 11 / Whole store" buttons,
    as classes rather than inline styles. */
 .prj-seg { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Off the head's bottom rule (Ethan, 2026-11-21): the buttons sat flush against
+   the line under the header, which stretches the width of the card. */
+#prjBody > .prj-seg { margin-top: 16px; }
 .prj-seg-btn {
     font: inherit; font-size: 11.5px; font-weight: 800; padding: 6px 13px; border-radius: 8px;
     cursor: pointer; min-width: 150px; text-align: center; flex: 0 0 auto;
@@ -27645,20 +27648,60 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 .prj-seg-btn.on { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
 .prj-seg-btn:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }
 .prj-seg-note { font-size: 11.5px; font-weight: 600; color: #94a3b8; }
+/* All Projects / Mine (2026-11-21): a small two-way switch pushed to the right
+   end of the status row — a different kind of filter, so a different look from
+   the status tabs. Both halves one width (side-by-side pills are one size). */
+.prj-scope {
+    margin-left: auto; display: inline-grid; grid-template-columns: 1fr 1fr;
+    padding: 3px; border-radius: 10px; background: #f1f5f9; gap: 2px;
+}
+.prj-scope-btn {
+    font: inherit; font-size: 11.5px; font-weight: 800; padding: 6px 14px; border-radius: 8px;
+    border: 0; background: transparent; color: #64748b; cursor: pointer; white-space: nowrap;
+}
+.prj-scope-btn:hover { color: #334155; }
+.prj-scope-btn.on { background: #fff; color: #0f172a; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+.prj-scope-btn:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }
+/* The request form's Cancel and submit: one size and shape (Ethan, 2026-11-21). */
+#prjFormModal .prj-form-btn { min-width: 190px; padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: 700; white-space: nowrap; }
 
 .prj-table-wrap { border: 1px solid var(--cb-line); border-radius: 12px; overflow-x: auto; }
+/* Five fixed-width columns (500px + 24%) left Project — the one that matters —
+   with whatever was over: at ~800px it was one letter a line ("SPEE / KS /
+   Listin / g"). A floor on the table keeps Project readable; narrower than
+   that the table scrolls inside its wrapper, as it already does on a phone. */
+.prj-table { min-width: 960px; }
 .prj-table .prj-col-id     { width: 84px; }
 .prj-table .prj-col-people { width: 24%; }
 .prj-table .prj-col-by     { width: 150px; }
-.prj-table .prj-col-status { width: 170px; }
-.prj-table .prj-col-date   { width: 96px; text-align: right; }
+.prj-table .prj-col-status { width: 250px; }   /* fits "Completed · Ready for SPEEKSNET" */
+.prj-table .prj-col-date   { width: 96px; }
+/* CENTERED (Ethan, 2026-11-21): the four short columns — Who's Involved,
+   Requested By, Status, Updated — sit centred under their headers, header and
+   cell alike; # and Project stay left. The people chips are a flex row, so they
+   centre with justify-content rather than text-align. Has to outrank the
+   shared .cb-table th / td rules, hence the table class twice over. */
+.prj-table.cb-table th.prj-col-people, .prj-table.cb-table td.prj-col-people,
+.prj-table.cb-table th.prj-col-by,     .prj-table.cb-table td.prj-col-by,
+.prj-table.cb-table th.prj-col-status, .prj-table.cb-table td.prj-col-status,
+.prj-table.cb-table th.prj-col-date,   .prj-table.cb-table td.prj-col-date { text-align: center; }
+.prj-table td.prj-col-people .prj-tags { justify-content: center; }
 .prj-table td { color: var(--slate-charcoal); }
+/* Yours, on All Projects (2026-11-21): Call Backs' .cb-row-hasit look, the same
+   sage tint and left bar, so "this one is mine" reads the same across the site. */
+.prj-table .prj-row-mine { background: var(--cb-sage-tint); }
+.prj-table .prj-row-mine > td:first-child { box-shadow: inset 3px 0 0 var(--cb-sage); }
+.prj-table .prj-row-mine:hover { background: #ddf1e5; }
 .prj-table td.prj-col-by, .prj-table td.prj-col-date { color: var(--cb-muted); font-weight: 600; }
 .prj-row:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
 .prj-row-title { display: block; font-weight: 800; overflow-wrap: anywhere; }
 .prj-row-desc {
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
     margin-top: 2px; font-size: 12px; color: var(--cb-muted); line-height: 1.4; overflow-wrap: anywhere;
+    /* Always two lines tall, even for a one-line description (Ethan, 2026-11-21):
+       rows of mixed height made the list jump about when switching tabs. Two
+       lines is also the clamp above, so every row is the same height. */
+    min-height: 2.8em;
 }
 .prj-id { font-size: 11.5px; font-weight: 700; color: #8a94a3; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .prj-empty { padding: 28px 0; }
@@ -27668,6 +27711,10 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 .prj-tag { display: inline-block; font-size: 11.5px; font-weight: 700; color: #475467; background: #f1f5f9; border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
 
 .prj-chip { display: inline-block; font-size: 11px; font-weight: 800; border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+/* _prjEqualPills sets one width per column from the widest pill's measured box:
+   border-box so that width includes the padding, centred so a short label sits
+   in the middle of its wider pill. */
+.prj-table .prj-chip, .prj-table .prj-tag { box-sizing: border-box; text-align: center; }
 .prj-tone-wait  { background: #fef3e2; color: #b54708; }
 .prj-tone-warn  { background: #fef3e2; color: #b54708; }
 .prj-tone-go    { background: #e8f7ee; color: #1f6f43; }
@@ -27710,6 +27757,37 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 /* Has to outrank `.modal-menu.manage-menu .btn-secondary` (0,3,0), which sets
    every secondary button in a tool popup to slate. */
 .modal-menu.prj-detail-modal .prj-foot-btns .prj-danger { color: #b42318; }
+/* Armed by the first press of a can't-undo action (_prjArmed): solid red so the
+   second press is plainly a different, final thing. */
+.modal-menu.prj-detail-modal .prj-foot-btns .prj-armed { background: #b42318; border-color: #b42318; color: #fff; }
+/* Whose move it is, when the bar has nothing for you to press. */
+.prj-foot-wait { font-size: 13px; font-weight: 600; color: #64748b; margin-right: 6px; }
+#prjFormSub:empty { display: none; }
+
+/* The ⋯ menu in the popup header — Edit / Withdraw / Delete (2026-11-21).
+   B2B's deal-screen menu (.b2b-ws-more / .b2b-ws-menu), restated here because
+   those rules lean on B2B's own colour variables. */
+.prj-head-actions { position: relative; }
+.prj-more {
+    width: 32px; height: 32px; border-radius: 9px; border: 0; cursor: pointer;
+    background: #f1f5f9; color: #64748b; display: inline-flex; align-items: center; justify-content: center;
+}
+.prj-more svg { width: 16px; height: 16px; }
+.prj-more:hover, .prj-more[aria-expanded="true"] { background: #e6ebf1; color: #0f172a; }
+.prj-more-menu {
+    position: absolute; top: 38px; right: 40px; z-index: 30; min-width: 190px; padding: 4px;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, .16);
+}
+.prj-more-menu[hidden] { display: none; }
+.prj-more-menu button {
+    display: block; width: 100%; text-align: left; border: 0; background: none; cursor: pointer;
+    padding: 9px 11px; border-radius: 7px; font: inherit; font-size: 13px; font-weight: 600; color: #0f172a;
+}
+.prj-more-menu button:hover { background: #f8fafc; }
+.prj-more-menu button.danger { color: #d1443b; }
+.prj-more-menu button.danger:hover { background: #fcecec; }
+.prj-more-menu button.prj-armed { background: #b42318; color: #fff; }
 .prj-msg { margin-right: auto; font-size: 13px; font-weight: 600; color: #475467; }
 .prj-msg-bad { color: #b42318; }
 .prj-act:disabled { opacity: .6; cursor: default; transform: none; }
@@ -27765,4 +27843,6 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .prj-seg-btn { min-width: 0; flex: 1 1 auto; }
     .prj-foot-btns > button { flex: 1 1 auto; }
     .prj-msg { flex-basis: 100%; }
+    /* Two 190px buttons don't fit a phone: share the row, still one size. */
+    #prjFormModal .prj-form-btn { min-width: 0; flex: 1 1 0; }
 }
