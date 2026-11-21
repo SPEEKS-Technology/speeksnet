@@ -27636,6 +27636,9 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 /* Status filter: Variance Replies' "Needs replies · 11 / Whole store" buttons,
    as classes rather than inline styles. */
 .prj-seg { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Off the head's bottom rule (Ethan, 2026-11-21): the buttons sat flush against
+   the line under the header, which stretches the width of the card. */
+#prjBody > .prj-seg { margin-top: 16px; }
 .prj-seg-btn {
     font: inherit; font-size: 11.5px; font-weight: 800; padding: 6px 13px; border-radius: 8px;
     cursor: pointer; min-width: 150px; text-align: center; flex: 0 0 auto;

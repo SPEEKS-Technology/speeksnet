@@ -34971,8 +34971,14 @@ function prjRender() {
     if (!body || !_prjData) return;
     const all = _prjData.projects || [];
 
+    // The DM ADDS a project rather than requesting one (Ethan, 2026-11-21):
+    // his own go straight to In Progress — nobody to approve them but him.
+    // Same form and people picker; the function skips the approval step.
     const newBtn = document.getElementById('prjNewBtn');
-    if (newBtn) newBtn.style.display = _prjCan('request') ? '' : 'none';
+    if (newBtn) {
+        newBtn.style.display = _prjCan('request') || _prjCan('approve') ? '' : 'none';
+        newBtn.textContent = _prjCan('approve') ? '＋ Add Project' : '＋ Request Project';
+    }
 
     const waiting = _prjWaitingOnMe(all);
     const pip = document.getElementById('prjWaitPip');
@@ -35032,11 +35038,12 @@ function prjRender() {
 function _prjEmptyText(view) {
     // "of yours" for everyone but the DM — an empty list is about them, not the
     // district, and saying so stops "where did everyone's projects go?"
-    const yours = _prjCan('seesAll') ? '' : ' of yours';
-    if (view === 'approval') return _prjCan('request') ? `Nothing${yours} waiting for approval. Have an idea? Request a project.` : `Nothing${yours} waiting for approval.`;
-    if (view === 'active') return `Nothing${yours} under way.`;
-    if (view === 'done') return `Nothing${yours} finished yet.`;
-    return `Nothing${yours} declined or withdrawn.`;
+    // Title Case, like the rest of the tab's labels (Ethan, 2026-11-21).
+    const yours = _prjCan('seesAll') ? '' : ' of Yours';
+    if (view === 'approval') return _prjCan('request') && !_prjCan('approve') ? `Nothing${yours} Waiting for Approval. Have an Idea? Request a Project.` : `Nothing${yours} Waiting for Approval.`;
+    if (view === 'active') return `Nothing${yours} Under Way.`;
+    if (view === 'done') return `Nothing${yours} Finished Yet.`;
+    return `Nothing${yours} Declined or Withdrawn.`;
 }
 
 function _prjStatusChip(p) {
@@ -35115,7 +35122,7 @@ function _prjRenderDetail() {
             <ol class="prj-timeline">
                 ${events.slice().reverse().map(e => `
                     <li class="prj-ev prj-ev-${escapeHtml(e.kind)}">
-                        <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(PRJ_EVENT_LABEL[e.kind] || e.kind)}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
+                        <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(e.kind === 'created' && e.to_status === 'in_progress' ? 'added it' /* the DM's own: no request (2026-11-21) */ : (PRJ_EVENT_LABEL[e.kind] || e.kind))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
                         ${e.note && e.kind !== 'created' ? `<span class="prj-ev-note">${escapeHtml(e.note)}</span>` : ''}
                     </li>`).join('')}
             </ol>
@@ -35323,15 +35330,17 @@ function _prjFillForm(p) {
     _prjRenderPicked();
     _prjCloseMenu();
     const resubmit = p && p.status === 'changes_requested';
+    const adding = !p && _prjCan('approve');   // the DM's own: no approval step
     const t = document.getElementById('prjFormTitle');
-    if (t) t.textContent = !p ? 'Request a Project' : resubmit ? 'Edit and Resubmit' : 'Edit Project';
+    if (t) t.textContent = adding ? 'Add a Project' : !p ? 'Request a Project' : resubmit ? 'Edit and Resubmit' : 'Edit Project';
     const sub = document.getElementById('prjFormSub');
     if (sub) sub.textContent = resubmit
         ? `${p.decided_by || 'The DM'} asked: ${p.decision_note || 'for changes'}`
+        : adding ? 'Goes straight to In Progress — no approval needed.'
         : !p ? 'Goes to the DM for approval. Nothing starts until it is approved.'
         : 'Changes save straight to the project.';
     const go = document.getElementById('prjFormSubmit');
-    if (go) go.textContent = !p ? 'Send for Approval' : resubmit ? 'Resubmit' : 'Save Changes';
+    if (go) go.textContent = adding ? 'Add Project' : !p ? 'Send for Approval' : resubmit ? 'Resubmit' : 'Save Changes';
     const fm = document.getElementById('prjFormMsg');
     if (fm) { fm.textContent = ''; fm.classList.remove('prj-msg-bad'); }
 }
@@ -35441,6 +35450,8 @@ async function prjSubmitForm(btn) {
         const json = await _prjPost(payload);
         _rtMute('projects');
         closeAllModals();
+        // The DM's own lands In Progress, so show that list behind it.
+        if (payload.action === 'create' && json.project && json.project.status === 'in_progress') _prjView = 'active';
         await prjLoad(true);
         if (json.project) prjOpen(json.project.id);
     } catch (err) {

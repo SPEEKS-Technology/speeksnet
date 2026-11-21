@@ -328,15 +328,26 @@ Deno.serve(async (req: Request) => {
 
   // ---- create ----
   if (action === "create") {
-    if (!perms.request) return json({ success: false, error: "Requesting projects isn't switched on for you." }, 403);
+    if (!perms.request && !perms.approve) return json({ success: false, error: "Requesting projects isn't switched on for you." }, 403);
     const f = fields(b, pickable(await loadRoster(sb), overrides), meRef);
     if (!f.title) return json({ success: false, error: "Give the project a title." }, 400);
     if (!f.description) return json({ success: false, error: "Describe the project." }, 400);
+    // THE DM ADDS, HE DOESN'T REQUEST (Ethan, 2026-11-21). Whoever holds
+    // projects-approve would only be asking themselves, so their project is
+    // approved as it's made: straight to in_progress, decided and started now,
+    // and no "waiting for approval" email to themselves.
+    const direct = perms.approve;
     const { data: row, error } = await sb.from("projects").insert({
-      ...f, status: "requested", requested_by: me, requested_by_id: viewer.id, requested_store: viewer.store || null,
+      ...f, status: direct ? "in_progress" : "requested",
+      requested_by: me, requested_by_id: viewer.id, requested_store: viewer.store || null,
+      ...(direct ? { decided_by: me, decided_at: now, started_at: now } : {}),
     }).select().single();
     if (error) return json({ success: false, error: error.message }, 500);
-    await sb.from("project_events").insert({ project_id: row.id, kind: "created", actor: me, to_status: "requested" });
+    await sb.from("project_events").insert({ project_id: row.id, kind: "created", actor: me, to_status: row.status });
+    if (direct) {
+      await broadcastChange("projects");
+      return json({ success: true, project: row });
+    }
     const blurb = f.description!.length > 160 ? f.description!.slice(0, 157) + "…" : f.description;
     await queueNotification(sb, {
       kind: "project_request", priority: "high",

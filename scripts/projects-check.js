@@ -116,7 +116,7 @@ t('list: an empty group says so instead of drawing an empty table', function () 
     _prjData.projects = _prjData.projects.filter(function (p) { return p.status !== 'completed'; });
     _prjView = 'done';
     prjRender();
-    return (!document.querySelector('#prjBody .prj-table') && /Nothing of yours finished yet/.test(document.getElementById('prjBody').textContent)) || 'empty group drew a table';
+    return (!document.querySelector('#prjBody .prj-table') && /Nothing of Yours Finished Yet/.test(document.getElementById('prjBody').textContent)) || 'empty group drew a table';
 });
 // "DM can see all of the projects. Everyone else can only see projects they are
 // involved in." The filtering is the function's; the page has to SAY which
@@ -148,7 +148,7 @@ t('list: the DM\'s empty groups do not say "of yours"', function () {
     _prjView = 'active';
     prjRender();
     var txt = document.getElementById('prjBody').textContent;
-    return (/Nothing under way/.test(txt) && !/of yours/.test(txt)) || txt.trim();
+    return (/Nothing Under Way/.test(txt) && !/of yours/i.test(txt)) || txt.trim();
 });
 t('list: each row shows who is involved as names', function () {
     load('Pat Viewer', VIEWER, 'active');
@@ -696,4 +696,51 @@ t('delete: managers never get Delete, even on their own request', function () {
     var shown = [];
     [1, 3, 5, 8].forEach(function (id) { openDetail('Alex OVL', MANAGER, id); if (footBtn('delete')) shown.push('PRJ-' + id); });
     return shown.length === 0 || 'Delete drawn for a manager on ' + shown.join(',');
+});
+
+// ---- the DM adds, Title Case empties (Ethan, 2026-11-21) ----------------------
+
+t('add: the DM\'s button says Add Project; a manager\'s says Request Project', function () {
+    load('Ethan', APPROVER);
+    var dm = document.getElementById('prjNewBtn');
+    var dmTxt = dm.textContent, dmShown = dm.style.display !== 'none';
+    load('Alex OVL', MANAGER);
+    var mgr = document.getElementById('prjNewBtn').textContent;
+    return (dmShown && /Add Project/.test(dmTxt) && /Request Project/.test(mgr)) || 'dm "' + dmTxt + '" shown=' + dmShown + ', manager "' + mgr + '"';
+});
+t('add: the DM\'s new-project form says it goes straight to In Progress', function () {
+    openForm('Ethan', APPROVER, null);
+    var title = document.getElementById('prjFormTitle').textContent;
+    var sub = document.getElementById('prjFormSub').textContent;
+    var go = document.getElementById('prjFormSubmit').textContent;
+    return (title === 'Add a Project' && go === 'Add Project' && /In Progress/.test(sub) && !/approval\./i.test(go)) || [title, sub, go].join(' | ');
+});
+t('add: a manager\'s new-project form still sends it for approval', function () {
+    openForm('Alex OVL', MANAGER, null);
+    return document.getElementById('prjFormSubmit').textContent === 'Send for Approval' || document.getElementById('prjFormSubmit').textContent;
+});
+t('add: History reads "added it" for a project the DM made in progress', function () {
+    detailDom();
+    _prjData = fixture('Ethan', APPROVER);
+    _prjData.events = [{ id: 9, project_id: 4, kind: 'created', actor: 'Ethan', to_status: 'in_progress', created_at: ago(1) }];
+    _prjOpenId = 4;
+    _prjRenderDetail();
+    var txt = document.getElementById('prjDetailBody').textContent;
+    return (/Ethan\s*added it/.test(txt) && !/requested it/.test(txt)) || txt.slice(0, 300);
+});
+t('caps: every empty-list message is Title Case, for the DM and for a manager', function () {
+    var bad = [];
+    [['Ethan', APPROVER], ['Alex OVL', MANAGER]].forEach(function (who) {
+        ['approval', 'active', 'done', 'closed'].forEach(function (v) {
+            pane();
+            _prjData = fixture(who[0], who[1]);
+            _prjData.projects = [];
+            _prjView = v;
+            prjRender();
+            var el = document.querySelector('#prjBody .prj-empty');
+            var txt = el ? el.textContent.trim() : '(none)';
+            txt.split(/[.?]\s*/).filter(Boolean).forEach(function (s) { if (notTitleCase(s)) bad.push(txt); });
+        });
+    });
+    return !bad.length || 'not Title Case: ' + bad.join(' | ');
 });
