@@ -67,6 +67,25 @@ async function whoAmI(sb: any, pin: string) {
   return { name: String(data.name || "").trim(), role, store: String(data.store || "").trim() };
 }
 
+// FEATURE ACCESS — the same key and default as the front end's catalog entry
+// (notify-phone-alerts, DM only while Ethan pilots it, 2026-11-20). Resolved
+// the way _featureOverrideFor does it: a per-user override beats a per-role
+// one, which beats this default. So widening Phone Alerts to managers is a
+// Feature Access change and the function follows without a deploy.
+const PUSH_FEATURE = "notify-phone-alerts";
+const PUSH_DEFAULT_ROLES = ["district-manager"];
+async function pushAllowed(sb: any, me: { name: string; role: string }) {
+  const roleClass = me.role.replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
+  const { data: ovs } = await sb.from("feature_overrides")
+    .select("subject_type, subject, enabled").eq("feature_key", PUSH_FEATURE);
+  const forUser = (ovs || []).find((o: any) => o.subject_type === "user"
+    && String(o.subject).toLowerCase() === me.name.toLowerCase());
+  const forRole = (ovs || []).find((o: any) => o.subject_type === "role"
+    && String(o.subject).toLowerCase() === roleClass);
+  const ov = forUser || forRole;
+  return ov ? !!ov.enabled : PUSH_DEFAULT_ROLES.includes(roleClass);
+}
+
 function vapid() {
   if (!VAPID_PUBLIC || !VAPID_PRIVATE) throw new Error("VAPID keys are not set on the function");
   return { publicKey: VAPID_PUBLIC, privateJwk: JSON.parse(VAPID_PRIVATE), subject: VAPID_SUBJECT };
@@ -149,6 +168,11 @@ Deno.serve(async (req: Request) => {
     const me = await whoAmI(sb, req.headers.get("x-user-pin") || String(body.pin || ""));
     if (!me) return json({ error: "Sign in again" }, 401);
     if (me.role === "store") return json({ error: "TV board logins can't get phone alerts" }, 403);
+    // Turning alerts OFF is always allowed — losing access must never strand a
+    // phone that keeps buzzing. Everything else needs the feature.
+    if (action !== "unsubscribe" && !(await pushAllowed(sb, me))) {
+      return json({ error: "Phone alerts aren't turned on for your account" }, 403);
+    }
 
     if (action === "subscribe") {
       const s = body.subscription || {};

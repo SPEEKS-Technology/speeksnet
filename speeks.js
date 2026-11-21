@@ -44809,6 +44809,12 @@ const FEATURE_CATALOG = [
     // offered a preferences panel for a mailbox nobody reads. Belt and braces
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'assistant-manager', 'employee'] },
+    // Phone Alerts (Alerts Hub, 2026-11-20): the top block of Settings →
+    // Notifications that turns on push for this phone. DM only while Ethan
+    // pilots it (his phone + BAL). Widening it is a Feature Access change, not a
+    // code change; the alerts-hub function reads the same key and the same
+    // default, so the two cannot disagree (see PUSH_DEFAULT_ROLES there).
+    { key: 'notify-phone-alerts',      label: 'Phone Alerts (Push)',           tab: 'hotbar', group: 'Top Bar', def: ['district-manager'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -65459,7 +65465,7 @@ const SETTINGS_SECTIONS = {
     notifications: {
         pane: 'settingsNotifyPane', back: true, footer: true,
         eyebrow: 'Settings', title: 'Notifications',
-        sub: 'Pick which SPEEKSNET alerts also reach your inbox.',
+        sub: 'Pick which SPEEKSNET alerts reach you, and where.',
         onOpen: () => loadNotifySettings(),
     },
 };
@@ -65688,6 +65694,12 @@ function _pushNote(msg, kind) {
 async function _pushRender() {
     const box = document.getElementById('nsPush');
     if (!box) return;
+    // Feature Access gate (notify-phone-alerts, DM-only default). Not drawn at
+    // all for anyone else: an empty block, not a greyed one.
+    if (_featureEffectiveVisible('notify-phone-alerts', _jumpRoleClass(), sessionStorage.getItem('speeksUserName') || '') !== true) {
+        box.innerHTML = '';
+        return;
+    }
     const env = _pushEnv();
     const apos = String.fromCharCode(39);
     let inner;
@@ -65704,7 +65716,7 @@ async function _pushRender() {
         let sub = null;
         try { sub = await _pushCurrentSub(); } catch (_) { sub = null; }
         inner = sub
-            ? `<div class="ns-push-state">On for this ${_samEsc(_pushDeviceName().toLowerCase())}</div>
+            ? `<div class="ns-push-state">Alerts On · ${_samEsc(_pushDeviceName())}</div>
                <div class="ns-push-btns">
                  <button type="button" class="btn-secondary" onclick="pushTest(this)">Send A Test</button>
                  <button type="button" class="btn-ghost" onclick="pushDisable(this)">Turn Off</button>

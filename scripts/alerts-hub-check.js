@@ -16,6 +16,7 @@ function _ahMount() {
     document.body.appendChild(b);
     return b;
 }
+sessionStorage.setItem('speeksUserRole', 'district manager');   // the block is DM-only by default
 function _ahWithEnv(env, fn) {
     var real = window._pushEnv;
     window._pushEnv = function () { return env; };
@@ -79,4 +80,27 @@ t('requestPermission is the first await in pushEnable (iOS needs the tap)', func
 t('the handlers the buttons call are global', function () {
     var miss = ['pushEnable', 'pushTest', 'pushDisable'].filter(function (n) { return typeof window[n] !== 'function'; });
     return !miss.length || 'not on window: ' + miss.join(', ');
+});
+
+// Feature Access (Ethan, 2026-11-20: "only DM should have this right now").
+t('Phone Alerts is a DM-only catalog entry', function () {
+    var f = FEATURE_CATALOG.find(function (x) { return x.key === 'notify-phone-alerts'; });
+    if (!f) return 'no notify-phone-alerts entry';
+    return JSON.stringify(f.def) === '["district-manager"]' || 'default is ' + JSON.stringify(f.def);
+});
+
+t('the block draws nothing for a manager, and draws for the DM', function () {
+    var b = _ahMount(); b.innerHTML = '<div id="nsPush"></div>';
+    var env = { ios: false, android: false, standalone: false, supported: false };
+    var role = sessionStorage.getItem('speeksUserRole');
+    try {
+        sessionStorage.setItem('speeksUserRole', 'manager');
+        _ahWithEnv(env, _pushRender);
+        if (b.querySelector('#nsPush').innerHTML !== '') return 'a manager got the block';
+        sessionStorage.setItem('speeksUserRole', 'district manager');
+        _ahWithEnv(env, _pushRender);
+        return !!b.querySelector('#nsPush .ns-push') || 'the DM got nothing';
+    } finally {
+        if (role === null) sessionStorage.removeItem('speeksUserRole'); else sessionStorage.setItem('speeksUserRole', role);
+    }
 });
