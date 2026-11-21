@@ -309,7 +309,7 @@ t('detail: lists everyone involved, including someone who has left', function ()
 t('detail: history is newest first', function () {
     openDetail('Pat Viewer', VIEWER, 4);
     var first = document.querySelector('.prj-timeline .prj-ev');
-    return (first && /approved/.test(first.textContent)) || 'first entry: ' + (first && first.textContent);
+    return (first && /Approved It/.test(first.textContent)) || 'first entry: ' + (first && first.textContent.trim());
 });
 
 // ---- request form + the roster picker -------------------------------------------
@@ -521,7 +521,7 @@ t('sign-off: once sent back, the DM\'s note leads the popup', function () {
     _prjRenderDetail();
     var c = document.querySelector('#prjDetailBody .prj-callout');
     var hist = document.querySelector('.prj-timeline .prj-ev');
-    return (c && /sent it back/.test(c.textContent) && /export button/.test(c.textContent) && hist && /sent it back/.test(hist.textContent))
+    return (c && /sent it back/.test(c.textContent) && /export button/.test(c.textContent) && hist && /Sent It Back/.test(hist.textContent))
         || 'callout "' + (c && c.textContent) + '", newest history "' + (hist && hist.textContent) + '"';
 });
 t('sign-off: the note stops leading once work moves on (an update after it)', function () {
@@ -720,14 +720,15 @@ t('add: a manager\'s new-project form still sends it for approval', function () 
     openForm('Alex OVL', MANAGER, null);
     return document.getElementById('prjFormSubmit').textContent === 'Send for Approval' || document.getElementById('prjFormSubmit').textContent;
 });
-t('add: History reads "posted it" for a project the DM made in progress', function () {
+t('add: History reads "Posted It" for a project the DM made in progress', function () {
     detailDom();
     _prjData = fixture('Ethan', APPROVER);
     _prjData.events = [{ id: 9, project_id: 4, kind: 'created', actor: 'Ethan', to_status: 'in_progress', created_at: ago(1) }];
     _prjOpenId = 4;
     _prjRenderDetail();
     var txt = document.getElementById('prjDetailBody').textContent;
-    return (/Ethan\s*posted it/.test(txt) && !/requested it/.test(txt)) || txt.slice(0, 300);
+    var sub = document.getElementById('prjDetailSub').textContent;
+    return (/Ethan\s*Posted It/.test(txt) && !/requested it/i.test(txt) && /Posted by/.test(sub)) || txt.slice(0, 300) + ' | sub: ' + sub;
 });
 t('caps: every empty-list message is Title Case, for the DM and for a manager', function () {
     var bad = [];

@@ -34872,12 +34872,13 @@ const PRJ_OUTCOME = {
     standalone:  'Keep Standalone',
     retire:      'Retire It',
 };
+// Title Case, like every other label on the tab (Ethan, 2026-11-21: "Posted It").
 const PRJ_EVENT_LABEL = {
-    created: 'requested it', edited: 'edited it', resubmitted: 'resubmitted it',
-    approved: 'approved it', declined: 'declined it', changes_requested: 'asked for changes',
-    withdrawn: 'withdrew it', update: 'posted an update', parked: 'parked it',
-    resumed: 'resumed it', signoff_requested: 'sent it for sign-off', signoff_returned: 'sent it back',
-    completed: 'marked it complete', outcome: 'decided what happens next',
+    created: 'Requested It', edited: 'Edited It', resubmitted: 'Resubmitted It',
+    approved: 'Approved It', declined: 'Declined It', changes_requested: 'Asked for Changes',
+    withdrawn: 'Withdrew It', update: 'Posted an Update', parked: 'Parked It',
+    resumed: 'Resumed It', signoff_requested: 'Sent It for Sign-Off', signoff_returned: 'Sent It Back',
+    completed: 'Marked It Complete', outcome: 'Decided What Happens Next',
 };
 
 let _prjData     = null;    // { me, can, people, projects, events } from the last GET
@@ -35095,8 +35096,11 @@ function _prjRenderDetail() {
     }
     document.getElementById('prjDetailEyebrow').textContent = `PRJ-${p.id}`;
     head.textContent = p.title;
+    // "Posted by" for a project the DM put straight into In Progress — its
+    // created event went to in_progress, not requested (2026-11-21).
+    const posted = ((_prjData && _prjData.events) || []).some(e => e.project_id === p.id && e.kind === 'created' && e.to_status === 'in_progress');
     document.getElementById('prjDetailSub').innerHTML =
-        `${_prjStatusChip(p)} <span>Requested by ${escapeHtml(p.requested_by)}${p.requested_store ? ` (${escapeHtml(p.requested_store)})` : ''} · ${escapeHtml(_prjDate(p.created_at))}</span>`;
+        `${_prjStatusChip(p)} <span>${posted ? 'Posted' : 'Requested'} by ${escapeHtml(p.requested_by)}${p.requested_store ? ` (${escapeHtml(p.requested_store)})` : ''} · ${escapeHtml(_prjDate(p.created_at))}</span>`;
 
     const facts = [
         ["Who's involved", _prjNameChips(_prjInvolved(p))],
@@ -35122,7 +35126,7 @@ function _prjRenderDetail() {
             <ol class="prj-timeline">
                 ${events.slice().reverse().map(e => `
                     <li class="prj-ev prj-ev-${escapeHtml(e.kind)}">
-                        <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(e.kind === 'created' && e.to_status === 'in_progress' ? 'posted it' /* the DM's own: no request (Ethan, 2026-11-21) */ : (PRJ_EVENT_LABEL[e.kind] || e.kind))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
+                        <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(e.kind === 'created' && e.to_status === 'in_progress' ? 'Posted It' /* the DM's own: no request (Ethan, 2026-11-21) */ : (PRJ_EVENT_LABEL[e.kind] || e.kind))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
                         ${e.note && e.kind !== 'created' ? `<span class="prj-ev-note">${escapeHtml(e.note)}</span>` : ''}
                     </li>`).join('')}
             </ol>
