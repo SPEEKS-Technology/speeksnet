@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261118b">
+  <link rel="stylesheet" href="styles.css?v=20261120a">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -22,10 +22,16 @@
     #recycleInvModal .manage-content { overflow-x: hidden !important; }
   </style>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <!-- Home-screen app + phone alerts (Alerts Hub, 2026-11-20). iOS reads the apple-* tags, Android the manifest. -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="SPEEKSNET">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20261118b" defer></script>
+  <script src="speeks.js?v=20261120a" defer></script>
 </head>
 
 <body class="preload">

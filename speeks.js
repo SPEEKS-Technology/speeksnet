@@ -220,6 +220,7 @@ const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
+const ALERTS_HUB_URL    = `${_BASE}/alerts-hub`;   // phone push (Alerts Hub, 2026-11-20)
 const DAILY_BRIEF_URL   = `${_BASE}/daily-brief`;
 const DISTRICT_WATCH_URL = `${_BASE}/district-watch`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
@@ -65613,7 +65614,7 @@ function renderNotifySettings(d) {
     // categories are meaningless without both. The block below the switch dims
     // when it is off, so the state reads at a glance instead of being inferred
     // from a row of ticked boxes that aren't doing anything.
-    body.innerHTML = `${feedHtml}
+    body.innerHTML = `<div id="nsPush"></div>${feedHtml}
       <div class="ns-master ${on ? 'is-on' : ''}">
         <label class="ns-switch">
           <input type="checkbox" id="nsEnabled" ${on ? 'checked' : ''} onchange="_nsSyncEnabled()">
@@ -65637,7 +65638,162 @@ function renderNotifySettings(d) {
         </div>
       </div>`;
     _nsSyncEnabled();
+    _pushRender();
 }
+
+// ============================================================================
+// PHONE ALERTS — Alerts Hub phase 1 (2026-11-20, docs/alerts-hub-plan.md)
+// ============================================================================
+// The top block of Settings → Notifications. Acts on the spot rather than
+// waiting for Save: turning alerts on is a permission prompt plus a handshake
+// with the phone, not a preference, so there is nothing to hold back.
+//
+// iPhone only delivers web push to a site added to the Home Screen (iOS 16.4+),
+// and only from a tap — so requestPermission() is the FIRST await in
+// pushEnable(); a fetch before it loses the tap and iOS silently says no.
+// Android Chrome works straight from the browser. sw.js is push-only (no
+// cache) so the ?v= cache-buster keeps working — read its header first.
+function _pushEnv() {
+    const ua = navigator.userAgent || '';
+    const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    return { ios, android: /Android/.test(ua), standalone, supported };
+}
+
+function _pushDeviceName() {
+    const e = _pushEnv();
+    return e.ios ? 'iPhone' : e.android ? 'Android Phone' : 'This Computer';
+}
+
+function _pushKeyBytes(b64u) {
+    const pad = '='.repeat((4 - (b64u.length % 4)) % 4);
+    const bin = atob((b64u + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+
+async function _pushCurrentSub() {
+    if (!('serviceWorker' in navigator)) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+}
+
+function _pushNote(msg, kind) {
+    const n = document.getElementById('nsPushNote');
+    if (!n) return;
+    n.textContent = msg || '';
+    n.className = 'ns-push-note' + (kind ? ' is-' + kind : '');
+}
+
+async function _pushRender() {
+    const box = document.getElementById('nsPush');
+    if (!box) return;
+    const env = _pushEnv();
+    const apos = String.fromCharCode(39);
+    let inner;
+    if (env.ios && !env.standalone) {
+        inner = `<div class="ns-hint ns-push-steps">On iPhone, alerts only work from the Home Screen app:<br>
+                 1. Tap <b>Share</b> → <b>Add to Home Screen</b><br>
+                 2. Open SPEEKSNET from the Home Screen and sign in<br>
+                 3. Come back here and tap <b>Turn On Phone Alerts</b></div>`;
+    } else if (!env.supported) {
+        inner = `<div class="ns-hint">This browser can${apos}t get phone alerts. Use Chrome on Android, or Safari → Add to Home Screen on iPhone.</div>`;
+    } else if (Notification.permission === 'denied') {
+        inner = `<div class="ns-hint">Alerts are blocked for SPEEKSNET on this device. Turn them on in the phone${apos}s Settings → Notifications → SPEEKSNET, then come back.</div>`;
+    } else {
+        let sub = null;
+        try { sub = await _pushCurrentSub(); } catch (_) { sub = null; }
+        inner = sub
+            ? `<div class="ns-push-state">On for this ${_samEsc(_pushDeviceName().toLowerCase())}</div>
+               <div class="ns-push-btns">
+                 <button type="button" class="btn-secondary" onclick="pushTest(this)">Send A Test</button>
+                 <button type="button" class="btn-ghost" onclick="pushDisable(this)">Turn Off</button>
+               </div>`
+            : `<div class="ns-hint">Get SPEEKSNET alerts on this device, like a text — only for work.</div>
+               <div class="ns-push-btns is-one">
+                 <button type="button" class="btn-primary" onclick="pushEnable(this)">Turn On Phone Alerts</button>
+               </div>`;
+    }
+    box.innerHTML = `<div class="ns-push">
+        <div class="ns-label">Phone alerts</div>
+        ${inner}
+        <div class="ns-push-note" id="nsPushNote"></div>
+      </div>`;
+}
+
+async function _pushPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const res = await fetch(ALERTS_HUB_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
+    return j;
+}
+
+async function pushEnable(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    _pushNote('Turning on…');
+    try {
+        const perm = await Notification.requestPermission();          // keep FIRST — see banner
+        if (perm !== 'granted') {
+            _pushNote(perm === 'denied' ? `Alerts were blocked. Allow them in the phone${apos}s settings.` : 'Alerts were not allowed.', 'err');
+            if (btn) btn.disabled = false;
+            return;
+        }
+        const reg = await navigator.serviceWorker.register('sw.js');
+        await navigator.serviceWorker.ready;
+        const kr = await fetch(`${ALERTS_HUB_URL}?action=key&v=${Date.now()}`);
+        const kj = await kr.json().catch(() => ({}));
+        if (!kj.publicKey) throw new Error(kj.error || 'Phone alerts are not set up yet');
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _pushKeyBytes(kj.publicKey) });
+        await _pushPost({ action: 'subscribe', subscription: sub.toJSON(), device: _pushDeviceName() });
+        await _pushRender();
+        _pushNote('On. Sending a test now…', 'ok');
+        await _pushPost({ action: 'test' });
+        _pushNote('Test sent — it should arrive in a few seconds.', 'ok');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t turn on — ${e.message || 'try again'}.`, 'err');
+        if (btn) btn.disabled = false;
+    }
+}
+window.pushEnable = pushEnable;
+
+async function pushTest(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    _pushNote('Sending…');
+    try {
+        const j = await _pushPost({ action: 'test' });
+        _pushNote(j.sent ? 'Test sent — it should arrive in a few seconds.' : 'Nothing was delivered. Turn alerts off and on again.', j.sent ? 'ok' : 'err');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t send — ${e.message || 'try again'}.`, 'err');
+    }
+    if (btn) btn.disabled = false;
+}
+window.pushTest = pushTest;
+
+async function pushDisable(btn) {
+    const apos = String.fromCharCode(39);
+    if (btn) btn.disabled = true;
+    try {
+        const sub = await _pushCurrentSub();
+        if (sub) {
+            try { await _pushPost({ action: 'unsubscribe', endpoint: sub.endpoint }); } catch (_) { /* still drop it locally */ }
+            await sub.unsubscribe();
+        }
+        await _pushRender();
+        _pushNote('Phone alerts are off for this device.');
+    } catch (e) {
+        _pushNote(`Couldn${apos}t turn off — ${e.message || 'try again'}.`, 'err');
+        if (btn) btn.disabled = false;
+    }
+}
+window.pushDisable = pushDisable;
 
 // One category row. A category the function gave sub-switches for becomes a
 // disclosure: the category tick still governs the whole thing, and the caret
