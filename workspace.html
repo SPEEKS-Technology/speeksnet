@@ -858,7 +858,16 @@
                 <span class="tool-head-sub prj-detail-sub" id="prjDetailSub"></span>
             </div>
         </div>
+        <div class="tool-head-actions prj-head-actions">
+            <!-- Edit / Withdraw / Delete live here, off the bottom bar (Ethan,
+                 2026-11-21: the bar was "very chaotic"). Same ⋯ menu as B2B's
+                 deal screen. _prjRenderDetail fills it; hidden when empty. -->
+            <button class="prj-more" id="prjMoreBtn" style="display:none;" onclick="prjMoreToggle(event)" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <div class="prj-more-menu" id="prjMoreMenu" role="menu" hidden></div>
         <button class="modal-close-btn" onclick="closeAllModals()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
     </div>
     <div class="manage-content prj-detail-body" id="prjDetailBody"></div>
     <div class="manage-footer prj-detail-foot" id="prjDetailFooter"></div>

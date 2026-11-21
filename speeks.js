@@ -35122,7 +35122,7 @@ function _prjRenderDetail() {
             <ol class="prj-timeline">
                 ${events.slice().reverse().map(e => `
                     <li class="prj-ev prj-ev-${escapeHtml(e.kind)}">
-                        <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(e.kind === 'created' && e.to_status === 'in_progress' ? 'added it' /* the DM's own: no request (2026-11-21) */ : (PRJ_EVENT_LABEL[e.kind] || e.kind))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
+                        <span class="prj-ev-line"><b>${escapeHtml(e.actor)}</b> ${escapeHtml(e.kind === 'created' && e.to_status === 'in_progress' ? 'posted it' /* the DM's own: no request (Ethan, 2026-11-21) */ : (PRJ_EVENT_LABEL[e.kind] || e.kind))}<span class="prj-ev-when">${escapeHtml(_prjDate(e.created_at))}</span></span>
                         ${e.note && e.kind !== 'created' ? `<span class="prj-ev-note">${escapeHtml(e.note)}</span>` : ''}
                     </li>`).join('')}
             </ol>
@@ -35136,16 +35136,70 @@ function _prjRenderDetail() {
         ${timeline}`;
 
     foot.innerHTML = _prjActionsHtml(p);
+    _prjFillMore(p);
 }
 
-// Which actions this person gets on this project, in its current state. The
-// function enforces the same table; this only decides what is drawn. Buttons
-// are the site's own — kpi-cancel-btn / btn-secondary / btn-primary, as in
-// every other tool popup.
+// THE ACTION BAR, REWORKED (Ethan, 2026-11-21: "looks very chaotic" — up to six
+// buttons in one row: Delete, Edit, Withdraw, Ask for Changes, Decline, Approve).
+// Two places now:
+//   ⋯ menu (popup header, as on B2B's deal screen) — Edit, Withdraw, Delete:
+//     things you do to the project, not a step in its workflow.
+//   the bar — only the step this project is at, at most three buttons, the
+//     main one green on the right, the note box only when the step uses it.
+// The DM's OWN project gets no note box and no Post Update: the notes are how
+// he comments on other people's projects, not his own.
+// The function enforces the same table; this only decides what is drawn.
+
+// Things done TO the project: the ⋯ menu.
+function _prjMenuHtml(p) {
+    const approver = _prjCan('approve');
+    const mine = _prjIsRequester(p);
+    const live = ['requested', 'in_progress', 'parked', 'awaiting_signoff'].includes(p.status);
+    const item = (label, onclick, danger) =>
+        `<button type="button" role="menuitem" class="prj-act${danger ? ' danger' : ''}" onclick="${onclick}">${escapeHtml(label)}</button>`;
+    let out = '';
+    // changes_requested has its own "Edit and Resubmit" on the bar. The DM
+    // edits a project once it is under way, not someone's request while it
+    // waits on his decision — he asks for changes instead (as before).
+    if (live && (mine || (approver && p.status !== 'requested'))) out += item('Edit', `prjMoreClose(); prjEdit(${Number(p.id)})`);
+    // Not on the DM's own: he has Delete, and a second red item doing the same
+    // job is the clutter this menu exists to remove.
+    if (mine && !approver && ['requested', 'changes_requested'].includes(p.status)) out += item('Withdraw Request', "prjAct('withdraw', this)", true);
+    if (approver) out += item('Delete Project', "prjAct('delete', this)", true);
+    return out;
+}
+function _prjFillMore(p) {
+    const m = document.getElementById('prjMoreMenu');
+    const b = document.getElementById('prjMoreBtn');
+    const html = p ? _prjMenuHtml(p) : '';
+    if (m) { m.innerHTML = html; m.hidden = true; }
+    if (b) { b.style.display = html ? '' : 'none'; b.setAttribute('aria-expanded', 'false'); }
+}
+function prjMoreToggle(ev) {
+    if (ev) ev.stopPropagation();
+    const m = document.getElementById('prjMoreMenu');
+    if (!m) return;
+    m.hidden = !m.hidden;
+    document.getElementById('prjMoreBtn')?.setAttribute('aria-expanded', String(!m.hidden));
+}
+function prjMoreClose() {
+    const m = document.getElementById('prjMoreMenu');
+    if (m && !m.hidden) {
+        m.hidden = true;
+        document.getElementById('prjMoreBtn')?.setAttribute('aria-expanded', 'false');
+        m.querySelectorAll('.prj-armed').forEach(_prjDisarm);
+    }
+}
+document.addEventListener('click', (e) => {
+    if (!e.target.closest || !e.target.closest('#prjMoreMenu')) prjMoreClose();
+});
+
+// The step this project is at: the bar.
 function _prjActionsHtml(p) {
     const approver = _prjCan('approve');
     const mine = _prjIsRequester(p);
     const owns = mine || _prjIsInvolved(p);
+    const ownDm = approver && mine;   // the DM's own project
     const editBtn = (label, cls) =>
         `<button class="${cls || 'btn-secondary'} prj-act" onclick="prjEdit(${Number(p.id)})">${escapeHtml(label)}</button>`;
     const btn = (label, action, cls) =>
@@ -35157,43 +35211,43 @@ function _prjActionsHtml(p) {
     let btns = '';
 
     if (p.status === 'requested') {
-        if (approver) {
+        if (ownDm) {
+            // Only a project he made before Add Project skipped approval.
+            btns = btn('Start It', 'approve', 'btn-primary');
+        } else if (approver) {
             rows = note('Note for the requester — required to decline or ask for changes');
             btns = btn('Ask for Changes', 'request_changes') + btn('Decline', 'decline', 'btn-secondary prj-danger') + btn('Approve and Start', 'approve', 'btn-primary');
         }
-        // Withdraw is red and sits after Edit (Ethan, 2026-11-21): it used to
-        // wear kpi-cancel-btn, first in the row — the same look and place as
-        // every popup's Cancel — and one click closed the request for good.
-        if (mine) btns = editBtn('Edit') + btn('Withdraw', 'withdraw', 'btn-secondary prj-danger') + btns;
     } else if (p.status === 'changes_requested') {
-        if (mine) btns = btn('Withdraw', 'withdraw', 'btn-secondary prj-danger') + editBtn('Edit and Resubmit', 'btn-primary');
-        if (approver) { rows = note('Why it is declined'); btns += btn('Decline', 'decline', 'btn-secondary prj-danger'); }
+        if (mine) btns = editBtn('Edit and Resubmit', 'btn-primary');
+        else if (approver) { rows = note('Why it is declined'); btns = btn('Decline', 'decline', 'btn-secondary prj-danger'); }
     } else if (p.status === 'in_progress' || p.status === 'parked') {
-        if (owns || approver) {
-            rows = note(approver ? 'Progress update, or a note to go with your decision'
-                : 'Progress update — or, when it is finished, what was done and where to find it');
+        if (ownDm) {
+            btns = (p.status === 'parked' ? btn('Resume', 'resume') : btn('Park', 'park'))
+                + btn('Mark Complete', 'complete', 'btn-primary');
+        } else if (approver) {
+            rows = note('Progress update, or a note to go with your decision');
+            btns = btn('Post Update', 'update')
+                + (p.status === 'parked' ? btn('Resume', 'resume') : btn('Park', 'park'))
+                + btn('Mark Complete', 'complete', 'btn-primary');
+        } else if (owns) {
+            rows = note('Progress update — or, when it is finished, what was done and where to find it');
             btns = btn('Post Update', 'update');
-        }
-        // Who's involved changes as the work goes on, so a running project stays
-        // editable by whoever asked for it and by the DM (the function agrees).
-        if (mine || approver) btns = editBtn('Edit') + btns;
-        if (approver) {
-            btns += p.status === 'parked' ? btn('Resume', 'resume') : btn('Park', 'park');
-            btns += btn('Mark Complete', 'complete', 'btn-primary');
-        } else if (owns && p.status === 'in_progress') {
             // The people doing the work say when it is done; the DM signs it
             // off (0187). Parked projects are resumed first — parked means
             // nobody is on it.
-            btns += btn('Submit for Sign-Off', 'request_signoff', 'btn-primary');
+            if (p.status === 'in_progress') btns += btn('Submit for Sign-Off', 'request_signoff', 'btn-primary');
         }
     } else if (p.status === 'awaiting_signoff') {
-        if (owns || approver) {
-            rows = note(approver ? 'Note for the team — required to send it back'
-                : 'Anything to add while it waits for sign-off');
+        if (ownDm) {
+            btns = btn('Mark Complete', 'complete', 'btn-primary');
+        } else if (approver) {
+            rows = note('Note for the team — required to send it back');
+            btns = btn('Post Update', 'update') + btn('Send Back', 'return_signoff') + btn('Approve as Complete', 'complete', 'btn-primary');
+        } else if (owns) {
+            rows = note('Anything to add while it waits for sign-off');
             btns = btn('Post Update', 'update');
         }
-        if (mine || approver) btns = editBtn('Edit') + btns;
-        if (approver) btns += btn('Send Back', 'return_signoff') + btn('Approve as Complete', 'complete', 'btn-primary');
     } else if (p.status === 'completed' && approver) {
         rows = `
             <div class="prj-outcome-row">
@@ -35206,13 +35260,13 @@ function _prjActionsHtml(p) {
         btns = btn(p.outcome ? 'Update Decision' : 'Save Decision', 'outcome', 'btn-primary');
     }
 
-    const close = '<button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button>';
-    // Delete: the DM only, in every state, first in the row and red, behind the
-    // same press-twice confirm (Ethan, 2026-11-21 — a junk or test request had
-    // no way off the board). On a closed project it is the only action, so it
-    // keeps a Close beside it.
-    if (approver) btns = btn('Delete', 'delete', 'btn-secondary prj-danger') + (btns || close);
-    if (!rows && !btns) return `${msg}${close}`;
+    // Nothing to do at this step: say whose move it is, and a Close.
+    if (!rows && !btns) {
+        const wait = p.status === 'requested' ? 'Waiting for the DM to approve it.'
+            : p.status === 'awaiting_signoff' ? 'Waiting for the DM to sign it off.'
+            : p.status === 'changes_requested' ? 'Sent back for changes.' : '';
+        return `<div class="prj-foot-btns">${msg}${wait ? `<span class="prj-foot-wait">${wait}</span>` : ''}<button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button></div>`;
+    }
     return `<div class="prj-foot-rows">${rows}</div><div class="prj-foot-btns">${msg}${btns}</div>`;
 }
 
@@ -35226,7 +35280,7 @@ const _PRJ_CONFIRM = { withdraw: 'Withdraw', decline: 'Decline', complete: 'Comp
 function _prjArmed(action, btn) {
     if (!_PRJ_CONFIRM[action] || !btn) return true;
     if (btn.dataset.armed === '1') return true;
-    document.querySelectorAll('#prjDetailFooter .prj-armed').forEach(_prjDisarm);
+    document.querySelectorAll('.prj-armed').forEach(_prjDisarm);
     btn.dataset.armed = '1';
     btn.dataset.label = btn.textContent;
     btn.textContent = `Click Again to ${_PRJ_CONFIRM[action]}`;
@@ -35336,7 +35390,7 @@ function _prjFillForm(p) {
     const sub = document.getElementById('prjFormSub');
     if (sub) sub.textContent = resubmit
         ? `${p.decided_by || 'The DM'} asked: ${p.decision_note || 'for changes'}`
-        : adding ? 'Goes straight to In Progress — no approval needed.'
+        : adding ? ''   // the DM needs no explanation of his own form (Ethan, 2026-11-21)
         : !p ? 'Goes to the DM for approval. Nothing starts until it is approved.'
         : 'Changes save straight to the project.';
     const go = document.getElementById('prjFormSubmit');

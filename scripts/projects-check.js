@@ -190,7 +190,8 @@ t('list: titles and descriptions are escaped', function () {
 
 function actions(me, can, id) {
     _prjData = fixture(me, can);
-    var html = _prjActionsHtml(_prjById(id));
+    // The bar and the ⋯ menu together: every action this person has.
+    var html = _prjActionsHtml(_prjById(id)) + _prjMenuHtml(_prjById(id));
     var acts = [];
     html.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
     if (/prjEdit\(/.test(html)) acts.push('edit');
@@ -239,18 +240,18 @@ t('actions: declined is final — nothing but the DM\'s Delete', function () {
 t('actions: a different person who happens to share a name is NOT the requester', function () {
     _prjData = fixture('Alex OVL', MANAGER);
     _prjData.me = { id: 'u-someone-else', name: 'Alex OVL' };
-    var html = _prjActionsHtml(_prjById(1));
+    var html = _prjActionsHtml(_prjById(1)) + _prjMenuHtml(_prjById(1));
     return !/withdraw/.test(html) || 'a namesake got the requester\'s buttons';
 });
 t('actions: a renamed requester keeps their buttons (same id, new name)', function () {
     _prjData = fixture('Alex OVL', MANAGER);
     _prjData.me = { id: ALEX, name: 'Alexandra OVL' };
-    return /withdraw/.test(_prjActionsHtml(_prjById(1))) || 'lost the buttons on a rename';
+    return /withdraw/.test(_prjMenuHtml(_prjById(1))) || 'lost the buttons on a rename';
 });
 t('actions: with no id on either side, the name decides (test accounts)', function () {
     _prjData = fixture('Alex OVL', MANAGER);
     _prjData.me = { id: null, name: ' alex ovl ' };
-    return /withdraw/.test(_prjActionsHtml(_prjById(1))) || 'name fallback failed';
+    return /withdraw/.test(_prjMenuHtml(_prjById(1))) || 'name fallback failed';
 });
 
 // ---- note rules are enforced before the network ---------------------------------
@@ -263,6 +264,7 @@ function detailDom() {
         document.body.appendChild(host);
     }
     host.innerHTML = '<div id="prjDetailEyebrow"></div><div id="prjDetailHead"></div><div id="prjDetailSub"></div>'
+        + '<button id="prjMoreBtn"></button><div id="prjMoreMenu" hidden></div>'
         + '<div id="prjDetailBody"></div><div id="prjDetailFooter"></div>';
     return host;
 }
@@ -443,7 +445,7 @@ function signoffFixture(me, can, status, extraEvents) {
 }
 function signoffActions(me, can, status) {
     signoffFixture(me, can, status);
-    var html = _prjActionsHtml(_prjById(4));
+    var html = _prjActionsHtml(_prjById(4)) + _prjMenuHtml(_prjById(4));
     var acts = [];
     html.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
     if (/prjEdit\(/.test(html)) acts.push('edit');
@@ -634,16 +636,15 @@ t('wiring: Jump search lands on the Workspace tab', function () {
 // ---- can't-undo actions: red, after Edit, press twice; DM can delete (2026-11-21) ----
 
 function footBtn(action) {
-    return document.querySelector('#prjDetailFooter button[onclick*="prjAct(\'' + action + '\'"]');
+    // The bar or the ⋯ menu — wherever the action lives now.
+    return document.querySelector('#prj-detail-host button[onclick*="prjAct(\'' + action + '\'"]');
 }
-t('undo-proof: Withdraw is red and comes after Edit, not dressed as Cancel', function () {
+t('undo-proof: Withdraw is in the ⋯ menu, red, and not on the bar', function () {
     openDetail('Alex OVL', MANAGER, 1);
-    var w = footBtn('withdraw');
-    if (!w) return 'no Withdraw button';
-    if (w.classList.contains('kpi-cancel-btn')) return 'Withdraw still wears kpi-cancel-btn';
-    if (!w.classList.contains('prj-danger')) return 'Withdraw is not red';
-    var html = document.getElementById('prjDetailFooter').innerHTML;
-    return html.indexOf('prjEdit(') < html.indexOf("prjAct('withdraw'") || 'Withdraw comes before Edit';
+    var w = document.querySelector('#prjMoreMenu button[onclick*="prjAct(\'withdraw\'"]');
+    if (!w) return 'no Withdraw in the menu';
+    if (!w.classList.contains('danger')) return 'Withdraw is not red';
+    return !/prjAct\('withdraw'/.test(document.getElementById('prjDetailFooter').innerHTML) || 'Withdraw is still on the bar';
 });
 t('undo-proof: the first press of Withdraw only arms it — nothing is sent', function () {
     openDetail('Alex OVL', MANAGER, 1);
@@ -708,25 +709,25 @@ t('add: the DM\'s button says Add Project; a manager\'s says Request Project', f
     var mgr = document.getElementById('prjNewBtn').textContent;
     return (dmShown && /Add Project/.test(dmTxt) && /Request Project/.test(mgr)) || 'dm "' + dmTxt + '" shown=' + dmShown + ', manager "' + mgr + '"';
 });
-t('add: the DM\'s new-project form says it goes straight to In Progress', function () {
+t('add: the DM\'s new-project form is Add a Project, with no explanation line', function () {
     openForm('Ethan', APPROVER, null);
     var title = document.getElementById('prjFormTitle').textContent;
     var sub = document.getElementById('prjFormSub').textContent;
     var go = document.getElementById('prjFormSubmit').textContent;
-    return (title === 'Add a Project' && go === 'Add Project' && /In Progress/.test(sub) && !/approval\./i.test(go)) || [title, sub, go].join(' | ');
+    return (title === 'Add a Project' && go === 'Add Project' && sub === '') || [title, sub, go].join(' | ');
 });
 t('add: a manager\'s new-project form still sends it for approval', function () {
     openForm('Alex OVL', MANAGER, null);
     return document.getElementById('prjFormSubmit').textContent === 'Send for Approval' || document.getElementById('prjFormSubmit').textContent;
 });
-t('add: History reads "added it" for a project the DM made in progress', function () {
+t('add: History reads "posted it" for a project the DM made in progress', function () {
     detailDom();
     _prjData = fixture('Ethan', APPROVER);
     _prjData.events = [{ id: 9, project_id: 4, kind: 'created', actor: 'Ethan', to_status: 'in_progress', created_at: ago(1) }];
     _prjOpenId = 4;
     _prjRenderDetail();
     var txt = document.getElementById('prjDetailBody').textContent;
-    return (/Ethan\s*added it/.test(txt) && !/requested it/.test(txt)) || txt.slice(0, 300);
+    return (/Ethan\s*posted it/.test(txt) && !/requested it/.test(txt)) || txt.slice(0, 300);
 });
 t('caps: every empty-list message is Title Case, for the DM and for a manager', function () {
     var bad = [];
@@ -743,4 +744,70 @@ t('caps: every empty-list message is Title Case, for the DM and for a manager', 
         });
     });
     return !bad.length || 'not Title Case: ' + bad.join(' | ');
+});
+
+// ---- the reworked action bar (Ethan, 2026-11-21: "very chaotic") -------------
+
+function barButtons() {
+    return Array.prototype.filter.call(document.querySelectorAll('#prjDetailFooter button'), function (b) { return !/closeAllModals/.test(b.getAttribute('onclick') || ''); });
+}
+t('bar: at most three buttons, for every role on every project', function () {
+    var bad = [];
+    [['Ethan', APPROVER], ['Alex OVL', MANAGER], ['Sam LEE', MANAGER], ['Kim WSP', MANAGER], ['Pat Viewer', VIEWER]].forEach(function (who) {
+        for (var id = 1; id <= 8; id++) {
+            openDetail(who[0], who[1], id);
+            var n = barButtons().length;
+            if (n > 3) bad.push(who[0] + ' PRJ-' + id + ': ' + n);
+        }
+    });
+    ['in_progress', 'awaiting_signoff', 'parked'].forEach(function (s) {
+        detailDom(); signoffFixture('Ethan', APPROVER, s); _prjOpenId = 4; _prjRenderDetail();
+        if (barButtons().length > 3) bad.push('Ethan ' + s + ': ' + barButtons().length);
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+t('bar: Edit, Withdraw and Delete are never on the bar — they are in the ⋯ menu', function () {
+    var bad = [];
+    for (var id = 1; id <= 8; id++) {
+        openDetail('Ethan', APPROVER, id);
+        var bar = document.getElementById('prjDetailFooter').innerHTML;
+        if (/prjAct\('(delete|withdraw)'/.test(bar)) bad.push('PRJ-' + id + ' bar has delete/withdraw');
+        if (/>Edit</.test(bar)) bad.push('PRJ-' + id + ' bar has Edit');
+        var btn = document.getElementById('prjMoreBtn');
+        if (!btn || btn.style.display === 'none') bad.push('PRJ-' + id + ' no ⋯ for the DM');
+    }
+    return bad.length === 0 || bad.join('; ');
+});
+t('bar: someone with nothing on the menu gets no ⋯ button', function () {
+    openDetail('Pat Viewer', VIEWER, 4);
+    return document.getElementById('prjMoreBtn').style.display === 'none' || '⋯ shown with an empty menu';
+});
+t('bar: a requester waiting on the DM is told so, with a Close', function () {
+    openDetail('Alex OVL', MANAGER, 1);
+    var f = document.getElementById('prjDetailFooter');
+    return (/Waiting for the DM/.test(f.textContent) && /closeAllModals/.test(f.innerHTML)) || f.textContent;
+});
+function ownDm(status) {
+    detailDom();
+    _prjData = fixture('Ethan', APPROVER);
+    var p = _prjById(4);
+    p.status = status; p.requested_by = 'Ethan'; p.requested_by_id = ETHAN; p.involved = [ref('Ethan')];
+    _prjOpenId = 4;
+    _prjRenderDetail();
+    return document.getElementById('prjDetailFooter');
+}
+t('own: the DM\'s own running project has no note box and no Post Update', function () {
+    var bad = [];
+    ['in_progress', 'parked', 'awaiting_signoff'].forEach(function (s) {
+        var f = ownDm(s);
+        if (f.querySelector('#prjNote')) bad.push(s + ' has a note box');
+        if (/prjAct\('update'/.test(f.innerHTML)) bad.push(s + ' has Post Update');
+        if (!/prjAct\('complete'/.test(f.innerHTML)) bad.push(s + ' has no Mark Complete');
+    });
+    return bad.length === 0 || bad.join('; ');
+});
+t('own: a DM project left waiting for approval just gets Start It, no decision note', function () {
+    var f = ownDm('requested');
+    var acts = []; f.innerHTML.replace(/prjAct\('([a-z_]+)'/g, function (_, a) { acts.push(a); });
+    return (acts.join(',') === 'approve' && !f.querySelector('#prjNote') && /Start It/.test(f.textContent)) || acts.join(',') + ' note=' + !!f.querySelector('#prjNote');
 });
