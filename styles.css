@@ -27043,6 +27043,9 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
 #restockSkuModal .rsk-nb-note { width: 100%; box-sizing: border-box; margin-top: 8px; font-size: 16px; resize: vertical; }
 #restockSkuModal .rsk-nb-row { display: flex; gap: 8px; }
 #restockSkuModal .rsk-nb-row .rsk-btn { flex: 1; }
+#restockSkuModal .rsk-claim { margin: 0 0 16px; padding: 12px 14px; border: 1.5px solid #cfe0d6; border-radius: 10px; background: #fbfdfc; }
+#restockSkuModal .rsk-claim .rsk-sugg { margin-bottom: 6px; }
+#restockSkuModal .rsk-pick:disabled { opacity: .55; cursor: wait; }
 
 /* ============================================================================
    QUICKPORTAL TABS — Your Feed on top, the dashboard as tabs, minis on a rail

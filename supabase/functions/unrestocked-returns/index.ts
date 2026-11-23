@@ -11,6 +11,7 @@
 //     &sample=1&html=1                render the mail from invented rows
 //   POST {action:'lookup'|'close'}    the app's "Restocked Under Another SKU"
 //                                     card — see RESTOCKED UNDER ANOTHER SKU
+//   POST {action:'link_claim'}        the same card's "On A Claim" — see ON A CLAIM
 //
 // WHY THIS EXISTS. Ethan, 2026-10-22: a store refunds a whole item — a return
 // at the counter, an eBay or web return, or an order cancelled before it
@@ -557,7 +558,7 @@ const C = {
   bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1",
 };
 
-type Row = Candidate & { flag: string; ageDays: number; attempts?: any[]; nb?: any };
+type Row = Candidate & { flag: string; ageDays: number; attempts?: any[]; nb?: any; claimHint?: string; claimDead?: string };
 
 // Where the mail's "Restocked Under Another SKU" link lands: the dashboard,
 // which is also the login page, so the hash survives the PIN screen and the
@@ -572,7 +573,9 @@ function closedHtml(r: any) {
     <tr><td style="padding:12px 14px;border-top:1px solid ${C.line};font-size:13px;color:${C.ink};line-height:1.6;">
       <div style="font-size:12px;color:${C.faint};">${esc(STORE_NAME[r.store_code] || r.store_code)} · ${esc(r.channel || "")} · Closed ${esc(shortAt(r.resolved_at))} By ${esc(r.closed_by || "Unknown")}</div>
       <b>${esc(r.order_name)}</b> · ${esc(r.title || "")} — ${money(num(r.amount))}<br>
-      Back In Stock As <b>${esc(r.moved_to_sku || "")}</b> <span style="color:${C.faint};">(was ${esc(r.sku || "no SKU")})</span>
+      ${r.claim_id
+        ? `On Claim <b>${esc(r.claim_case || "")}</b> <span style="color:${C.faint};">(SKU ${esc(r.sku || "none")})</span>`
+        : `Back In Stock As <b>${esc(r.moved_to_sku || "")}</b> <span style="color:${C.faint};">(was ${esc(r.sku || "no SKU")})</span>`}
     </td></tr>`;
 }
 
@@ -627,6 +630,8 @@ function rowHtml(r: Row) {
         ${r.recheck ? `<br><span style="color:${C.warn};">${esc(r.recheck)}</span>` : ""}
         ${tried(r)}
         ${nbLine(r)}
+        ${r.claimDead ? `<br><span style="color:${C.bad};">${esc(r.claimDead)}</span>` : ""}
+        ${r.claimHint ? `<br><span style="color:${C.warn};font-weight:600;">${esc(r.claimHint)}</span>` : ""}
       </div>
       <div style="margin-top:8px;font-size:12px;">
         <a href="${shopUrl}" style="color:#1c6b47;">Open In Shopify</a>
@@ -634,6 +639,8 @@ function rowHtml(r: Row) {
         <a href="${APP_URL}#restock=${encodeURIComponent(r.key)}" style="color:#1c6b47;">Restocked Under Another SKU</a>
         &nbsp;·&nbsp;
         <a href="${APP_URL}#restock=${encodeURIComponent(r.key)}" style="color:#1c6b47;">${r.nb?.pending ? "Confirm Or Deny" : "Never Came Back"}</a>
+        &nbsp;·&nbsp;
+        <a href="${APP_URL}#restock=${encodeURIComponent(r.key)}" style="color:#1c6b47;">On A Claim</a>
       </div>
     </td></tr>`;
 }
@@ -678,7 +685,7 @@ function build(fresh: Row[], older: Row[], blind: string[], days: string[], clos
   <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:11px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
     Sent every morning while anything is open. Items stay on until they are back in stock or sold.
     Partial refunds are not included.
-    ${store ? `<br>Put it back in stock in Shopify. If it went back under a different listing, use Restocked Under Another SKU.` : ""}
+    ${store ? `<br>Put it back in stock in Shopify. If it went back under a different listing, use Restocked Under Another SKU. If it was lost in shipping and is on a claim, use On A Claim.` : ""}
     ${blind.length ? `<br><b style="color:${C.bad};">Could not check today: ${esc(blind.join(", "))}.</b>` : ""}
   </td></tr>
 </table></td></tr></table></body></html>`;
@@ -770,7 +777,53 @@ function cardOf(row: any) {
     closed: !!row.resolved_at, closedHow: row.resolved_how, closedBy: row.closed_by, movedTo: row.moved_to_sku,
     attempts: Array.isArray(row.attempts) ? row.attempts : [],
     nb: nbOf(row),
+    claim: row.claim_id ? { id: row.claim_id, caseNumber: row.claim_case, by: row.claim_linked_by, at: row.claim_linked_at } : null,
+    claimDead: !row.claim_id && row.claim_case && !row.resolved_at ? row.claim_case : null,
   };
+}
+
+// ===========================================================================
+// ON A CLAIM (2026-11-23, 0200). OVL #KS01-15437: a MacBook refunded on eBay,
+// lost in the post, note "SHIPPING CLAIM OPENED" — and already filed in
+// Shopify Claims (SHPLI-111926173701) under the same SKU. Nothing will ever come
+// back to restock, so no SKU test clears it, and it sat on the mail daily.
+//
+// The card offers the claims at the row's store that list the row's SKU; the
+// manager picks one and the line closes. Same rule as Restocked Under Another
+// SKU — the manager picks, the function checks: same store, same SKU, not
+// waiting on a delete. No matching claim, no close — the card says to file it in
+// Shopify Claims with this SKU first. A link closes like any hand-close: on the
+// next DM mail once, under Closed By A Manager, naming the case.
+//
+// A claim deleted later (DM-approved delete) reopens the line on the next
+// morning run — see reopenDeadClaims — and the mail says why it's back.
+// ===========================================================================
+const skuKey = (s: any) => String(s || "").trim().toUpperCase();
+
+async function claimsFor(sb: any, row: any) {
+  if (!skuKey(row.sku)) return [];
+  const { data } = await sb.from("shopify_claims")
+    .select("id, case_number, item_sku, status, reason_type, price, created_at, created_by, delete_requested_at")
+    .eq("store", row.store_code).order("created_at", { ascending: false }).limit(500);
+  return (data || []).filter((c: any) => skuKey(c.item_sku) === skuKey(row.sku) && !c.delete_requested_at)
+    .map((c: any) => ({ id: c.id, caseNumber: c.case_number, status: c.status, reason: c.reason_type,
+      price: c.price == null ? null : num(c.price), createdAt: c.created_at, createdBy: c.created_by }));
+}
+
+// Lines linked to a claim that has since been deleted. Reopened, and the case
+// number is kept (claim_id cleared) so the mail and card can say why it's back.
+async function reopenDeadClaims(sb: any, prior: any[]) {
+  const linked = prior.filter((r) => r.resolved_at && r.claim_id);
+  if (!linked.length) return [];
+  const { data } = await sb.from("shopify_claims").select("id").in("id", linked.map((r) => r.claim_id));
+  const alive = new Set((data || []).map((c: any) => c.id));
+  const dead = linked.filter((r) => !alive.has(r.claim_id));
+  for (const r of dead) {
+    const patch = { claim_id: null, resolved_at: null, resolved_how: null, closed_by: null, closure_mailed_at: null };
+    await sb.from("unrestocked_returns").update(patch).eq("issue_key", r.issue_key);
+    Object.assign(r, patch);
+  }
+  return dead.map((r) => r.issue_key);
 }
 
 // NEVER CAME BACK (2026-11-06, 0179). WSP #MO02-6752: refunded on eBay, the
@@ -850,7 +903,11 @@ async function appAction(body: any): Promise<Response> {
     if (!row.resolved_at && !denied && shopRow?.access_token) {
       try { suggestions = await suggestionsFor(shopRow.shop, shopRow.access_token, row); } catch (_) { /* card still works without them */ }
     }
-    return json({ ok: true, card: cardOf(row), canClose: !denied, denied, canDecide: isDm(body?.who), suggestions });
+    let claims: any[] = [];
+    if (!row.resolved_at && !denied) {
+      try { claims = await claimsFor(sb, row); } catch (_) { /* card still works without them */ }
+    }
+    return json({ ok: true, card: cardOf(row), canClose: !denied, denied, canDecide: isDm(body?.who), suggestions, claims });
   }
 
   if (body.action === "never_back") {
@@ -884,6 +941,29 @@ async function appAction(body: any): Promise<Response> {
           nb_denied_at: nowIso, nb_denied_by: by,
           nb_denied_note: `${String(body?.note || "").trim().slice(0, 300) || "No reason given"} (they said: ${row.nb_reason})` };
     const { data: done } = await sb.from("unrestocked_returns").update(patch).eq("issue_key", key).select("*").maybeSingle();
+    return json({ ok: true, card: cardOf(done || row) });
+  }
+
+  if (body.action === "link_claim") {
+    if (denied) return json({ ok: false, error: denied }, 403);
+    if (row.resolved_at) return json({ ok: true, already: true, card: cardOf(row) });
+    const id = String(body?.claimId || "").trim();
+    const { data: claim } = /^[0-9a-f-]{36}$/i.test(id)
+      ? await sb.from("shopify_claims").select("id, store, case_number, item_sku, delete_requested_at").eq("id", id).maybeSingle()
+      : { data: null };
+    const why = !claim ? "That claim isn't in Shopify Claims any more."
+      : claim.store !== row.store_code ? `That claim is at ${claim.store}, not ${row.store_code}.`
+      : !skuKey(row.sku) ? "This line has no SKU, so it can't be matched to a claim. Ask the DM to close it."
+      : skuKey(claim.item_sku) !== skuKey(row.sku) ? `That claim is for SKU ${claim.item_sku || "(none)"}, not ${row.sku}.`
+      : claim.delete_requested_at ? "That claim is waiting to be deleted, so it can't hold this line."
+      : null;
+    if (why) return json({ ok: false, why, card: cardOf(row) });
+    const by = String(body?.who?.name || "").trim() || "Unknown";
+    const nowIso = new Date().toISOString();
+    const { data: done } = await sb.from("unrestocked_returns").update({
+      claim_id: claim.id, claim_case: claim.case_number, claim_linked_by: by, claim_linked_at: nowIso,
+      resolved_at: nowIso, resolved_how: `on claim ${claim.case_number} — closed by ${by}`, closed_by: by, last_checked: nowIso,
+    }).eq("issue_key", key).select("*").maybeSingle();
     return json({ ok: true, card: cardOf(done || row) });
   }
 
@@ -968,6 +1048,8 @@ Deno.serve(async (req: Request) => {
   try {
     const sb = createClient(SUPABASE_URL, SERVICE_KEY);
     const { data: prior } = await sb.from("unrestocked_returns").select("*");
+    // Skipped on a dry run: it writes. A dry run just won't show those lines.
+    const reopened = q("dryRun") === "1" ? [] : await reopenDeadClaims(sb, prior || []);
     const priorBy: Record<string, any> = {};
     for (const r of (prior || [])) priorBy[r.issue_key] = r;
     const openRows = (prior || []).filter((r: any) => !r.resolved_at);
@@ -980,7 +1062,21 @@ Deno.serve(async (req: Request) => {
     const rows: Row[] = [...uniq.values()].map((f) => ({
       ...f, ageDays: daysBetween(f.refundDay, today), attempts: priorBy[f.key]?.attempts || [],
       nb: priorBy[f.key] ? nbOf(priorBy[f.key]) : null,
+      claimDead: priorBy[f.key]?.claim_case && !priorBy[f.key]?.claim_id
+        ? `Claim ${priorBy[f.key].claim_case} Was Deleted — Back On The List` : undefined,
     }));
+    // A claim filed for this SKU but never linked: nudge, don't close. Only the
+    // card closes a line (a person says it's the same item).
+    try {
+      const { data: cl } = await sb.from("shopify_claims").select("store, item_sku, case_number")
+        .in("store", wantStores).is("delete_requested_at", null).not("item_sku", "is", null);
+      const byKey: Record<string, string> = {};
+      for (const c of (cl || [])) byKey[`${c.store}|${skuKey(c.item_sku)}`] ||= c.case_number;
+      for (const r of rows) {
+        const cn = r.sku && byKey[`${r.store}|${skuKey(r.sku)}`];
+        if (cn) r.claimHint = `Claim ${cn} Is Filed For This SKU — Link It With On A Claim`;
+      }
+    } catch (_) { /* hint only */ }
     // Closed from the app since the last mail (RESTOCKED UNDER ANOTHER SKU).
     // Only for the stores this run covers, so &store=BAL doesn't eat OVL's.
     const closed = (prior || []).filter((r: any) =>
@@ -1101,7 +1197,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       ok: true, days, new: fresh.length, stillOpen: older.length, cleared: cleared.length,
-      sent, blindStores: [...blind], stats, problems,
+      reopenedDeadClaims: reopened, sent, blindStores: [...blind], stats, problems,
     });
   } catch (err: any) {
     return json({ ok: false, error: String(err?.message ?? err),

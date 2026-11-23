@@ -45879,6 +45879,13 @@ function _jumpHandleHash() {
 //     hand or has sold since the refund. A refusal is logged and shows on the
 //     next mail, and every close is listed there for the DM.
 // No toasts ([[no-floating-toasts]]): every message is inline on the card.
+//
+// ON A CLAIM (2026-11-23, Ethan). A line lost in shipping never comes back to
+// restock, so once it's filed in Shopify Claims the card links it to that claim
+// and it closes. Only claims at the same store listing the same SKU are offered
+// (the function checks again on link). They sit at the TOP when there is one —
+// a filed claim for this exact SKU is the likeliest answer. With none, a short
+// note at the bottom says to file it with this SKU first.
 // ============================================================================
 let _restockKey = null;
 
@@ -45954,6 +45961,25 @@ function _restockRender(j, st) {
         body.innerHTML = h + `<p class="rsk-bad">${escapeHtml(j.denied || 'You can’t close this one.')}</p>`;
         return;
     }
+    if (c.claimDead) {
+        h += `<p class="rsk-bad">Claim ${escapeHtml(c.claimDead)} was deleted, so this is back on the list.</p>`;
+    }
+    const claims = j.claims || [];
+    if (claims.length) {
+        h += `<div class="rsk-claim">
+                <label class="form-label-caps">On A Claim — ${claims.length === 1 ? 'This Claim Lists' : 'These Claims List'} SKU ${escapeHtml(c.sku || '')}</label>
+                <div class="rsk-sugg">${claims.map(cl => {
+                    const when = cl.createdAt ? new Date(cl.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                    const status = { in_progress: 'In Progress', recovered: 'Recovered', denied: 'Denied' }[cl.status] || cl.status || '';
+                    return `<button type="button" class="rsk-pick" onclick="_restockLinkClaim('${escapeHtml(cl.id)}')">
+                      <b>${escapeHtml(cl.caseNumber || '')}</b> <span class="rsk-muted">· ${escapeHtml(status)}${when ? ' · Filed ' + escapeHtml(when) : ''}</span><br>
+                      ${escapeHtml(cl.reason || 'Claim')}${cl.price != null ? ' · $' + Number(cl.price).toFixed(2) : ''}
+                    </button>`;
+                }).join('')}</div>
+                ${st.claimMsg ? `<p class="rsk-bad">${escapeHtml(st.claimMsg)}</p>` : ''}
+                <p class="rsk-muted">Tap it if the item is on that claim. That closes this line, and the DM sees it on tomorrow’s email.</p>
+              </div>`;
+    }
     // NEVER CAME BACK waiting on the DM: the DM decides here; anyone else just
     // sees it's waiting (the SKU route below still works for them).
     const nb = c.nb || {};
@@ -46002,6 +46028,14 @@ function _restockRender(j, st) {
                 <button id="restockNbBtn" class="btn-secondary rsk-btn" onclick="_restockNeverBack()">${j.canDecide ? 'Close As Never Came Back' : 'Send To DM To Confirm'}</button>
               </div>`;
     }
+    if (!claims.length) {
+        h += `<div class="rsk-nb">
+                <div class="form-label-caps">On A Claim?</div>
+                <div class="rsk-muted">${c.sku
+                    ? `Lost in shipping and filed as a claim? Add it in Shopify Claims with SKU <b>${escapeHtml(c.sku)}</b>, then open this again to link it.`
+                    : 'This line has no SKU, so it can’t be linked to a claim. Ask the DM to close it.'}</div>
+              </div>`;
+    }
     const tries = c.attempts || [];
     if (tries.length) {
         h += `<div class="rsk-tries"><div class="form-label-caps">Tried Before</div>${tries.slice(-3).reverse().map(a => `
@@ -46037,6 +46071,18 @@ async function _restockNbDecide(action) {
         _restockRender(Object.assign({}, last, { card: j.card || last.card }), j.ok ? {} : { nbMsg: j.why || j.error, note });
     } catch (e) {
         _restockRender(last, { nbMsg: e.message || 'Could not reach the server. Try again.', note });
+    }
+}
+
+async function _restockLinkClaim(claimId) {
+    const last = window._restockLast || {};
+    document.querySelectorAll('#restockSkuModal .rsk-claim .rsk-pick').forEach(b => { b.disabled = true; });
+    try {
+        const j = await _restockPost({ action: 'link_claim', claimId });
+        if (j.ok && j.card && j.card.closed) { _restockRender(j, { justClosed: !j.already }); return; }
+        _restockRender(Object.assign({}, last, { card: j.card || last.card }), { claimMsg: j.why || j.error || 'Could not link it.' });
+    } catch (e) {
+        _restockRender(last, { claimMsg: e.message || 'Could not reach the server. Try again.' });
     }
 }
 
