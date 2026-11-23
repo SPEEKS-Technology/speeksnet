@@ -2731,6 +2731,29 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
                              nameVerdict.evidence_field)
       : null;
+    // ⚠️ A LABEL READ IS ONE READER AGAINST THE LISTING, NOT A TIEBREAK. BAL and
+    // LEE, denied 2026-11-20/21 — four in two days, every one a part code:
+    //   Denon AVR-S760H → "S720H"   (photo 4 reads S760H, plainly)
+    //   Crucial CT16G56C46S5 → "66" (the same label says DDR5-5600)
+    //   Dell U2412MB → "U2412Hb"    (a blurry label; the store is retaking it)
+    //   Anker A2820 → "A2206"       (unreadable at 800px — invented)
+    // labelVerdict hands its own read back as the photo answer ("ours"), so
+    // photoSaysOurs called each of them settled, made it one click, and would
+    // have rewritten the listing's correct Model / MPN field to match. The 11-05
+    // rule sends a one-character dispute "to the photos" — and a one-character
+    // misread of small print is exactly what a photo read gets wrong.
+    // So when the listing's own field says what the title says, a label read of
+    // a PART CODE settles it only if another of the listing's fields backs the
+    // label (BAL's ADATA: MPN 28, Model 38, label 38 — two sources against one).
+    // On its own it is a recommendation with the photo beside it, never a button.
+    // Sizes and capacities are not codes and keep their one click (the T7's 2TB);
+    // a knowledge verdict the tiebreak confirmed (WD's WDBB, also 11-20) is two
+    // readers and is untouched.
+    const labelBacked = fromLabel && saidBy && right && !placeholder
+      ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
+                             nameVerdict.evidence_field)
+      : null;
+    const labelAlone = fromLabel && !!saidBy && !labelBacked && hasPartCode(wrong, undefined);
     // A label verdict's photo counts with or without a field repeating the title:
     // it is the only evidence there is, and the reviewer must be sent to it.
     const photo = (saidBy && !backedBy) || (fromLabel && !backedBy)
@@ -2783,6 +2806,25 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       // The photos show what the listing says, so the listing was right and our
       // knowledge was not. Nothing to report — counted by the sweep instead, so
       // how often this happens stays visible.
+    } else if (labelAlone && saidBy && !placeholder && at >= 0 && right && right !== wrong) {
+      // See labelAlone. Said in full, photo attached, nothing written.
+      const own = saidBy;
+      const recommended = (title.slice(0, at) + right + title.slice(at + wrong.length))
+        .replace(/\s+/g, " ").trim();
+      findings.push({
+        code: "name-disputed",
+        severity: 1,
+        fixable: false,
+        says: `In ${shot.toLowerCase()}, ${seen || "the label"} — so we recommend "${right}" in place of "${wrong}".`
+          + oneCharSwap(wrong, right)
+          + (recommended.length <= EBAY_TITLE_MAX ? ` Recommended title: "${recommended}".` : "")
+          + ` It is not one click because the listing's own ${own.field} says "${own.value}",`
+          + ` the same as the title, and nothing else in the listing backs the photo`
+          + (oneCharCode ? ` — one character of small print is easy to misread.` : `.`),
+        warn: `Zoom in on ${shot.toLowerCase()}. If it clearly reads "${right}", change the title and the`
+          + ` ${own.field} field in Shopify. If it reads "${wrong}", or you cannot tell, dismiss this.`,
+        ...(photo?.photo ? { photo: { n: photo.photo, url: photo.url || null } } : {}),
+      });
     } else if (!placeholder && at >= 0 && right && right !== wrong && saidBy && !settled) {
       const recommended = (title.slice(0, at) + right + title.slice(at + wrong.length))
         .replace(/\s+/g, " ").trim();
