@@ -72,6 +72,8 @@ const helpers = strip([
     between('const IDENTITY_FIELDS = [', '\n\ntype NameVerdict'),
     between('function listingSaysItself', '\n\n// How many notes nobody has carried'),
     between('function fieldBacksCorrection', '\n\n// ⚠️ EVERY FAILED DESIGN'),
+    // labelAlone (2026-11-23) asks whether the disputed text is a part code.
+    between('function hasPartCode', '\n\n// The label answer'),
 ].join('\n\n'));
 
 // ⚠️ SLICED SHORT ON PURPOSE, so the closing brace is added here. The slice ends
@@ -521,8 +523,22 @@ console.log('\n== 10. LEE denials, 2026-11-17/19: #ABA, and WiFi Only on purpose
             hpSpecs);
         const f = hp.findings[0] || {};
         const tag = 'HP (' + (source || 'name check') + ')';
-        ok(hp.title === HP.replace('85M81UC', '8TM81UC'), tag + ': suggested title drops #ABA', hp.title);
-        ok(!/#ABA/.test(hp.title), tag + ': no region suffix in the suggestion');
+        const want = HP.replace('85M81UC', '8TM81UC');
+        if (source === 'label') {
+            // ⚠️ THE PRICE OF labelAlone (2026-11-23), kept visible on purpose.
+            // This read was RIGHT — LEE applied 8TM81UC on 11-17 — and it is the
+            // one true catch of its shape against four misreads (Denon, Crucial,
+            // Dell, Anker). The MPN agrees with the title and nothing backs the
+            // label, so it is now a recommendation, not a button: the same title,
+            // the same photo, one manual step.
+            ok(f.code === 'name-disputed' && !hp.fixable && hp.title === HP,
+               tag + ': a label read alone is a recommendation, not one click', f.code);
+            ok((f.says || '').includes('Recommended title: "' + want + '"'),
+               tag + ': still names the title, #ABA dropped', f.says);
+        } else {
+            ok(hp.title === want, tag + ': suggested title drops #ABA', hp.title);
+            ok(!/#ABA/.test(hp.title), tag + ': no region suffix in the suggestion');
+        }
         ok(/the "5" should be "T"/.test(f.says || ''), tag + ': names the one character', f.says);
         ok(f.photo && f.photo.n === 6, tag + ': still sends the reviewer to photo 6');
     }

@@ -122,6 +122,7 @@ const helpers = strip([
     between('const IDENTITY_FIELDS = [', '\n\ntype NameVerdict'),
     between('function listingSaysItself', '\n\n// How many notes nobody has carried'),
     between('function fieldBacksCorrection', '\n\n// ⚠️ EVERY FAILED DESIGN'),
+    between('function hasPartCode', '\n\n// The label answer'),
 ].join('\n\n'));
 const decision = strip(between(
     '  if (nameVerdict && nameVerdict.verdict !== "ok") {',
@@ -139,9 +140,11 @@ try {
 
 console.log('\n== 4. Through the real decision ==');
 {
-    // BAL's ADATA, with the MPN repeating the title's typo.
+    // BAL's ADATA, with the MPN repeating the title's typo — and, as on the real
+    // listing, its Model field carrying the label's 38. Two sources against one
+    // (see labelAlone; section 6 has the same row with nothing backing it).
     const v = labelVerdict(ADATA, [good], URLS, LOADED);
-    const r = decide(v, ADATA, { specs: { Brand: 'ADATA', MPN: 'AD4U266628G19-B' } });
+    const r = decide(v, ADATA, { specs: { Brand: 'ADATA', Model: 'AD4U266638G19-B', MPN: 'AD4U266628G19-B' } });
     const f = r.findings[0] || {};
     ok(f.code === 'name-wrong' && f.severity === 3, 'name-wrong, severity 3 — not "garbled"', f.code);
     ok(r.fixable && f.fixable, 'one click');
@@ -241,6 +244,67 @@ console.log('\n== 5. What a photo cannot tell ==');
     const adv = labelVerdict(T4, [{ title_text: '1TB', label_text: '500GB', photo: 1,
         seen: 'the drive label reads 500GB' }], URLS, LOADED);
     ok(decide(adv, T4, { specs: {} }).title === 'Samsung T7 500GB SSD', 'an advertised 500GB stays 500GB');
+}
+
+// --- 6: a label read alone never overrules the listing's own part code ------
+// BAL/LEE denials 2026-11-20/21. Each listing's field agreed with its title and
+// the label read was the misread. Disputed, photo attached, nothing written.
+console.log('\n== 6. A label read alone does not overrule an agreeing field ==');
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// These rows cite photos 4, 6 and 7, past section 2's three.
+const URLS8 = [1, 2, 3, 4, 5, 6, 7, 8].map(n => 'https://x/' + n + '.jpg');
+const alone = (what, T, specs, m, wantRight) => {
+    const v = labelVerdict(T, [m], URLS8, URLS8.map(() => true));
+    ok(!!v, what + ': the read itself is accepted');
+    const r = decide(v, T, { specs: specs });
+    const f = r.findings[0] || {};
+    ok(f.code === 'name-disputed' && !f.fixable && !r.fixable && r.title === T,
+       what + ': disputed, not one click', f.code + ' | ' + r.title);
+    ok(f.photo && f.photo.n === m.photo, what + ': the photo rides on it');
+    ok(new RegExp('we recommend "' + esc(wantRight) + '"').test(f.says || '')
+       && /It is not one click because the listing's own/.test(f.says || ''),
+       what + ': says the recommendation and why it is not a button', f.says);
+    ok(/^Zoom in on photo \d/.test(f.warn || ''), what + ': tells them where to look', f.warn);
+    return f;
+};
+{
+    const d = alone('Denon AVR-S760H', 'Denon AVR-S760H 7.2 Home Theater Receiver AVR-S760H',
+        { Brand: 'Denon', Model: 'AVR-S760H', MPN: 'AVR-S760H' },
+        { title_text: 'AVR-S760H', label_text: 'AVR-S720H', photo: 4, seen: 'the rear panel label reads DENON AVR-S720H' },
+        'AVR-S720H');
+    ok(/one character of small print/.test(d.says || ''), 'a one-character code says why it is doubted', d.says);
+    alone('Crucial CT16G56C46S5', 'Crucial CT16G56C46S5.M8G1 16GB (1x16GB) RAM DDR5 5600MHz CT16G56C46S5',
+        { Brand: 'Crucial', Model: 'CT16G56C46S5.M8G1', MPN: 'CT16G56C46S5' },
+        { title_text: 'CT16G56C46S5.M8G1', label_text: 'CT16G66C46S5.M8G1', photo: 1, seen: "the stick's label reads CT16G66C46S5.M8G1" },
+        'CT16G66C46S5.M8G1');
+    alone('Dell U2412MB', 'Dell 24" U2412MB WUXGA LCD IPS LCD Monitor',
+        { Brand: 'Dell', MPN: 'U2412MB' },
+        { title_text: 'U2412MB', label_text: 'U2412Hb', photo: 7, seen: 'label reads MODEL NO. U2412Hb' },
+        'U2412Hb');
+    const a = alone('Anker A2820', 'Anker Prime Docking Station 140W Max TB5 Docking Station A2820 Multi-Colored',
+        { Brand: 'Anker', Model: 'Prime Docking Station', MPN: 'A2820' },
+        { title_text: 'A2820', label_text: 'A2206', photo: 6, seen: "the caseback label reads 'Model: A2206'" },
+        'A2206');
+    ok(!/one character/.test(a.says || ''), 'a multi-character change does not claim one character', a.says);
+}
+{
+    // The ADATA with only the MPN repeating the title and nothing backing 38:
+    // the same shape as the Denon, so the same answer.
+    const v = labelVerdict(ADATA, [good], URLS, LOADED);
+    const r = decide(v, ADATA, { specs: { Brand: 'ADATA', MPN: 'AD4U266628G19-B' } });
+    ok(r.findings[0] && r.findings[0].code === 'name-disputed' && !r.fixable,
+       'ADATA with nothing backing the label is disputed too', r.findings[0] && r.findings[0].code);
+}
+{
+    // Untouched: WD (MO04-2636C-E4, 11-20) was a knowledge verdict the photo
+    // tiebreak confirmed — two readers — and it was right.
+    const T = 'Western Digital WD Black SN850X 1TB M.2 NVMe Gen 4.0 SSD WBBB9G0010BNC';
+    const kv = { verdict: 'wrong', wrong_text: 'WBBB9G0010BNC', correct_text: 'WDBB9G0010BNC',
+                 why: 'Typo in the WD part number: it should start WDB, not WBB',
+                 photo: { answer: 'ours', photo: 3, seen: 'the drive label reads MDL: WDBB9G0D10BNC', url: URLS[2] } };
+    const r = decide(kv, T, { specs: { Brand: 'Western Digital WD', Model: 'Black SN850X', MPN: 'WBBB9G0010BNC' } });
+    ok(r.findings[0] && r.findings[0].code === 'name-wrong' && r.fixable,
+       'WD: knowledge + photo is still one click', r.findings[0] && r.findings[0].code);
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all passed') + '\n');
