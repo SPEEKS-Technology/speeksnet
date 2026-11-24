@@ -289,6 +289,45 @@ Each phase is shippable on its own and gets its own PR into `pre-release`.
 
 ---
 
+## 6b. The pipeline redesign (Nick, 2026-11-24) — replaces the ticket list as the suite's main view
+
+Three mockup rounds in `prototypes/dev-pipeline-mock.html`; the third is the one Nick shaped. His words, in order:
+
+> "We really want a pipeline like feel. We want work to be directly related to a specific update … Anything thats being worked on will be in the form of a branch that we can assign tasks from backlog for … when it merges it brings all those tasks as completed into pre release. We can manually mark them as completed on the branch … or move them off of it … I really want this UI to be SIMPLE and INTUITIVE."
+
+> "When its merged to pre release, those changes will be staged for whatever update is next. Pre release IS the staging for the next update."
+
+> "Pre release is the next version update. You can mark it as minor or major or overhaul update. These indicate wether it changes the 0.0.0 … If its major or overhaul you have to give it a tittle. Patch notes always generate automatically. As soon as a branch is merged all of the items from it come with it to the pre release update. Whenever a new branch is created, thats a column that lines up instead of updates that are lined up. We can add a feature later … called roadmap but this will be for active development."
+
+> "Both developers Highly often use claude. Often having him merge and create branches. We need to have clear instructions in the repository for how to handle branches and merges and even connector to speeksnet for managing … tickets and assigning what to what branch."
+
+**The model:**
+- **Stages:** Backlog → a branch → pre-release → live. Where a ticket is in the pipeline *is* its status, for the user. The seven-status list goes away from the UI. `status` stays in the table, derived from stage: backlog/triage, in_progress, on_prerelease, done.
+- **A branch carries many tickets** (`dev_tickets.branch`, plus `branch_done` for the tick). This replaces the one-ticket-per-branch Start work of Phase 5. Branch names drop the `sn-n` part: `feat|fix|chore/<what-it-does>`.
+- **Pre-release = the next update**, one row in `dev_releases` with status `in_progress`. It has `size` (`minor` / `major` / `overhaul` → bumps Z / Y / X of the live version) and a `title`, required unless minor. Its version is computed from the live version and the size, never typed.
+- **Merge = ship.** When a PR into `pre-release` merges, **every ticket on that branch** moves to `on_prerelease` with `release_id` = the next update, whether or not it was ticked. Today Phase 4 moves only tickets named in the PR. A branch planned "for later" that merges early ships next. There's no per-update planning on this page; that's a later **Roadmap** feature.
+- **Patch notes are generated**, grouped New (suggestion) / Improved / Fixed (bug) / Behind the scenes (task), straight from ticket titles.
+- **Go live** = Phase 6 (version + busters → `pre-release` into `main` → tag → GitHub release → in-app patch note → managers emailed). Then a fresh `minor` next update starts. Branches still in progress are left alone.
+- **Claude:**
+  - Rules for every session are in `docs/DEVELOPMENT-WORKFLOW.md`, with the short version in CLAUDE.md.
+  - A **`speeksnet-dev` connector** (`dev-mcp` edge function) gives Claude the suite's ticket and branch actions **as a named developer**:
+    - **Auth:** a per-person key (`dev_mcp_keys`: hash → `users.id`, revocable, last used).
+    - **Claude Code:** sends the key as a header from `${SPEEKSNET_DEV_KEY}` in a committed `.mcp.json`. The key is never in the repo, which is public.
+    - **claude.ai:** falls back to a key in the URL path, like `speeks-mcp`.
+    - **Scope:** no Go live, merge or delete.
+    - **History:** every action shows as "Claude, for Nick".
+  - Later: Claude inside the suite itself (Nick: "Later we can also maybe even implement claude into the dev suite itself").
+
+**Build order (all on `feat/dev-tracker`):**
+1. ✅ **Data** — `0205_dev_pipeline` (applied 2026-11-24): `dev_tickets.branch` / `branch_done` / `branch_done_at`, `dev_releases.size`, one `in_progress` row at a time (release 14, set to major), `dev_next_release()`, event kinds `branch` / `branch_done`. Its `dev_branch_merged()` is **not called**. A `0206` adding `branch_at` was declined, so the "was it on the branch before the merge" check reads the `branch` history rows instead (see `mergeBranch` in `github-webhook`). Drop the function in a later migration.
+2. ✅ **Sync** — `dev-tickets`: GET returns `pipeline` (live version, next update with size/title/version and what each size would give); actions `to_branch {ids, branch|null}`, `branch_done {id, done}`, `set_next {size?, title?}`; `create` takes `branch`; `status` keeps the branch fields in step. `github-webhook`: a PR merged into pre-release takes every open ticket on its head branch to `on_prerelease` with `release_id` = next; an SN-named branch puts its ticket on it; `start_branch {prefix, slug, ticket_ids}` creates `feat|fix|chore/<slug>` (needs Contents write, still pending).
+3. **UI:** `dev.js`/`dev.css` become the pipeline from the mockup. Keep the ticket side panel, keyboard and realtime. Checks are rewritten to match.
+4. **Connector:** the `dev-mcp` function, key management in the suite, and `.mcp.json`.
+5. **Go live** (Phase 6). Needs the GitHub App's Contents **and** Pull requests write.
+6. **Lock `main`** (Phase 7).
+
+---
+
 ## 7. Risks and traps
 
 1. **Public repo.** The shared edge-function secret in the source is readable by anyone. Nothing that writes to GitHub may accept it — PIN + server-side Feature Access check only, every write logged, attempt-limit the Publish PIN.

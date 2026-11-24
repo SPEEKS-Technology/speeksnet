@@ -23,6 +23,19 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // A TEST ACCOUNT (0160) can read if its name or role has been granted
 // dev-tracker; any write finds no users row and is refused.
+//
+// THE PIPELINE (0205, 2026-11-24 — docs/DEVELOPMENT-WORKFLOW.md):
+//   Backlog → a branch → pre-release (the next update) → live.
+//   GET adds `pipeline`: the live version, and the next update — its size,
+//   title, and the version each size would give. The version is never typed:
+//   it is the live one bumped by the size.
+//   to_branch   {ids, branch|null}  put tickets on a branch (→ In progress), or
+//                                   back in the Backlog with null. Not once
+//                                   merged: a merge is what moves a ticket on.
+//   branch_done {id, done}          tick a ticket done on its branch
+//   set_next    {size?, title?}     the next update's size / title
+// Every branch change writes a 'branch' history row whose time github-webhook
+// reads on a merge: only tickets that were on the branch when it merged move.
 // ============================================================================
 
 const corsHeaders = {
@@ -100,6 +113,48 @@ const day = (v: unknown) => {
 const storeList = (v: unknown) =>
   [...new Set((Array.isArray(v) ? v : []).map((s) => String(s).toUpperCase().trim()).filter((s) => STORES.includes(s)))];
 
+// ---- the pipeline ----------------------------------------------------------
+const SIZES = ["minor", "major", "overhaul"];
+// Open = still in the Backlog or on a branch; anything past that moved on by a merge.
+const OPEN = ["triage", "backlog", "in_progress", "in_review"];
+// A git branch name we'll store: no spaces, no "..", not a base branch.
+const branchName = (v: unknown) => {
+  const s = String(v ?? "").trim();
+  if (!s || s.length > 120 || !/^[A-Za-z0-9._\/-]+$/.test(s) || s.includes("..") || s.startsWith("/") || s.endsWith("/")) return null;
+  return s === "main" || s === "pre-release" ? null : s;
+};
+// "v3.12.3" / "3.12" → [3,12,3]; anything else (v2.1.1_Bug_Fix, v.0.9.0) → null.
+const parseVersion = (v: unknown): number[] | null => {
+  const m = String(v ?? "").trim().match(/^v?(\d+)\.(\d+)(?:\.(\d+))?$/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] || 0)] : null;
+};
+const bump = (v: number[], size: string) =>
+  size === "overhaul" ? `v${v[0] + 1}.0.0` : size === "major" ? `v${v[0]}.${v[1] + 1}.0` : `v${v[0]}.${v[1]}.${v[2] + 1}`;
+
+// What's live (the newest published release with a real version) and the next
+// update, made if it isn't there (straight after a Go live it isn't).
+async function pipeline(sb: Sb, releases: any[]) {
+  const live = releases
+    .filter((r) => r.status === "published" && parseVersion(r.version) && r.published_at)
+    .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0] || null;
+  let next = releases.find((r) => r.status === "in_progress") || null;
+  if (!next) {
+    const { data: rid } = await sb.rpc("dev_next_release");
+    if (rid) ({ data: next } = await sb.from("dev_releases").select("*").eq("id", Number(rid)).maybeSingle());
+  }
+  const lv = parseVersion(live?.version) || [0, 0, 0];
+  const size = SIZES.includes(String(next?.size)) ? String(next.size) : "minor";
+  return {
+    live: live ? { id: live.id, version: live.version, title: live.title, published_at: live.published_at } : null,
+    next: next ? {
+      id: next.id, size, title: String(next.title || ""),
+      version: bump(lv, size),
+      versions: Object.fromEntries(SIZES.map((s) => [s, bump(lv, s)])),
+      needs_title: size !== "minor",
+    } : null,
+  };
+}
+
 // The roster, without the shop-floor board accounts (role 'store'); test
 // accounts live in test_users and are never here.
 async function loadPeople(sb: Sb): Promise<Person[]> {
@@ -168,6 +223,7 @@ Deno.serve(async (req: Request) => {
       success: true,
       me: { id: viewer.id, name: viewer.name, role: viewer.role, test },
       can,
+      pipeline: await pipeline(sb, r.data || []),
       tickets: (t.data || []).map((x: any) => ({
         ...x,
         assignee_name: x.assignee_id ? nameOf(x.assignee_id, x.assignee_name) : x.assignee_name,
@@ -223,6 +279,63 @@ Deno.serve(async (req: Request) => {
     return p ? { ok: true, ref: { id: p.id, name: p.name } } : { ok: false, ref: null };
   }
 
+  // ---- the pipeline ----
+
+  // The next update's size and title. Planning, so any dev may; Go live is
+  // what needs dev-release-publish.
+  if (action === "set_next") {
+    const { data: rid } = await sb.rpc("dev_next_release");
+    if (!rid) return json({ success: false, error: "Couldn't find the next update." }, 500);
+    const patch: Record<string, unknown> = { updated_at: now };
+    if ("size" in b) {
+      if (!SIZES.includes(String(b.size))) return json({ success: false, error: "Pick minor, major or overhaul." }, 400);
+      patch.size = String(b.size);
+    }
+    if ("title" in b) patch.title = clip(b.title, 120) || "";
+    const { data: row, error } = await sb.from("dev_releases").update(patch).eq("id", Number(rid)).eq("status", "in_progress").select().maybeSingle();
+    if (error) return json({ success: false, error: error.message }, 500);
+    if (!row) return json({ success: false, error: "The next update just went live — reload." }, 409);
+    await broadcastChange();
+    const { data: all } = await sb.from("dev_releases").select("*");
+    return json({ success: true, release: row, pipeline: await pipeline(sb, all || []) });
+  }
+
+  // Tickets onto a branch (In progress), or back to the Backlog (branch null).
+  if (action === "to_branch") {
+    const ids = [...new Set((Array.isArray(b.ids) ? b.ids : [b.id]).map(Number).filter(Number.isInteger))];
+    if (!ids.length) return json({ success: false, error: "Which tickets?" }, 400);
+    // Back to the Backlog only when asked for in so many words (branch: null).
+    if (!("branch" in b)) return json({ success: false, error: "Which branch? (branch: null takes them back to the Backlog.)" }, 400);
+    const to = b.branch === null || b.branch === "" ? null : branchName(b.branch);
+    if (b.branch && !to) return json({ success: false, error: "That isn't a branch name tickets can go on (main and pre-release can't carry tickets)." }, 400);
+    const { data: rows, error: rErr } = await sb.from("dev_tickets").select("*").in("id", ids);
+    if (rErr) return json({ success: false, error: rErr.message }, 500);
+    const missing = ids.filter((i) => !(rows || []).some((r: any) => Number(r.id) === i));
+    if (missing.length) return json({ success: false, error: `${missing.map((i) => "SN-" + i).join(", ")} doesn't exist.` }, 404);
+    const closed = (rows || []).filter((r: any) => !OPEN.includes(r.status));
+    if (closed.length) {
+      const t = closed[0];
+      const why = t.status === "on_prerelease" ? "is already merged into the next update" : t.status === "done" ? "is already live" : "is marked Won't do";
+      return json({ success: false, error: `SN-${t.id} ${why} — it can't move to a branch.` }, 409);
+    }
+    const out: any[] = [];
+    for (const t of rows || []) {
+      if ((t.branch || null) === to) { out.push(t); continue; }
+      const status = to ? (["triage", "backlog"].includes(t.status) ? "in_progress" : t.status) : "backlog";
+      const { data: row, error } = await sb.from("dev_tickets").update({
+        branch: to, branch_done: false, branch_done_at: null, status, closed_at: null, updated_at: now,
+      }).eq("id", t.id).eq("updated_at", t.updated_at).select().maybeSingle();
+      if (error) return json({ success: false, error: error.message }, 500);
+      if (!row) return json({ success: false, error: `Someone changed SN-${t.id} at the same moment — reload and try again.` }, 409);
+      // The 'branch' row's time is what a merge checks (see the header).
+      await event(t.id, "branch", { from_value: t.branch || null, to_value: to, note: to ? `Put on ${to}` : `Taken off ${t.branch}` });
+      if (status !== t.status) await event(t.id, "status", { from_value: t.status, to_value: status });
+      out.push(row);
+    }
+    await broadcastChange();
+    return json({ success: true, tickets: out });
+  }
+
   // ---- create ----
   if (action === "create") {
     const title = clip(b.title, 200);
@@ -238,8 +351,12 @@ Deno.serve(async (req: Request) => {
     const priority = PRIORITIES.includes(String(b.priority)) ? String(b.priority) : "normal";
     // A dev creating a ticket has already triaged it, so it starts in the
     // backlog unless they say otherwise. (Phase 3's intake lands in triage.)
-    const status = STATUSES.includes(String(b.status)) ? String(b.status) : "backlog";
+    // Straight onto a branch, if one was named (the connector's create + assign).
+    const onBranch = b.branch ? branchName(b.branch) : null;
+    if (b.branch && !onBranch) return json({ success: false, error: "That isn't a branch name tickets can go on." }, 400);
+    const status = onBranch ? "in_progress" : ["triage", "backlog"].includes(String(b.status)) ? String(b.status) : "backlog";
     const { data: row, error } = await sb.from("dev_tickets").insert({
+      branch: onBranch,
       title, description: clip(b.description, 20000) || "", type, area: area.value, priority, status,
       assignee_id: who.ref?.id ?? null, assignee_name: who.ref?.name ?? null,
       reporter_id: me.id, reporter_name: me.name, reporter_store: viewer.store || null,
@@ -248,6 +365,7 @@ Deno.serve(async (req: Request) => {
     }).select().single();
     if (error) return json({ success: false, error: error.message }, 500);
     await event(row.id, "created", { to_value: status });
+    if (onBranch) await event(row.id, "branch", { to_value: onBranch, note: `Put on ${onBranch}` });
     await broadcastChange();
     return json({ success: true, ticket: row });
   }
@@ -316,13 +434,39 @@ Deno.serve(async (req: Request) => {
       if (to === from) return json({ success: true, ticket: tk, unchanged: true });
       const note = clip(b.note, 2000);
       if (to === "wont_do" && !note) return json({ success: false, error: "Say why it won't be done — whoever raised it will read this." }, 400);
+      const patch: Record<string, unknown> = { status: to, closed_at: CLOSED.includes(to) ? now : null, updated_at: now };
+      // The pipeline's columns follow: back to the Backlog (or Won't do) leaves
+      // the branch; on to pre-release by hand joins the next update.
+      const leaves = tk.branch && OPEN.includes(from) && ["triage", "backlog", "wont_do"].includes(to);
+      if (leaves) Object.assign(patch, { branch: null, branch_done: false, branch_done_at: null });
+      if (to === "on_prerelease") {
+        const { data: rid } = await sb.rpc("dev_next_release");
+        if (rid) patch.release_id = Number(rid);
+      }
       const { data: row, error } = await sb.from("dev_tickets")
-        .update({ status: to, closed_at: CLOSED.includes(to) ? now : null, updated_at: now })
+        .update(patch)
         .eq("id", id).eq("status", from)
         .select().maybeSingle();
       if (error) return json({ success: false, error: error.message }, 500);
       if (!row) return json({ success: false, error: "Someone moved this ticket at the same moment — reload and try again." }, 409);
       await event(id, "status", { from_value: from, to_value: to, note });
+      if (leaves) await event(id, "branch", { from_value: tk.branch, to_value: null, note: `Taken off ${tk.branch}` });
+      await broadcastChange();
+      return json({ success: true, ticket: row });
+    }
+
+    // Ticked done on its branch — the branch's progress, not a stage: the
+    // ticket still moves on only when the branch merges.
+    case "branch_done": {
+      if (!tk.branch || !OPEN.includes(tk.status)) return json({ success: false, error: `SN-${id} isn't on a branch.` }, 409);
+      const done = !!b.done;
+      if (!!tk.branch_done === done) return json({ success: true, ticket: tk, unchanged: true });
+      const { data: row, error } = await sb.from("dev_tickets")
+        .update({ branch_done: done, branch_done_at: done ? now : null, updated_at: now })
+        .eq("id", id).eq("branch", tk.branch).select().maybeSingle();
+      if (error) return json({ success: false, error: error.message }, 500);
+      if (!row) return json({ success: false, error: "This ticket just moved — reload and try again." }, 409);
+      await event(id, "branch_done", { to_value: done ? "done" : "not done", note: tk.branch });
       await broadcastChange();
       return json({ success: true, ticket: row });
     }

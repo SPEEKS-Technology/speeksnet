@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Development Pipeline</title>
+<!-- MOCKUP ONLY (2026-11-24, third pass) — the Development suite as a pipeline for ACTIVE
+     development. Nick's architecture:
+       - Pre-release IS the next version update. Its size is Minor / Major / Overhaul, which
+         decides which part of the version moves (x.y.Z / x.Y.0 / X.0.0). Major and Overhaul
+         need a title. Patch notes always write themselves.
+       - Each branch is a column. Branches line up, not updates.
+       - When a branch merges, every ticket on it comes along to the pre-release update.
+       - Lining up future updates ("Roadmap") is a later feature, not this page.
+     Real ticket titles and release dates; which branch carries which ticket is invented.
+     Nothing here talks to Supabase or GitHub. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#0b0e0f; --bg-1:#0f1314; --bg-2:#131819; --bg-3:#181e20; --bg-4:#1d2427; --bg-5:#232b2f;
+  --line:#1e2528; --line-2:#283135; --line-3:#35404a;
+  --text:#e9eef0; --text-2:#a9b4ba; --text-3:#6f7b82; --text-4:#4d575d;
+  --sage:#3fbf7f; --sage-hi:#55d494; --sage-ink:#04130b; --sage-soft:rgba(63,191,127,.13); --sage-ring:rgba(63,191,127,.4);
+  --teal:#2dd4bf; --teal-soft:rgba(45,212,191,.12); --teal-line:rgba(45,212,191,.28);
+  --amber:#f0a83a; --amber-soft:rgba(240,168,58,.13);
+  --red:#f2665c; --blue:#60a5fa; --violet:#a78bfa; --grey:#8b969d;
+  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --shadow:0 20px 50px rgba(0,0,0,.55),0 2px 8px rgba(0,0,0,.35);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px/1.45 Inter, system-ui, sans-serif;
+  font-feature-settings: 'cv11','ss01','tnum'; -webkit-font-smoothing: antialiased; overflow: hidden; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.mono { font-family: var(--mono); }
+* { scrollbar-width: thin; scrollbar-color: #283135 transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-thumb { background: #232b2f; border-radius: 9px; border: 2px solid transparent; background-clip: content-box; }
+:focus-visible { outline: 2px solid var(--sage-ring); outline-offset: 1px; }
+
+.app { position: fixed; inset: 0; display: grid; grid-template-rows: 56px 1fr; }
+
+/* ---------- top bar ---------- */
+.top { display: flex; align-items: center; gap: 14px; padding: 0 18px; background: var(--bg-1); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; letter-spacing: -.01em; white-space: nowrap; }
+.mark { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(140deg, #4fd08e, #2c9e65); display: grid; place-items: center; box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 2px 10px rgba(63,191,127,.25); }
+.mark svg { width: 15px; height: 15px; color: var(--sage-ink); }
+.brand small { font-weight: 500; color: var(--text-3); font-size: 12.5px; }
+.grow { flex: 1; }
+.livepill { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 11px; border-radius: 99px; border: 1px solid var(--line-2); background: var(--bg); color: var(--text-2); font-size: 12px; transition: border-color .12s, background .12s; }
+.livepill:hover { border-color: var(--line-3); background: var(--bg-3); color: var(--text); }
+.livepill b { font: 600 12px var(--mono); color: var(--text); }
+.livepill .ldot { width: 7px; height: 7px; border-radius: 50%; background: var(--sage); box-shadow: 0 0 0 3px var(--sage-soft); }
+.livepill svg { width: 11px; height: 11px; color: var(--text-3); transform: rotate(90deg); }
+.search { position: relative; width: 280px; }
+.search input { width: 100%; height: 34px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); padding: 0 34px; outline: none; transition: border-color .12s, box-shadow .12s; }
+.search input::placeholder { color: var(--text-3); }
+.search input:focus { border-color: var(--sage-ring); box-shadow: 0 0 0 3px rgba(63,191,127,.1); }
+.search svg { position: absolute; left: 11px; top: 10px; width: 14px; height: 14px; color: var(--text-3); }
+.search kbd { position: absolute; right: 8px; top: 8px; font: 11px var(--mono); color: var(--text-3); border: 1px solid var(--line-2); border-radius: 5px; padding: 0 5px; line-height: 16px; }
+.btn { height: 34px; padding: 0 13px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg-3); display: inline-flex; align-items: center; gap: 7px; font-weight: 500; white-space: nowrap;
+  transition: background .12s, border-color .12s, transform .08s, box-shadow .12s, opacity .12s; }
+.btn:hover { background: var(--bg-4); border-color: var(--line-3); }
+.btn:active { transform: translateY(1px); }
+.btn svg { width: 14px; height: 14px; }
+.btn.primary { background: var(--sage); border-color: var(--sage); color: var(--sage-ink); font-weight: 600; box-shadow: 0 1px 0 rgba(255,255,255,.2) inset; }
+.btn.primary:hover { background: var(--sage-hi); border-color: var(--sage-hi); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn.ghost:hover { background: var(--bg-4); color: var(--text); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.btn[disabled] { opacity: .4; cursor: not-allowed; transform: none; }
+.me { width: 30px; height: 30px; border-radius: 50%; background: #1f3a2c; color: #8fe0b5; display: grid; place-items: center; font-size: 12px; font-weight: 700; border: 1px solid #2b4f3c; }
+.demo { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 4px 0 10px; border-radius: 99px; background: var(--amber-soft); color: var(--amber); font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+.demo button { height: 20px; border: 0; border-radius: 99px; padding: 0 8px; background: rgba(240,168,58,.18); color: var(--amber); font-size: 11px; font-weight: 600; }
+.demo button:hover { background: rgba(240,168,58,.28); }
+
+/* ---------- the pipeline: backlog | branch lanes (scroll) | pre-release ---------- */
+.pipe { display: grid; grid-template-columns: 284px minmax(0, 1fr) 356px; min-height: 0; }
+.col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.col-h { padding: 14px 16px 12px; border-bottom: 1px solid transparent; }
+.col-h .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.col-h h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; }
+.col-h p { margin: 4px 0 0; font-size: 12px; color: var(--text-3); }
+.count { font: 11px var(--mono); color: var(--text-3); background: var(--bg-3); border-radius: 99px; padding: 1px 7px; }
+.col-b { overflow-y: auto; padding: 4px 12px 20px; flex: 1; min-height: 0; }
+.stagek { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+
+.backlog { background: var(--bg-1); border-right: 1px solid var(--line); }
+
+.lanes-wrap { position: relative; min-width: 0; display: flex; flex-direction: column; }
+.lanes-wrap::after { content: ''; position: absolute; top: 40px; right: 0; bottom: 0; width: 36px; pointer-events: none; background: linear-gradient(90deg, transparent, rgba(11,14,15,.85)); opacity: var(--fade, 1); transition: opacity .2s; }
+.lanes-k { display: flex; align-items: center; gap: 10px; padding: 14px 16px 0; }
+.lanes-k .stagek { margin: 0; }
+.lanes-k .hint { font-size: 12px; color: var(--text-3); }
+.lanes { flex: 1; min-height: 0; display: flex; overflow-x: auto; overflow-y: hidden; padding: 10px 6px 0 12px; gap: 12px; scroll-behavior: smooth; }
+.lane { flex: none; width: 296px; display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--line-2); border-radius: 14px 14px 0 0; border-bottom: 0;
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-1) 220px); transition: border-color .15s, box-shadow .15s; }
+.lane:hover { border-color: var(--line-3); }
+.lane.fresh { animation: fresh .45s var(--ease); }
+@keyframes fresh { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.lane.merging { animation: merge .45s var(--ease) forwards; pointer-events: none; }
+@keyframes merge { to { opacity: 0; transform: translateX(60px); filter: saturate(.3); } }
+.lane-h { padding: 12px 12px 11px; border-bottom: 1px solid var(--line); }
+.lane-h .row { display: flex; align-items: center; gap: 8px; }
+.lane-h svg.git { width: 14px; height: 14px; color: var(--text-3); flex: none; }
+.lane-h .nm { font: 500 12.4px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.lane-m { display: flex; align-items: center; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+.lane-p { display: flex; align-items: center; gap: 9px; margin-top: 10px; font-size: 11.5px; color: var(--text-3); }
+.prog { flex: 1; height: 4px; border-radius: 4px; background: var(--bg-5); overflow: hidden; }
+.prog b { display: block; height: 100%; background: var(--sage); border-radius: 4px; transition: width .35s var(--ease); }
+.lane-b { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 10px 12px; }
+.lane-b.drop { border-radius: 0; }
+.lane-f { padding: 10px 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-3); }
+.lane-f .btn { margin-left: auto; }
+.addlane { flex: none; width: 210px; margin-bottom: 14px; border-radius: 14px; border: 1.5px dashed var(--line-2); background: transparent; color: var(--text-3); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-weight: 500;
+  transition: color .12s, border-color .12s, background .12s; }
+.addlane:hover { color: var(--text); border-color: var(--line-3); background: var(--bg-1); }
+.addlane i { width: 34px; height: 34px; border-radius: 10px; background: var(--bg-3); display: grid; place-items: center; }
+.addlane svg { width: 16px; height: 16px; }
+.addlane small { font-size: 11.5px; color: var(--text-4); font-weight: 400; text-align: center; padding: 0 18px; line-height: 1.45; }
+.lanes-empty { margin: 10px 0; color: var(--text-3); }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 8px; border-radius: 99px; font-size: 11px; font-weight: 500; background: var(--bg-4); color: var(--text-2); white-space: nowrap; }
+.pill.pr { background: rgba(96,165,250,.12); color: #9cc8ff; }
+.pill.draft, .pill.none { background: var(--bg-4); color: var(--text-3); }
+.pill.ahead { font: 11px var(--mono); color: var(--text-3); background: transparent; padding: 0 2px; }
+
+/* ---------- cards ---------- */
+.grp { margin: 2px 0 14px; }
+.grp-h { display: flex; align-items: center; gap: 8px; padding: 4px 4px 7px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.grp-h .ct { margin-left: auto; font: 11px var(--mono); color: var(--text-3); font-weight: 400; }
+.grp-h .new { font-size: 10.5px; color: var(--amber); background: var(--amber-soft); border-radius: 99px; padding: 0 7px; }
+.drop { border-radius: 10px; min-height: 8px; transition: background .12s, box-shadow .12s; }
+.drop.over { background: var(--sage-soft); box-shadow: inset 0 0 0 1.5px var(--sage-ring); }
+.empty { border: 1.5px dashed var(--line-2); border-radius: 10px; padding: 18px 12px; text-align: center; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+
+.card { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; padding: 9px 10px 8px 11px; margin-bottom: 6px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--bg-2); cursor: grab; user-select: none; position: relative;
+  transition: border-color .12s, background .12s, box-shadow .12s, opacity .15s; }
+.card:hover { border-color: var(--line-3); background: var(--bg-3); box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.card:active { cursor: grabbing; }
+.card.drag { opacity: .3; }
+.card.land { animation: land .7s var(--ease); }
+@keyframes land { 0% { box-shadow: 0 0 0 2px var(--sage-ring); background: #15261e; transform: scale(.98); } 100% { box-shadow: none; } }
+.card .title { font-size: 12.8px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--text-3); }
+.card .id { font: 11px var(--mono); }
+.ty { display: inline-flex; align-items: center; gap: 5px; }
+.ty i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.side { display: flex; align-items: center; gap: 2px; }
+.av { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 9.5px; font-weight: 700; flex: none; }
+.av.e { background: #22324a; color: #a5c8ff; } .av.n { background: #1f3a2c; color: #8fe0b5; } .av.x { background: var(--bg-4); color: var(--text-3); }
+.more { opacity: 0; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); display: grid; place-items: center; transition: opacity .12s, background .12s; flex: none; }
+.more svg { width: 14px; height: 14px; }
+.card:hover .more, .more:focus-visible, .more.show { opacity: 1; }
+.more:hover { background: var(--bg-5); color: var(--text); }
+.card.task { grid-template-columns: auto 1fr auto; }
+.lane .card { background: var(--bg-1); }
+.lane .card:hover { background: var(--bg-3); }
+.chk { width: 17px; height: 17px; margin-top: 1px; border-radius: 5px; border: 1.5px solid var(--line-3); background: transparent; padding: 0; display: grid; place-items: center; transition: background .15s, border-color .15s, transform .1s; }
+.chk:hover { border-color: var(--sage); }
+.chk:active { transform: scale(.9); }
+.chk svg { width: 11px; height: 11px; color: var(--sage-ink); opacity: 0; transform: scale(.6); transition: opacity .15s, transform .15s var(--ease); }
+.card.done .chk { background: var(--sage); border-color: var(--sage); }
+.card.done .chk svg { opacity: 1; transform: none; }
+.card.done .title { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--text-4); }
+
+/* ---------- pre-release: the next version ---------- */
+.pre { border-left: 1px solid var(--teal-line); background: linear-gradient(180deg, rgba(45,212,191,.07), rgba(45,212,191,.015) 340px, var(--bg) 640px); }
+.pre .stagek { color: var(--teal); }
+.pre .stagek i { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: pulse 2.2s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(45,212,191,.55); } 70% { box-shadow: 0 0 0 7px rgba(45,212,191,0); } 100% { box-shadow: 0 0 0 0 rgba(45,212,191,0); } }
+.hero { margin: 0 0 6px; padding: 16px; border-radius: 14px; border: 1px solid var(--teal-line); background: linear-gradient(160deg, rgba(45,212,191,.1), rgba(19,24,25,.92) 62%); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.ver { display: flex; align-items: baseline; gap: 10px; }
+.ver .now { font: 600 26px var(--mono); letter-spacing: -.03em; }
+.ver .from { font: 12px var(--mono); color: var(--text-3); }
+.ver .from s { text-decoration-color: var(--text-4); }
+.htitle { margin-top: 2px; font-size: 14px; font-weight: 600; color: var(--text-2); min-height: 20px; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; margin-top: 14px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-2); }
+.seg button { height: 44px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); display: grid; align-content: center; gap: 1px; transition: background .15s, color .15s, box-shadow .15s; }
+.seg button:hover { color: var(--text); background: var(--bg-3); }
+.seg button b { font-weight: 600; font-size: 12.5px; }
+.seg button span { font: 10.5px var(--mono); color: var(--text-3); }
+.seg button.on { background: var(--bg-4); color: var(--text); box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 2px 8px rgba(0,0,0,.3); }
+.seg button.on span { color: var(--teal); }
+.tfield { margin-top: 10px; position: relative; }
+.tfield input { width: 100%; height: 36px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); padding: 0 11px; outline: none; transition: border-color .12s, box-shadow .12s; }
+.tfield input:focus { border-color: var(--teal-line); box-shadow: 0 0 0 3px rgba(45,212,191,.1); }
+.tfield input.need { border-color: rgba(240,168,58,.5); }
+.tfield .why { margin-top: 5px; font-size: 11.5px; color: var(--amber); }
+.tnote { margin-top: 10px; font-size: 11.5px; color: var(--text-3); }
+.ready { margin: 14px 0 12px; display: grid; gap: 6px; }
+.ready div { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
+.ready b { color: var(--text); font-weight: 600; }
+.ready i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.ready i svg { width: 10px; height: 10px; }
+.ready .ok i { background: var(--sage-soft); color: var(--sage); }
+.ready .wait i { background: var(--bg-5); color: var(--text-3); }
+.golive { width: 100%; height: 40px; justify-content: center; font-size: 13.5px; }
+.golive svg { width: 15px; height: 15px; }
+
+.notes-h { display: flex; align-items: center; gap: 8px; margin: 18px 4px 2px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.notes-h .auto { font-size: 10.5px; font-weight: 600; color: var(--teal); background: var(--teal-soft); padding: 1px 7px; border-radius: 99px; }
+.notes h4 { margin: 14px 4px 4px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; display: flex; align-items: center; gap: 7px; color: var(--c); }
+.notes h4 .ct { color: var(--text-3); font: 11px var(--mono); letter-spacing: 0; }
+.note { display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: start; padding: 7px 8px; border-radius: 8px; cursor: pointer; transition: background .12s; }
+.note:hover { background: rgba(255,255,255,.035); }
+.note .id { font: 11px var(--mono); color: var(--text-3); padding-top: 1px; white-space: nowrap; }
+.note .tt { font-size: 12.8px; line-height: 1.35; }
+.note .via { display: block; font: 10.5px var(--mono); color: var(--text-4); margin-top: 2px; }
+.note.land { animation: noteland 1s var(--ease); }
+@keyframes noteland { 0% { background: rgba(45,212,191,.24); transform: translateX(-10px); opacity: 0; } 30% { opacity: 1; transform: none; } 100% { background: transparent; } }
+
+/* ---------- drawer, popover, modal, toast ---------- */
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 94vw); background: var(--bg-1); border-left: 1px solid var(--line-2); box-shadow: var(--shadow); z-index: 35;
+  transform: translateX(105%); transition: transform .22s var(--ease); display: flex; flex-direction: column; }
+.drawer.on { transform: none; }
+.dr-h { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.dr-h .mono { font-size: 12px; color: var(--text-3); }
+.dr-b { padding: 18px 20px; overflow-y: auto; }
+.dr-b h2 { margin: 0 0 16px; font-size: 18px; line-height: 1.3; letter-spacing: -.015em; }
+.stepper { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 20px; }
+.stepper div { position: relative; padding-top: 14px; font-size: 10.5px; color: var(--text-4); text-align: center; font-weight: 500; }
+.stepper div::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; border-radius: 4px; background: var(--bg-5); }
+.stepper div.past::before { background: rgba(63,191,127,.45); }
+.stepper div.past { color: var(--text-3); }
+.stepper div.cur::before { background: var(--sage); box-shadow: 0 0 10px rgba(63,191,127,.5); }
+.stepper div.cur { color: var(--text); font-weight: 600; }
+.props { display: grid; grid-template-columns: 96px 1fr; gap: 10px 12px; font-size: 12.5px; margin: 0 0 18px; }
+.props dt { color: var(--text-3); }
+.props dd { margin: 0; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.props .mono { font-size: 12px; }
+.muted { color: var(--text-3); }
+.desc { padding: 12px 14px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); color: var(--text-2); line-height: 1.6; font-size: 12.5px; }
+.dr-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+
+.menu { position: fixed; z-index: 45; min-width: 230px; max-width: 340px; padding: 5px; border-radius: 11px; border: 1px solid var(--line-2); background: #141a1c; box-shadow: var(--shadow); animation: pop .12s var(--ease); }
+.menu .lbl { padding: 7px 9px 4px; font-size: 10.5px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: .07em; }
+.menu button { display: flex; width: 100%; align-items: center; gap: 9px; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12.5px; }
+.menu button:hover { background: var(--bg-4); }
+.menu button.danger { color: var(--red); }
+.menu .mono { font-size: 11.5px; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.rel { padding: 8px 9px; border-radius: 8px; }
+.rel + .rel { border-top: 1px solid var(--line); border-radius: 0; }
+.rel-h { display: flex; align-items: center; gap: 8px; }
+.rel-h .v { font: 600 12.5px var(--mono); }
+.rel-h .n { color: var(--text-2); font-size: 12px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rel-h .dt { color: var(--text-3); font-size: 11.5px; }
+.rel ul { margin: 6px 0 2px; padding: 0; list-style: none; }
+.rel li { display: flex; gap: 8px; padding: 2px 0; font-size: 12px; color: var(--text-2); }
+.rel li .mono { font-size: 10.5px; color: var(--text-3); white-space: nowrap; padding-top: 1px; }
+@keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.scrim { position: fixed; inset: 0; background: rgba(3,5,6,.62); backdrop-filter: blur(3px); display: grid; place-items: center; z-index: 50; animation: fade .15s; }
+@keyframes fade { from { opacity: 0; } }
+.modal { width: min(480px, 92vw); border-radius: 16px; border: 1px solid var(--line-2); background: #12181a; box-shadow: var(--shadow); padding: 22px; animation: pop .18s var(--ease); }
+.modal h2 { margin: 0 0 6px; font-size: 17px; letter-spacing: -.015em; }
+.modal p { margin: 0 0 12px; color: var(--text-2); line-height: 1.55; }
+.modal .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.steps { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.steps li { display: flex; gap: 10px; align-items: center; color: var(--text-2); font-size: 12.5px; }
+.steps li span { width: 20px; height: 20px; border-radius: 6px; background: var(--bg-4); display: grid; place-items: center; font: 600 11px var(--mono); color: var(--text-2); flex: none; }
+.callout { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--bg-3); color: var(--text-2); font-size: 12.3px; line-height: 1.5; }
+.field { display: grid; gap: 6px; margin-top: 12px; }
+.field label { font-size: 11.5px; color: var(--text-3); font-weight: 500; }
+.field input, .field select { height: 36px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); padding: 0 11px; outline: none; }
+.field input:focus, .field select:focus { border-color: var(--sage-ring); box-shadow: 0 0 0 3px rgba(63,191,127,.1); }
+.inrow { display: flex; gap: 6px; }
+.inrow select { width: 96px; font: 12.5px var(--mono); }
+.inrow input { flex: 1; font: 12.5px var(--mono); }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 9px; padding: 10px 14px; border-radius: 11px; background: #1a2225; border: 1px solid var(--line-3); box-shadow: var(--shadow); z-index: 60; animation: up .2s var(--ease); max-width: min(560px, 92vw); }
+.toast i { width: 7px; height: 7px; border-radius: 50%; background: var(--sage); flex: none; }
+@keyframes up { from { opacity: 0; transform: translate(-50%, 8px); } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-git" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="4.5" cy="12.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="11.5" cy="5.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 5.3v5.4M11.5 7.3c0 2.5-3 2.6-6.4 4" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="4.5" cy="12.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="11.5" cy="12.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 5.3v5.4M4.5 5.5c0 3 3 4.5 5.2 6" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 16 16"><path d="M9.5 2.5c2.2-.6 4-.5 4-.5s.1 1.8-.5 4L9 10 6 7l3.5-4.5zM6 7L3.5 7.3 2 9.5l3 .5M9 10l-.3 2.5L6.5 14l-.5-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="10.6" cy="5.4" r="1" fill="currentColor"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-dash" viewBox="0 0 16 16"><path d="M4.5 8h7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="app">
+  <header class="top">
+    <div class="brand"><span class="mark"><svg viewBox="0 0 16 16"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Development <small>SPEEKSNET</small></div>
+    <span class="demo">Mockup · nothing is saved <button onclick="resetDemo()">Reset</button></span>
+    <div class="grow"></div>
+    <button class="livepill" id="livepill" title="What's on speeksnet.com"></button>
+    <div class="search"><svg><use href="#i-search"/></svg><input id="q" placeholder="Search tickets" autocomplete="off"><kbd>/</kbd></div>
+    <button class="btn primary" onclick="newTicket()"><svg><use href="#i-plus"/></svg>New ticket</button>
+    <span class="me" title="Nick">N</span>
+  </header>
+  <main class="pipe" id="pipe">
+    <section class="col backlog" id="colBacklog"></section>
+    <section class="lanes-wrap">
+      <div class="lanes-k"><span class="stagek">In progress</span><span class="count" id="brCount"></span><span class="hint">One column per branch. Drag tickets onto the branch that's building them.</span></div>
+      <div class="lanes" id="lanes"></div>
+    </section>
+    <section class="col pre" id="colPre"></section>
+  </main>
+</div>
+<aside class="drawer" id="drawer"></aside>
+
+<script>
+// ========================================================================= data
+const NAMES = { e: 'Ethan Kushnir', n: 'Nick Hettinger' };
+const TYPES = { suggestion: ['Suggestion', 'var(--violet)', 'New'], improvement: ['Improvement', 'var(--blue)', 'Improved'], bug: ['Bug', 'var(--red)', 'Fixed'], task: ['Task', 'var(--grey)', 'Behind the scenes'] };
+const SIZES = { minor: ['Minor', 'x.x.+1'], major: ['Major', 'x.+1.0'], overhaul: ['Overhaul', '+1.0.0'] };
+const STAGES = ['Backlog', 'In progress', 'Pre-release', 'Live'];
+let T, B, LIVE, P, S;
+
+function seed() {
+  T = {};
+  const add = (id, title, type, who, stage, branch, done, inbox) => T[id] = { id, title, type, who, stage, branch: branch || null, done: !!done, inbox: !!inbox };
+  add(1000, 'THIS IS A TEST', 'task', null, 'backlog', 0, 0, 1);
+  [[400, 'Full Listing Reviews', 'suggestion', 'e'], [505, 'SPEEKS Connect Picture Health Tool', 'suggestion', 'e'],
+   [564, 'Minor B2B tab design change', 'improvement', 'e'], [575, 'Facebook Marketplace Browser Extension', 'suggestion', 'e'],
+   [376, 'Listing Goal Report', 'improvement', 'e'], [79, 'Training Implementation', 'suggestion', null],
+   [279, 'Due Date reminders', 'improvement', 'e'], [280, 'Manager ability to send store specific message', 'improvement', 'e'],
+   [297, 'Add mark as read for all applicable items', 'improvement', 'e'], [332, 'Add weekly and monthly KPI Due Date', 'improvement', 'e'],
+   [361, 'Dark Mode & Potential SPEEKSNET Redesign', 'suggestion', null], [543, 'SPEEKS Personal AI Assistant for SPEEKSNET', 'suggestion', null],
+   [553, 'Manager Dashboards', 'suggestion', null]].forEach(a => add(...a, 'backlog'));
+  add(571, 'Interactive Dashboard Widget Re-Design', 'improvement', 'e', 'build', 'Main-December-Update-2---Ethan', 1);
+  add(567, 'Update SPEEKSNET Settings Notifications', 'improvement', 'e', 'build', 'Main-December-Update-2---Ethan', 1);
+  add(565, 'Expense Tool Export Button', 'improvement', 'e', 'build', 'Main-December-Update-2---Ethan');
+  add(1001, 'Development suite: the pipeline', 'task', 'n', 'build', 'feat/dev-tracker');
+  add(1002, 'Release builder: Go live from SPEEKSNET', 'task', 'n', 'build', 'feat/dev-tracker', 1);
+  add(573, 'Customer Callback Fixes', 'bug', 'e', 'build', 'fix/callbacks-and-claims');
+  add(570, 'Claims Tool Clean Up', 'improvement', 'e', 'build', 'fix/callbacks-and-claims', 1);
+  add(562, 'New Listing Goals Game!', 'suggestion', 'e', 'build', 'feat/listing-goals-game', 1);
+  add(572, 'Submit an Idea switched to the SPEEKSNET backend', 'improvement', 'n', 'pre', 'feat/submit-a-ticket');
+  add(568, 'Fix box order tool cart', 'bug', 'e', 'pre', 'fix/box-order-cart');
+  add(1003, 'Projects: DM signs off finished projects', 'suggestion', 'n', 'pre', 'feat/projects-completion-signoff');
+  B = [
+    { name: 'Main-December-Update-2---Ethan', who: 'e', ahead: 25, pr: '#576' },
+    { name: 'feat/dev-tracker', who: 'n', ahead: 18, pr: '#580', draft: true },
+    { name: 'fix/callbacks-and-claims', who: 'e', ahead: 3, pr: null },
+    { name: 'feat/listing-goals-game', who: 'e', ahead: 6, pr: '#588' },
+  ];
+  LIVE = [
+    { ver: 'v3.12.3', name: '', date: 'Nov 21' }, { ver: 'v3.12.2', name: '', date: 'Nov 21' },
+    { ver: 'v3.12.1', name: '', date: 'Nov 21' }, { ver: 'v3.12.0', name: '', date: 'Nov 12' },
+    { ver: 'v3.11.0', name: 'Main November Update', date: 'Nov 1' },
+  ];
+  P = { size: 'major', title: 'December Update' };
+  S = { q: '', open: null, landed: new Set(), notesLanded: new Set(), freshLane: null, triedLive: false };
+}
+seed();
+
+// ========================================================================= helpers
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ic = (n, cls) => `<svg class="${cls || ''}"><use href="#i-${n}"/></svg>`;
+const av = w => w ? `<span class="av ${w}" title="${NAMES[w]}">${NAMES[w][0]}</span>` : `<span class="av x" title="Unassigned">–</span>`;
+const all = () => Object.values(T);
+const match = t => !S.q || (t.title + ' sn-' + t.id + ' ' + (t.branch || '')).toLowerCase().includes(S.q);
+const plural = (n, w, pl) => `${n} ${n === 1 ? w : (pl || w + 's')}`;
+const live = () => LIVE[0].ver;
+function bump(v, size) {
+  const [a, b, c] = v.replace(/^v/, '').split('.').map(Number);
+  return 'v' + (size === 'overhaul' ? [a + 1, 0, 0] : size === 'major' ? [a, b + 1, 0] : [a, b, c + 1]).join('.');
+}
+const nextVer = () => bump(live(), P.size);
+const needsTitle = () => P.size !== 'minor';
+const stageIx = t => ({ backlog: 0, build: 1, pre: 2, live: 3 })[t.stage];
+
+// ========================================================================= render
+function render() { renderTop(); renderBacklog(); renderLanes(); renderPre(); if (S.open) renderDrawer(); S.landed.clear(); S.notesLanded.clear(); S.freshLane = null; }
+
+function renderTop() {
+  $('#livepill').innerHTML = `<span class="ldot"></span>Live <b>${live()}</b>${ic('arrow')}`;
+}
+
+function card(t, onBranch) {
+  const ty = TYPES[t.type];
+  const cls = ['card', onBranch ? 'task' : '', onBranch && t.done ? 'done' : '', S.landed.has(t.id) ? 'land' : ''].join(' ');
+  return `<div class="${cls}" draggable="true" data-id="${t.id}">
+    ${onBranch ? `<button class="chk" data-chk="${t.id}" title="${t.done ? 'Mark not done' : 'Mark done'}">${ic('check')}</button>` : ''}
+    <div><div class="title">${esc(t.title)}</div>
+      <div class="meta"><span class="id">SN-${t.id}</span><span class="ty" style="--c:${ty[1]}"><i></i>${ty[0]}</span></div></div>
+    <div class="side">${av(t.who)}<button class="more" data-more="${t.id}" title="Move">${ic('more')}</button></div></div>`;
+}
+
+function renderBacklog() {
+  const bl = all().filter(t => t.stage === 'backlog');
+  const vis = bl.filter(match), inbox = vis.filter(t => t.inbox), rest = vis.filter(t => !t.inbox);
+  $('#colBacklog').innerHTML = `<div class="col-h"><div class="stagek">Waiting</div><div class="row"><h2>Backlog</h2><span class="count">${bl.length}</span></div><p>Drag a ticket onto a branch to start it</p></div>
+    <div class="col-b drop" data-zone="backlog">
+      ${inbox.length ? `<div class="grp"><div class="grp-h"><span class="new">${inbox.length} new</span>From Submit a Ticket</div>${inbox.map(t => card(t)).join('')}</div>` : ''}
+      <div class="grp"><div class="grp-h">Ideas and requests<span class="ct">${rest.length}</span></div>${rest.map(t => card(t)).join('') || `<div class="empty">${S.q ? 'No matches' : 'Nothing waiting'}</div>`}</div>
+    </div>`;
+}
+
+function renderLanes() {
+  $('#brCount').textContent = B.length;
+  $('#lanes').innerHTML = B.map(b => {
+    const ts = all().filter(t => t.stage === 'build' && t.branch === b.name);
+    const vis = ts.filter(match), d = ts.filter(t => t.done).length;
+    const pr = b.pr ? `<span class="pill ${b.draft ? 'draft' : 'pr'}">PR ${b.pr}${b.draft ? ' · draft' : ''}</span>` : '<span class="pill none">No PR yet</span>';
+    return `<div class="lane ${S.freshLane === b.name ? 'fresh' : ''}" data-lane="${esc(b.name)}">
+      <div class="lane-h"><div class="row">${ic('git', 'git')}<span class="nm" title="${esc(b.name)}">${esc(b.name)}</span>${av(b.who)}<button class="more show" data-bmore="${esc(b.name)}" title="Branch">${ic('more')}</button></div>
+        <div class="lane-m">${pr}<span class="pill ahead">+${b.ahead} commits</span></div>
+        <div class="lane-p"><div class="prog"><b style="width:${ts.length ? d / ts.length * 100 : 0}%"></b></div><span class="pc">${d}/${ts.length} done</span></div></div>
+      <div class="lane-b drop" data-zone="branch" data-branch="${esc(b.name)}">${vis.map(t => card(t, true)).join('') || `<div class="empty">${S.q && ts.length ? 'No matches' : 'Drag tickets here from the Backlog'}</div>`}</div>
+      <div class="lane-f"><span>${ts.length ? plural(ts.length, 'ticket') : 'No tickets yet'}</span><button class="btn sm" data-merge="${esc(b.name)}" title="Stands in for the PR merging on GitHub">${ic('merge')}Simulate merge</button></div>
+    </div>`;
+  }).join('') + `<button class="addlane" onclick="newBranch()"><i>${ic('plus')}</i>Start a branch<small>Created on GitHub from pre-release</small></button>`;
+  fadeEdge();
+  if (S.freshLane) { const el = document.querySelector(`[data-lane="${CSS.escape(S.freshLane)}"]`); if (el) el.scrollIntoView({ behavior: 'smooth', inline: 'end', block: 'nearest' }); }
+}
+
+// the right-edge fade says "more branches this way" only while there are more
+function fadeEdge() { const l = $('#lanes'); l.parentElement.style.setProperty('--fade', l.scrollLeft + l.clientWidth < l.scrollWidth - 4 ? 1 : 0); }
+document.getElementById('lanes').addEventListener('scroll', fadeEdge, { passive: true });
+addEventListener('resize', fadeEdge);
+
+function renderPre() {
+  const pre = all().filter(t => t.stage === 'pre');
+  const building = all().filter(t => t.stage === 'build').length;
+  const missing = needsTitle() && !P.title.trim();
+  const notes = ['suggestion', 'improvement', 'bug', 'task'].map(ty => {
+    const l = pre.filter(t => t.type === ty && match(t));
+    if (!l.length) return '';
+    return `<h4 style="--c:${TYPES[ty][1]}">${TYPES[ty][2]}<span class="ct">${l.length}</span></h4>` + l.map(t =>
+      `<div class="note ${S.notesLanded.has(t.id) ? 'land' : ''}" data-open="${t.id}"><span class="id">SN-${t.id}</span>
+        <span class="tt">${esc(t.title)}<span class="via">from ${esc(t.branch)}</span></span>${av(t.who)}</div>`).join('');
+  }).join('');
+  $('#colPre').innerHTML = `<div class="col-h"><div class="stagek"><i></i>Next update</div><div class="row"><h2>Pre-release</h2><span class="count">${pre.length}</span></div><p>Everything merged here ships in the next update</p></div>
+    <div class="col-b">
+      <div class="hero">
+        <div class="ver"><span class="now">${nextVer()}</span><span class="from">from <s>${live()}</s></span></div>
+        <div class="htitle">${needsTitle() ? esc(P.title.trim() || 'Untitled update') : `${SIZES[P.size][0]} update`}</div>
+        <div class="seg" role="radiogroup" aria-label="Update size">${Object.entries(SIZES).map(([k, v]) =>
+          `<button role="radio" aria-checked="${P.size === k}" class="${P.size === k ? 'on' : ''}" data-size="${k}"><b>${v[0]}</b><span>${bump(live(), k)}</span></button>`).join('')}</div>
+        ${needsTitle()
+          ? `<div class="tfield"><input id="ptitle" value="${esc(P.title)}" placeholder="Name this update" maxlength="60" class="${missing && S.triedLive ? 'need' : ''}">${missing && S.triedLive ? '<div class="why">A major or overhaul update needs a title</div>' : ''}</div>`
+          : `<div class="tnote">Minor updates don't need a title.</div>`}
+        <div class="ready">
+          <div class="ok"><i>${ic('check')}</i><span><b>${plural(pre.length, 'ticket')}</b> merged and ready</span></div>
+          <div class="wait"><i>${ic('dash')}</i><span>${building ? `<b>${building}</b> still on branches. They join when their branch merges.` : 'Nothing else in progress'}</span></div>
+        </div>
+        <button class="btn primary golive" onclick="goLive()" ${pre.length ? '' : 'disabled'}>${ic('rocket')}Go live with ${nextVer()}</button>
+      </div>
+      <div class="notes-h">Patch notes<span class="auto">Written automatically</span></div>
+      <div class="notes">${notes || '<div class="empty" style="margin-top:10px">When a branch merges, its tickets show up here.</div>'}</div>
+    </div>`;
+}
+
+function renderDrawer() {
+  const t = T[S.open]; if (!t) return closeDrawer();
+  const si = stageIx(t), ty = TYPES[t.type];
+  const where = { backlog: '<span class="muted">Backlog</span>', build: `<span class="mono">${esc(t.branch)}</span>`, pre: `Pre-release, ships in <b class="mono" style="font-weight:600">${nextVer()}</b>`, live: `Live in <span class="mono">${esc(t.liveIn || '')}</span>` }[t.stage];
+  $('#drawer').innerHTML = `<div class="dr-h"><span class="mono">SN-${t.id}</span><div class="grow"></div><button class="btn ghost sm" onclick="closeDrawer()" title="Close (Esc)">${ic('x')}</button></div>
+    <div class="dr-b"><h2>${esc(t.title)}</h2>
+      <div class="stepper">${STAGES.map((s, i) => `<div class="${i < si ? 'past' : i === si ? 'cur' : ''}">${s}</div>`).join('')}</div>
+      <dl class="props">
+        <dt>Where</dt><dd>${where}</dd>
+        ${t.stage === 'build' ? `<dt>On branch</dt><dd>${t.done ? `<span style="color:var(--sage)">${ic('check').replace('<svg', '<svg width="12" height="12"')} Done</span>` : '<span class="muted">Not done yet</span>'}</dd>` : ''}
+        <dt>Type</dt><dd><span class="ty" style="--c:${ty[1]}"><i></i>${ty[0]}</span></dd>
+        <dt>Assignee</dt><dd>${av(t.who)}${t.who ? NAMES[t.who] : '<span class="muted">Unassigned</span>'}</dd>
+      </dl>
+      <div class="desc">The description, attachments, comments and history sit here, the same as today's ticket panel.</div>
+      <div class="dr-acts">${t.stage === 'backlog' || t.stage === 'build' ? `<button class="btn sm" data-more="${t.id}">Move to…</button>` : ''}</div>
+    </div>`;
+  $('#drawer').classList.add('on');
+}
+function closeDrawer() { S.open = null; $('#drawer').classList.remove('on'); }
+
+// ========================================================================= actions
+function moveTo(id, zone, branch) {
+  const t = T[id]; if (!t || t.stage === 'pre' || t.stage === 'live') return;
+  if (zone === 'branch' && t.branch === branch && t.stage === 'build') return;
+  if (zone === 'backlog' && t.stage === 'backlog') return;
+  if (zone === 'backlog') Object.assign(t, { stage: 'backlog', branch: null, done: false });
+  else Object.assign(t, { stage: 'build', branch, done: false });
+  t.inbox = false; S.landed.add(id); render();
+  toast(`SN-${id} → ${zone === 'backlog' ? 'Backlog' : branch}`);
+}
+
+function merge(name) {
+  const b = B.find(x => x.name === name);
+  const ts = all().filter(t => t.branch === name && t.stage === 'build');
+  const lane = document.querySelector(`[data-lane="${CSS.escape(name)}"]`);
+  const finish = () => {
+    ts.forEach(t => { Object.assign(t, { stage: 'pre', done: true }); S.notesLanded.add(t.id); });
+    B.splice(B.indexOf(b), 1); render();
+    toast(`${name} merged into pre-release. ${ts.length ? plural(ts.length, 'ticket') + ' added to the patch notes.' : ''}`);
+  };
+  if (lane) { lane.classList.add('merging'); setTimeout(finish, 380); } else finish();
+}
+
+function goLive() {
+  if (needsTitle() && !P.title.trim()) { S.triedLive = true; renderPre(); const i = $('#ptitle'); if (i) i.focus(); return; }
+  const pre = all().filter(t => t.stage === 'pre'), v = nextVer(), building = all().filter(t => t.stage === 'build').length;
+  modal(`<h2>Go live with ${v}${needsTitle() ? ` · ${esc(P.title.trim())}` : ''}?</h2>
+    <p>${plural(pre.length, 'ticket')} on pre-release go to speeksnet.com as a <b>${SIZES[P.size][0].toLowerCase()}</b> update.</p>
+    <ol class="steps">
+      <li><span>1</span>Version and cache-busters set to ${v} on pre-release</li>
+      <li><span>2</span>Pre-release merged into main</li>
+      <li><span>3</span>Tagged ${v}, GitHub release published</li>
+      <li><span>4</span>Patch notes posted in SPEEKSNET, managers emailed</li>
+    </ol>
+    ${building ? `<div class="callout">The ${B.length === 1 ? 'branch' : B.length + ' branches'} in progress stay where they are. Their tickets ship in whichever update they merge before.</div>` : ''}
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="doLive()">${ic('rocket')}Go live</button></div>`);
+}
+function doLive() {
+  const v = nextVer(), name = needsTitle() ? P.title.trim() : '';
+  const shipped = all().filter(t => t.stage === 'pre');
+  shipped.forEach(t => { t.stage = 'live'; t.liveIn = v; });
+  LIVE.unshift({ ver: v, name, date: 'Today', notes: shipped.slice() });
+  P = { size: 'minor', title: '' }; S.triedLive = false;
+  closeModal(); render();
+  const pill = $('#livepill'); pill.animate([{ boxShadow: '0 0 0 0 rgba(63,191,127,.7)' }, { boxShadow: '0 0 0 10px rgba(63,191,127,0)' }], { duration: 900, iterations: 2 });
+  toast(`${v}${name ? ' · ' + name : ''} is live. Pre-release is now the next update.`);
+}
+
+function newBranch() {
+  modal(`<h2>Start a branch</h2><p>SPEEKSNET creates it on GitHub from pre-release. It shows up as a new column; drag tickets onto it.</p>
+    <div class="field"><label>Name</label><div class="inrow"><select id="bp"><option>feat/</option><option>fix/</option><option>chore/</option></select><input id="bn" placeholder="what-it-does"></div></div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="makeBranch()">Create branch</button></div>`);
+  setTimeout(() => $('#bn').focus(), 40);
+}
+function makeBranch() {
+  const slug = ($('#bn').value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) { $('#bn').focus(); return; }
+  const name = $('#bp').value + slug;
+  if (B.some(b => b.name === name)) { toast('A branch with that name already exists'); return; }
+  B.push({ name, who: 'n', ahead: 0, pr: null }); S.freshLane = name; closeModal(); render(); toast(`${name} created`);
+}
+function newTicket() {
+  modal(`<h2>New ticket</h2><p>It goes in the Backlog until a branch picks it up.</p>
+    <div class="field"><label>Title</label><input id="nt" placeholder="What needs doing?"></div>
+    <div class="field"><label>Type</label><select id="ny">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="makeTicket()">Create ticket</button></div>`);
+  setTimeout(() => $('#nt').focus(), 40);
+}
+let nextId = 1004;
+function makeTicket() {
+  const title = $('#nt').value.trim(); if (!title) { $('#nt').focus(); return; }
+  const id = nextId++; T[id] = { id, title, type: $('#ny').value, who: 'n', stage: 'backlog', branch: null, done: false };
+  S.landed.add(id); closeModal(); render(); toast(`SN-${id} created`);
+}
+function resetDemo() { seed(); nextId = 1004; closeDrawer(); closeModal(); closeMenu(); $('#q').value = ''; render(); toast('Demo reset'); }
+
+// ========================================================================= menus, modal, toast
+function menu(anchor, html) {
+  closeMenu(); const m = document.createElement('div'); m.className = 'menu'; m.id = 'menu'; m.innerHTML = html; document.body.appendChild(m);
+  const a = anchor.getBoundingClientRect(), r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(a.right - r.width, innerWidth - r.width - 8)) + 'px';
+  m.style.top = (a.bottom + r.height + 8 > innerHeight ? Math.max(8, a.top - r.height - 4) : a.bottom + 4) + 'px';
+}
+function closeMenu() { const m = $('#menu'); if (m) m.remove(); }
+function moveMenu(id, anchor) {
+  const t = T[id], brs = B.filter(b => !(t.stage === 'build' && b.name === t.branch));
+  menu(anchor, `${brs.length ? `<div class="lbl">Work on branch</div>${brs.map(b => `<button data-to="branch" data-arg="${esc(b.name)}" data-id="${id}">${ic('git').replace('<svg', '<svg width="13" height="13" style="color:var(--text-3)"')}<span class="mono">${esc(b.name)}</span></button>`).join('')}` : '<div class="lbl">No other branches</div>'}
+    ${t.stage !== 'backlog' ? `<hr><button data-to="backlog" data-id="${id}">Back to the Backlog</button>` : ''}`);
+}
+function liveMenu(anchor) {
+  menu(anchor, `<div class="lbl">On speeksnet.com</div>${LIVE.slice(0, 5).map((r, i) => `<div class="rel"><div class="rel-h">${i === 0 ? '<span class="ldot" style="width:7px;height:7px;border-radius:50%;background:var(--sage)"></span>' : ''}<span class="v">${r.ver}</span><span class="n">${esc(r.name)}</span><span class="dt">${r.date}</span></div>
+    ${r.notes ? `<ul>${r.notes.map(t => `<li><span class="mono">SN-${t.id}</span>${esc(t.title)}</li>`).join('')}</ul>` : ''}</div>`).join('')}`);
+}
+function modal(html) { closeModal(); const s = document.createElement('div'); s.className = 'scrim'; s.id = 'scrim'; s.innerHTML = `<div class="modal" role="dialog">${html}</div>`; s.addEventListener('mousedown', e => { if (e.target === s) closeModal(); }); document.body.appendChild(s); }
+function closeModal() { const s = $('#scrim'); if (s) s.remove(); }
+let tt; function toast(m) { const o = $('.toast'); if (o) o.remove(); const d = document.createElement('div'); d.className = 'toast'; d.innerHTML = `<i></i><span>${esc(m)}</span>`; document.body.appendChild(d); clearTimeout(tt); tt = setTimeout(() => d.remove(), 3600); }
+
+// ========================================================================= events
+document.addEventListener('click', e => {
+  const el = s => e.target.closest(s);
+  let x;
+  if ((x = el('[data-to]'))) { moveTo(+x.dataset.id, x.dataset.to, x.dataset.arg); closeMenu(); return; }
+  if ((x = el('[data-more]'))) { e.stopPropagation(); moveMenu(+x.dataset.more, x); return; }
+  if ((x = el('#livepill'))) { e.stopPropagation(); if ($('#menu')) closeMenu(); else liveMenu(x); return; }
+  if ((x = el('[data-bmore]'))) { e.stopPropagation(); const name = x.dataset.bmore;
+    menu(x, `<button onclick="closeMenu();toast('Opens ${esc(name)} on GitHub')">Open on GitHub</button><button onclick="closeMenu();toast('Opens the pull request on GitHub')">Open the pull request</button><hr><button class="danger" onclick="closeMenu();toast('Deleting a branch is only offered once it is merged')">Delete branch…</button>`); return; }
+  if ((x = el('[data-chk]'))) { const t = T[x.dataset.chk]; t.done = !t.done; x.closest('.card').classList.toggle('done', t.done); x.title = t.done ? 'Mark not done' : 'Mark done'; refreshLane(t.branch); return; }
+  if ((x = el('[data-merge]'))) { merge(x.dataset.merge); return; }
+  if ((x = el('[data-size]'))) { P.size = x.dataset.size; renderPre(); renderTop(); if (needsTitle() && !P.title) { const i = $('#ptitle'); if (i) i.focus(); } return; }
+  if ((x = el('[data-open]'))) { S.open = +x.dataset.open; renderDrawer(); return; }
+  if ((x = el('.card'))) { S.open = +x.dataset.id; renderDrawer(); return; }
+  if (!el('.menu')) closeMenu();
+  if (!el('.drawer') && S.open) closeDrawer();
+});
+function refreshLane(name) {
+  const ts = all().filter(t => t.branch === name && t.stage === 'build'), d = ts.filter(t => t.done).length;
+  const l = document.querySelector(`[data-lane="${CSS.escape(name)}"]`); if (!l) return;
+  l.querySelector('.prog b').style.width = (ts.length ? d / ts.length * 100 : 0) + '%';
+  l.querySelector('.pc').textContent = `${d}/${ts.length} done`;
+}
+document.addEventListener('input', e => {
+  if (e.target.id === 'ptitle') { P.title = e.target.value; const h = $('.htitle'); if (h) h.textContent = P.title.trim() || 'Untitled update'; if (P.title.trim() && S.triedLive) { e.target.classList.remove('need'); const w = $('.why'); if (w) w.remove(); } }
+  if (e.target.id === 'q') { S.q = e.target.value.trim().toLowerCase(); renderBacklog(); renderLanes(); renderPre(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if ($('#menu')) closeMenu(); else if ($('#scrim')) closeModal(); else if (S.open) closeDrawer(); else if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); return; }
+  if (e.key === 'Enter' && $('#scrim')) { const p = $('#scrim .btn.primary'); if (p && e.target.tagName !== 'SELECT') { e.preventDefault(); p.click(); } return; }
+  if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || $('#scrim')) return;
+  if (e.key === '/') { e.preventDefault(); $('#q').focus(); }
+  else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); newTicket(); }
+  else if (e.key === 'b' || e.key === 'B') { e.preventDefault(); newBranch(); }
+});
+
+// drag and drop: onto a branch column or back to the backlog
+let dragId = null;
+document.addEventListener('dragstart', e => { const c = e.target.closest('.card'); if (!c) return; dragId = +c.dataset.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(dragId)); requestAnimationFrame(() => c.classList.add('drag')); closeMenu(); });
+document.addEventListener('dragend', () => { dragId = null; document.querySelectorAll('.drag, .over').forEach(x => x.classList.remove('drag', 'over')); });
+document.addEventListener('dragover', e => { if (dragId == null) return; const z = e.target.closest('.drop'); document.querySelectorAll('.over').forEach(x => x !== z && x.classList.remove('over')); if (!z) return; e.preventDefault(); z.classList.add('over'); });
+document.addEventListener('drop', e => {
+  const z = dragId != null && e.target.closest('.drop'); if (!z) return; e.preventDefault();
+  const id = dragId; dragId = null;
+  if (z.dataset.zone === 'branch') moveTo(id, 'branch', z.dataset.branch); else moveTo(id, 'backlog');
+});
+
+render();
+</script>
+</body>
+</html>

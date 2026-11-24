@@ -48,6 +48,16 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //   PRs merged into anything other than pre-release or main (an update branch,
 //   the dev-tracker umbrella) are linked and logged but move nothing.
 //
+//   THE PIPELINE (0205, 2026-11-24 — docs/DEVELOPMENT-WORKFLOW.md): tickets sit
+//   ON a branch (dev_tickets.branch). A PR merged into pre-release takes EVERY
+//   open ticket on its head branch into the next update (on_prerelease,
+//   release_id = dev_next_release()) — named in the PR or not, ticked or not —
+//   provided it was on the branch before the merge (mergeBranch: the reconcile
+//   replays old merges and branch names get reused). A branch whose name has
+//   SN-n puts that ticket on it, if it's on no branch yet.
+//     start_branch {prefix, slug, ticket_ids}  create feat|fix|chore/<slug> from
+//                                          pre-release with those tickets on it
+//
 //   CHECKS — on every PR that touches a ticket, from its changed files, shown
 //   on the ticket (and, Phase 6, on the release checklist):
 //     a NEW supabase/migrations/NNNN_*.sql → applied already? number taken in
@@ -198,7 +208,7 @@ class Run {
     const { sn, closes } = this.refs(text, keyworded);
     const want = [...new Set([...sn, ...closes])].filter((n) => !this.tickets.has(n));
     if (want.length) {
-      const { data } = await this.sb.from("dev_tickets").select("id, status, github_number").in("id", want);
+      const { data } = await this.sb.from("dev_tickets").select("id, status, github_number, branch").in("id", want);
       for (const n of want) this.tickets.set(n, null);
       for (const t of data || []) this.tickets.set(Number(t.id), t);
     }
@@ -222,18 +232,66 @@ class Run {
   }
 
   // Forward only, never out of Won't do; `back` is the one sanctioned retreat.
-  async move(ticket: any, to: string, note: string, back = false) {
+  // `extra`: columns that go with the move (release_id on a merge).
+  async move(ticket: any, to: string, note: string, back = false, extra: Record<string, unknown> = {}) {
     const from = String(ticket.status);
     if (from === "wont_do" || from === to) return;
     if (!back && !(RANK[to] > (RANK[from] ?? 99))) return;
     const now = new Date().toISOString();
     const { data: row } = await this.sb.from("dev_tickets")
-      .update({ status: to, closed_at: to === "done" ? now : null, updated_at: now })
-      .eq("id", ticket.id).eq("status", from).select("id, status, github_number").maybeSingle();
+      .update({ status: to, closed_at: to === "done" ? now : null, updated_at: now, ...extra })
+      .eq("id", ticket.id).eq("status", from).select("id, status, github_number, branch").maybeSingle();
     if (!row) return; // someone moved it at the same moment — theirs stands
     await this.sb.from("dev_ticket_events").insert({ ticket_id: ticket.id, kind: "status", actor_name: this.actor.name, actor_id: this.actor.id, from_value: from, to_value: to, note });
     ticket.status = to;
     this.summary.moved.push(`SN-${ticket.id} ${from}→${to}`);
+  }
+
+  // ---- the pipeline (0205): a ticket's branch ----
+  // Puts a still-open ticket on `name` if it isn't on a branch yet. Never takes
+  // one off another branch: a person put it there. The 'branch' history row's
+  // time is what mergeBranch() checks.
+  async onBranch(ticket: any, name: string, note: string) {
+    if (ticket.branch || !["triage", "backlog", "in_progress", "in_review"].includes(String(ticket.status))) return;
+    const now = new Date().toISOString();
+    const { data: row } = await this.sb.from("dev_tickets")
+      .update({ branch: name, branch_done: false, branch_done_at: null, updated_at: now })
+      .eq("id", ticket.id).is("branch", null).select("id").maybeSingle();
+    if (!row) return;
+    await this.sb.from("dev_ticket_events").insert({ ticket_id: ticket.id, kind: "branch", actor_name: this.actor.name, actor_id: this.actor.id, to_value: name, note });
+    ticket.branch = name;
+  }
+
+  // A branch merged into pre-release: EVERY open ticket on it joins the next
+  // update (Nick, 2026-11-24 — ticked or not). Only tickets that were on the
+  // branch WHEN it merged: the reconcile replays old merged PRs and branch
+  // names get reused, so a ticket put on the branch afterwards stays put. The
+  // join time is the newest 'branch' history row onto this branch. (0205's
+  // dev_branch_merged() does the same move without that check — not called.)
+  async mergeBranch(head: string, mergedAt: string, prNumber: number) {
+    const { data: on } = await this.sb.from("dev_tickets").select("id, status, github_number, branch")
+      .eq("branch", head).in("status", ["triage", "backlog", "in_progress", "in_review"]);
+    if (!(on || []).length) return;
+    const { data: ev } = await this.sb.from("dev_ticket_events").select("ticket_id, created_at")
+      .eq("kind", "branch").eq("to_value", head).in("ticket_id", (on || []).map((t: any) => t.id))
+      .order("created_at", { ascending: false });
+    const joined = new Map<number, number>();
+    for (const e of ev || []) if (!joined.has(Number(e.ticket_id))) joined.set(Number(e.ticket_id), Date.parse(e.created_at));
+    const cutoff = Date.parse(mergedAt) || Date.now();
+    const rid = await this.nextRelease();
+    for (const t of on || []) {
+      // No history row = put there some way we don't know of; trust it.
+      if ((joined.get(Number(t.id)) ?? 0) > cutoff) continue;
+      await this.move(t, "on_prerelease", `${head} merged into pre-release (PR #${prNumber})`, false, rid ? { release_id: rid } : {});
+    }
+  }
+  private nextId: number | null = null;
+  async nextRelease(): Promise<number | null> {
+    if (this.nextId) return this.nextId;
+    const { data, error } = await this.sb.rpc("dev_next_release");
+    if (error) { this.summary.errors.push(`dev_next_release: ${error.message}`); return null; }
+    this.nextId = Number(data) || null;
+    return this.nextId;
   }
 
   // ---- branches ----
@@ -244,6 +302,7 @@ class Run {
     }
     for (const t of await this.ticketsFor(name)) {
       await this.link(t, "branch", name, { url: `https://github.com/${REPO}/tree/${name}`, title: name, state: "active", head_sha: sha }, `Branch ${name}`);
+      await this.onBranch(t, name, `Branch ${name} names SN-${t.id}`);
       await this.move(t, "in_progress", `Branch ${name} pushed`);
     }
   }
@@ -261,11 +320,14 @@ class Run {
 
   // ---- pull requests ----
   async pr(pr: any, action: string | null) {
+    const state = pr.merged_at ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "open";
+    const base = String(pr.base?.ref || "");
+    const head = pr.head?.repo?.full_name === REPO ? String(pr.head?.ref || "") : "";
+    // The pipeline: the branch's own tickets, whether or not the PR names them.
+    if (state === "merged" && base === "pre-release" && head) await this.mergeBranch(head, pr.merged_at, pr.number);
     const tickets = await this.ticketsFor(`${pr.title}\n${pr.head?.ref || ""}`);
     for (const t of await this.ticketsFor(String(pr.body || ""), true)) if (!tickets.includes(t)) tickets.push(t);
     if (!tickets.length) return;
-    const state = pr.merged_at ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "open";
-    const base = String(pr.base?.ref || "");
     const fields: Record<string, unknown> = {
       url: pr.html_url, title: String(pr.title || "").slice(0, 300), state, base, head: pr.head?.ref || null,
       author: pr.user?.login || null, merged_at: pr.merged_at || null,
@@ -282,7 +344,13 @@ class Run {
       await this.link(t, "pr", String(pr.number), fields, `PR #${pr.number}: ${String(pr.title || "").slice(0, 160)}`);
       if (state === "open") await this.move(t, "in_review", `PR #${pr.number} ${action === "ready_for_review" ? "ready for review" : "opened"}`);
       else if (state === "draft") await this.move(t, "in_progress", `Draft PR #${pr.number} opened`);
-      else if (state === "merged" && base === "pre-release") await this.move(t, "on_prerelease", `PR #${pr.number} merged into pre-release`);
+      else if (state === "merged" && base === "pre-release") {
+        // Named in the PR but on no branch: it shipped with this one. (Not on
+        // a replay of an old merge — the branch name may carry new work now.)
+        if (head && this.live) await this.onBranch(t, head, `Named in PR #${pr.number}`);
+        const rid = await this.nextRelease();
+        await this.move(t, "on_prerelease", `PR #${pr.number} merged into pre-release`, false, rid ? { release_id: rid } : {});
+      }
       else if (state === "merged" && base === "main") await this.move(t, "done", `PR #${pr.number} merged into main — live`);
       else if (state === "closed" && this.live && action === "closed" && t.status === "in_review") {
         const { data: open } = await this.sb.from("dev_ticket_links").select("ref")
@@ -568,7 +636,7 @@ async function branchAction(sb: Sb, who: { name: string; id: string }, action: s
 
   if (action === "start_work") {
     const id = Number(b.ticket_id);
-    const { data: t } = await sb.from("dev_tickets").select("id, title, type, status, assignee_id, github_number").eq("id", id).maybeSingle();
+    const { data: t } = await sb.from("dev_tickets").select("id, title, type, status, assignee_id, github_number, branch").eq("id", id).maybeSingle();
     if (!t) return { success: false, status: 404, error: `SN-${id} doesn't exist.` };
     if (t.status === "done" || t.status === "wont_do") return { success: false, error: "That ticket is closed — reopen it before starting work." };
     const prefix = BRANCH_PREFIXES.includes(String(b.prefix)) ? String(b.prefix) : prefixFor(t.type);
@@ -585,6 +653,7 @@ async function branchAction(sb: Sb, who: { name: string; id: string }, action: s
       return { success: false, status: 502, error: writeRefused(w.status, w.data) };
     }
     await run.link(t, "branch", name, { url: `https://github.com/${REPO}/tree/${name}`, title: name, state: "active", head_sha: sha }, `Branch ${name} (Start work)`);
+    await run.onBranch(t, name, `Started ${name}`);
     // Whoever starts the work owns it, if nobody did.
     if (!t.assignee_id) {
       const { data: row } = await sb.from("dev_tickets").update({ assignee_id: who.id, assignee_name: who.name, updated_at: new Date().toISOString() })
@@ -594,6 +663,43 @@ async function branchAction(sb: Sb, who: { name: string; id: string }, action: s
     await run.move(t, "in_progress", `Started work on ${name}`);
     await run.branchRow(name);
     return { success: true, branch: name, url: `https://github.com/${REPO}/tree/${name}` };
+  }
+
+  // The pipeline (0205): a branch for a piece of work, named for the work
+  // (feat|fix|chore/<what>), from pre-release, with its tickets on it. A ticket
+  // already on another branch moves — saying which tickets is the request.
+  if (action === "start_branch") {
+    const prefix = BRANCH_PREFIXES.includes(String(b.prefix)) ? String(b.prefix) : "feat";
+    const slug = slugify(b.slug);
+    if (!slug) return { success: false, error: "Give the branch a short name — what the work does." };
+    const name = `${prefix}/${slug}`;
+    const ids = [...new Set((Array.isArray(b.ticket_ids) ? b.ticket_ids : []).map(Number).filter(Number.isInteger))];
+    const { data: ts } = ids.length ? await sb.from("dev_tickets").select("id, status, github_number, branch, updated_at").in("id", ids) : { data: [] as any[] };
+    const missing = ids.filter((i) => !(ts || []).some((t: any) => Number(t.id) === i));
+    if (missing.length) return { success: false, status: 404, error: `${missing.map((i) => "SN-" + i).join(", ")} doesn't exist.` };
+    const shut = (ts || []).find((t: any) => !["triage", "backlog", "in_progress", "in_review"].includes(t.status));
+    if (shut) return { success: false, status: 409, error: `SN-${shut.id} has already moved past a branch (${shut.status.replace("_", " ")}).` };
+    const base = await gh(`/repos/${REPO}/git/ref/heads/pre-release`);
+    const sha = base?.object?.sha;
+    if (!sha) return { success: false, status: 502, error: "Couldn't read pre-release from GitHub." };
+    const w = await ghWrite("POST", `/repos/${REPO}/git/refs`, { ref: `refs/heads/${name}`, sha });
+    await logWrite(sb, who, "create_branch", w.ok, { branch: name, from: "pre-release", sha, tickets: ids, status: w.status, error: w.ok ? undefined : w.data?.message });
+    if (!w.ok) {
+      if (w.status === 422) return { success: false, status: 409, error: `${name} already exists on GitHub — pick another name, or put the tickets on it instead.` };
+      return { success: false, status: 502, error: writeRefused(w.status, w.data) };
+    }
+    const now = new Date().toISOString();
+    for (const t of ts || []) {
+      const status = ["triage", "backlog"].includes(t.status) ? "in_progress" : t.status;
+      const { data: row } = await sb.from("dev_tickets").update({ branch: name, branch_done: false, branch_done_at: null, status, closed_at: null, updated_at: now })
+        .eq("id", t.id).eq("updated_at", t.updated_at).select("id").maybeSingle();
+      if (!row) { run.summary.errors.push(`SN-${t.id} changed at the same moment — not moved`); continue; }
+      await sb.from("dev_ticket_events").insert({ ticket_id: t.id, kind: "branch", actor_name: who.name, actor_id: who.id, from_value: t.branch || null, to_value: name, note: `Started ${name}` });
+      if (status !== t.status) await sb.from("dev_ticket_events").insert({ ticket_id: t.id, kind: "status", actor_name: who.name, actor_id: who.id, from_value: t.status, to_value: status });
+      await run.link(t, "branch", name, { url: `https://github.com/${REPO}/tree/${name}`, title: name, state: "active", head_sha: sha }, `Branch ${name}`);
+    }
+    await run.branchRow(name);
+    return { success: true, branch: name, url: `https://github.com/${REPO}/tree/${name}`, skipped: run.summary.errors };
   }
 
   const name = String(b.name || "").trim();
@@ -700,7 +806,7 @@ Deno.serve(async (req: Request) => {
     const r = await runReconcile(sb, who, days);
     return json({ success: r.ok, ...r });
   }
-  if (!["start_work", "delete_branch", "link_branch", "mark_branch"].includes(action)) return json({ success: false, error: "Unknown action" }, 400);
+  if (!["start_work", "start_branch", "delete_branch", "link_branch", "mark_branch"].includes(action)) return json({ success: false, error: "Unknown action" }, 400);
   try {
     const r = await branchAction(sb, who, action, b);
     if (r.success) await broadcastChange();

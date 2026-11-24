@@ -219,8 +219,28 @@ you must clean up Chrome, filter on `--headless` in the command line
 - There is **no test suite** and no CI build. `.github/workflows/main.yml` is only
   a branch-policy check: `main` may only be merged into from `pre-release`.
 
+## Branches, merges and tickets — read `docs/DEVELOPMENT-WORKFLOW.md` first
+
+Both developers do most of their branching and merging through Claude, so the
+rules are written for you. The short version:
+
+- **`pre-release` is the next update.** Whatever is on it ships with the next
+  Go live. **Merging into `pre-release` is the decision to ship**, so never
+  merge without the user saying so. Ask, naming the tickets and the version.
+- **Branches come from `pre-release`** and are named `feat/` / `fix/` / `chore/`
+  plus what the work does. A branch can carry several tickets. Create branches
+  through the `speeksnet-dev` connector (`start_branch`) when it's available.
+- **Every change belongs to a ticket.** Put `SN-n` in commit messages and
+  `Closes SN-n` (one per line) in the PR body. Ticket titles become the patch
+  notes word for word.
+- **Never touch `main`.** No push, no PR, no merge, no tags, no GitHub
+  releases, no `APP_VERSION` bump. The suite's Go live button does all of
+  that.
+- **Migrations and edge functions go live when applied or deployed**, not when
+  merged. Ask first, and note it on the ticket.
+
 ## Git flow
 
-`main` ← `pre-release` ← `release/vX.Y.Z`. Version constant `APP_VERSION` at `speeks.js:42`
+`main` ← `pre-release` ← feature branches. Version constant `APP_VERSION` at `speeks.js:42`
 (`0. APP VERSION`) — bump it with the release. Patch notes are a DB-backed
 in-app feature (`patch-notes` function, editor around `speeks.js:31582-31909`).
