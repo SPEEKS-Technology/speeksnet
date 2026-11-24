@@ -86,6 +86,8 @@ const SHOP_BY_STORE: Record<string, string> = {
 // ⚠️ Keep in step with the FEATURE_CATALOG entry when the panel lands.
 const PQ_KEY = "ec-view-picture-quality";
 const PQ_DEFAULT_ROLES = ["district manager", "ceo"];
+const FIX_KEY = "ec-view-fix-queue";
+const FIX_DEFAULT_ROLES = ["district manager", "ceo", "manager", "owner (manager)", "owner manager", "assistant manager"];
 
 // The cheaper model by default, because the task is recognition against a
 // reference, not deep reasoning — and the calibration run is what decides
@@ -95,6 +97,10 @@ const PQ_DEFAULT_ROLES = ["district manager", "ceo"];
 // Sonnet wrote ~4x the output tokens. See scratchpad ab.mjs / ab-score.mjs.
 const DEFAULT_MODEL = "claude-opus-5-5";
 const DEFAULT_EFFORT = "medium";   // low wandered run to run on small visual calls (calibration 2026-09-25)
+// What a call's cache did to its bill, in input-token terms: a cache READ is
+// billed at a tenth of input, a cache WRITE at 1.25×. The live path used to
+// count both at full price, so its costs read high (2026-11-23).
+const cacheDisc = (u: any) => (u?.cache_read_input_tokens || 0) * 0.9 - (u?.cache_creation_input_tokens || 0) * 0.25;
 const PRICES: Record<string, [number, number]> = {   // $ per million in / out
   "claude-sonnet-5": [2, 10],
   "claude-opus-5": [5, 25],
@@ -110,7 +116,10 @@ const RECIPE = "pq-v18";  // v18 2026-10-11: PayMore's Good/Fair wording decides
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
-const PHOTO_PX = 800;
+// GUIDE-ONLY (Ethan, 2026-11-23): naming which guide shot a photo is does not
+// need 800px — 512 cuts each photo's tokens by about 60%. The full check keeps 800.
+const GUIDE_ONLY = Deno.env.get("PQ_FULL_CHECK") !== "1";
+const PHOTO_PX = GUIDE_ONLY ? 512 : 800;
 const MAX_IDS = 12;
 const CONCURRENCY = 4;
 
@@ -179,7 +188,18 @@ async function scopeFor(pin: string): Promise<Scope | null> {
   const slug = role.replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
   const forUser = list.find((r: any) => lc(r.subject_type) === "user" && lc(r.subject) === lc(name));
   const forRole = list.find((r: any) => lc(r.subject_type) === "role" && lc(r.subject) === slug);
-  const allowed = forUser ? !!forUser.enabled : forRole ? !!forRole.enabled : PQ_DEFAULT_ROLES.includes(role);
+  let allowed = forUser ? !!forUser.enabled : forRole ? !!forRole.enabled : PQ_DEFAULT_ROLES.includes(role);
+  // THE FIX QUEUE (listing-review, 0189) puts this tool's lines on a manager's
+  // card, and its Approve Order / Dismiss buttons call this function. So whoever
+  // holds the Fix Queue may take those actions here too. ⚠️ FIX_DEFAULT_ROLES
+  // must match FEATURE_CATALOG's def for ec-view-fix-queue and FIX_ROLES in
+  // listing-review.
+  if (!allowed) {
+    const fx = await rows(`feature_overrides?feature_key=eq.${FIX_KEY}&select=subject_type,subject,enabled`);
+    const fu = fx.find((r: any) => lc(r.subject_type) === "user" && lc(r.subject) === lc(name));
+    const fr = fx.find((r: any) => lc(r.subject_type) === "role" && lc(r.subject) === slug);
+    allowed = fu ? !!fu.enabled : fr ? !!fr.enabled : FIX_DEFAULT_ROLES.includes(role);
+  }
   if (!allowed) return null;
   const corp = ["district manager", "ceo", "mocd"].includes(role);
   const stores = corp ? STORES
@@ -529,6 +549,87 @@ title_notes: only where the photos show the title is wrong or incomplete — a m
 
 summary: one plain sentence a store manager would understand.`;
 
+// --- GUIDE-ONLY: the question asked now ---------------------------------------------
+//
+// ⚠️ THE CHECK IS GUIDE SHOTS, SQUARE PHOTOS AND GUIDE ORDER — NOTHING ELSE
+// (Ethan, 2026-11-18, made real 2026-11-23: "I thought we changed this tool to
+// look just for guide photos, square photos, and guide order? We can probably
+// cut everything else"). Until now the full forty-field review still ran and
+// the extras were stripped by hand. Now the model is asked only which guide
+// shot each photo is and which shots are missing; SQUARE is measured from the
+// photo's own size and ORDER is worked out from the shot names, both in
+// rules.ts, both free. Framing, reflections, cords, the stand, units, "says new
+// but looks used" and every other finding are no longer asked or shown.
+//
+// The wording below is LIFTED from REVIEW_SYSTEM as the file loads, so the two
+// can never say different things about what counts as a shot or a missing one.
+// PQ_FULL_CHECK=1 brings the full review back (kept for calibration only).
+const pickLines = (...prefixes: string[]) => REVIEW_SYSTEM.split("\n")
+  .filter(line => prefixes.some(pre => line.startsWith(pre))).join("\n\n");
+const GUIDE_SYSTEM = `You check the photos of one used-electronics listing against the store's Picture Guide sheet for that kind of item. You only say which guide shot each photo is and which guide shots are missing; the store's code works out the rest (photo order, square photos). Be exact.
+
+${pickLines("sheet_fits:")}
+
+For each photo (numbered from 1, in listing order), report:
+${pickLines("- shots:", "- whole_item:")}
+
+${pickLines("missing_shots:", "A shot of a feature")}
+
+${pickLines("needed_missing:")}
+
+${pickLines("all_sides_shown:")}
+
+${pickLines("flat_package:")}
+
+${pickLines("serial:")}
+
+${pickLines("lead_ok:")}
+
+${pickLines("suggested_order:")}`;
+const GuideReport = z.object({
+  sheet_fits: z.boolean(),
+  better_sheet: z.string().nullable(),
+  photos: z.array(z.object({ n: z.number().int(), shots: z.array(z.string()), whole_item: z.boolean() })),
+  missing_shots: z.array(z.string()),
+  needed_missing: z.array(z.string()),
+  all_sides_shown: z.boolean(),
+  flat_package: z.boolean(),
+  serial: z.enum(["shown", "hidden_behind_cover", "not_shown"]),
+  lead_ok: z.boolean(),
+  suggested_order: z.array(z.number().int()),
+});
+// The short answer as the full report the rules read: everything not asked is
+// "nothing wrong", so rules.ts runs unchanged and the guide findings come out.
+function fromGuide(g: z.infer<typeof GuideReport>): ReportT {
+  return {
+    ...g,
+    photos: g.photos.map(ph => ({ ...ph, repeats: null, framing: "matches" as const, framing_problems: [], issues: [], note: "" })),
+    flaw_views: [], units_claimed: null, all_units_shown: true, units_together: true,
+    screen_never_on: false, new_claim_wrong: false,
+    main_flaw: { stated: null, source: "none" as const, shown: "not_applicable" as const, photo: null },
+    setups: [], setup_difference: "", title_notes: [], summary: "",
+  } as ReportT;
+}
+const REVIEW_FORMAT = () => GUIDE_ONLY ? GuideReport : Report;
+const parseReport = (raw: unknown): ReportT => GUIDE_ONLY ? fromGuide(GuideReport.parse(raw)) : Report.parse(raw);
+// The findings guide-only keeps; everything else decide() can find is dropped.
+const GUIDE_CODES = new Set(["missing_shot", "retake", "order", "not_square", "no_photos", "no_sheet"]);
+function guideOnly(d: any, l: { photos: unknown[]; price: number }) {
+  if (!GUIDE_ONLY) return d;
+  const findings = d.findings.filter((f: { code: string }) => GUIDE_CODES.has(f.code));
+  const pic = pictureScore(findings, l.photos.length, l.price);
+  return { ...d, findings, deletion: null, pictureScore: pic.score, costs: pic.costs,
+           verdict: verdictOf(findings, pic.score, d.reorder, null) };
+}
+// ⚠️ THE SECOND LOOK, GUIDE-ONLY: only when a SHOT is called missing (Ethan,
+// 2026-11-23, took the recommendation). Order and square are worked out in
+// code and need no second opinion; what one look can get wrong is which shot a
+// photo is, and that is how a shot gets wrongly called missing.
+function secondLookWanted(lr: any, sheet: any, r: ReportT): boolean {
+  if (!GUIDE_ONLY) return needsSecondLook(lr, sheet, r);
+  return guideOnly(decide(lr, sheet, r), lr).findings.some((f: { code: string }) => f.code === "missing_shot" || f.code === "retake");
+}
+
 // --- the framing look ----------------------------------------------------------
 //
 // ⚠️ CENTRED, LEVEL AND BIG ENOUGH ARE ASKED IN A CALL OF THEIR OWN (Ethan,
@@ -677,16 +778,35 @@ function gameSheetFor(l: Listing, sheet: Sheet | null, sheets: Sheet[]): Sheet |
   return sheets.find(s => s.slug === (noCase ? "video-games-disk-cartridge-only" : "video-games")) || sheet;
 }
 
+const pickQuestion = (l: Listing, sheets: Sheet[]) =>
+  "SHEETS:\n" + sheets.map(s => `${s.slug} — ${s.name}${s.group ? ` (${s.group})` : ""}`).join("\n") +
+  `\n\nLISTING:\nTITLE: ${l.title}\nCOLLECTIONS: ${l.collections.join(", ")}\nCONDITION: ${l.condition}` +
+  `\nINCLUDED: ${l.included}\nNOT INCLUDED: ${l.notIncluded}`;
 async function pickSheet(client: Anthropic, model: string, l: Listing, sheets: Sheet[]) {
   const res = await client.messages.parse({
     model, max_tokens: 4000, system: PICK_SYSTEM,
-    messages: [{ role: "user", content:
-      "SHEETS:\n" + sheets.map(s => `${s.slug} — ${s.name}${s.group ? ` (${s.group})` : ""}`).join("\n") +
-      `\n\nLISTING:\nTITLE: ${l.title}\nCOLLECTIONS: ${l.collections.join(", ")}\nCONDITION: ${l.condition}` +
-      `\nINCLUDED: ${l.included}\nNOT INCLUDED: ${l.notIncluded}` }],
+    messages: [{ role: "user", content: pickQuestion(l, sheets) }],
     output_config: { effort: "low", format: zodOutputFormat(SheetPick) },
   } as any);
   return { pick: res.parsed_output as z.infer<typeof SheetPick> | null, usage: res.usage };
+}
+// ⚠️ THE PICK GOES IN THE BATCH TOO (Ethan, 2026-11-23, "the best combination of
+// price to quality"): the same question, the same model, at half price. It was
+// asked live, at full price, because the review needs the sheet's guide photos
+// before it can be sent — so now the pick is its own round: a "pick" batch, and
+// the poller sends each listing's review as a follow-up. Answers arrive one
+// round later (~5–15 min); nothing about the pick itself changed. Saves ~$0.006
+// a listing, ~$14 a month at 2,300 listings.
+function pickParams(l: Listing, sheets: Sheet[], model: string) {
+  const fmt: any = zodOutputFormat(SheetPick);
+  return { model, max_tokens: 4000, system: PICK_SYSTEM,
+           messages: [{ role: "user", content: pickQuestion(l, sheets) }],
+           output_config: { effort: "low", format: { type: fmt.type, schema: fmt.schema } } };
+}
+// A pick's answer → the sheet to grade on, or null (no confident match).
+function sheetFromPick(l: Listing, pick: z.infer<typeof SheetPick> | null, sheets: Sheet[]): Sheet | null {
+  const sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
+  return gameSheetFor(l, sheet, sheets);
 }
 
 // The sheet and its examples go first and are cached, so a store's fifty
@@ -718,14 +838,14 @@ async function review(client: Anthropic, model: string, effort: string, l: Listi
   const res = await client.messages.parse({
     // 16000, not 8000: at effort "medium" the thinking ate the budget and the
     // JSON came back cut off mid-string on two of five listings.
-    model, max_tokens: 16000, system: REVIEW_SYSTEM,
+    model, max_tokens: GUIDE_ONLY ? 6000 : 16000, system: GUIDE_ONLY ? GUIDE_SYSTEM : REVIEW_SYSTEM,
     messages: [{ role: "user", content: [...sheetBlocks, ...listingBlocks] }],
-    output_config: { effort, format: zodOutputFormat(Report) },
+    output_config: { effort, format: zodOutputFormat(REVIEW_FORMAT()) },
   } as any);
-  const parsed = res.parsed_output as ReportT | null;
+  const parsed = res.parsed_output as any;
   // Null means the answer did not validate — never read that as "all clear".
   if (!parsed) throw new Error("the review returned nothing that matched its schema");
-  return { report: parsed, usage: res.usage };
+  return { report: (GUIDE_ONLY ? fromGuide(parsed) : parsed) as ReportT, usage: res.usage };
 }
 
 // --- the verdict, in code ---------------------------------------------------
@@ -777,15 +897,15 @@ async function finalRow(l: Listing, sheet: Sheet, standard: Map<string, number>,
                         first: ReportT, second: ReportT | null, faults?: Map<number, string[]>) {
   const lr = forRules(l, standard);
   let report = first;
-  let d = decide(lr, sheet, report, faults);
-  const firstLook = { verdict: d.verdict, findings: d.findings.map(f => f.text) };
+  let d = guideOnly(decide(lr, sheet, report, faults), lr);
+  const firstLook = { verdict: d.verdict, findings: d.findings.map((f: any) => f.text) };
   let secondLook: typeof firstLook | null = null;
   if (second) {
-    const d2 = decide(lr, sheet, second, faults);
-    secondLook = { verdict: d2.verdict, findings: d2.findings.map(f => f.text) };
+    const d2 = guideOnly(decide(lr, sheet, second, faults), lr);
+    secondLook = { verdict: d2.verdict, findings: d2.findings.map((f: any) => f.text) };
     const d1 = d;
     report = agree(report, second);
-    d = decide(lr, sheet, report, faults);
+    d = guideOnly(decide(lr, sheet, report, faults), lr);
     // A reorder stands only if each look, on its own, asked for one: the
     // Synology's "Everything Included is not in the first three" came from
     // one look's labels and the next look's labels disagreed.
@@ -801,7 +921,7 @@ async function finalRow(l: Listing, sheet: Sheet, standard: Map<string, number>,
            title_notes: report.title_notes, sheet_slug: sheet.slug, sheet_name: sheet.name,
            stamp: await stampFor(l, sheet),
            report: { ...report, orderScore: d.orderScore, pictureScore: d.pictureScore, costs: d.costs,
-             sheetPick: pick, reSheeted, looks: second ? 2 : 1, firstLook, secondLook,
+             sheetPick: pick, reSheeted, looks: second ? 2 : 1, firstLook, secondLook, guideOnly: GUIDE_ONLY,
              notesAsSent: sentences(l.cosmetic).map(s => (isStandardSentence(s, standard.get(norm(s)) || 0) ? "[standard] " : "[unit] ") + s) } };
 }
 
@@ -833,7 +953,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
     // count its sentences was pure wait. boilerplateFor stays for reference.
     fetchListings(shop, token, ids), loadSheets(), Promise.resolve(new Map<string, number>())]);
   const price = PRICES[model] || PRICES[DEFAULT_MODEL];
-  let tin = 0, tout = 0;
+  let tin = 0, tout = 0, tdisc = 0;
   const out: any[] = [];
 
   const one = async (l: Listing) => {
@@ -856,6 +976,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
       let inTok = (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0);
       let outTok = usage?.output_tokens || 0;
       tin += inTok; tout += outTok;
+      let ldisc = cacheDisc(usage); tdisc += ldisc;
       // The text alone cannot always tell (the Pyle title says "Speaker"; the
       // photos show a pair). One re-grade on the sheet the photos point to.
       const better = !report.sheet_fits && report.better_sheet ? sheets.find(s => s.slug === report.better_sheet) : null;
@@ -864,6 +985,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
         ({ report, usage } = await review(client, model, effort, l, sheet, standard, others(sheet)));
         const extra = (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0);
         inTok += extra; tin += extra; tout += usage?.output_tokens || 0; outTok += usage?.output_tokens || 0;
+        { const dd = cacheDisc(usage); ldisc += dd; tdisc += dd; }
       }
       // The framing look — see framingLook. Same "seen twice" rule as the main
       // review: a second look only when the first finds something, and a photo
@@ -903,10 +1025,11 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
       // only problem is framing has already been looked at twice above.
       // Only when the flag is close to the line — see needsSecondLook (rules.ts).
       let second: ReportT | null = null;
-      if (needsSecondLook(lr, sheet, report)) {
+      if (secondLookWanted(lr, sheet, report)) {
         const again = await review(client, model, effort, l, sheet, standard, others(sheet));
         const extra = (again.usage?.input_tokens || 0) + (again.usage?.cache_read_input_tokens || 0) + (again.usage?.cache_creation_input_tokens || 0);
         inTok += extra; tin += extra; tout += again.usage?.output_tokens || 0; outTok += again.usage?.output_tokens || 0;
+        { const dd = cacheDisc(again.usage); ldisc += dd; tdisc += dd; }
         second = again.report;
       }
       const row = await finalRow(l, sheet, standard, pick, !!better, report, second, faults);
@@ -916,7 +1039,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
                  cache: {
                  read: usage?.cache_read_input_tokens || 0, wrote: usage?.cache_creation_input_tokens || 0 } },
                input_tokens: inTok, output_tokens: outTok,
-               cost_usd: Math.round((inTok / 1e6 * price[0] + outTok / 1e6 * price[1]) * 1e5) / 1e5 };
+               cost_usd: Math.round(((inTok - ldisc) / 1e6 * price[0] + outTok / 1e6 * price[1]) * 1e5) / 1e5 };
     } catch (e) {
       return { ...base, verdict: "error", stamp: "error", findings: [{ code: "error", text: String((e as Error).message || e).slice(0, 300) }] };
     }
@@ -932,13 +1055,13 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
     try {
       await sb("ai_usage_log", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
         tool: "picture-quality", store_code: store, model, effort, batches: out.length, items: out.length,
-        input_tokens: tin, output_tokens: tout, cost_usd: tin / 1e6 * price[0] + tout / 1e6 * price[1] }) });
+        input_tokens: tin, output_tokens: tout, cost_usd: (tin - tdisc) / 1e6 * price[0] + tout / 1e6 * price[1] }) });
     } catch (e) { console.error("ai_usage_log write failed:", String(e)); }
   }
 
   return {
     store, model, effort, saved: save, reviewed: out.length,
-    cost_usd: Math.round((tin / 1e6 * price[0] + tout / 1e6 * price[1]) * 1e4) / 1e4,
+    cost_usd: Math.round(((tin - tdisc) / 1e6 * price[0] + tout / 1e6 * price[1]) * 1e4) / 1e4,
     tokens: { input: tin, output: tout },
     verdicts: out.reduce((a: any, r) => (a[r.verdict] = (a[r.verdict] || 0) + 1, a), {}),
     results: out,
@@ -1018,9 +1141,9 @@ function reviewParams(l: Listing, sheet: Sheet, standard: Map<string, number>, o
     "OTHER SHEETS (only if this one is clearly wrong for the item): " + otherSheets +
     "\n\nTHE LISTING:\n" + listingText(l, standard) + "\n\nIts photos, in listing order:" }];
   l.photos.forEach((p, i) => listingBlocks.push({ type: "text", text: `Photo ${i + 1}` }, urlImage(p.url)));
-  const fmt: any = zodOutputFormat(Report);
+  const fmt: any = zodOutputFormat(REVIEW_FORMAT());
   return {
-    model, max_tokens: 16000, system: REVIEW_SYSTEM,
+    model, max_tokens: GUIDE_ONLY ? 6000 : 16000, system: GUIDE_ONLY ? GUIDE_SYSTEM : REVIEW_SYSTEM,
     messages: [{ role: "user", content: [...sheetBlocks, ...listingBlocks] }],
     // The format object carries a parse function the batch cannot send; the
     // schema is what matters, and the answer is parsed with Report below.
@@ -1032,7 +1155,7 @@ function reviewParams(l: Listing, sheet: Sheet, standard: Map<string, number>, o
 // — saved on the row's report so the panel can outline it as NEW (Ethan,
 // 2026-10-15: "have the entire box border for these highlighted so I know which
 // ones are new for me to review tomorrow"). Follow-ups carry it ({...p}).
-type Pending = { pid: string; kind: "first" | "resheet" | "second"; sheet: string; pick: unknown;
+type Pending = { pid: string; kind: "pick" | "first" | "resheet" | "second"; sheet: string; pick: unknown;
                  reSheeted: boolean; stamp: string; first?: ReportT; sample?: boolean };
 const customId = (p: Pending) => `${p.kind[0]}${p.pid.split("/").pop()}`;
 
@@ -1057,14 +1180,17 @@ async function inFlight(store: string) {
 // NEW listings only — created in the last `days` days — whose saved grade is
 // missing or stale. The one-time backfill of the existing catalogue is a
 // separate decision (Ethan, 2026-10-11: "do not include the one time backfill").
-async function batchSweep(store: string, limit: number, days: number, model: string, effort: string, regrade = false, random = false) {
+async function batchSweep(store: string, limit: number, days: number, model: string, effort: string, regrade = false, random = false, only: string[] = [], settleMin = 0) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
   const client = new Anthropic({ apiKey });
   const { shop, token } = await shopFor(store);
   const since = new Date(Date.now() - days * 86400000).toISOString();
+  // settleMin (the trickle): leave a listing alone until it is this many minutes
+  // old, so a lister still adding photos is not graded half-done and paid twice.
+  const settled = settleMin > 0 ? `&product_created_at=lte.${new Date(Date.now() - settleMin * 60000).toISOString()}` : "";
   const cat: any[] = await rows(`ebay_catalog?store_code=eq.${store}&quantity=gt.0&online_published=is.true`
-    + `&product_created_at=gte.${since}&select=product_id&order=product_created_at.desc&limit=1000`);
+    + `&product_created_at=gte.${since}${settled}&select=product_id&order=product_created_at.desc&limit=1000`);
   let ids = [...new Set(cat.map(c => String(c.product_id || "")).filter(Boolean)
     .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`))];
   // &regrade=1 — the store's OPEN rows, graded again whatever their stamp (a
@@ -1073,6 +1199,10 @@ async function batchSweep(store: string, limit: number, days: number, model: str
   if (random) ids = ids.map(id => [Math.random(), id] as const).sort((a, b) => a[0] - b[0]).map(x => x[1]);
   if (regrade) ids = [...new Set<string>((await allRows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open&select=product_id&order=product_id`))
     .map((r: any) => String(r.product_id) as string))];
+  // &ids= on the batch path — EXACTLY these listings, graded again whatever
+  // their stamp: the Fix Queue's overnight re-grade of cards a store marked
+  // fixed (listing-review ?regrade=1). The same half-price Batch as the nightly.
+  if (only.length) { ids = only; regrade = true; }
   const flying = await inFlight(store);
   const seen = new Map<string, string>((await allRows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp&order=product_id`))
     .map((r: any) => [String(r.product_id), String(r.stamp || "")]));
@@ -1098,8 +1228,8 @@ async function batchSweep(store: string, limit: number, days: number, model: str
       todo.push(l);
     }
   }
-  // …then the sheet picks, EIGHT AT A TIME. One after another, a first night's
-  // hundred listings at ~3s a pick would outrun the function's time limit.
+  // …then each one's sheet pick goes into the batch (see pickParams); the poller
+  // sends the review once the pick is back. No model is called here any more.
   let next = 0;
   const pickOne = async () => {
     while (next < todo.length) {
@@ -1111,30 +1241,15 @@ async function batchSweep(store: string, limit: number, days: number, model: str
                       stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null });
         continue;
       }
-      try {
-        const { pick, usage } = await pickSheet(client, model, l, sheets);
-        pickIn += usage?.input_tokens || 0; pickOut += usage?.output_tokens || 0;
-        let sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
-        sheet = gameSheetFor(l, sheet, sheets);
-        if (!sheet) {
-          direct.push({ ...base, verdict: "no_sheet", stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null,
-                        findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }] });
-          continue;
-        }
-        const others = sheets.filter(x => x.slug !== sheet!.slug).map(x => `${x.slug} (${x.name})`).join(", ");
-        reqs.push({ p: { pid: l.id, kind: "first", sheet: sheet.slug, pick, reSheeted: false, stamp: await stampFor(l, sheet), ...(random ? { sample: true } : {}) },
-                    params: reviewParams(l, sheet, standard, others, model, effort) });
-      } catch (e) {
-        // One failed pick costs that listing tonight, not the whole batch.
-        console.error("pick failed", l.id, String((e as Error).message || e));
-      }
+      reqs.push({ p: { pid: l.id, kind: "pick", sheet: "", pick: null, reSheeted: false, stamp: await stampFor(l, null), ...(random ? { sample: true } : {}) },
+                  params: pickParams(l, sheets, model) });
     }
   };
   await Promise.all(Array.from({ length: 8 }, pickOne));
   await saveRows(direct);
   const batchId = await submitBatch(client, store, model, effort, reqs);
   const price = PRICES[model] || PRICES[DEFAULT_MODEL];
-  await logUsage(store, model, effort, "sweep-pick", reqs.length + direct.length, pickIn, pickOut, pickIn / 1e6 * price[0] + pickOut / 1e6 * price[1]);
+  if (pickIn || pickOut) await logUsage(store, model, effort, "sweep-pick", reqs.length + direct.length, pickIn, pickOut, pickIn / 1e6 * price[0] + pickOut / 1e6 * price[1]);
   return { store, candidates: ids.length, submitted: reqs.length, savedDirect: direct.length, batch: batchId };
 }
 
@@ -1174,13 +1289,32 @@ async function pollBatches() {
       const u = msg.usage || {};
       tin += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0); tcache += u.cache_read_input_tokens || 0; tout += u.output_tokens || 0;
       const l = live.get(p.pid);
+      if (p.kind === "pick") {
+        if (!l || await stampFor(l, null) !== p.stamp) { changed++; continue; }
+        const ptext = (msg.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
+        let pick: z.infer<typeof SheetPick>;
+        try { pick = SheetPick.parse(JSON.parse(ptext)); } catch { failed++; continue; }
+        ok++;
+        const ps = sheetFromPick(l, pick, sheets);
+        if (!ps) {
+          save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model: b.model,
+                      verdict: "no_sheet", stamp: p.stamp, sheet_slug: null, sheet_name: null,
+                      findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }],
+                      ...(p.sample ? { report: { sample: new Date().toISOString() } } : {}) });
+          continue;
+        }
+        const oth = sheets.filter(x => x.slug !== ps.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+        follow.push({ p: { ...p, kind: "first", sheet: ps.slug, pick, stamp: await stampFor(l, ps) },
+                      params: reviewParams(l, ps, standard, oth, b.model, b.effort) });
+        continue;
+      }
       const sheet = sheets.find(s => s.slug === p.sheet);
       // Gone, or edited since it was sent: that grade is about photos that are
       // no longer there. The next sweep sends it again.
       if (!l || !sheet || await stampFor(l, sheet) !== p.stamp) { changed++; continue; }
       const text = (msg.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
       let parsed: ReportT;
-      try { parsed = Report.parse(JSON.parse(text)); } catch { failed++; continue; }
+      try { parsed = parseReport(JSON.parse(text)); } catch { failed++; continue; }
       ok++;
       const others = (s: Sheet) => sheets.filter(x => x.slug !== s.slug).map(x => `${x.slug} (${x.name})`).join(", ");
       if (p.kind === "first") {
@@ -1192,7 +1326,7 @@ async function pollBatches() {
           continue;
         }
       }
-      if (p.kind !== "second" && needsSecondLook(forRules(l, standard), sheet, parsed)) {
+      if (p.kind !== "second" && secondLookWanted(forRules(l, standard), sheet, parsed)) {
         follow.push({ p: { ...p, kind: "second", first: parsed }, params: reviewParams(l, sheet, standard, others(sheet), b.model, b.effort) });
         continue;
       }
@@ -2345,6 +2479,30 @@ Deno.serve(async (req: Request) => {
       const pids = [...new Set(Object.values((b.items || {}) as Record<string, Pending>).map(p => p.pid))];
       return json({ cancelled: cancelId, store: b.store_code, processing_status: info?.processing_status, request_counts: info?.request_counts, pids });
     }
+    // ?trickle=1 — THE ALL-DAY GUIDE CHECK (Ethan, 2026-11-23: "batch every
+    // 15–30 minutes across all stores"). Every store's listings made in the last
+    // day that are at least 30 minutes old and not yet graded (or changed since)
+    // go into that store's half-price Batch; ?poll=1 collects them through the
+    // day. One listing is graded once unless it changes — the stamp check in
+    // batchSweep. Up to 40 per store per run, so a bulk-listing day cannot run
+    // away with the bill.
+    // ⚠️ OFF until Ethan says go (every run is paid): the cron fires and gets
+    // {off:true}. Turn on:  npx supabase secrets set PQ_TRICKLE_ON=1 --project-ref ejzaqmyxxrkmxvzbjeuo
+    // Leave PQ_NIGHTLY_PAUSED=1 when it is on — the trickle replaces the nightly.
+    // A hand run: &force=1[&store=LEE].
+    if (url.searchParams.get("trickle") === "1") {
+      const forced = url.searchParams.get("force") === "1";
+      if (Deno.env.get("PQ_TRICKLE_ON") !== "1" && !forced) {
+        return json({ off: true, note: "All-day guide check is off (PQ_TRICKLE_ON is not 1) — nothing submitted." });
+      }
+      const one = (url.searchParams.get("store") || "").toUpperCase();
+      const which = STORES.includes(one) ? [one] : STORES;
+      return streamed(async () => ({
+        trickle: await Promise.all(which.map(st =>
+          batchSweep(st, 40, 1, DEFAULT_MODEL, DEFAULT_EFFORT, false, false, [], 30)
+            .catch((e: unknown) => ({ store: st, error: String((e as Error)?.message || e) })))),
+      }));
+    }
     const store = (url.searchParams.get("store") || "").toUpperCase();
     if (!STORES.includes(store)) return json({ error: "pass ?store=OVL|LEE|WSP|MPL|BAL" }, 400);
     const model = url.searchParams.get("model") || DEFAULT_MODEL;
@@ -2379,8 +2537,10 @@ Deno.serve(async (req: Request) => {
       }
       const days = forced ? Math.min(Math.max(Number(url.searchParams.get("days") || 3), 1), 30) : NIGHTLY.days;
       const limit = forced ? Math.min(sweep, 200) : NIGHTLY.limit;
-      return streamed(() => batchSweep(store, limit, days, model, effort, url.searchParams.get("regrade") === "1",
-        !forced || url.searchParams.get("random") === "1"));
+      const only = forced ? (url.searchParams.get("ids") || "").split(",").map(s => s.trim()).filter(Boolean)
+        .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`) : [];
+      return streamed(() => batchSweep(store, only.length ? Math.min(only.length, 200) : limit, days, model, effort,
+        url.searchParams.get("regrade") === "1", !forced || url.searchParams.get("random") === "1", only));
     }
     if (sweep > 0) {
       return streamed(async () => {

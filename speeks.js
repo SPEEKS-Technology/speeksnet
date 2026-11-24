@@ -138,6 +138,12 @@ const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXB
         { path: '/functions/v1/district-watch', actions: ['board', 'history'] },
         // 'lookup' only reads the row and Shopify; 'close' writes and stays blocked.
         { path: '/functions/v1/unrestocked-returns', actions: ['lookup'] },
+        // ⚠️ NOT reads — SANDBOXED writes (0203, Ethan 2026-11-23: test sends "from
+        // the test DM to the test manager … so I don't accidentally send one").
+        // listing-review saves a test account's full-review loop into
+        // listing_review_cards_test and never writes a flag; any other action
+        // from a test PIN is still refused there.
+        { path: '/functions/v1/listing-review', actions: ['full-review', 'mark-fixed', 'undo-fixed', 'notes-seen', 'confirm', 'send-back', 'mine-seen'] },
     ];
     function isReadPost(url, init) {
         let action = '';
@@ -33572,7 +33578,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkClaimsConfirmAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkClaimsConfirmAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); checkSpotNoteReminders(); checkMyFixReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -36508,7 +36514,40 @@ function renderAuditSectionPhotos(sIdx) {
 }
 
 // Full-screen image viewer (created lazily; sits above any modal).
-function openAuditPhotoLightbox(src) {
+// `gallery` (optional): every photo in the strip the click came from, so the
+// viewer can step through them with ‹ › or the arrow keys instead of closing
+// and reopening (Ethan, 2026-11-18, on the spot check). Without it the viewer
+// is exactly what it always was — one photo, no arrows — for every old caller.
+let _lbGallery = [], _lbIdx = 0;
+function _lbShow() {
+    const lb = document.getElementById('auditPhotoLightbox');
+    if (!lb) return;
+    lb.querySelector('img').src = _lbGallery[_lbIdx];
+    const many = _lbGallery.length > 1;
+    lb.querySelectorAll('.au-lb-nav').forEach(b => { b.style.display = many ? 'flex' : 'none'; });
+    // Greyed at the ends, not wrapping (Ethan, 2026-11-18): the first and last
+    // photo are where you stop, and a wrap hid which end you were at.
+    const prev = lb.querySelector('.au-lb-prev'), next = lb.querySelector('.au-lb-next');
+    if (prev) prev.disabled = _lbIdx <= 0;
+    if (next) next.disabled = _lbIdx >= _lbGallery.length - 1;
+    // Room for the arrows either side of the photo.
+    lb.querySelector('img').style.maxWidth = many ? 'calc(100vw - 200px)' : '92vw';
+    const n = lb.querySelector('.au-lb-count');
+    if (n) { n.style.display = many ? 'block' : 'none'; n.textContent = (_lbIdx + 1) + ' / ' + _lbGallery.length; }
+}
+function auditPhotoStep(d) {
+    if (_lbGallery.length < 2) return;
+    _lbIdx = Math.min(_lbGallery.length - 1, Math.max(0, _lbIdx + d));
+    _lbShow();
+}
+window.auditPhotoStep = auditPhotoStep;
+document.addEventListener('keydown', e => {
+    const lb = document.getElementById('auditPhotoLightbox');
+    if (!lb || lb.style.display === 'none' || _lbGallery.length < 2) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); auditPhotoStep(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); auditPhotoStep(1); }
+});
+function openAuditPhotoLightbox(src, gallery) {
     let lb = document.getElementById('auditPhotoLightbox');
     if (!lb) {
         lb = document.createElement('div');
@@ -36533,10 +36572,15 @@ function openAuditPhotoLightbox(src) {
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"' +
             ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
             '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>' +
-            '</svg></button>';
+            '</svg></button>' +
+            '<button type="button" class="au-lb-nav au-lb-prev" aria-label="Previous photo" onclick="event.stopPropagation(); auditPhotoStep(-1);"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>' +
+            '<button type="button" class="au-lb-nav au-lb-next" aria-label="Next photo" onclick="event.stopPropagation(); auditPhotoStep(1);"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></button>' +
+            '<span class="au-lb-count" onclick="event.stopPropagation();"></span>';
         document.body.appendChild(lb);
     }
-    lb.querySelector('img').src = src;
+    _lbGallery = Array.isArray(gallery) && gallery.length ? gallery : [src];
+    _lbIdx = Math.max(0, _lbGallery.indexOf(src));
+    _lbShow();
     lb.style.display = 'flex';
 }
 
@@ -44539,6 +44583,18 @@ const FEATURE_CATALOG = [
     // nightly (paused anyway) are untouched. Restore by uncommenting this line.
     // (2026-10-31: 31dfda8 had uncommented it by accident on Update 3 —
     // re-parked before the merge to pre-release.)
+    // THE FIX QUEUE AND THE SPOT CHECK (listing-review, 0189; Ethan 2026-11-18).
+    // ⚠️ Each def must match its edge function: FIX_ROLES in listing-review,
+    // FIX_DEFAULT_ROLES in picture-quality, FIX_ROLES in shopify-recat; SPOT_ROLES
+    // in listing-review.
+    { key: 'ec-view-fix-queue',        label: 'SPEEKS Connect · Fix Queue', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'ec-view-spot-check',       label: 'SPEEKS Connect · Spot Check & Flag Rates', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    // FULL LISTING REVIEW (0197): the DM only for now (Ethan, 2026-11-21).
+    // ⚠️ Must match FULL_ROLES in listing-review.
+    { key: 'ec-view-full-review',      label: 'SPEEKS Connect · Full Listing Review', tab: 'widgets', group: 'Operations', def: ['district-manager'] },
+    // MY FIXES (0204, Ethan 2026-11-23): a full-review send-back goes to the
+    // team member who listed it too. ⚠️ Must match MINE_ROLES in listing-review.
+    { key: 'ec-view-my-fixes',         label: 'SPEEKS Connect · My Fixes', tab: 'widgets', group: 'Operations', def: ['employee'] },
     // { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     // LENDS the corp hat to someone outside the corp roles. DM, CEO and MOCD have
     // corp powers by role whatever this says (_b2bIsCorp), which is why only the
@@ -44777,7 +44833,7 @@ const _SECTION_TABS = {
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'ec-upload', 'ec-view-categories', 'ec-view-photos',
-                        'ec-view-titles', 'ec-view-picture-quality'],
+                        'ec-view-titles', 'ec-view-picture-quality', 'ec-view-fix-queue', 'ec-view-spot-check', 'ec-view-full-review', 'ec-view-my-fixes'],
     // B2B left Operations for its own page and nav tab (2026-10). Same feature
     // key, so whoever could see the sub-tab sees the tab -- and someone with B2B
     // and nothing else in Operations no longer gets an Operations link that
@@ -45583,6 +45639,10 @@ const JUMP_KEYWORDS = {
     'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
     'ec-view-titles':            'speeks connect listing health titles title fix keywords seo rename wrong title bundle cib ebay',
     'ec-view-picture-quality':   'speeks connect listing health picture quality photos retake reorder crooked square guide',
+    'ec-view-fix-queue':         'speeks connect listing health fix queue fix listings mark fixed photos title category',
+    'ec-view-spot-check':        'speeks connect listing health spot check confirm fixes flag rate lister grade',
+    'ec-view-full-review':       'speeks connect full listing review manual review listing notes send back',
+    'ec-view-my-fixes':          'speeks connect my fixes my listings sent back fix lister',
     'tool-listing-health':       'listing health title notes denied dismissed rule wrong feedback ask claude copy prompt',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
@@ -45645,7 +45705,7 @@ const JUMP_PLACES = [
     { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'page-b2b',    label: 'B2B Deals',             sub: 'Main navigation', kind: 'page', page: 'b2b.html',        keys: 'b2b business deals pickup quote listing wholesale bulk corporate' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles', 'ec-view-picture-quality'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles', 'ec-view-picture-quality', 'ec-view-fix-queue', 'ec-view-spot-check', 'ec-view-full-review', 'ec-view-my-fixes'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -59642,6 +59702,21 @@ function _samReminderCfg() {
         // card was about shut inside a <details> three sections down. A card
         // that names a job has to open the job.
         action: "openListingHealthTool()" });
+    // THE DM'S OWN SPOT CHECK SEND-BACKS (Ethan, 2026-11-18: "make sure there is
+    // a notification on the feed for the Spot check notes too. have it look and
+    // operate the same way"). Same colour, same place in the order, and it opens
+    // the popup rather than a page. Clears when he clears the notes (0190).
+    cfg.push({ key: 'spotNoteAlert', id: 'spotNoteAlertBubble', text: 'spotNoteAlertBubbleText',
+        title: 'Spot Check Notes',
+        urgency: 0, due: 'Action', cls: 'sam-due-amber',
+        action: "openSpotNotes()" });
+    // MY FIXES (0204, Ethan 2026-11-23: "when they come in every morning … you
+    // have 2 listings to fix", the same as every other feed card). Clears when
+    // the last one is marked fixed, by them or the manager.
+    cfg.push({ key: 'myFixAlert', id: 'myFixAlertBubble', text: 'myFixAlertBubbleText',
+        title: 'My Fixes',
+        urgency: 0, due: 'Action', cls: 'sam-due-amber',
+        action: "window.location.href='operations.html#ebay'" });
     return cfg;
 }
 
@@ -59813,8 +59888,12 @@ function _samTestNotes() {
         { author: 'Colin Davis', store, text: 'Bench scale is acting up again, using the spare from the back room.', created_at: new Date(Date.now() - 26 * h).toISOString() },
     ];
 }
+// Cards a TEST account sees for real, beside the samples: the ones whose data
+// is the test sandbox's own (My Fixes reads listing_review_cards_test, 0203/0204),
+// so Test DM → Test Employee shows the morning card exactly as a lister gets it.
+const _SAM_TEST_REAL = ['myFixAlert'];
 function _samGatherReminders() {
-    if (window._speeksTestSession) return _samTestReminders();
+    const testing = !!window._speeksTestSession;
     const dismissed = _samGetDismissedRem();
     const out = [];
     // ONE clock reading for the whole pass. dateMs used to be Date.now() read
@@ -59825,6 +59904,7 @@ function _samGatherReminders() {
     // equal-urgency cards tie -- Array.sort is stable, so they keep config order.
     const nowBase = Date.now();
     _samReminderCfg().forEach(c => {
+        if (testing && !_SAM_TEST_REAL.includes(c.key)) return;
         const el = document.getElementById(c.id);
         if (!el) return;
         // The alert elements are position:fixed, and offsetParent is ALWAYS null
@@ -59904,7 +59984,7 @@ function _samGatherReminders() {
             ..._samDueFields(c, (t && t.dataset && t.dataset.dueOn) || '')
         });
     });
-    return out;
+    return testing ? _samTestReminders().concat(out) : out;
 }
 
 // --- INIT ---
@@ -65573,6 +65653,15 @@ function _ecFeedReconcile() {
 async function ecLoad() {
     const body = document.getElementById('ecBody');
     if (!body) return;
+    // ⚠️ MY FIXES ONLY (0204): a team member without the store's list sees the
+    // listings sent back to them and nothing else of SPEEKS Connect.
+    if (typeof _lrMineOnly === 'function' && _lrMineOnly()) {
+        _ecView = 'mine';
+        if (!_mfData) body.innerHTML = '<div class="status-message">Loading…</div>';
+        await _mfLoad();
+        ecRender();
+        return;
+    }
     // BEFORE the fetch, not after. _ecSyncChrome corrects the view too, but it
     // runs once the request is already in flight — so a person with Upload
     // revoked would fetch a listings payload they may not see, then switch. The
@@ -65598,7 +65687,15 @@ async function ecLoad() {
     // view they will be bounced off is worse than not trying.
     const _ecRoleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const _ecLandsAllStores = _ecRoleLc === 'district manager' || _ecRoleLc === 'ceo';
-    if (_ecView === 'listings' && _ecLandsAllStores) {
+    // ⚠️ …UNLESS THEY HOLD THE SPOT CHECK: then they land on TODAY, inside
+    // Listing Health (Ethan, 2026-11-18: "I don't see the new view on the DM
+    // page?"). Today's store tiles do the job All Stores did; All Stores stays
+    // one click away on its pill.
+    // Always, whatever view was open last: with the pills hidden there is no way back from another view.
+    if (typeof _lrDmPage === 'function' && _lrDmPage()) {
+        _ecView = 'cats';
+        _ecMarkView('cats');
+    } else if (_ecView === 'listings' && _ecLandsAllStores) {
         _ecView = 'health';
         _ecMarkView('health');
     } else if (_ecView === 'listings' && _ecGranted('ecViewCatsBtn')) {
@@ -65698,6 +65795,13 @@ async function ecLoad() {
                 _pqData = null;
                 _pqErr = e.message || String(e);
             }
+            // THE FIX QUEUE (listing-review): the same store rcLoad settled on.
+            // Spot Check is every store at once and Shopify-heavy, so it loads
+            // in the background and draws when it lands.
+            await _fqLoad();
+            if (!_ecScope && _fqData?.scope) _ecScope = { allStores: !!_fqData.scope.corp, stores: _fqData.scope.stores };
+            // Every load, so Refresh re-reads Today too.
+            if (_lrMaySpot()) _spLoad().then(() => { ecRender(); _ecSyncChrome(); });
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
             _ecScope = _ecData.scope;
@@ -65769,7 +65873,11 @@ function _ecSyncChrome() {
     // A toggle offering a single option is a button that does nothing, so it
     // goes with the second view rather than sitting there inviting a click.
     const toggle = document.getElementById('ecViewToggle');
-    if (toggle) toggle.style.display = n > 1 ? '' : 'none';
+    // ⚠️ THE DM'S LISTING REVIEW HAS NO VIEW TOGGLE AND NO STORE PICKER (Ethan,
+    // 2026-11-18: "get rid of these options except the refresh button"). Today
+    // is the page; a store tile is how he gets to a store, and it opens exactly
+    // what that store's manager sees.
+    if (toggle) toggle.style.display = n > 1 && !_lrDmPage() ? '' : 'none';
 
     // LAND ON SOMETHING THAT EXISTS. With Upload revoked and Categories granted,
     // the panel opened on Upload — a blank pane behind a hidden button, which
@@ -65790,7 +65898,7 @@ function _ecSyncChrome() {
         // picker beside it means nothing -- and never did. Both halves are set: the
         // host is what shows, and the enhancer may not have wrapped it yet on the
         // first paint. Same fix as _cbShowFilter.
-        const showSel = many && _ecView !== 'health';
+        const showSel = many && _ecView !== 'health' && !_lrDmPage();
         const selHost = sel.closest('.dd-host');
         sel.style.display = showSel ? '' : 'none';
         if (selHost) selHost.style.display = showSel ? '' : 'none';
@@ -65820,10 +65928,15 @@ function _ecSyncChrome() {
         // the total to submit include everything available not just one or two of
         // the 3 tools"). The same counts as the tab chips, from _lhTabCounts, so
         // the header and the chips can never disagree.
-        const total = _lhTabCounts().reduce((s, t) => s + t.n, 0);
+        // With the Fix Queue the card count IS the total — the tool tabs beside it
+        // (DM only) count the same listings again, and Spot Check is not store work.
+        const _tc = _lhTabCounts(), _fx = _tc.find(t => t.v === 'fix');
+        const total = _fx ? _fx.n : _tc.reduce((s, t) => s + (t.n || 0), 0);
         if (total) bits.push(`${total} To Submit`);
         else if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
-        sub.textContent = _ecView === 'cats'
+        sub.textContent = _lrDmPage() && _ecView === 'cats'
+            ? `Listing Review · ${_lrMode === 'store' ? (_ecStore || '') : 'District'}`
+            : _ecView === 'cats'
             ? `${_ecStore || ''} · ${bits.length ? bits.join(' · ') : 'All Clear'}`
             : _ecView === 'health' ? 'Every store, at a glance'
             : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
@@ -65926,6 +66039,7 @@ window.ecSetStore = ecSetStore;
 function ecRender() {
     const body = document.getElementById('ecBody');
     if (!body) return;
+    if (_ecView === 'mine') { _mfChrome(); body.innerHTML = _mfHtml(); return; }
     _ecSyncChrome();
     // EVERY view, before any of the early returns below. See _ecStandbySync.
     _ecStandbySync();
@@ -66537,17 +66651,43 @@ function _lhTabCounts() {
     const catN = _rcData?.counts
         ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
         : (_rcData?.queue || []).length;
-    return [
+    // ⚠️ MANAGERS AND ASMs GET THE FIX QUEUE INSTEAD OF THE THREE TOOL TABS
+    // (Ethan, 2026-11-18): one card per listing replaces Title Quality, Picture
+    // Quality and Categories for whoever holds the queue but not the Spot Check.
+    // The DM keeps the old tabs beside the new ones.
+    const fqN = (_fqData?.open || []).length + ((_fqData?.noPhotos || []).length);
+    const spN = _spData ? Object.values(_spData.stores || {}).reduce((n, s) => n + (s.items || []).filter(i => i.result === 'pending').length, 0)
+        + ((_cfData?.items || []).length) : null;
+    const fixTabs = [
+        { v: 'fix', label: 'Fix Queue', on: _lrMayFix() && !!(_fqData || _fqErr), html: () => _fqHtml(), n: fqN,
+          bad: !!_fqErr || (_fqData?.noPhotos || []).length > 0 },
+        { v: 'spot', label: 'Spot Check', on: _lrMaySpot(), html: () => _dmHtml(), n: spN, bad: false },
+        { v: 'flags', label: 'Flag Rates', on: _lrMaySpot(), html: () => _flHtml(), n: null, bad: false },
+    ];
+    if (fixTabs[0].on && !_lrMaySpot()) return [fixTabs[0]];
+    // Spot Check and Flag Rates have no count of their own on the header line.
+    return fixTabs.filter(t => t.on).concat([
         { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
           n: (_ltData?.queue || []).length, bad: !!_ltErr },
         { v: 'photos', label: _lhMay('pictures') ? 'Picture Quality' : 'No Photos', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
           // Passed rows ride in the same queue (for the Passed tab) but are not work.
           n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).filter(r => r.verdict !== 'pass').length, bad: noPhotos > 0 || !!_lhPhotoErr },
         { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
-    ].filter(t => t.on);
+    ].filter(t => t.on));
 }
 
+// ⚠️ NO TABS FOR WHOEVER HOLDS THE FIX QUEUE (Ethan, 2026-11-18 — see THE FIX
+// QUEUE banner): managers and ASMs get the list, the DM gets Today. The tabbed
+// page below is the DM's "Tool Views", and everybody's page without the queue.
 function _lhHtml() {
+    // ⚠️ NOT "(_fqData || _fqErr)": that fell through to the old tabbed page for
+    // the moment a store was loading, so opening OVL flashed the old SPEEKS
+    // Connect first (Ethan, 2026-11-20). The new screens draw their own Loading.
+    if (_lrMayFix()) return _lrMaySpot() ? _dmHtml() : _fqHtml(false);
+    return _lhToolsHtml();
+}
+
+function _lhToolsHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
     // ONE PHOTOS TAB, TWO SWITCHES. "Live With No Photos" is the first sub-tab
@@ -66555,7 +66695,8 @@ function _lhHtml() {
     // ec-view-photos, only the DM holds Picture Quality for now, so a manager
     // sees this tab with the one sub-tab they have.
     const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
-    const tabs = _lhTabCounts();
+    // The queue's own screens are not tool tabs.
+    const tabs = _lhTabCounts().filter(t => !['fix', 'spot', 'flags'].includes(t.v));
     // Reachable only by a race: the pill needs one of the switches, so losing
     // all of them between the click and the render means an override changed
     // underneath. Say that, rather than drawing an empty page that looks broken.
@@ -66571,7 +66712,7 @@ function _lhHtml() {
     const strip = tabs.length < 2 ? '' : `<div class="lh-tabs" role="tablist">${tabs.map(t => `
         <button type="button" role="tab" class="lh-tab${t.v === _lhTab ? ' lh-tab-on' : ''}"
                 aria-selected="${t.v === _lhTab}" onclick="lhSetTab('${t.v}')">${t.label}
-          <span class="lh-tab-n${t.bad ? ' lh-tab-bad' : t.n ? '' : ' lh-tab-zero'}">${t.n}</span>
+          ${t.n == null ? '' : `<span class="lh-tab-n${t.bad ? ' lh-tab-bad' : t.n ? '' : ' lh-tab-zero'}">${t.n}</span>`}
         </button>`).join('')}</div>`;
     return strip + tabs.find(t => t.v === _lhTab).html();
 }
@@ -66867,12 +67008,11 @@ function _pqHtml() {
     // Confirm Shots (2026-10-16) takes its place: the gold set's shot labels.
     // ABOVE the tabs, not under the queue: at the bottom it sat 4,000px down on
     // OVL Quick Fixes and Ethan could not find it (2026-10-16).
-    const train = _pqcMayUse() ? `<div class="pqt-entry pqt-entry-top">
-        <button type="button" class="pqt-btn" onclick="pqConfirmOpen()">Confirm Shots</button>
-        <button type="button" class="pqt-btn" onclick="pqConfirmOpen('', true)"
-          title="Listings you passed in your store reviews, weakest sheets first: confirming them makes them training material">More For Training</button>
-        <span>Say which shot each photo is — the answer key a cheaper model is tested and trained on.</span></div>` : '';
-    return head(train + tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
+    // RETIRED TOO (Ethan, 2026-11-18, restarting as a guide-only check: "you can
+    // get rid of the confirm shots and more for training stuff"). pqConfirmOpen
+    // and the gold set stay in the file and pq_shot_labels keeps his labels —
+    // only the entry buttons are gone, the way Train The Checker went.
+    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
 
@@ -67519,8 +67659,8 @@ function _pqcGridHtml(l) {
         .map(([slug, g]) => `<option value="${_ecEsc(slug)}"${slug === l.pickedSheet ? ' selected' : ''}>${_ecEsc(g.name)}</option>`).join('');
 
     const said = [
-        ...(l.youSaid || []).map(x => `<div class="pqc-you"><b>You said</b> <span>${_ecEsc(String(x.at || '').slice(5))}</span> ${_ecEsc(x.said)}</div>`),
-        ...(l.accepted ? [`<div class="pqc-you"><b>You approved</b> ${_ecEsc(l.accepted)}: these shot labels were accepted then.</div>`] : []),
+        ...(l.youSaid || []).map(x => `<div class="pqc-you"><b>You Said</b> <span>${_ecEsc(String(x.at || '').slice(5))}</span> ${_ecEsc(x.said)}</div>`),
+        ...(l.accepted ? [`<div class="pqc-you"><b>You Approved</b> ${_ecEsc(l.accepted)}: these shot labels were accepted then.</div>`] : []),
     ].join('');
 
     const cards = l.photos.map((p, i) => {
@@ -68184,6 +68324,1533 @@ async function pqRecheck(pid) {
 window.pqRecheck = pqRecheck;
 
 
+// ============ THE FIX QUEUE, THE SPOT CHECK, FLAG RATES ======================
+// Ethan, 2026-11-18 (design: docs/listing-review-flow-design.md). He stops
+// reviewing every listing himself: the checks flag, the STORE fixes from one
+// list, and he spot-checks the highest-price PASSES per store each day.
+//
+// ⚠️ NO TABS. Ethan, the same evening, on the first build: "there's too many
+// tabs. It's just like all the existing things just all put together on one
+// sub page." He picked two drawings from the Listing Review Redesign canvas:
+//   MANAGERS / ASMs   "List And Detail" — every listing on the left, highest
+//                     price first, with Photos / Title / Category tags; the
+//                     picked one on the right as plain fix boxes, and one
+//                     button: I Fixed It — Recheck Tonight.
+//   THE DM            "Today" — one tile per store, two jobs (Spot Check,
+//                     Confirm Fixes), the most-flagged listers, how the
+//                     checks are doing, and the rule notes for Claude. Spot
+//                     Check and Confirm Fixes open ONE LISTING AT A TIME; a
+//                     store tile opens that store's list.
+// The old tool tabs (Title Quality / Picture Quality / Categories) stay
+// reachable for the DM from a small "Tool Views" link at the foot of Today —
+// Confirm Shots and the photo training live there.
+//
+// ⚠️ THE BUTTONS GO TO THE TOOL THAT OWNS THE LINE, not to listing-review.
+// Fix The Order is picture-quality's reorder, Use This Title is listing-titles'
+// approve, Move It is shopify-recat's apply, and every "Not Wrong…" is that
+// tool's own dismissal — so the reasons land in Listing Health Notes exactly as
+// they did from the old tabs. listing-review owns only the card: I Fixed It,
+// the spot check, Confirm / Send Back, and the flag ledger.
+//
+// ⚠️ "I FIXED IT" IS NOT A RECHECK. Like Resolve on Claims & Disputes, it parks
+// the listing as "Waiting On Tonight's Recheck" and the overnight Batch grades
+// it again (Ethan: overnight only, never the ~23c immediate call). A pass goes
+// to Ethan's Confirm Fixes; a fail comes back to the top of the store's list.
+const LR_URL = `${_BASE}/listing-review`;
+
+let _fqData = null;      // listing-review ?view=queue for _ecStore
+let _fqErr = null;
+const _fqBusy = new Set();
+let _fqSel = null;       // the listing open on the right
+let _fqFilter = 'all';   // 'all' | 'photos' | 'title' | 'category'
+let _fqWaitView = false; // the right side lists the ones waiting on tonight
+let _tdData = null;      // ?view=today
+let _tdNotes = null;     // rule notes waiting on Claude
+let _spData = null;      // ?view=spot — every store's daily ten
+let _cfData = null;      // ?view=confirm — re-graded and passed
+let _flData = null;      // ?view=flags
+let _spErr = null;
+let _spLoading = false;
+let _lrMode = 'today';   // DM: 'today' | 'spot' | 'confirm' | 'listers' | 'store' | 'tools'
+const _spSkipped = new Set();  // passed over this session, so the next one shows
+const _cfSkipped = new Set();
+let _flWeek = null;
+// Send Back, held here and not read off the DOM: ecRender replaces the subtree
+// on every state change, and a half-ticked form would be lost.
+const _spForm = new Map();
+
+async function _lrFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${LR_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+async function _lrPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(LR_URL, { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin }, body: JSON.stringify(payload) });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false, status: r.status, body };
+}
+
+const _lrMayFix = () => typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible('ec-view-fix-queue');
+const _lrMaySpot = () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-spot-check');
+// The DM's page: whoever holds both the queue and the spot check.
+const _lrDmPage = () => _lrMayFix() && _lrMaySpot();
+
+async function _fqLoad() {
+    if (!_lrMayFix()) { _fqData = null; _fqErr = null; return; }
+    try { _fqData = await _lrFetch(`?view=queue&store=${encodeURIComponent(_ecStore || '')}`); _fqErr = null; }
+    catch (e) { _fqData = null; _fqErr = e.message || String(e); }
+}
+async function _fqReload() { await _fqLoad(); _fqRender(); }
+// A redraw rebuilds the list, which put its scroll back at the top — so a click
+// halfway down lost your place (Ethan, 2026-11-20: "keep the left side at the
+// same scroll area"). Kept across the redraw here; the page itself still goes
+// to the top (_lrScrollTop) so the listing you opened is in view.
+function _fqRender() {
+    const before = document.querySelector('.lr-rows');
+    const keep = before ? before.scrollTop : 0;
+    ecRender();
+    const after = document.querySelector('.lr-rows');
+    if (after && keep) after.scrollTop = keep;
+}
+
+// Today, Spot Check, Confirm Fixes and the lister table are every store at
+// once, so they are not tied to the store picker; loaded in the background.
+// ⚠️ ONE LOAD AT A TIME, AND A SECOND CALLER WAITS FOR IT. The first version
+// returned straight away while a load was running; a renderer that found no
+// data asked again and redrew on the answer, which asked again — a loop with
+// no await in it that froze the tab (Ethan, 2026-11-18: "I'm struggling to get
+// to this"). Now a caller gets the running load's promise, and the renderers
+// go through _spEnsure, which never starts a second load or retries a failed one.
+let _spPromise = null;
+function _spLoad() {
+    if (!_lrMaySpot()) return Promise.resolve();
+    if (_spPromise) return _spPromise;
+    _spPromise = _spLoadNow().finally(() => { _spPromise = null; });
+    return _spPromise;
+}
+function _spEnsure() {
+    if (_spPromise || _spErr || !_lrMaySpot()) return;
+    _spLoad().then(ecRender);
+}
+async function _spLoadNow() {
+    _spLoading = true;
+    try {
+        const [td, sp, cf, fl] = await Promise.all([_lrFetch('?view=today'), _lrFetch('?view=spot'),
+            _lrFetch('?view=confirm'), _lrFetch('?view=flags&weeks=4')]);
+        _tdData = td; _spData = sp; _cfData = cf; _flData = fl; _spErr = null;
+    } catch (e) { _spErr = e.message || String(e); }
+    _spLoading = false;
+    // The notes count is the notes tool's own two reads, best-effort: a failure
+    // here leaves the line off rather than taking Today down.
+    try {
+        const t = await _ltFetch('?view=feedback&days=30').catch(() => null);
+        const p = typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-picture-quality')
+            ? await _pqFetch('?view=feedback&days=30').catch(() => null) : null;
+        _tdNotes = (t?.total || 0) + (p?.total || 0);
+    } catch (_) { _tdNotes = null; }
+}
+async function _spReload() { await _spLoad(); ecRender(); }
+
+const _fqMoney = n => (n == null || n === '' || isNaN(Number(n))) ? ''
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const _fqNumeric = pid => String(pid || '').split('/').pop();
+const _fqDay = iso => { const d = new Date(iso || ''); return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+// The ticks, in words — what the store reads under "Sent Back By Ethan".
+function _fqTicksSaid(t) {
+    if (!t) return [];
+    const out = [];
+    if ((t.missing || []).length) out.push(`<b>Missing</b> — ${_ecEsc(t.missing.join(', '))}`);
+    if (t.order) out.push('<b>Wrong Order</b> — put the photos in the guide’s order');
+    if (t.title) out.push('<b>Title Wrong</b>');
+    if ((t.fields || []).length) out.push(`<b>Field Wrong</b> — ${_ecEsc(t.fields.join(', '))}`);
+    if (t.category) out.push('<b>Wrong Category</b>');
+    // A full review's parts: the part, then his note on it.
+    for (const pt of (t.parts || [])) out.push(`<b>${_ecEsc(pt.part)}</b> — “${_ecEsc(pt.note || '')}”`);
+    // Per photo, with the photo as Ethan saw it (the number can move once the
+    // store reorders; the picture cannot).
+    for (const ph of (t.photos || [])) {
+        out.push(`<span class="lr-said-ph">${ph.thumb ? `<img src="${_ecEsc(ph.thumb)}" alt="">` : ''}<span><b>Photo ${_ecEsc(String(ph.n))}</b> — ${_ecEsc((ph.tags || []).join(', ') || 'See note')}${ph.note ? `: “${_ecEsc(ph.note)}”` : ''}</span></span>`);
+    }
+    const loose = (t.eye || []).filter(x => !(t.photos || []).some(ph => (ph.tags || []).includes(x)));
+    if (loose.length) out.push(`<b>Check By Eye</b> — ${_ecEsc(loose.join(', '))}`);
+    return out;
+}
+const _FQ_RETURNED = { spot: 'Sent Back By Ethan', confirm: 'Fix Not Accepted', regrade: 'Recheck Still Found A Problem',
+    full: 'Sent Back By Ethan — Full Listing Review',
+    // Notes Only (0203): something to read, nothing to fix, never a flag.
+    notes: 'Notes From Ethan — Nothing To Fix' };
+// Test accounts (0203) send and fix on their own cards, which only test accounts see.
+const _LR_TEST_NOTE = '<div class="lr-test">Test Account — what you send here goes only to test accounts. No real store sees it, and nobody is flagged.</div>';
+
+// The listing's photos as a strip, and the shots the check says are missing
+// as red dashed tiles on the end — so "what is missing" is a picture too.
+function _lrPhotos(photos, missing, big) {
+    const ph = (photos || []).map((p, i) => `<a class="lr-ph${big ? ' lr-ph-big' : ''}" href="${_ecEsc(p.url || p.thumb)}" target="_blank" rel="noopener"
+        onclick="if (!event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); openAuditPhotoLightbox(this.href, [...this.parentElement.querySelectorAll('a.lr-ph')].map(a => a.href)); }">
+        <img loading="lazy" src="${_ecEsc(p.thumb)}" alt="Photo ${i + 1}"><span class="lr-n">${i + 1}</span></a>`).join('');
+    const miss = (missing || []).map(m => `<span class="lr-ph lr-ph-miss${big ? ' lr-ph-big' : ''}" title="Missing: ${_ecEsc(m)}">${_ecEsc(m)}</span>`).join('');
+    return `<div class="lr-strip">${ph}${miss}</div>`;
+}
+// The guide's own shot names. A finding that carries `shot`/`shots` is read
+// as-is; only an old one without them falls back to its sentence, cut at the
+// dash so "Lock/Home Screen — the first photo the guide asks for" is the shot.
+function _fqMissingList(l) {
+    if (!l || l.kind !== 'photos') return [];
+    const out = [];
+    const add = x => { const t = String(x || '').split(/\s+—\s+/)[0].trim(); if (t && !out.some(o => o.toLowerCase() === t.toLowerCase())) out.push(t); };
+    for (const f of l.findings || []) {
+        if (f.shot) add(f.shot);
+        for (const x of f.shots || []) add(x);
+        if (!f.shot && !(f.shots || []).length) {
+            const m = /^Missing: (.+?)\.?$/.exec(f.text || '');
+            if (m) add(m[1]);
+            const r = /required shots are missing: (.+?)\.?$/.exec(f.text || '');
+            if (r) r[1].split(/,\s*/).forEach(add);
+        }
+    }
+    return out;
+}
+
+// ---- the store's list ---------------------------------------------------------
+
+// No Photos rides in the same list as its own kind of card: it is a listing
+// with something to fix, and a second panel for it was one more thing to read.
+function _fqItems() {
+    const d = _fqData || {};
+    const open = d.open || [];
+    const byId = new Map(open.map(c => [c.productId, c]));
+    // No-photo listings first (a shopper can see those now); one that also has
+    // a title or category problem is the SAME card, with its No Photos line on top.
+    const np = (d.noPhotos || []).map(r => {
+        const c = byId.get(r.productId);
+        return c ? { ...c, lines: [{ kind: 'nophotos' }, ...c.lines.filter(l => l.kind !== 'nophotos')] }
+                 : { productId: r.productId, sku: r.sku, title: r.title, price: r.price,
+                     handle: r.handle, photos: [], lines: [{ kind: 'nophotos' }], card: null, lister: null };
+    });
+    const pinned = new Set(np.map(c => c.productId));
+    return np.concat(open.filter(c => !pinned.has(c.productId)));
+}
+const _fqKinds = c => new Set(c.lines.map(l => l.kind === 'label' ? 'title' : l.kind));
+const _fqPass = (c, f) => f === 'all' || _fqKinds(c).has(f) || (f === 'photos' && _fqKinds(c).has('nophotos'));
+const _FQ_TAG = { photos: ['Photos', 'lr-c-ph'], nophotos: ['No Photos', 'lr-c-bad'], title: ['Title', 'lr-c-ti'],
+    label: ['Label', 'lr-c-ti'], category: ['Category', 'lr-c-ca'], ethan: ['Sent Back', 'lr-c-bad'] };
+
+function _fqRowHtml(c) {
+    const sel = c.productId === _fqSel;
+    const back = c.card && c.card.status === 'open' && c.card.returnedKind;
+    const tags = [...new Set(c.lines.map(l => l.kind))].filter(k => !(back && k === 'ethan'))
+        .map(k => `<span class="lr-chip ${_FQ_TAG[k][1]}">${_FQ_TAG[k][0]}</span>`).join('');
+    const thumb = c.photos && c.photos[0] ? `<img src="${_ecEsc(c.photos[0].thumb)}" alt="" loading="lazy">` : '';
+    return `<button type="button" class="lr-row${sel ? ' lr-row-on' : ''}${back ? ' lr-row-back' : ''}" onclick="fqPick('${_ecEsc(c.productId)}')">
+      <span class="lr-thumb">${thumb}</span>
+      <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(c.title || 'Untitled Listing')}</span>
+        <span class="lr-chips">${back ? (back === 'notes' ? '<span class="lr-chip lr-c-notes">Notes</span>' : '<span class="lr-chip lr-c-bad">Sent Back</span>') : ''}${tags}</span></span>
+      <span class="lr-row-p">${_fqMoney(c.price)}</span>
+    </button>`;
+}
+
+// One fix box per line. Each says what to do in plain words first, then the
+// button that does it (or where to do it), then "Not Wrong…".
+function _fqFixHtml(c, l, store) {
+    const id = _ecEsc(c.productId), st = _ecEsc(store), busy = _fqBusy.has(c.productId) ? 'disabled' : '';
+    const notWrong = fn => `<button type="button" class="lr-btn lr-btn-ghost" ${busy} onclick="${fn}('${st}','${id}'${fn === 'fqDismissPhotos' ? `, ${l.verdict === 'reorder'}` : ''})">Not Wrong…</button>`;
+    const box = (tag, head, body, acts) => `<div class="lr-fix"><div class="lr-fix-h">${tag}<b>${head}</b></div>${body}${acts ? `<div class="lr-acts">${acts}</div>` : ''}</div>`;
+    if (l.kind === 'nophotos') {
+        return box('<span class="lr-chip lr-c-bad">No Photos</span>', 'Live On The Online Store With No Photos',
+            '<p class="lr-say">Shoppers can see this now. Add the photos in Shopify — it comes off this list by itself.</p>', '');
+    }
+    if (l.kind === 'photos') {
+        const miss = _fqMissingList(l);
+        const order = l.reorder && Array.isArray(l.reorder.suggested) && l.verdict !== 'pass';
+        const del = l.deletion && Array.isArray(l.deletion.photos) && l.deletion.photos.length ? l.deletion : null;
+        const head = l.verdict === 'retake' ? 'Retake The Photos Following The Guide'
+            : miss.length ? `Take ${miss.length} Missing Photo${miss.length === 1 ? '' : 's'}`
+            : l.verdict === 'reorder' ? 'The Photos Are In The Wrong Order' : 'Fix The Photos';
+        const said = miss.length ? `<p class="lr-say">${_ecEsc(miss.join(', '))}. Add ${miss.length === 1 ? 'it' : 'them'} in Shopify, in the guide’s order${l.sheet ? ` (${_ecEsc(l.sheet)})` : ''}.</p>` : '';
+        const rest = _pqFindingLines((l.findings || []).filter(f => !['missing_shot', 'retake', 'order'].includes(f.code)));
+        return box('<span class="lr-chip lr-c-ph">Photos</span>', head,
+            said + (rest ? `<ul class="lt-why lr-why">${rest}</ul>` : '')
+            // THE NEW ORDER, SHOWN (Ethan, 2026-11-20: "should show what the
+            // corrected order will be like it used to") — the photos as they
+            // will stand, each moved one marked with where it came from.
+            + (order ? `<p class="lr-say">${l.verdict === 'reorder' || !miss.length ? 'Here is the order the guide wants' : 'They are also out of the guide’s order — here is the order it wants'}. We can fix it for you; nothing is added or removed.</p>
+                <div class="pq-cmp pq-ro"><div class="pq-ro-row"><span class="lt-lab">New Order</span>${_pqStrip((c.photos || []).map(p => ({ thumb: p.thumb, full: p.url })), l.reorder.suggested, new Set(), true)}</div></div>` : ''),
+            (order ? `<button type="button" class="lr-btn lr-btn-go" ${busy} onclick="fqApproveOrder('${st}','${id}')">Fix The Order For Me</button>` : '')
+            + (del ? `<button type="button" class="lr-btn lr-btn-go" ${busy} onclick="fqApproveDeletion('${st}','${id}')">Delete The Repeat</button>` : '')
+            + notWrong('fqDismissPhotos'));
+    }
+    if (l.kind === 'title' || l.kind === 'label') {
+        const changes = l.suggested && l.suggested !== l.current;
+        const first = (l.findings || [])[0];
+        const head = l.severity === 3 ? 'The Title Is Wrong' : l.severity === 2 ? 'The Title Is Hard To Find' : 'The Title Could Be Better';
+        return box(`<span class="lr-chip lr-c-ti">${l.kind === 'label' ? 'Label' : 'Title'}</span>`, head,
+            `<ul class="lt-why lr-why">${_ltWhy(l.findings)}</ul>`
+            + (changes ? `<div class="lr-diff"><span class="lr-old">${_ecEsc(l.current || '')}</span><span class="lr-new">${_ecEsc(l.suggested)}</span></div>`
+                       : '<p class="lr-say">No ready title for this one — fix it in Shopify and it comes off this list by itself.</p>'),
+            (changes ? `<button type="button" class="lr-btn lr-btn-go" ${busy} onclick="fqApproveTitle('${st}','${id}')">Use This Title</button>` : '')
+            + notWrong('fqDismissTitle'));
+    }
+    if (l.kind === 'category') {
+        // ⚠️ IN "OTHER", NOBODY HAS PICKED ITS CATEGORY. Ethan, 2026-11-19, on
+        // "No rule knows its shelf": that made no sense to anybody but us. Now
+        // it says what a shopper sees, and the fix is right here: pick the
+        // category, Move It — shopify-recat's apply with the chosen shelf.
+        const unmatched = l.mode === 'unmatched' || !l.to;
+        if (unmatched) {
+            const picked = _fqShelf.get(c.productId) || '';
+            const opts = (_fqData?.shelves || []).map(sh => `<option value="${_ecEsc(sh.handle)}"${sh.handle === picked ? ' selected' : ''}>${_ecEsc(sh.title)}</option>`).join('');
+            return box('<span class="lr-chip lr-c-ca">Category</span>', 'No Category Picked',
+                '<p class="lr-say">It is in <b>Other</b> on the online store, so shoppers browsing a category will not find it. Pick where it belongs.</p>'
+                + `<select class="lr-shelf" data-dd-down aria-label="Category for this listing" onchange="fqPickShelf('${id}', this.value)">
+                    <option value="">Choose A Category…</option>${opts}</select>`,
+                `<button type="button" class="lr-btn lr-btn-go" ${busy || (picked ? '' : 'disabled')} onclick="fqApproveCategory('${st}','${id}','unmatched')">Move It</button>`
+                + notWrong('fqDismissCategory'));
+        }
+        return box('<span class="lr-chip lr-c-ca">Category</span>',
+            `Belongs On ${_ecEsc(l.toTitle || l.to)}`,
+            `<p class="lr-say">It is on <b>${_ecEsc((l.from || []).join(', ') || 'Other')}</b> now.</p>`,
+            `<button type="button" class="lr-btn lr-btn-go" ${busy} onclick="fqApproveCategory('${st}','${id}','${_ecEsc(l.mode)}')">Move It</button>`
+            + notWrong('fqDismissCategory'));
+    }
+    if (l.kind === 'ethan') {
+        const said = _fqTicksSaid(l.ticks);
+        if (c.card && c.card.returnedKind === 'notes') return said.length ? box('<span class="lr-chip lr-c-notes">Notes</span>', 'For You To Read',
+            `<ul class="lt-why lr-why">${said.map(s => `<li>${s}</li>`).join('')}</ul>`, '') : '';
+        return said.length ? box('<span class="lr-chip lr-c-bad">Sent Back</span>', 'What To Fix',
+            `<ul class="lt-why lr-why">${said.map(s => `<li>${s}</li>`).join('')}</ul>`, '') : '';
+    }
+    return '';
+}
+
+// ⚠️ ONE "FROM ETHAN" CARD (Ethan, 2026-11-23: a flag with a note, and a note
+// alone, "looks slightly different … I'd like a way to make it more apparent
+// that that's what they should be looking at"). Whatever he sent — a send-back,
+// Notes Only, a fix not accepted — reads the same way, right under the title,
+// before the photos: what kind it is, then his overall note and every part and
+// photo he marked as one list. Red when there is something to fix, blue when it
+// is only to read. The old banner stays only for a card with nothing of his on
+// it (a failed overnight recheck).
+function _fqFromEthanHtml(back, line, mine) {
+    const notes = back.returnedKind === 'notes';
+    const said = _fqTicksSaid(line && line.ticks);
+    if (back.returnedNote) said.unshift(`<b>Overall</b> — “${_ecEsc(back.returnedNote)}”`);
+    const when = back.returnedAt ? _fqDay(back.returnedAt) : '';
+    return `<div class="lr-from ${notes ? 'lr-from-notes' : 'lr-from-fix'}">
+      <div class="lr-from-h">
+        <span class="lr-chip ${notes ? 'lr-c-notes' : 'lr-c-bad'}">${notes ? 'Notes' : 'Sent Back'}</span>
+        <b>${_ecEsc(notes ? 'Notes From Ethan' : _FQ_RETURNED[back.returnedKind] || 'Sent Back By Ethan')}</b>
+        ${when ? `<span class="lr-from-when">${_ecEsc(when)}</span>` : ''}
+      </div>
+      <span class="lr-from-k">${notes ? 'For You To Read — Nothing To Fix' : 'What To Fix'}</span>
+      ${mine ? '' : _mfWhoHtml(back)}
+      <ul class="lt-why lr-why lr-from-list">${said.map(x => `<li>${x}</li>`).join('') || '<li>See the listing.</li>'}</ul>
+    </div>`;
+}
+function _fqDetailHtml(c, store, allClear) {
+    // Nothing in the list at all: the panel says all clear rather than asking
+    // for a pick there is none to make (Ethan, 2026-11-20).
+    if (!c) return allClear ? '<div class="lr-detail-in"><div class="lh-clear">All Clear — Nothing To Fix Here.</div></div>'
+        : '<div class="lr-empty">Pick A Listing On The Left.</div>';
+    const shop = _ecEsc(_fqData?.shop || '');
+    const back = c.card && c.card.status === 'open' && c.card.returnedKind ? c.card : null;
+    const photoLine = c.lines.find(l => l.kind === 'photos');
+    // I Fixed It is for what only a person can fix: photos to retake, or
+    // Ethan's own lines. A title or category line still open has its own
+    // buttons, and marking the listing fixed over one would only bring it back.
+    const notes = back && back.returnedKind === 'notes';
+    const handFix = c.lines.some(l => (l.kind === 'photos' && l.verdict !== 'reorder') || (l.kind === 'ethan' && !notes));
+    const oneClickOpen = c.lines.some(l => ['title', 'label', 'category'].includes(l.kind));
+    const busy = _fqBusy.has(c.productId) ? 'disabled' : '';
+    const ethanLine = c.lines.find(l => l.kind === 'ethan');
+    const fromCard = back && (ethanLine || back.returnedNote) && back.returnedKind !== 'regrade';
+    // A card with only his lines on it skips the overnight recheck (eye-only)
+    // and goes straight to his Confirm Fixes — so the button says that.
+    const toEthan = !photoLine;
+    return `<div class="lr-detail-in">
+      ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
+      ${back && !fromCard ? `<div class="lr-back"><b>⟲ ${_FQ_RETURNED[back.returnedKind] || 'Sent Back'}</b>
+          ${back.returnedNote ? `<span>“${_ecEsc(back.returnedNote)}”</span>` : ''}</div>` : ''}
+      <div class="lr-head">
+        <div class="lr-head-t"><h3>${_ecEsc(c.title || 'Untitled Listing')}</h3>
+          <span class="lr-meta">${_ecEsc(c.sku || '—')}${c.lister ? ` · ${_ecEsc(c.lister)}` : ''}${c.createdAt ? ` · Listed ${_fqDay(c.createdAt)}` : ''}</span>
+</div>
+        <div class="lr-head-r"><span class="lr-price">${_fqMoney(c.price)}</span>${_lrLinks(_fqData?.shop, c.productId, c.handle, _fqData?.store)}</div>
+      </div>
+      ${fromCard ? _fqFromEthanHtml(back, ethanLine) : ''}
+      ${(c.photos || []).length || photoLine ? _lrPhotos(c.photos, _fqMissingList(photoLine)) : ''}
+      ${photoLine && (photoLine.guide || []).length ? `<span class="lr-k">The Guide — Shoot It Like This</span>${_lrGuideStrip(photoLine.guide, null,
+          new Set(_fqMissingList(photoLine).map(x => x.toLowerCase())))}` : ''}
+      <div class="lr-fixes">${c.lines.filter(l => !(fromCard && l.kind === 'ethan')).map(l => _fqFixHtml(c, l, store)).join('')}</div>
+      ${handFix ? `<div class="lr-done">
+          <button type="button" class="lr-btn lr-btn-main" ${busy || (oneClickOpen ? 'disabled' : '')} onclick="fqMarkFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">${toEthan ? 'I Fixed It — Send To Ethan' : 'I Fixed It — Recheck Tonight'}</button>
+          <span class="lr-hint">${oneClickOpen ? 'Use or dismiss the title and category fixes first.' : toEthan ? 'Ethan checks it himself. Opens the next listing.' : 'Opens the next listing.'}</span></div>` : ''}
+      ${notes ? `<div class="lr-done">
+          <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="fqNotesSeen('${_ecEsc(store)}','${_ecEsc(c.productId)}')">Got It</button>
+          <span class="lr-hint">Nothing to fix — this is not a flag on anyone. Got It takes the notes off your list.</span></div>` : ''}
+    </div>`;
+}
+
+function _fqWaitingHtml(store) {
+    const list = (_fqData?.waiting || []);
+    const said = s => s === 'fixed' ? 'Rechecked Tonight' : s === 'regrading' ? 'Being Rechecked' : 'Passed — Ethan Confirms';
+    return `<div class="lr-detail-in">
+      <div class="lr-head"><div class="lr-head-t"><h3>Waiting On Tonight’s Recheck</h3>
+        <span class="lr-meta">Marked fixed. The overnight recheck grades them again; anything still wrong comes back to the top of the list.</span></div></div>
+      ${_fqData?.regradeOn ? '' : '<div class="lr-off">The overnight recheck is not switched on yet — these wait here until it is.</div>'}
+      ${list.length ? list.map(c => `<div class="lr-wait">
+          <span class="lr-thumb">${c.photos && c.photos[0] ? `<img src="${_ecEsc(c.photos[0].thumb)}" alt="" loading="lazy">` : ''}</span>
+          <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(c.title || '')}</span>
+            <span class="lr-meta">${said(c.card.status)}${c.card.fixedBy ? ` · ${_ecEsc(c.card.fixedBy)}` : ''}</span></span>
+          ${c.card.status === 'fixed' ? `<button type="button" class="lr-btn lr-btn-ghost" ${_fqBusy.has(c.productId) ? 'disabled' : ''}
+              onclick="fqUndoFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">Undo</button>` : ''}
+        </div>`).join('') : '<div class="lr-empty">Nothing Waiting.</div>'}
+    </div>`;
+}
+
+function _fqHtml(withBack) {
+    const store = _ecEsc(_ecStore || '');
+    // Ethan, 2026-11-19: "I'm just expecting to see what the store sees, and I
+    // should be able to fix things in here as well." Back, then the store's page.
+    const backLink = withBack ? `<div class="lr-screen-h">${_LR_BACK}</div>` : '';
+    if (_fqErr) return `${backLink}<div class="lh-unknown"><span class="lh-unknown-t">Could Not Check ${store}</span>
+        <span class="lh-why">${_ecEsc(_fqErr)}</span><span class="lh-why">This is not an all clear — nobody has looked yet.</span></div>`;
+    if (!_fqData) return `${backLink}<div class="status-message">Loading…</div>`;
+    const d = _fqData, all = _fqItems();
+    const n = f => all.filter(c => _fqPass(c, f)).length;
+    const shown = all.filter(c => _fqPass(c, _fqFilter));
+    if (!_fqWaitView && !shown.some(c => c.productId === _fqSel)) _fqSel = shown[0] ? shown[0].productId : null;
+    const sel = shown.find(c => c.productId === _fqSel) || null;
+    const filters = [['all', 'All'], ['photos', 'Photos'], ['title', 'Title'], ['category', 'Category']].map(([v, lab]) =>
+        `<button type="button" class="lr-filter${_fqFilter === v ? ' lr-filter-on' : ''}" onclick="fqFilter('${v}')">${lab} ${n(v)}</button>`).join('');
+    const waitN = (d.waiting || []).length;
+    return `${backLink}<div class="lr-split">
+      <section class="lr-list">
+        <div class="lr-list-h">
+          <div class="lr-list-title"><h2>To Fix</h2><span class="lr-count">${all.length}</span><span class="lr-sort">${_ecEsc(d.store)} · Sorted By Price, Highest First</span></div>
+          <div class="lr-filters">${filters}</div>
+        </div>
+        <div class="lr-rows">${shown.length ? shown.map(_fqRowHtml).join('')
+            : `<div class="lh-clear">Nothing To Fix At ${_ecEsc(d.store)}${_fqFilter === 'all' ? '' : ' In This Group'}.</div>`}</div>
+        <div class="lr-list-f">
+          <button type="button" class="lr-btn lr-btn-ghost lr-btn-sm lr-wait-btn${_fqWaitView ? ' lr-wait-on' : ''}" onclick="fqWaiting()">Tonight’s Recheck</button>
+          <span>${d.fixedToday || 0} Fixed Today</span>
+        </div>
+      </section>
+      <section class="lr-detail">${_fqWaitView ? _fqWaitingHtml(d.store) : _fqDetailHtml(sel, d.store, !shown.length)}</section>
+    </div>`;
+}
+
+// ⚠️ BACK TO THE TOP OF THE LIST, CLEAR OF WHATEVER IS PINNED (Ethan,
+// 2026-11-20: scrolled down, a click on a listing or on Tonight's Recheck
+// left the new panel half under the sticky SPEEKS Connect header). A fixed
+// offset guessed wrong; this scrolls there, then asks the page what is
+// actually sitting over the panel's top edge and moves down past it.
+function _lrScrollTop() {
+    const el = document.querySelector('.lr-split');
+    if (!el) return;
+    // 'instant', not 'auto': the site sets scroll-behavior: smooth, under which
+    // 'auto' animates, and the check below would measure a page still moving.
+    window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - 12), behavior: 'instant' });
+    for (let i = 0; i < 4; i++) {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + 24, Math.max(1, r.top + 2));
+        if (!hit || el.contains(hit)) break;
+        const cover = hit.getBoundingClientRect();
+        const by = cover.bottom - r.top + 12;
+        if (by <= 0 || window.scrollY <= 0) break;
+        window.scrollBy({ top: -by, behavior: 'instant' });
+    }
+    const rows = el.querySelector('.lr-rows');
+    if (rows && _fqWaitView) rows.scrollTop = 0;
+}
+function fqPick(pid) { _fqSel = pid; _fqWaitView = false; _fqRender(); _lrScrollTop(); }
+function fqFilter(f) { _fqFilter = f; _fqWaitView = false; ecRender(); }
+// Back up to the top of the list and the panel beside it, so the waiting
+// listings are in view rather than wherever the scroll was (Ethan, 2026-11-20).
+function fqWaiting() { _fqWaitView = !_fqWaitView; ecRender(); _lrScrollTop(); }
+
+// --- the store's actions -------------------------------------------------------
+const _fqCard = pid => [..._fqItems(), ...(_fqData?.waiting || [])].find(c => c.productId === pid);
+const _fqLine = (pid, kinds) => (_fqCard(pid)?.lines || []).find(l => kinds.includes(l.kind));
+// After a listing is done, the NEXT one opens — the one below it in the list.
+function _fqNextAfter(pid) {
+    const shown = _fqItems().filter(c => _fqPass(c, _fqFilter));
+    const i = shown.findIndex(c => c.productId === pid);
+    return i >= 0 && shown[i + 1] ? shown[i + 1].productId : null;
+}
+async function _fqRun(pid, work, advance) {
+    const next = advance ? _fqNextAfter(pid) : null;
+    _fqBusy.add(pid); _fqRender();
+    let res;
+    try { res = await work(); } catch (e) { res = { ok: false, body: { detail: String(e && e.message || e) } }; }
+    _fqBusy.delete(pid);
+    if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.');
+    else if (advance && next) _fqSel = next;
+    await _fqReload();
+    // I Fixed It opens the next listing — at the top, like a click on it would.
+    if (advance && res.ok) _lrScrollTop();
+    if (_lrMaySpot()) _spLoad().then(ecRender);
+    return res.ok;
+}
+
+async function fqMarkFixed(store, pid) {
+    const c = _fqCard(pid);
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'Listing Fixes', title: 'Mark This Listing Fixed?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
+               <p class="lt-ask-say">${(c?.lines || []).some(l => l.kind === 'photos')
+                 ? 'It is rechecked overnight. If the recheck passes, Ethan confirms it; if it still finds a problem, it comes back to the top of this list with what is wrong.'
+                 : 'It goes to Ethan, who checks it himself. If something is still wrong, it comes back to the top of this list with his note.'}</p>`,
+        go: 'I Fixed It', cancel: 'Not Yet' });
+    if (!said) return;
+    await _fqRun(pid, () => _lrPost({ action: 'mark-fixed', store, productId: pid }), true);
+}
+async function fqNotesSeen(store, pid) {
+    await _fqRun(pid, () => _lrPost({ action: 'notes-seen', store, productId: pid }), true);
+}
+async function fqUndoFixed(store, pid) {
+    await _fqRun(pid, () => _lrPost({ action: 'undo-fixed', store, productId: pid }));
+}
+async function fqApproveOrder(store, pid) {
+    const c = _fqCard(pid), l = _fqLine(pid, ['photos']);
+    if (!l || !l.reorder) return;
+    const photos = (c.photos || []).map(p => ({ thumb: p.thumb, full: p.url }));
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'Listing Fixes', title: 'Save This Photo Order?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>${_pqStrip(photos, l.reorder.suggested, new Set())}
+               <p class="lt-ask-say">The photos are rearranged in Shopify — nothing is added or removed.</p>`,
+        go: 'Save The Order', cancel: 'Cancel' });
+    if (!said) return;
+    await _fqRun(pid, () => _pqPost({ action: 'reorder', store, productId: pid }));
+}
+async function fqApproveDeletion(store, pid) {
+    const c = _fqCard(pid), l = _fqLine(pid, ['photos']);
+    const del = l && l.deletion;
+    if (!del) return;
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'Listing Fixes', title: 'Delete The Repeated Photo?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
+               <p class="lt-ask-say">Removes photo${del.photos.length > 1 ? 's' : ''} ${_ecEsc(del.photos.join(', '))} from Shopify.</p>`,
+        go: 'Delete It', cancel: 'Cancel' });
+    if (!said) return;
+    await _fqRun(pid, () => _pqPost({ action: 'delete-photos', store, productId: pid }));
+}
+async function fqDismissPhotos(store, pid, isReorder) {
+    const c = _fqCard(pid);
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'Listing Fixes',
+        title: isReorder ? 'Keep The Current Photo Order?' : 'Are These Photos Fine As They Are?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>`,
+        note: { label: isReorder ? 'Why Keep This Order?' : 'Why Are They Fine?', required: true,
+                placeholder: 'e.g. the serial is under the battery cover',
+                hint: 'Required — it goes to Ethan’s rule notes, and it is how a wrong rule gets fixed.' },
+        go: 'Not Wrong', cancel: 'Cancel' });
+    if (!said || !said.note) return;
+    await _fqRun(pid, () => _pqPost({ action: isReorder ? 'deny-reorder' : 'dismiss', store, productId: pid, reason: said.note }));
+}
+async function fqApproveTitle(store, pid) {
+    const l = _fqLine(pid, ['title', 'label']);
+    if (!l || !l.suggested) return;
+    const asking = _ltAsk({ kind: 'ok', eyebrow: 'Use This Title', title: 'Change This Listing’s Title?',
+        body: _ltAskPair(l.current, l.suggested) + '<div class="lt-ask-wait"><span class="lt-ask-spin"></span>Checking what else on this listing says the same thing…</div>',
+        busy: true, go: 'Checking…', cancel: 'Cancel' });
+    const pre = await _ltPost({ action: 'preview', store, productId: pid, title: l.suggested });
+    _ltAskFill(_ltAskPair(l.current, l.suggested) + (pre.ok && pre.body ? _ltAskEchoes(pre.body) : '')
+        + '<p class="lt-ask-say">This updates the Shopify product, so it changes <b>the online store</b> and <b>eBay</b>.</p>', 'Change The Title');
+    if (!(await asking)) return;
+    await _fqRun(pid, () => _ltPost({ action: 'approve', store, productId: pid, title: l.suggested }));
+}
+async function fqDismissTitle(store, pid) {
+    const l = _fqLine(pid, ['title', 'label']);
+    if (!l) return;
+    const kind = _ltDenyKind(l);
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'Not Wrong', title: 'Is This Title Fine As It Is?',
+        body: `<div class="lt-ask-pair"><div class="lt-now"><span class="lt-lab">Title</span><span class="lt-cur">${_ecEsc(l.current || '')}</span></div></div>`,
+        note: { label: 'Why Is It Fine?', required: true, placeholder: 'e.g. the model name really does repeat on the box',
+                hint: 'Required — it goes to Ethan’s rule notes, and it is how a wrong rule gets fixed.' },
+        go: 'Not Wrong', cancel: 'Cancel' });
+    if (!said || !said.note) return;
+    await _fqRun(pid, () => _ltPost({ action: 'deny', store, productId: pid, reason: said.note, as: kind.as }));
+}
+// The category picked for a listing sitting in Other, by product — held here,
+// not read off the <select>, because every redraw rebuilds it.
+const _fqShelf = new Map();
+function fqPickShelf(pid, handle) { if (handle) _fqShelf.set(pid, handle); else _fqShelf.delete(pid); ecRender(); }
+window.fqPickShelf = fqPickShelf;
+async function fqApproveCategory(store, pid, mode) {
+    const l = _fqLine(pid, ['category']);
+    if (!l) return;
+    const chosen = mode === 'unmatched' || !l.to ? _fqShelf.get(pid) : null;
+    if (!l.to && !chosen) return;
+    const toTitle = chosen ? ((_fqData?.shelves || []).find(sh => sh.handle === chosen) || {}).title || chosen : (l.toTitle || l.to);
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'Listing Fixes', title: 'Move It To The Right Category?',
+        body: `<p class="lt-ask-say">${_ecEsc(l.title || '')}</p>
+               <p class="lt-ask-say">Leaves <b>${_ecEsc((l.from || []).join(', ') || 'Other')}</b>, joins <b>${_ecEsc(toTitle)}</b> on the online store.</p>`,
+        go: 'Move It', cancel: 'Cancel' });
+    if (!said) return;
+    const ok = await _fqRun(pid, () => _rcPost({ action: 'apply', store, mode, items: [chosen ? { productId: pid, to: chosen } : { productId: pid }] }));
+    if (ok) _fqShelf.delete(pid);
+}
+async function fqDismissCategory(store, pid) {
+    const l = _fqLine(pid, ['category']);
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'Not Wrong', title: 'Is The Category Right As It Is?',
+        body: `<p class="lt-ask-say">${_ecEsc(l?.title || '')}</p>`,
+        note: { label: 'Why Is It Right?', required: true, placeholder: 'e.g. a dashcam belongs on Car Electronics',
+                hint: 'Required — kept with the skip, so the rule that raised it can be fixed.' },
+        go: 'Not Wrong', cancel: 'Cancel' });
+    if (!said || !said.note) return;
+    await _fqRun(pid, () => _rcPost({ action: 'skip', store, productId: pid, reason: said.note }));
+}
+Object.assign(window, { fqPick, fqFilter, fqWaiting, fqMarkFixed, fqNotesSeen, fqUndoFixed, fqApproveOrder, fqApproveDeletion,
+    fqDismissPhotos, fqApproveTitle, fqDismissTitle, fqApproveCategory, fqDismissCategory });
+
+// ---- the DM: Today ----------------------------------------------------------------
+const _LR_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+// Shopify / Store, as the pills every other listing tool on the site uses.
+function _lrLinks(shop, pid, handle, store) {
+    if (!shop) return '';
+    // View Listing: the whole listing inside SPEEKSNET, for every role on every
+    // tool (Ethan, 2026-11-21: "every single role … should be able to have the
+    // option to view the full listing … just to help get context").
+    const view = store ? `<button type="button" class="ec-pill lr-pill-view" onclick="openListingView('${_ecEsc(store)}','${_ecEsc(pid)}')">View Listing</button>` : '';
+    return `<div class="ec-pills rc-links lr-links">${view}
+      <a class="ec-pill ec-pill-shopify" href="https://${_ecEsc(shop)}/admin/products/${_ecEsc(_fqNumeric(pid))}" target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>
+      ${handle ? `<a class="ec-pill ec-pill-store" href="https://${_ecEsc(shop)}/products/${_ecEsc(handle)}" target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}</div>`;
+}
+const _LR_BACK = `<button type="button" class="lr-back-btn" onclick="lrSetMode('today')"><span aria-hidden="true">‹</span> Back</button>`;
+
+function _tdHtml() {
+    if (_spErr) return `<div class="lh-unknown"><span class="lh-unknown-t">Could Not Load Today</span><span class="lh-why">${_ecEsc(_spErr)}</span></div>`;
+    if (!_tdData) { _spEnsure(); return '<div class="status-message">Loading…</div>'; }
+    const t = _tdData;
+    const day = new Date(t.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const tiles = _LR_STORES.filter(s => t.stores.some(x => x.store === s)).map(s => {
+        const x = t.stores.find(y => y.store === s);
+        return `<button type="button" class="lr-tile" onclick="lrOpenStore('${s}')">
+          <span class="lr-tile-h"><b>${s}</b>${x.sentBack ? `<span class="lr-bad">${x.sentBack} Sent Back</span>` : ''}</span>
+          <span class="lr-big">${x.toFix}</span><span class="lr-k">To Fix</span>
+          <span class="lr-line"><span>Fixed Today</span><b>${x.fixedToday}</b></span>
+          <span class="lr-line"><span>Spot Check Left</span><b>${x.spotLeft}</b></span>
+        </button>`;
+    }).join('');
+    const bar = r => r >= 50 ? 'lr-bar-bad' : r >= 25 ? 'lr-bar-warn' : 'lr-bar-good';
+    const listers = (t.listers || []).map(r => `<div class="lr-lr"><span><b>${_ecEsc(r.lister)}</b> · ${_ecEsc(r.store)}</span>
+        <span class="lr-dim">${r.checkerFlags + r.ethanSendBacks}/${r.listed}</span>
+        <span class="lr-bar"><span class="${bar(r.rate)}" style="width:${Math.min(100, r.rate || 0)}%"></span></span><b>${r.rate}%</b></div>`).join('');
+    const ck = t.checkers || {};
+    // One grid: the check on the left, its number right-aligned under one
+    // header (Ethan, 2026-11-18: "Capitalize … and align the sentences").
+    const ckRow = (k, lab) => ck[k] ? `<span class="lr-ck-name">${lab}</span><b class="lr-ck-n">${ck[k].misses} of ${ck[k].checked}</b>` : '';
+    const spotN = t.spotNotes || 0;
+    return `<div class="lr-today">
+      <div class="lr-today-h"><h2>Today</h2><span>${_ecEsc(day)}</span></div>
+      <div class="lr-jobs${_lrMayFull() ? ' lr-jobs-3' : ''}">
+        <div class="lr-job ${t.spotLeft ? 'lr-job-go' : 'lr-job-off'}"><div class="lr-job-t"><span class="lr-k${t.spotLeft ? ' lr-k-go' : ''}">Your Spot Check</span>
+            <b>${t.spotLeft ? `${t.spotLeft} Listing${t.spotLeft === 1 ? '' : 's'} To Look At` : 'All Caught Up'}</b>
+            <span>${t.spotLeft ? 'Each store’s highest-price listings the photo check passed. Agree, or send it back.' : 'Tomorrow’s Picks Arrive at 6am.'}</span></div>
+          <button type="button" class="lr-btn lr-btn-go lr-btn-lg" ${t.spotLeft ? '' : 'disabled'} onclick="lrSetMode('spot')">Start</button></div>
+        <div class="lr-job${t.confirm ? '' : ' lr-job-off'}"><div class="lr-job-t"><span class="lr-k">Confirm Fixes</span>
+            <b>${t.confirm} Fix${t.confirm === 1 ? '' : 'es'} Passed The Recheck</b>
+            <span>Stores fixed these and the overnight recheck passed them. Confirm, or send back.</span></div>
+          <button type="button" class="lr-btn lr-btn-ghost lr-btn-lg" ${t.confirm ? '' : 'disabled'} onclick="lrSetMode('confirm')">Review</button></div>
+        ${_lrMayFull() ? `<div class="lr-job lr-job-full"><div class="lr-job-t"><span class="lr-k lr-k-full">Full Listing Review</span>
+            <b>Review Any Listing</b>
+            <span>The whole listing as a shopper sees it. Send notes back on any part of it.</span></div>
+          <button type="button" class="lr-btn lr-btn-full-go lr-btn-lg" onclick="frOpen()">Open</button></div>` : ''}
+      </div>
+      <div class="lr-tiles">${tiles}</div>
+      <div class="lr-bottom">
+        <div class="lr-panel"><div class="lr-panel-h"><span class="lr-k">Listers This Week — Most Flagged</span>
+            <button type="button" class="lr-btn lr-btn-ghost lr-btn-sm" onclick="lrSetMode('listers')">All Listers ›</button></div>
+          ${listers || '<div class="lr-empty">No listers with five or more listings this week yet.</div>'}
+</div>
+        <!-- The "passes you disagreed with" count came off (Ethan, 2026-11-20: "0 of 6
+             is weird … keep just the two"). The panel is the two note lists. -->
+        <div class="lr-panel"><span class="lr-k">Notes For Claude</span>
+          <!-- ⚠️ TWO NOTE LISTS, KEPT APART (Ethan, 2026-11-18): his own spot
+               check send-backs say a rule MISSED something; the stores' "Not
+               Wrong" reasons say a rule is TOO STRICT. Opposite asks, so two
+               popups that work the same way. -->
+          <div class="lr-notes${spotN ? '' : ' lr-notes-off'}"><div><b>${spotN} Spot Check Note${spotN === 1 ? '' : 's'}</b>
+              <span>Passes you sent back — the checks missed these</span></div>
+            <button type="button" class="lr-btn lr-btn-main" ${spotN ? '' : 'disabled'} onclick="openSpotNotes()">Open</button></div>
+          ${_tdNotes != null ? `<div class="lr-notes${_tdNotes ? '' : ' lr-notes-off'}"><div><b>${_tdNotes} Listing Health Note${_tdNotes === 1 ? '' : 's'}</b>
+              <span>Stores said “Not Wrong” — the checks may be too strict</span></div>
+            <button type="button" class="lr-btn lr-btn-main" ${_tdNotes ? '' : 'disabled'} onclick="openListingHealthTool()">Open</button></div>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+// ---- the DM: Spot Check and Confirm Fixes, one listing at a time ----------------
+function _spQueue() {
+    const out = [];
+    for (const st of _LR_STORES) {
+        const s = (_spData?.stores || {})[st];
+        for (const it of (s?.items || [])) out.push({ ...it, store: st });
+    }
+    return out;
+}
+// ⚠️ ONE RUN, EVERY STORE (Ethan, 2026-11-19: "mash all of them together …
+// tell me which store I'm working on, and 1 of 6, 2 of 6 … let me keep going
+// until I'm done. And then … take me back"). The header names the store and
+// where this listing sits in that store's picks; the last answer goes back to
+// Today, where the Spot Check card greys out until tomorrow's picks.
+function _spWhere(all, it) {
+    const mine = all.filter(i => i.store === it.store);
+    return `<span class="lr-where"><b>${_ecEsc(it.store)}</b> · ${mine.indexOf(it) + 1} Of ${mine.length}</span>`;
+}
+// Nothing left: straight back to Today rather than an "all done" page.
+function _lrDoneBack() { setTimeout(() => { if (_lrMode === 'spot' || _lrMode === 'confirm') lrSetMode('today'); }, 0); return '<div class="status-message">Loading…</div>'; }
+function _spFormOf(id) {
+    if (!_spForm.has(id)) _spForm.set(id, { open: false, missing: new Set(), order: false,
+                                             photos: new Map(), sel: null, note: '' });
+    return _spForm.get(id);
+}
+// ⚠️ THE SPOT CHECK IS PICTURES ONLY, FOR NOW (Ethan, 2026-11-19: "keep that
+// just for pictures … I do want to bridge this out to full listing review" —
+// later, after a cleanup). Titles, categories and the listing's fields were
+// on it for a day and came off.
+// TWO KINDS OF PHOTO PROBLEM. The photo check looks at the guide shots and
+// their order. _SP_EYE it does not look at yet, so a send-back made ONLY of
+// these skips the paid overnight recheck (it could not see them) and comes
+// straight to his Confirm Fixes as "Check By Eye", is not a miss against the
+// check, and goes to Claude as an idea for a new rule.
+const _SP_EYE = ['Angle', 'Framing', 'Dirty Table'];
+
+// ⚠️ PER PHOTO, NOT PER LISTING (Ethan, 2026-11-19: "if photo 3 has the wrong
+// angle and dirty table, but picture 4 only has dirty table, they would … want
+// to give different notes back to the store"). In Send Back mode a tap on a
+// listing photo SELECTS it — its problems and its own note go on that photo —
+// and a tap on a guide picture marks that shot missing. Outside Send Back the
+// same taps open the photo viewer, as before.
+
+// THE GUIDE, PICTURED (Ethan, 2026-11-18: "I like the guide order having the
+// pictures like before") — the Picture Quality strip's look (.pq-gph): the
+// example photo, its slot number, its name, and "If Needed" on a conditional
+// shot. `mark` (Send Back mode): {id, missing} — a tap marks the shot missing.
+function _lrGuideStrip(guide, mark, showMissing) {
+    return `<div class="pq-strip pq-guide lr-guide-strip${mark ? ' lr-guide-mark' : ''}">${guide.map((g, i) => {
+        const miss = (mark && mark.missing.has(g.label)) || (showMissing && showMissing.has(String(g.label).toLowerCase()));
+        const tap = mark ? ` onclick="spTick(${mark.id},'missing',${!miss},${_ecEsc(JSON.stringify(g.label))})"`
+            : ` onclick="openAuditPhotoLightbox(this.src, [...this.closest('.pq-guide').querySelectorAll('img.pq-gimg')].map(x => x.src))"`;
+        return `<span class="pq-ph pq-gph${g.cond ? ' pq-gph-cond' : ''}${miss ? ' pq-gph-miss' : ''}" title="${_ecEsc(g.label + (g.cond ? ' — only if: ' + g.cond : '') + (mark ? (miss ? ' — tap to unmark' : ' — tap if this shot is missing') : ''))}"${mark ? tap.replace('this.src', '') : ''}>
+        ${g.img ? `<img loading="lazy" src="${_ecEsc(g.img)}" alt="${_ecEsc(g.label)}" class="pq-gimg"${mark ? '' : tap}>`
+          : '<span class="pq-noimg">No Example Photo</span>'}
+        <span class="pq-n">${i + 1}</span>
+        ${miss ? '<span class="pq-tag pq-tag-miss">Missing</span>' : g.cond ? '<span class="pq-tag">If Needed</span>' : ''}
+        <span class="pq-glab">${_ecEsc(g.label)}</span>
+      </span>`;
+    }).join('')}</div>`;
+}
+
+// The listing's photos in Send Back mode: a tap selects one; a photo with
+// problems marked wears a red count.
+function _spTagStrip(it, f) {
+    return `<div class="lr-strip lr-strip-tap">${(it.photos || []).map((p, k) => {
+        const n = k + 1, m = f.photos.get(n), marks = m ? m.tags.size + (m.note ? 1 : 0) : 0;
+        return `<button type="button" class="lr-ph lr-ph-big lr-ph-tap${f.sel === n ? ' lr-ph-sel' : ''}${marks ? ' lr-ph-marked' : ''}"
+            onclick="spPickPhoto(${it.id}, ${n})" aria-label="Photo ${n}${marks ? ' — marked' : ''}">
+          <img loading="lazy" src="${_ecEsc(p.thumb)}" alt=""><span class="lr-n">${n}</span>
+          ${marks ? `<span class="lr-ph-badge">${m.tags.size || '✎'}</span>` : ''}</button>`;
+    }).join('')}</div>`;
+}
+
+function _spScreenHtml() {
+    if (!_spData) { _spEnsure(); return '<div class="status-message">Loading…</div>'; }
+    const all = _spQueue();
+    const left = all.filter(i => i.result === 'pending');
+    const it = left.find(i => !_spSkipped.has(i.id)) || left[0] || null;
+    if (!it) return _lrDoneBack();
+    const head = `<div class="lr-screen-h">${_LR_BACK}
+        <h2>Spot Check</h2>${_spWhere(all, it)}<span class="lr-dim">${all.length - left.length} Of ${all.length} Done</span></div>`;
+    const f = _spForm.get(it.id);
+    const open = !!(f && f.open);
+    const tick = (on, call, lab) => `<button type="button" class="lr-tick${on ? ' lr-tick-on' : ''}" onclick="${call}">${_ecEsc(lab)}${on ? ' ✕' : ''}</button>`;
+    let form = '';
+    if (open) {
+        const sel = f.sel ? f.photos.get(f.sel) || { tags: new Set(), note: '' } : null;
+        const selPhoto = f.sel ? (it.photos || [])[f.sel - 1] : null;
+        const marked = [...f.photos.entries()].filter(([, m]) => m.tags.size || m.note).sort((a, b) => a[0] - b[0]);
+        form = `<div class="lr-form">
+        ${sel ? `<div class="lr-photo-ed">
+            <div class="lr-photo-ed-h"><b>Photo ${f.sel}</b><span class="lr-dim">What’s Wrong With This Photo?</span></div>
+            ${selPhoto ? _lrStepStage(`<button type="button" class="lr-photo-zoom" title="Zoom in"
+                onclick="openAuditPhotoLightbox(${_ecEsc(JSON.stringify(selPhoto.url || selPhoto.thumb))}, ${_ecEsc(JSON.stringify((it.photos || []).map(p => p.url || p.thumb)))})">
+                <img src="${_ecEsc(selPhoto.url || selPhoto.thumb)}" alt="Photo ${f.sel}"><span class="lr-zoom-tag">⤢ Zoom</span></button>`, f.sel, (it.photos || []).length, `spPickPhoto.bind(null, ${it.id})`) : ''}
+            <div class="lr-ticks">${_SP_EYE.map(x => tick(sel.tags.has(x), `spPhotoTag(${it.id},${f.sel},${_ecEsc(JSON.stringify(x))})`, x)).join('')}</div>
+            <textarea class="lr-note" rows="2" placeholder="Note for photo ${f.sel}, e.g. shoot it straight on, not from above"
+              oninput="spPhotoNote(${it.id}, ${f.sel}, this.value)">${_ecEsc(sel.note || '')}</textarea>
+            <div class="lr-acts"><button type="button" class="lr-btn lr-btn-ghost lr-btn-sm" onclick="spPickPhoto(${it.id}, null)">Done With Photo ${f.sel}</button>
+              ${sel.tags.size || sel.note ? `<button type="button" class="lr-btn lr-btn-ghost lr-btn-sm" onclick="spClearPhoto(${it.id}, ${f.sel})">Clear Photo ${f.sel}</button>` : ''}</div>
+          </div>` : `<div class="lr-tap-hint">Tap a photo to mark what’s wrong with it. Tap a guide picture that’s missing.</div>`}
+        ${marked.length || f.missing.size ? `<div class="lr-tgroup"><span class="lr-tlab">Marked So Far</span><div class="lr-marked">
+            ${marked.map(([n, m]) => `<button type="button" class="lr-mk${f.sel === n ? ' lr-mk-on' : ''}" onclick="spPickPhoto(${it.id}, ${n})">
+                <b>Photo ${n}</b><span>${_ecEsc([...m.tags].join(', ') || 'Note')}${m.note ? ' — “' + _ecEsc(m.note.length > 60 ? m.note.slice(0, 60) + '…' : m.note) + '”' : ''}</span></button>`).join('')}
+            ${[...f.missing].map(sh => `<button type="button" class="lr-mk lr-mk-miss" onclick="spTick(${it.id},'missing',false,${_ecEsc(JSON.stringify(sh))})"
+                title="Tap to unmark"><b>Missing</b><span>${_ecEsc(sh)} ✕</span></button>`).join('')}
+          </div></div>` : ''}
+        <div class="lr-tgroup"><span class="lr-tlab">The Whole Listing</span><div class="lr-ticks">
+          ${tick(f.order, `spTick(${it.id},'order',${!f.order})`, 'Wrong Order')}
+        </div></div>
+        <label class="lr-tlab" for="spNote${it.id}">Note For The Store</label>
+        <textarea id="spNote${it.id}" class="lr-note" rows="2" placeholder="For the whole listing — e.g. switch the picture table when it starts to get dirty"
+          oninput="spNote(${it.id}, this.value)">${_ecEsc(f.note)}</textarea>
+        <button type="button" class="lr-btn lr-btn-main lr-btn-full" ${_fqBusy.has('sp' + it.id) ? 'disabled' : ''} onclick="spGrade(${it.id})">Send Back To ${_ecEsc(it.store)}</button>
+      </div>`;
+    }
+    const shop = (_spData.shops || {})[it.store] || '';
+    return head + `<div class="lr-one">
+      <section class="lr-one-main">
+        <span class="lr-k lr-k-go">Passed The Photo Check · #${it.rank} By Price At ${_ecEsc(it.store)}</span>
+        <div class="lr-head"><div class="lr-head-t"><h3>${_ecEsc(it.title || '')}</h3>
+          <span class="lr-meta">${_ecEsc(it.sku || '—')}${it.lister ? ` · ${_ecEsc(it.lister)}` : ''}${it.sheet ? ` · ${_ecEsc(it.sheet)} guide` : ''}</span>
+</div>
+          <div class="lr-head-r"><span class="lr-price">${_fqMoney(it.price)}</span>${_lrLinks(shop, it.productId, it.handle, it.store)}</div></div>
+        ${it.gone ? '<div class="lr-off">No longer on Shopify — sold or deleted. Agree to move on.</div>' : ''}
+        <span class="lr-k">Photos${open ? ' — Tap One To Mark It' : ''}</span>${open ? _spTagStrip(it, f) : _lrPhotos(it.photos, [], true)}
+        ${(it.guide || []).length ? `<span class="lr-k">Guide Order${open ? ' — Tap A Missing Shot' : ''}</span>${_lrGuideStrip(it.guide, open ? { id: it.id, missing: f.missing } : null)}`
+          : it.shots.length ? `<span class="lr-k">Guide Order</span><div class="lr-guide">${it.shots.map((s, i) => `<span>${i + 1} ${_ecEsc(s)}</span>`).join('<span>·</span>')}</div>` : ''}
+      </section>
+      <aside class="lr-one-side">
+        <b class="lr-ask">Did The Checks Get This Right?</b>
+        <div class="lr-pair">
+          <button type="button" class="lr-btn lr-btn-go" ${_fqBusy.has('sp' + it.id) ? 'disabled' : ''} onclick="spAgree(${it.id})">Agree</button>
+          <button type="button" class="lr-btn lr-btn-no${open ? ' lr-btn-no-on' : ''}" onclick="spOpen(${it.id})">Send Back</button>
+        </div>
+        ${form}
+        <button type="button" class="lr-link lr-skip" onclick="spSkip(${it.id})">Skip For Now ›</button>
+      </aside>
+    </div>`;
+}
+
+function _cfScreenHtml() {
+    if (!_cfData) { _spEnsure(); return '<div class="status-message">Loading…</div>'; }
+    const items = _cfData.items || [];
+    const it = items.find(i => !_cfSkipped.has(i.store + i.productId)) || items[0] || null;
+    if (!it) return _lrDoneBack();
+    const head = `<div class="lr-screen-h">${_LR_BACK}
+        <h2>Confirm Fixes</h2><span class="lr-where"><b>${_ecEsc(it.store)}</b></span><span class="lr-dim">${items.length} Left</span></div>`;
+    const said = _fqTicksSaid(it.ticks);
+    const shop = (_cfData.shops || {})[it.store] || '';
+    const busy = _fqBusy.has('cf' + it.productId) ? 'disabled' : '';
+    return head + `<div class="lr-one">
+      <section class="lr-one-main">
+        <span class="lr-k lr-k-go">Passed The Overnight Recheck · ${_ecEsc(it.store)}</span>
+        <div class="lr-head"><div class="lr-head-t"><h3>${_ecEsc(it.title || '')}</h3>
+          <span class="lr-meta">${_ecEsc(it.sku || '—')}${it.fixedBy ? ` · Fixed by ${_ecEsc(it.fixedBy)}` : ''}</span>
+</div>
+          <div class="lr-head-r"><span class="lr-price">${_fqMoney(it.price)}</span>${_lrLinks(shop, it.productId, it.handle, it.store)}</div></div>
+        ${it.manualOnly ? '<div class="lr-off">Check By Eye — only things the checks don’t look at were sent back, so this skipped the overnight recheck.</div>' : ''}
+        ${said.length || it.returnedNote ? `<div class="lr-fix"><div class="lr-fix-h"><span class="lr-chip lr-c-bad">Was Wrong</span></div>
+          <ul class="lt-why lr-why">${said.map(s => `<li>${s}</li>`).join('')}${it.returnedNote ? `<li>“${_ecEsc(it.returnedNote)}”</li>` : ''}</ul></div>` : ''}
+        <span class="lr-k">Photos Now</span>${_lrPhotos(it.photos, [], true)}
+      </section>
+      <aside class="lr-one-side">
+        <b class="lr-ask">Is It Fixed?</b>
+        <div class="lr-pair">
+          <button type="button" class="lr-btn lr-btn-go" ${busy} onclick="cfConfirm('${_ecEsc(it.store)}','${_ecEsc(it.productId)}')">Confirm</button>
+          <button type="button" class="lr-btn lr-btn-no" ${busy} onclick="cfSendBack('${_ecEsc(it.store)}','${_ecEsc(it.productId)}')">Send Back</button>
+        </div>
+        <span class="lr-hint">Send Back puts it on top of ${_ecEsc(it.store)}’s list as “Fix Not Accepted”. It does not count against the lister a second time.</span>
+        <button type="button" class="lr-link lr-skip" onclick="cfSkip('${_ecEsc(it.store + it.productId)}')">Skip For Now ›</button>
+      </aside>
+    </div>`;
+}
+
+// ALL LISTERS — one card per store, one week at a time (Ethan, 2026-11-18):
+// the current week THROUGH YESTERDAY, and ‹ › back through the four before it.
+// Columns are one width each with the numbers centred under their headers;
+// no send-backs column (they are inside Flagged) and no explanation block.
+const FL_WEEKS = 4;   // this week + the three before it
+function _flMonday(day) {
+    const d = new Date(day + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+}
+function _flAddDays(day, n) { const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+const _flFmt = day => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+function _flHtml() {
+    if (!_flData) { _spEnsure(); return '<div class="status-message">Loading…</div>'; }
+    const through = _flData.through || _flAddDays(new Date().toISOString().slice(0, 10), -1);
+    const current = _flMonday(through);
+    const weeks = Array.from({ length: FL_WEEKS }, (_, k) => _flAddDays(current, -7 * k));
+    const wk = weeks.includes(_flWeek) ? _flWeek : current;
+    const idx = weeks.indexOf(wk);
+    const end = wk === current ? through : _flAddDays(wk, 6);
+    const stepper = `<div class="fl-step">
+        <button type="button" class="fl-arrow" aria-label="Older week" ${idx >= FL_WEEKS - 1 ? 'disabled' : ''} onclick="flSetWeek('${weeks[idx + 1] || wk}')">‹</button>
+        <div class="fl-step-t"><b>${wk === current ? 'This Week' : 'Week Of ' + _flFmt(wk)}</b>
+          <span>${_flFmt(wk)} – ${_flFmt(end)}${wk === current ? ' · Through Yesterday' : ''}</span></div>
+        <button type="button" class="fl-arrow" aria-label="Newer week" ${idx <= 0 ? 'disabled' : ''} onclick="flSetWeek('${weeks[idx - 1] || wk}')">›</button>
+      </div>`;
+    const rows = (_flData.rows || []).filter(r => r.week === wk && r.lister !== 'Unknown');
+    const tone = r => r == null ? '' : r >= 50 ? 'fl-bad' : r >= 25 ? 'fl-warn' : 'fl-good';
+    const cards = _LR_STORES.filter(st => rows.some(r => r.store === st)).map(st => {
+        const mine = rows.filter(r => r.store === st);
+        const listed = mine.reduce((n, r) => n + r.listed, 0);
+        const flagged = mine.reduce((n, r) => n + (r.flagged != null ? r.flagged : r.checkerFlags + r.ethanSendBacks), 0);
+        const rate = listed ? Math.round(flagged / listed * 100) : null;
+        return `<section class="fl-card">
+          <div class="fl-card-h"><b>${st}</b>
+            <span class="fl-tag">${listed} Listed</span><span class="fl-tag fl-tag-bad">${flagged} Flagged</span>
+            <span class="fl-pill ${tone(rate)}">${rate == null ? '—' : rate + '%'}</span></div>
+          <table class="fl-table"><colgroup><col class="fl-c-name"><col><col><col><col></colgroup>
+            <thead><tr><th>Lister</th><th>Listed</th><th>Flagged</th><th>Dismissed</th><th>Flag Rate</th></tr></thead>
+            <tbody>${mine.map(r => {
+                const f = r.flagged != null ? r.flagged : r.checkerFlags + r.ethanSendBacks;
+                return `<tr${r.lister === 'Unknown' ? ' class="fl-unknown"' : ''}>
+                  <td>${_ecEsc(r.lister)}</td><td>${r.listed}</td><td>${f}</td><td class="fl-dim">${r.dismissed}</td>
+                  <td><span class="fl-rate ${tone(r.rate)}">${r.rate == null ? '—' : r.rate + '%'}</span>
+                    <span class="fl-mini"><span class="${tone(r.rate)}" style="width:${Math.min(100, r.rate || 0)}%"></span></span></td></tr>`;
+            }).join('')}</tbody></table>
+        </section>`;
+    }).join('');
+    return `<div class="lr-screen-h">${_LR_BACK}<h2>All Listers</h2>${stepper}</div>`
+        + (cards ? `<div class="fl-cards">${cards}</div>`
+            : `<div class="lh-clear">No listings tracked for this week${wk < '2026-11-16' ? ' — lister tracking started Nov 18, 2026' : ''}.</div>`);
+}
+
+// The DM's page: Today, or whichever job Today opened.
+function _dmHtml() {
+    if (_lrMode === 'spot') return _spScreenHtml();
+    if (_lrMode === 'confirm') return _cfScreenHtml();
+    if (_lrMode === 'listers') return _flHtml();
+    if (_lrMode === 'full') return _lrMayFull() ? _frHtml() : _tdHtml();
+    if (_lrMode === 'store') return _fqHtml(true);
+    return _tdHtml();
+}
+
+function lrSetMode(m) { _lrMode = m; if (m === 'today') _spLoad().then(ecRender); ecRender(); _ecSyncChrome(); window.scrollTo({ top: 0 }); }
+async function lrOpenStore(st) {
+    _ecStore = st; _fqSel = null; _fqFilter = 'all'; _fqWaitView = false; _lrMode = 'store';
+    _fqData = null; ecRender();
+    // The whole page reloads for the new store, so the Tool Views and the
+    // header line agree with the list.
+    if (typeof ecLoad === 'function') await ecLoad(); else await _fqReload();
+}
+function spOpen(id) { const f = _spFormOf(id); f.open = !f.open; ecRender(); }
+function spSkip(id) { _spSkipped.add(id); ecRender(); }
+function cfSkip(k) { _cfSkipped.add(k); ecRender(); }
+function spTick(id, what, on, val) {
+    const f = _spFormOf(id);
+    if (what === 'missing' || what === 'fields' || what === 'eye') { on ? f[what].add(val) : f[what].delete(val); }
+    else f[what] = !!on;
+    ecRender();
+}
+function spNote(id, v) { _spFormOf(id).note = v; }
+function spPickPhoto(id, n) { _spFormOf(id).sel = n; ecRender(); }
+function _spPhoto(id, n) {
+    const f = _spFormOf(id);
+    if (!f.photos.has(n)) f.photos.set(n, { tags: new Set(), note: '' });
+    return f.photos.get(n);
+}
+function spPhotoTag(id, n, tag) { const m = _spPhoto(id, n); m.tags.has(tag) ? m.tags.delete(tag) : m.tags.add(tag); ecRender(); }
+// No redraw on typing — the textarea keeps its focus and the badge catches up on the next tap.
+function spPhotoNote(id, n, v) { _spPhoto(id, n).note = v; }
+function spClearPhoto(id, n) { _spFormOf(id).photos.delete(n); ecRender(); }
+async function spAgree(id) {
+    _fqBusy.add('sp' + id); ecRender();
+    const res = await _lrPost({ action: 'spot-agree', id });
+    _fqBusy.delete('sp' + id);
+    if (!res.ok) await _ltTell('Not Saved', res.body?.detail || res.body?.error || 'The request failed.');
+    await _spReload();
+}
+async function spGrade(id) {
+    const f = _spFormOf(id);
+    const it = _spQueue().find(x => x.id === id);
+    const photos = [...f.photos.entries()].map(([n, m]) => ({ n, tags: [...m.tags], note: String(m.note || '').trim(),
+        thumb: it && it.photos[n - 1] ? it.photos[n - 1].thumb : null })).filter(p => p.tags.length || p.note);
+    const ticks = { missing: [...f.missing], order: f.order, photos };
+    if (!ticks.missing.length && !ticks.order && !photos.length) {
+        await _ltTell('Mark What Is Wrong', 'Tap a photo and mark what’s wrong with it, tap a missing guide shot, or choose Wrong Order.'); return;
+    }
+    if (!String(f.note || '').trim() && !photos.some(p => p.note)) {
+        await _ltTell('Add A Note', 'Add a note on a photo or for the whole listing — the store reads it, and it is what goes to Claude.'); return;
+    }
+    _fqBusy.add('sp' + id); ecRender();
+    const res = await _lrPost({ action: 'spot-grade', id, ticks, note: f.note.trim() });
+    _fqBusy.delete('sp' + id);
+    if (!res.ok) { await _ltTell('Not Sent Back', res.body?.detail || res.body?.error || 'The request failed.'); ecRender(); return; }
+    _spForm.delete(id);
+    await _spReload();
+}
+async function cfConfirm(store, pid) {
+    _fqBusy.add('cf' + pid); ecRender();
+    const res = await _lrPost({ action: 'confirm', store, productId: pid });
+    _fqBusy.delete('cf' + pid);
+    if (!res.ok) await _ltTell('Not Saved', res.body?.detail || res.body?.error || 'The request failed.');
+    await _spReload();
+}
+async function cfSendBack(store, pid) {
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'Confirm Fixes', title: 'Send This Back To The Store?',
+        body: '<p class="lt-ask-say">It goes back on top of their list as <b>Fix Not Accepted</b>, with your note. It does not count against the lister a second time.</p>',
+        note: { label: 'What Is Still Wrong?', required: true, placeholder: 'e.g. the port shot is still missing', hint: 'The store reads this.' },
+        go: 'Send It Back', cancel: 'Cancel' });
+    if (!said || !said.note) return;
+    _fqBusy.add('cf' + pid); ecRender();
+    const res = await _lrPost({ action: 'send-back', store, productId: pid, note: said.note });
+    _fqBusy.delete('cf' + pid);
+    if (!res.ok) await _ltTell('Not Sent Back', res.body?.detail || res.body?.error || 'The request failed.');
+    await _spReload();
+}
+function flSetWeek(w) { _flWeek = w; ecRender(); }
+
+// ============ SPOT CHECK NOTES — the DM's own send-backs =====================
+// Ethan, 2026-11-18: "keep the passes that I regrade to its own thing. It can
+// look just like listing health but be a separate popup just for these and have
+// it work the same way. Clear notes and stuff like that." So: the Listing
+// Health Notes popup's frame and classes, its Copy The Ask (copies, nothing
+// else) and its Clear (a separate, later act that only moves them to Cleared).
+// The ask is built by listing-review ?view=spot-notes, next to the data it quotes.
+let _snData = null;
+function _snEl() {
+    let el = document.getElementById('spotNotesModal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.className = 'modal-menu manage-menu';
+    el.id = 'spotNotesModal';
+    el.innerHTML = `
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">Listing Review</span>
+          <span class="tool-head-title">Spot Check Notes</span>
+          <span class="tool-head-sub">Listings the checks passed that you sent back.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="spotNotesBody"></div>`;
+    document.body.appendChild(el);
+    return el;
+}
+async function openSpotNotes() {
+    _snEl();
+    closeAllModals();
+    toggleModal('spotNotesModal');
+    const body = document.getElementById('spotNotesBody');
+    if (body) body.innerHTML = '<div class="status-message">Reading the notes…</div>';
+    try { _snData = await _lrFetch('?view=spot-notes'); }
+    catch (e) { if (body) body.innerHTML = `<div class="lh-unknown"><span class="lh-why">${_ecEsc(e.message || String(e))}</span></div>`; return; }
+    renderSpotNotes();
+}
+const _SN_GROUP = { photos: 'Photo Check Missed It' };
+function renderSpotNotes() {
+    const body = document.getElementById('spotNotesBody');
+    const d = _snData;
+    if (!body || !d) return;
+    const n = d.total || 0;
+    const done = d.done || [];
+    const doneHtml = done.length ? `<details class="lh-tool-done"><summary>${done.length} Cleared</summary>
+        ${done.map(r => `<div class="lh-tool-done-row">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
+          <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
+          ${_lhShopifyLink(r)}</div>`).join('')}</details>` : '';
+    if (!n) {
+        body.innerHTML = `<div class="lh-tool-clear"><div class="lh-tool-clear-h"><span class="lh-tool-tick">✓</span>
+            <b>No Spot Check Notes Waiting.</b></div>
+          <span>When you send a pass back from the spot check, it lands here.</span></div>${doneHtml}`;
+        return;
+    }
+    const groups = Object.keys(_SN_GROUP).map(k => {
+        const rows = (d.items || []).filter(it => (it.missed || []).includes(k));
+        return rows.length ? `<div class="lh-tool-grp">
+          <div class="lh-tool-grp-h"><span class="lh-tool-grp-n">${rows.length}</span><span>${_SN_GROUP[k]}</span></div>
+          ${rows.map(r => `<div class="lh-tool-row">
+            <div class="lh-tool-note">“${_ecEsc(r.note || '')}”</div>
+            <div class="lh-tool-meta"><span class="lh-sku">${_ecEsc(r.sku || '—')}</span><span>${_ecEsc(r.store || '')}</span>
+              ${r.lister ? `<span>${_ecEsc(r.lister)}</span>` : ''}${r.price != null ? `<span>${_fqMoney(r.price)}</span>` : ''}${_lhShopifyLink(r)}</div>
+            <div class="lh-tool-ttl"><span class="lt-lab">Listing</span><span>${_ecEsc(r.title || '')}</span></div>
+            <div class="lh-tool-ttl"><span class="lt-lab">You Found</span><div class="lr-said-list">${_fqTicksSaid(r.ticks).map(x => `<div>${x}</div>`).join('') || '—'}</div></div>
+            <div class="lh-tool-unsettled">${(r.checkerSaid || []).length
+              ? 'The photo check said: ' + _ecEsc(r.checkerSaid.join(' '))
+              : 'The photo check said nothing was wrong' + (r.sheet ? ` (${_ecEsc(r.sheet)} guide)` : '') + '.'}</div>
+          </div>`).join('')}
+        </div>` : '';
+    }).join('');
+    body.innerHTML = `
+      <div class="lt-ask-bar">
+        <span class="lt-ask-n">${n} Pass${n === 1 ? '' : 'es'} The Checks Should Have Flagged</span>
+        <button class="lt-ask-btn" onclick="spotNotesCopy(this)">Copy The Ask For Claude</button>
+      </div>
+      <p class="lh-tool-say">Paste it into Claude. It groups these by the check that missed them, links each
+        listing, quotes what you found and what the check said, and asks for the reasoning before any rule
+        changes. Nothing is sent from here, and no listing changes.</p>
+      ${groups}
+      <div class="lh-tool-finish"><span>Once Claude has been through them:</span>
+        <button class="lh-tool-done-btn" onclick="spotNotesDone()">Clear ${n} Note${n === 1 ? '' : 's'}</button></div>
+      ${doneHtml}`;
+}
+function spotNotesCopy(button) {
+    if (!_snData || !_snData.ask) return;
+    navigator.clipboard.writeText(_snData.ask).then(() => _copyFlash(button))
+        .catch(() => _ltTell('Could Not Reach The Clipboard', 'Your browser refused the copy. Select the notes above and copy them by hand.'));
+}
+async function spotNotesDone() {
+    const d = _snData;
+    if (!d || !d.total) return;
+    const n = d.total;
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'Spot Check Notes', title: `Clear ${n} Note${n === 1 ? '' : 's'}?`,
+        body: `<p class="lt-ask-say">Do this once Claude has been through them. The notes are kept and stay readable
+                under <b>Cleared</b>; nothing on any listing changes either way.</p>`,
+        go: 'Clear Them', cancel: 'Not Yet' });
+    if (!said) return;
+    const res = await _lrPost({ action: 'spot-notes-clear', ids: (d.items || []).map(i => i.id) });
+    if (!res.ok) { await _ltTell('Not Cleared', res.body?.detail || res.body?.error || 'The request failed.'); return; }
+    try { _snData = await _lrFetch('?view=spot-notes'); } catch (_) { _snData = { total: 0, items: [], done: d.done || [] }; }
+    renderSpotNotes();
+    _spLoad().then(ecRender);
+    if (typeof checkSpotNoteReminders === 'function') checkSpotNoteReminders();
+}
+Object.assign(window, { openSpotNotes, renderSpotNotes, spotNotesCopy, spotNotesDone });
+
+// ============ THE WHOLE LISTING: VIEW LISTING + FULL LISTING REVIEW ==========
+// Ethan, 2026-11-21 (Listing Review Redesign canvas, "Full listing review"):
+//   - VIEW LISTING, for every role on every tool: a pill beside Shopify /
+//     Store opens the whole listing inside SPEEKSNET, read-only — "just to help
+//     get context if needed".
+//   - FULL LISTING REVIEW, the DM only for now (ec-view-full-review): pick a
+//     store and a listing, flag any part or photo with a note, then Looks Good
+//     or Send Back. ONLY a send-back counts against the lister; it goes on the
+//     store's list, and its I Fixed It comes back to his Confirm Fixes.
+// One renderer (_lrListingHtml) draws the listing for both, so the popup and
+// the review screen can never disagree about what a listing says.
+
+// The description is the store's own HTML. It is shown through an allow-list
+// — tags kept, every attribute dropped but a cell's span — never inserted raw:
+// anything a lister pasted into Shopify would otherwise run inside SPEEKSNET.
+const _LR_OK_TAGS = new Set(['P', 'BR', 'UL', 'OL', 'LI', 'B', 'STRONG', 'I', 'EM', 'U', 'TABLE', 'THEAD', 'TBODY',
+    'TR', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SPAN', 'DIV', 'SMALL', 'SUP', 'SUB', 'HR']);
+function _lrCleanHtml(html) {
+    let doc;
+    try { doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); } catch (_) { return _ecEsc(String(html || '')); }
+    const walk = node => {
+        let out = '';
+        for (const n of node.childNodes) {
+            if (n.nodeType === 3) { out += _ecEsc(n.nodeValue); continue; }
+            if (n.nodeType !== 1) continue;
+            const tag = n.tagName;
+            if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'MATH'].includes(tag)) continue;
+            const inner = walk(n);
+            if (!_LR_OK_TAGS.has(tag)) { out += inner; continue; }
+            const t = tag.toLowerCase();
+            if (t === 'br' || t === 'hr') { out += `<${t}>`; continue; }
+            const span = (t === 'td' || t === 'th')
+                ? ['colspan', 'rowspan'].map(a => /^\d{1,2}$/.test(n.getAttribute(a) || '') ? ` ${a}="${n.getAttribute(a)}"` : '').join('') : '';
+            out += `<${t}${span}>${inner}</${t}>`;
+        }
+        return out;
+    };
+    return walk(doc.body);
+}
+
+// One part of the listing. In review mode it carries a Flag button, and a
+// flagged part wears the red edge with the note under it.
+// The selected photo with an arrow either side (Ethan, 2026-11-23: "flip back
+// and forth without having to individually click each photo"). An arrow picks
+// the next photo for flagging, the same as tapping it in the strip.
+function _lrStepStage(inner, n, total, call) {
+    if (total < 2) return inner;
+    return `<div class="lr-lv-stage lr-ed-stage">
+      <button type="button" class="lr-lv-nav" aria-label="Previous photo" ${n <= 1 ? 'disabled' : ''} onclick="${call}(${n - 1})">${_LV_ARROW(-1)}</button>
+      <div class="lr-ed-main">${inner}</div>
+      <button type="button" class="lr-lv-nav" aria-label="Next photo" ${n >= total ? 'disabled' : ''} onclick="${call}(${n + 1})">${_LV_ARROW(1)}</button>
+    </div>`;
+}
+function _lrPart(label, valueHtml, rv, already) {
+    const flagged = rv && rv.form.parts.has(label);
+    const sel = rv && rv.form.selPart === label;
+    // Already flagged by a check (Ethan, 2026-11-23): shown, never flagged twice.
+    const btn = !rv ? '' : already
+        ? `<button type="button" class="lr-flag" disabled title="${_ecEsc(already)}">Already Flagged</button>`
+        : `<button type="button" class="lr-flag${flagged ? ' lr-flag-on' : ''}" onclick="frFlagPart(${_ecEsc(JSON.stringify(label))})">${flagged ? 'Flagged' : 'Flag'}</button>`;
+    return `<div class="lr-part${flagged ? ' lr-part-flagged' : ''}${sel ? ' lr-part-sel' : ''}">
+      <span class="lr-part-h">${_ecEsc(label)}</span>${btn}
+      ${rv && already ? `<div class="lr-already">${_ecEsc(already)}</div>` : ''}
+      <div class="lr-part-v">${valueHtml || '<span class="lr-dim">Nothing listed.</span>'}</div>
+      ${flagged && rv.form.parts.get(label) ? `<div class="lr-part-note">“${_ecEsc(rv.form.parts.get(label))}”</div>` : ''}
+    </div>`;
+}
+// ⚠️ THE LISTING AS THE CUSTOMER READS IT (Ethan, 2026-11-23): no field-by-field
+// grid of Condition / Category / Cosmetic Notes / Functionality — "I'd rather
+// just see by default the whole listing description, because that actually
+// shows everything". So: photos, title and price, then the description open.
+// What's Included / Not Included are added only when the description never
+// mentions them. No photos says "No Photos", never a blank box.
+const _LV_ARROW = d => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="${d < 0 ? '15 18 9 12 15 6' : '9 18 15 12 9 6'}"/></svg>`;
+function _lrListingHtml(d, rv) {
+    const photos = d.photos || [];
+    const none = '<div class="lr-lv-none">No Photos</div>';
+    let strip;
+    if (!photos.length) strip = none;
+    else if (rv) strip = `<div class="lr-strip lr-strip-tap">${photos.map((p, k) => {
+            const n = k + 1, m = rv.form.photos.get(n), marks = m ? m.tags.size + (m.note ? 1 : 0) : 0;
+            return `<button type="button" class="lr-ph lr-ph-tap${rv.form.selPhoto === n ? ' lr-ph-sel' : ''}${marks ? ' lr-ph-marked' : ''}"
+                onclick="frPickPhoto(${n})" aria-label="Photo ${n}"><img loading="lazy" src="${_ecEsc(p.thumb)}" alt=""><span class="lr-n">${n}</span>
+                ${marks ? `<span class="lr-ph-badge">${m.tags.size || '✎'}</span>` : ''}</button>`;
+          }).join('')}</div>`;
+    else {
+        // The main photo steps with its own arrows (Ethan, 2026-11-23: "click
+        // through the photos and it just switches on that main section"); a
+        // thumbnail switches it too. Zoom is still a click on the photo.
+        const i = Math.min(Math.max(_lvIdx, 0), photos.length - 1), ph = photos[i], many = photos.length > 1;
+        strip = `<div class="lr-lv-photos">
+            <div class="lr-lv-stage">
+              ${many ? `<button type="button" class="lr-lv-nav lr-lv-prev" aria-label="Previous photo" ${i === 0 ? 'disabled' : ''} onclick="lvStep(-1)">${_LV_ARROW(-1)}</button>` : ''}
+              <button type="button" class="lr-lv-main" title="Zoom in" onclick="lvZoom()"><img src="${_ecEsc(ph.url || ph.thumb)}" alt="Photo ${i + 1}"><span class="lr-zoom-tag">⤢ Zoom</span>
+                ${many ? `<span class="lr-lv-count">${i + 1} of ${photos.length}</span>` : ''}</button>
+              ${many ? `<button type="button" class="lr-lv-nav lr-lv-next" aria-label="Next photo" ${i === photos.length - 1 ? 'disabled' : ''} onclick="lvStep(1)">${_LV_ARROW(1)}</button>` : ''}
+            </div>
+            <div class="lr-strip">${photos.map((p, k) => `<button type="button" class="lr-ph lr-ph-tap${k === i ? ' lr-ph-sel' : ''}" onclick="lvShow(${k})" aria-label="Photo ${k + 1}"><img loading="lazy" src="${_ecEsc(p.thumb)}" alt=""><span class="lr-n">${k + 1}</span></button>`).join('')}</div>
+          </div>`;
+    }
+    const P = (label, v) => _lrPart(label, v ? _ecEsc(v) : '', rv);
+    const desc = d.descriptionHtml ? _lrCleanHtml(d.descriptionHtml) : '';
+    const saysIncluded = /includ/i.test(desc.replace(/<[^>]+>/g, ' '));
+    // VIEW ONLY: just the photos and the listing's own HTML (Ethan, 2026-11-23:
+    // "minimize that page down to literally just the HTML") — no Title / Price
+    // parts (the title is in the description, the price is in the header) and
+    // no "Listing Description" label. The review keeps its flaggable parts.
+    if (!rv) return `<div class="lr-lv lr-lv-view">
+      <div class="lr-lv-pics">${strip}</div>
+      ${saysIncluded ? '' : `<div class="lr-parts-2">${P('What’s Included', d.included)}${P('Not Included', d.notIncluded)}</div>`}
+      ${desc ? `<div class="lr-desc-body lr-lv-html">${desc}</div>` : '<div class="lr-dim">This listing has no description.</div>'}
+    </div>`;
+    return `<div class="lr-lv">
+      <div class="lr-part lr-part-photos"><span class="lr-part-h">Photos${rv && photos.length ? ' — Tap One To Flag It' : ''}</span>
+        ${rv && d.already && d.already.photos ? `<div class="lr-already">${_ecEsc(d.already.photos)}</div>` : ''}${strip}</div>
+      <div class="lr-parts-2">${_lrPart('Title', d.title ? _ecEsc(d.title) : '', rv, d.already && d.already.title)}${_lrPart('Price', d.price ? _ecEsc(_fqMoney(d.price)) : '', rv)}</div>
+      ${saysIncluded ? '' : `<div class="lr-parts-2">${P('What’s Included', d.included)}${P('Not Included', d.notIncluded)}</div>`}
+      ${_lrPart('Listing Description', desc ? `<div class="lr-desc-body">${desc}</div>` : '', rv)}
+    </div>`;
+}
+let _lvIdx = 0;
+function _lvRedraw() {
+    const body = document.getElementById('listingViewBody');
+    if (body && _lrViewData) body.innerHTML = _lrListingHtml(_lrViewData, null);
+}
+function lvShow(i) { _lvIdx = i; _lvRedraw(); }
+function lvStep(dir) {
+    const n = ((_lrViewData && _lrViewData.photos) || []).length;
+    _lvIdx = Math.min(Math.max(_lvIdx + dir, 0), n - 1); _lvRedraw();
+}
+function lvZoom() {
+    const photos = (_lrViewData && _lrViewData.photos) || [];
+    const urls = photos.map(p => p.url || p.thumb);
+    if (urls.length) openAuditPhotoLightbox(urls[Math.min(_lvIdx, urls.length - 1)], urls);
+}
+Object.assign(window, { lvShow, lvStep, lvZoom });
+
+// --- View Listing: the popup ---------------------------------------------------------
+let _lrViewData = null;
+function _lvEl() {
+    let el = document.getElementById('listingViewModal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.className = 'modal-menu manage-menu lr-lv-modal';
+    el.id = 'listingViewModal';
+    el.innerHTML = `
+    <div class="modal-header tool-head">
+      <div class="tool-head-main"><div class="tool-head-titles">
+        <span class="tool-head-eyebrow" id="listingViewEyebrow">Full Listing</span>
+        <span class="tool-head-title" id="listingViewTitle">Loading…</span>
+        <span class="tool-head-sub" id="listingViewSub"></span></div></div>
+      <button class="modal-close-btn" onclick="closeAllModals()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="listingViewBody"></div>`;
+    document.body.appendChild(el);
+    return el;
+}
+async function openListingView(store, pid) {
+    _lvEl();
+    closeAllModals();
+    toggleModal('listingViewModal');
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    set('listingViewEyebrow', `Full Listing · ${store}`); set('listingViewTitle', 'Loading…'); set('listingViewSub', '');
+    const body = document.getElementById('listingViewBody');
+    if (body) body.innerHTML = '<div class="status-message">Reading the listing from Shopify…</div>';
+    try { _lrViewData = await _lrFetch(`?view=listing&store=${encodeURIComponent(store)}&productId=${encodeURIComponent(pid)}`); }
+    catch (e) { if (body) body.innerHTML = `<div class="lh-unknown"><span class="lh-why">${_ecEsc(e.message || String(e))}</span></div>`; return; }
+    const d = _lrViewData;
+    _lvIdx = 0;
+    set('listingViewTitle', d.title || 'Untitled Listing');
+    set('listingViewSub', [d.sku, d.lister, d.createdAt ? 'Listed ' + _fqDay(d.createdAt) : '', _fqMoney(d.price)].filter(Boolean).join(' · '));
+    if (body) body.innerHTML = _lrListingHtml(d, null);
+}
+window.openListingView = openListingView;
+
+// --- Full Listing Review (the DM) ---------------------------------------------------
+let _frStore = null, _frQ = '', _frList = null, _frListErr = null, _frSel = null, _frListing = null, _frListingErr = null;
+let _frBusy = false, _frSearchTimer = null;
+const _frForm = { parts: new Map(), photos: new Map(), selPart: null, selPhoto: null, note: '' };
+function _frReset() { _frForm.parts = new Map(); _frForm.photos = new Map(); _frForm.selPart = null; _frForm.selPhoto = null; _frForm.note = ''; }
+const _lrMayFull = () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-full-review');
+
+// ============================================================================
+// MY FIXES (0204, Ethan 2026-11-23)
+// ============================================================================
+// "it should not only go to the manager to fix, but it should also go to that
+// respective team member … when a team member submits it saying, hey, I fixed
+// it, it should also remove from the manager side. So the manager can have
+// their team make the fixes themselves while they're coaching them."
+//
+// ONE CARD, TWO VIEWERS. A full-review send-back is assigned to the lister (the
+// Shopify tag, matched to a SPEEKSNET account at that store — see assigneeFor in
+// listing-review). The lister sees it here; the manager sees it on the store's
+// list with "Sent To Rorie · Seen 9:12am". Either one's I Fixed It closes it for
+// both. No tag, or a temp with no account, stays the manager's alone. Notes
+// Only and photo send-backs are never assigned (for now: Ethan has his own plan
+// for pictures).
+const _lrMayMine = () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-my-fixes');
+const _lrMineOnly = () => _lrMayMine() && !_lrMayFix() && !_lrMaySpot() && !_lrMayFull();
+let _mfData = null, _mfErr = null, _mfSel = null;
+const _mfBusy = new Set();
+async function _mfLoad() {
+    try { _mfData = await _lrFetch('?view=mine'); _mfErr = null; }
+    catch (e) { _mfErr = e.message || String(e); }
+}
+function _mfTime(at) {
+    const d = new Date(at);
+    return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+// The manager's line on the From Ethan card.
+function _mfWhoHtml(back) {
+    if (!back || back.returnedKind === 'notes') return '';
+    if (!back.assignedTo) return '<span class="lr-from-who">Not sent to a team member — no lister tag matches anyone at this store.</span>';
+    return `<span class="lr-from-who">Also sent to <b>${_ecEsc(back.assignedTo)}</b> · ${back.assigneeSeenAt
+        ? 'Seen ' + _ecEsc(_mfTime(back.assigneeSeenAt)) : 'Not opened yet'}</span>`;
+}
+function _mfChrome() {
+    // Nothing of the store's tools: no view toggle, no store picker.
+    ['ecViewToggle', 'ecStoreFilter'].forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+    const host = document.getElementById('ecStoreFilter')?.closest('.dd-host'); if (host) host.style.display = 'none';
+    const sb = document.getElementById('ecStandbyHost'); if (sb) sb.innerHTML = '';
+    const sub = document.getElementById('ecSubtitle');
+    const n = (_mfData?.items || []).length;
+    if (sub) sub.textContent = `My Fixes · ${n ? n + ' To Fix' : 'All Clear'}`;
+}
+function _mfHtml() {
+    if (_mfErr) return `<div class="lh-unknown"><span class="lh-unknown-t">Could Not Load My Fixes</span><span class="lh-why">${_ecEsc(_mfErr)}</span></div>`;
+    if (!_mfData) return '<div class="status-message">Loading…</div>';
+    const items = _mfData.items || [];
+    if (!items.some(c => c.productId === _mfSel)) _mfSel = items[0] ? items[0].productId : null;
+    const c = items.find(x => x.productId === _mfSel) || null;
+    const rows = items.map(x => `<button type="button" class="lr-row${x.productId === _mfSel ? ' lr-row-on' : ''} lr-row-back" onclick="mfPick('${_ecEsc(x.productId)}')">
+        <span class="lr-thumb">${x.photos && x.photos[0] ? `<img src="${_ecEsc(x.photos[0].thumb)}" alt="" loading="lazy">` : ''}</span>
+        <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(x.title || 'Untitled Listing')}</span>
+          <span class="lr-chips"><span class="lr-chip lr-c-bad">${x.card.returnedKind === 'confirm' ? 'Fix Not Accepted' : 'Sent Back'}</span></span></span>
+        <span class="lr-row-p">${_fqMoney(x.price)}</span></button>`).join('');
+    const busy = c && _mfBusy.has(c.productId) ? 'disabled' : '';
+    const detail = !c ? `<div class="lr-detail-in"><div class="lh-clear">Nothing To Fix — Nice Work.</div></div>`
+        : `<div class="lr-detail-in">
+            ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
+            <div class="lr-head">
+              <div class="lr-head-t"><h3>${_ecEsc(c.title || 'Untitled Listing')}</h3>
+                <span class="lr-meta">${_ecEsc(c.sku || '—')}${c.createdAt ? ` · Listed ${_fqDay(c.createdAt)}` : ''}</span></div>
+              <div class="lr-head-r"><span class="lr-price">${_fqMoney(c.price)}</span>${_lrLinks(_mfData.shop, c.productId, c.handle, _mfData.store)}</div>
+            </div>
+            ${_fqFromEthanHtml(c.card, c.lines[0], true)}
+            ${(c.photos || []).length ? _lrPhotos(c.photos, []) : ''}
+            <div class="lr-done">
+              <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Send To Ethan</button>
+              <span class="lr-hint">Fix it in Shopify first. Ethan checks it, and your manager sees it is done.</span></div>
+          </div>`;
+    return `<div class="lr-split">
+      <section class="lr-list">
+        <div class="lr-list-h"><div class="lr-list-title"><h2>My Fixes</h2><span class="lr-count">${items.length}</span>
+          <span class="lr-sort">Listings You Made That Ethan Sent Back</span></div></div>
+        <div class="lr-rows">${rows || '<div class="lh-clear">Nothing To Fix.</div>'}</div>
+      </section>
+      <section class="lr-detail">${detail}</section>
+    </div>`;
+}
+function _mfSeen(pid) {
+    const c = (_mfData?.items || []).find(x => x.productId === pid);
+    if (!c || c.card.assigneeSeenAt) return;
+    c.card.assigneeSeenAt = new Date().toISOString();
+    _lrPost({ action: 'mine-seen', productId: pid }).catch(() => {});
+}
+function mfPick(pid) { _mfSel = pid; _mfSeen(pid); ecRender(); _lrScrollTop(); }
+async function mfMarkFixed(pid) {
+    const c = (_mfData?.items || []).find(x => x.productId === pid);
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Fixes', title: 'Mark This Listing Fixed?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
+               <p class="lt-ask-say">It goes to Ethan, who checks it. If something is still wrong, it comes back here with his note.</p>`,
+        go: 'I Fixed It', cancel: 'Not Yet' });
+    if (!said) return;
+    _mfBusy.add(pid); ecRender();
+    const res = await _lrPost({ action: 'mark-fixed', store: _mfData.store, productId: pid }).catch(e => ({ ok: false, body: { detail: String(e) } }));
+    _mfBusy.delete(pid);
+    if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.');
+    _mfSel = null;
+    await _mfLoad(); ecRender();
+    if (typeof checkMyFixReminders === 'function') checkMyFixReminders();
+}
+Object.assign(window, { mfPick, mfMarkFixed });
+
+async function _frLoadList() {
+    _frList = null; _frListErr = null;
+    try { _frList = await _lrFetch(`?view=full-list&store=${encodeURIComponent(_frStore)}${_frQ ? `&q=${encodeURIComponent(_frQ)}` : ''}`); }
+    catch (e) { _frListErr = e.message || String(e); }
+    _fqRender();
+}
+async function _frLoadListing() {
+    _frListing = null; _frListingErr = null; _fqRender();
+    try { _frListing = await _lrFetch(`?view=listing&store=${encodeURIComponent(_frStore)}&productId=${encodeURIComponent(_frSel)}`); }
+    catch (e) { _frListingErr = e.message || String(e); }
+    _fqRender();
+}
+function frOpen() { if (!_frStore) _frStore = _LR_STORES[0]; lrSetMode('full'); if (!_frList) _frLoadList(); }
+function frSetStore(st) { _frStore = st; _frSel = null; _frListing = null; _frReset(); _frLoadList(); }
+function frSearch(v) {
+    _frQ = String(v || '');
+    clearTimeout(_frSearchTimer);
+    _frSearchTimer = setTimeout(_frLoadList, 350);
+}
+function frPick(pid) { _frSel = pid; _frReset(); _frLoadListing(); _lrScrollTop(); }
+function frFlagPart(label) {
+    if (label === 'Title' && _frListing && _frListing.already && _frListing.already.title) { _ltTell('Already Flagged', _frListing.already.title); return; }
+    // A second click on Flagged unflags it (Ethan, 2026-11-23) — no separate Unflag button.
+    if (_frForm.parts.has(label)) { frUnflagPart(label); return; }
+    _frForm.parts.set(label, '');
+    _frForm.selPart = label; _frForm.selPhoto = null; _fqRender();
+}
+function frPartNote(v) { if (_frForm.selPart) _frForm.parts.set(_frForm.selPart, v); }
+function frEditPart(label) { _frForm.selPart = label; _frForm.selPhoto = null; _fqRender(); }
+function frUnflagPart(label) { _frForm.parts.delete(label); if (_frForm.selPart === label) _frForm.selPart = null; _fqRender(); }
+function frPickPhoto(n) { _frForm.selPhoto = n; _frForm.selPart = null; _fqRender(); }
+function _frPhoto(n) { if (!_frForm.photos.has(n)) _frForm.photos.set(n, { tags: new Set(), note: '' }); return _frForm.photos.get(n); }
+function frPhotoTag(n, tag) { const m = _frPhoto(n); m.tags.has(tag) ? m.tags.delete(tag) : m.tags.add(tag); _fqRender(); }
+function frPhotoNote(n, v) { _frPhoto(n).note = v; }
+function frClearPhoto(n) { _frForm.photos.delete(n); if (_frForm.selPhoto === n) _frForm.selPhoto = null; _fqRender(); }
+function frDone() { _frForm.selPart = null; _frForm.selPhoto = null; _fqRender(); }
+function frNote(v) { _frForm.note = v; }
+async function frSubmit(result) {
+    if (!_frListing || _frBusy) return;
+    const parts = [..._frForm.parts.entries()].map(([part, note]) => ({ part, note: String(note || '').trim() }));
+    const blank = parts.filter(p => !p.note);
+    const photos = [..._frForm.photos.entries()].map(([n, m]) => ({ n, tags: [...m.tags], note: String(m.note || '').trim(),
+        thumb: (_frListing.photos[n - 1] || {}).thumb || null })).filter(p => p.tags.length || p.note);
+    const note = String(_frForm.note || '').trim();
+    if (result === 'back' || result === 'notes') {
+        if (blank.length) { await _ltTell('Add A Note', `Say what you want them to know about ${blank.map(b => b.part).join(', ')} — the manager reads it.`); return; }
+    }
+    if (result === 'back' && !parts.length && !photos.length) { await _ltTell('Flag Something First', 'Flag a part or a photo, with a note, to send it back.'); return; }
+    // NOTES ONLY (Ethan, 2026-11-23): "maybe it's just a couple comments, but
+    // there's nothing they need to fix … those go just to the manager, but it
+    // doesn't count as a flag." Goes to the manager's list as Notes; Got It clears it.
+    if (result === 'notes' && !note && !parts.length && !photos.some(p => p.note)) {
+        await _ltTell('Write The Note First', 'Write what the manager should read — on a part, a photo, or in Note For The Store.'); return;
+    }
+    _frBusy = true; _fqRender();
+    const sending = result === 'back' || result === 'notes';
+    const res = await _lrPost({ action: 'full-review', store: _frStore, productId: _frSel, result: sending ? 'back' : 'good',
+        notesOnly: result === 'notes', parts: sending ? parts : [], photos: sending ? photos : [], note });
+    _frBusy = false;
+    if (!res.ok) { await _ltTell('Not Saved', res.body?.detail || res.body?.error || 'The request failed.'); _fqRender(); return; }
+    // On to the next listing in the list, the way I Fixed It opens the next one.
+    const items = (_frList && _frList.items) || [];
+    const i = items.findIndex(x => x.productId === _frSel);
+    const next = items.slice(i + 1).find(x => !x.reviewed) || null;
+    _frReset();
+    await _frLoadList();
+    if (next) frPick(next.productId); else { _frSel = null; _frListing = null; _fqRender(); }
+    if (_lrMaySpot()) _spLoad().then(ecRender);
+}
+Object.assign(window, { frOpen, frSetStore, frSearch, frPick, frFlagPart, frEditPart, frPartNote, frUnflagPart, frPickPhoto,
+    frPhotoTag, frPhotoNote, frClearPhoto, frDone, frNote, frSubmit });
+
+// "Mon, Nov 23" from YYYY-MM-DD, read as a calendar day (no time zone shift).
+function _frDayName(day) {
+    const d = new Date(day + 'T12:00:00Z');
+    return d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+}
+function _frHtml() {
+    const pills = _LR_STORES.map(st => `<button type="button" class="lr-filter${st === _frStore ? ' lr-filter-on' : ''}" onclick="frSetStore('${st}')">${st}</button>`).join('');
+    const head = `<div class="lr-screen-h">${_LR_BACK}<h2>Full Listing Review</h2><div class="lr-fr-stores">${pills}</div></div>`;
+    const items = (_frList && _frList.items) || [];
+    const listRows = _frListErr ? `<div class="lh-unknown"><span class="lh-why">${_ecEsc(_frListErr)}</span></div>`
+        : !_frList ? '<div class="status-message">Loading…</div>'
+        : items.length ? items.map((x, k) => `${!_frQ && x.day && (k === 0 || items[k - 1].day !== x.day)
+            ? `<div class="lr-fr-day">${x.missed ? 'Missed · ' : ''}Listed ${_ecEsc(_frDayName(x.day))}</div>` : ''}<button type="button" class="lr-row${x.productId === _frSel ? ' lr-row-on' : ''}" onclick="frPick('${_ecEsc(x.productId)}')">
+            <span class="lr-thumb">${x.thumb ? `<img src="${_ecEsc(x.thumb)}" alt="" loading="lazy">` : ''}</span>
+            <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(x.title || '')}</span>
+              <span class="lr-meta">${[x.lister, x.createdAt ? _fqDay(x.createdAt) : '', _fqMoney(x.price)].filter(Boolean).map(_ecEsc).join(' · ')}</span>
+              ${x.onList && !(x.reviewed && x.reviewed.result === 'notes') ? '<span class="lr-chips"><span class="lr-chip lr-c-ph">On Fix List</span></span>'
+                : x.reviewed ? `<span class="lr-chips"><span class="lr-chip ${({ good: 'lr-c-good', notes: 'lr-c-notes' })[x.reviewed.result] || 'lr-c-bad'}">${({ good: 'Looks Good', notes: 'Notes Sent' })[x.reviewed.result] || 'Sent Back'}</span></span>` : ''}
+            </span></button>`).join('')
+        : `<div class="lh-clear">${_frQ ? 'No live listings match.' : 'No Picks Yet — The Top 10 Arrive At 6am.'}</div>`;
+    const list = `<section class="lr-list lr-fr-list">
+        <div class="lr-list-h">
+          <!-- No search (Ethan, 2026-11-23): the list is the daily ten plus what he missed. -->
+          <span class="lr-sort">${_ecEsc(_frStore || '')} · ${_frQ ? 'Search Results' : 'Top 10 By Price'}</span>
+        </div>
+        <div class="lr-rows">${listRows}</div>
+      </section>`;
+    let mid, side = '';
+    if (!_frSel) mid = '<div class="lr-empty">Pick A Listing On The Left.</div>';
+    else if (_frListingErr) mid = `<div class="lr-detail-in"><div class="lh-unknown"><span class="lh-why">${_ecEsc(_frListingErr)}</span></div></div>`;
+    else if (!_frListing) mid = '<div class="status-message">Reading the listing from Shopify…</div>';
+    else {
+        const d = _frListing, f = _frForm;
+        mid = `<div class="lr-detail-in">
+          <div class="lr-head"><div class="lr-head-t"><h3>${_ecEsc(d.title || 'Untitled Listing')}</h3>
+            <span class="lr-meta">${[d.sku, d.lister, d.createdAt ? 'Listed ' + _fqDay(d.createdAt) : ''].filter(Boolean).map(_ecEsc).join(' · ')}</span></div>
+            <div class="lr-head-r"><span class="lr-price">${_fqMoney(d.price)}</span>${_lrLinks(d.shop, d.productId, d.handle)}</div></div>
+          ${_lrListingHtml(d, { form: f })}
+        </div>`;
+        const tick = (on, call, lab) => `<button type="button" class="lr-tick${on ? ' lr-tick-on' : ''}" onclick="${call}">${_ecEsc(lab)}${on ? ' ✕' : ''}</button>`;
+        let editor = '<div class="lr-tap-hint">Flag a part of the listing, or tap a photo, to say what’s wrong with it.</div>';
+        if (f.selPart) {
+            editor = `<div class="lr-photo-ed">
+                <div class="lr-photo-ed-h"><b>${_ecEsc(f.selPart)}</b><span class="lr-dim">What’s Wrong With This Part?</span></div>
+                <textarea class="lr-note" rows="3" placeholder="What the store should change" oninput="frPartNote(this.value)">${_ecEsc(f.parts.get(f.selPart) || '')}</textarea>
+                <div class="lr-acts"><button type="button" class="lr-btn lr-btn-ghost lr-btn-sm" onclick="frDone()">Save Note</button></div>
+              </div>`;
+        } else if (f.selPhoto) {
+            const m = f.photos.get(f.selPhoto) || { tags: new Set(), note: '' };
+            const ph = (d.photos || [])[f.selPhoto - 1];
+            editor = `<div class="lr-photo-ed">
+                <div class="lr-photo-ed-h"><b>Photo ${f.selPhoto}</b><span class="lr-dim">What’s Wrong With This Photo?</span></div>
+                ${ph ? _lrStepStage(`<button type="button" class="lr-photo-zoom" title="Zoom in" onclick="openAuditPhotoLightbox(${_ecEsc(JSON.stringify(ph.url || ph.thumb))}, ${_ecEsc(JSON.stringify((d.photos || []).map(p => p.url || p.thumb)))})"><img src="${_ecEsc(ph.url || ph.thumb)}" alt="Photo ${f.selPhoto}"><span class="lr-zoom-tag">⤢ Zoom</span></button>`, f.selPhoto, (d.photos || []).length, 'frPickPhoto') : ''}
+                <div class="lr-ticks">${_SP_EYE.map(x => tick(m.tags.has(x), `frPhotoTag(${f.selPhoto},${_ecEsc(JSON.stringify(x))})`, x)).join('')}</div>
+                <textarea class="lr-note" rows="2" placeholder="Note for photo ${f.selPhoto}" oninput="frPhotoNote(${f.selPhoto}, this.value)">${_ecEsc(m.note || '')}</textarea>
+                <div class="lr-acts"><button type="button" class="lr-btn lr-btn-ghost lr-btn-sm" onclick="frDone()">Save Note</button>
+                  ${m.tags.size || m.note ? `<button type="button" class="lr-btn lr-btn-ghost lr-btn-sm" onclick="frClearPhoto(${f.selPhoto})">Clear Photo ${f.selPhoto}</button>` : ''}</div>
+              </div>`;
+        }
+        const marked = [...f.parts.keys()].map(p => `<button type="button" class="lr-mk${f.selPart === p ? ' lr-mk-on' : ''}" onclick="frEditPart(${_ecEsc(JSON.stringify(p))})">
+              <b>${_ecEsc(p)}</b>${f.parts.get(p) ? '<span>“' + _ecEsc(f.parts.get(p).length > 60 ? f.parts.get(p).slice(0, 60) + '…' : f.parts.get(p)) + '”</span>' : ''}</button>`)
+            .concat([...f.photos.entries()].filter(([, m]) => m.tags.size || m.note).sort((a, b) => a[0] - b[0]).map(([n, m]) =>
+              `<button type="button" class="lr-mk${f.selPhoto === n ? ' lr-mk-on' : ''}" onclick="frPickPhoto(${n})"><b>Photo ${n}</b><span>${_ecEsc([...m.tags].join(', ') || 'Note')}</span></button>`)).join('');
+        side = `<aside class="lr-fr-side">
+            <b class="lr-ask">Your Review</b>
+            ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
+            ${editor}
+            ${marked ? `<div class="lr-tgroup"><span class="lr-tlab">Flagged So Far</span><div class="lr-marked">${marked}</div></div>` : ''}
+            <label class="lr-tlab" for="frNote">Note For The Store</label>
+            <textarea id="frNote" class="lr-note" rows="2" placeholder="For the whole listing" oninput="frNote(this.value)">${_ecEsc(f.note)}</textarea>
+            <div class="lr-pair">
+              <button type="button" class="lr-btn lr-btn-go" ${_frBusy ? 'disabled' : ''} onclick="frSubmit('good')">Looks Good</button>
+              <button type="button" class="lr-btn lr-btn-main" ${_frBusy ? 'disabled' : ''} onclick="frSubmit('back')">Send Back To ${_ecEsc(_frStore)}</button>
+            </div>
+            <button type="button" class="lr-btn lr-btn-ghost lr-fr-notes" ${_frBusy ? 'disabled' : ''} onclick="frSubmit('notes')">Notes Only — Not A Flag</button>
+            <span class="lr-hint">Send Back is a flag on the lister and the store fixes it. Notes Only goes to the ${_ecEsc(_frStore)} manager to read — nothing to fix, nobody flagged.</span>
+          </aside>`;
+    }
+    return head + `<div class="lr-split lr-fr">${list}<section class="lr-detail">${mid}</section>${side}</div>`;
+}
+
+Object.assign(window, { spPickPhoto, spPhotoTag, spPhotoNote, spClearPhoto });
+Object.assign(window, { lrSetMode, lrOpenStore, spOpen, spSkip, cfSkip, spTick, spNote, spAgree, spGrade,
+    cfConfirm, cfSendBack, flSetWeek });
+
+
 // --- Listing Titles ---------------------------------------------------------
 //
 // THE THIRD TOOL ON THIS PAGE, and the one that reads a title rather than a
@@ -68549,7 +70216,7 @@ function _lhToolPqHtml() {
               ${_lhShopifyLink(r)}
             </div>
             <div class="lh-tool-ttl"><span class="lt-lab">Listing</span><span>${_ecEsc(r.title || '')}</span></div>
-            ${(r.findings || []).map(t => `<div class="lh-tool-ttl"><span class="lt-lab">We said</span><span>${_ecEsc(t)}</span></div>`).join('')}
+            ${(r.findings || []).map(t => `<div class="lh-tool-ttl"><span class="lt-lab">We Said</span><span>${_ecEsc(t)}</span></div>`).join('')}
           </div>`).join('')}
       </div>`).join('');
     return `<div class="lh-tool-pq"><div class="lh-tool-h">Picture Quality</div>
@@ -70210,6 +71877,104 @@ async function checkTitleNoteReminders() {
 }
 window.checkTitleNoteReminders = checkTitleNoteReminders;
 
+// --- Spot Check Notes waiting (the DM's own send-backs) ---------------------
+// Built the same way as checkTitleNoteReminders above, read its comments: the
+// DM only (whoever holds the Spot Check), state on the server (triaged_at,
+// 0190), a 30-minute timer, the count as the card's identity.
+// ⚠️ The bubble id is in the RETIRED FLOATING ALERT TOASTS list in styles.css.
+let _snNagStarted = false;
+function _snHideNag() {
+    const b = document.getElementById('spotNoteAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._snHideNag = _snHideNag;
+function _snNagBubbleEl() {
+    let b = document.getElementById('spotNoteAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'spotNoteAlertBubble';
+    b.style.cssText = 'display:none;';
+    b.innerHTML = '<span id="spotNoteAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+async function checkSpotNoteReminders() {
+    if (!document.getElementById('samFeed')) return;
+    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-spot-check')) { _snHideNag(); return; }
+    if (!sessionStorage.getItem('speeksUserPin')) { _snHideNag(); return; }
+    if (!_snNagStarted) { _snNagStarted = true; setInterval(checkSpotNoteReminders, 30 * 60 * 1000); }
+    let d = null;
+    try { d = await _lrFetch('?view=spot-notes-count'); } catch (_) { return; }
+    const n = Number(d && d.waiting || 0);
+    if (!n) {
+        _snHideNag();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+        return;
+    }
+    const b = _snNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('spotNoteAlertBubbleText');
+    if (t) {
+        t.dataset.summary = n + ' pass' + (n === 1 ? '' : 'es') + ' you sent back from the spot check'
+            + (n === 1 ? ' is' : ' are') + ' waiting. Open it to read them and copy the ask for Claude.';
+        t.dataset.sig = 'spotnotes:' + n;
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+window.checkSpotNoteReminders = checkSpotNoteReminders;
+
+// --- My Fixes waiting (0204) -------------------------------------------------
+// Built like checkSpotNoteReminders above: whoever holds My Fixes, a 30-minute
+// timer, the count as the card's identity.
+// ⚠️ The bubble id is in the RETIRED FLOATING ALERT TOASTS list in styles.css.
+let _mfNagStarted = false;
+function _mfHideNag() {
+    const b = document.getElementById('myFixAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._mfHideNag = _mfHideNag;
+function _mfNagBubbleEl() {
+    let b = document.getElementById('myFixAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'myFixAlertBubble';
+    b.style.cssText = 'display:none;';
+    b.innerHTML = '<span id="myFixAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+async function checkMyFixReminders() {
+    if (!document.getElementById('samFeed')) return;
+    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-my-fixes')) { _mfHideNag(); return; }
+    if (!sessionStorage.getItem('speeksUserPin')) { _mfHideNag(); return; }
+    if (!_mfNagStarted) { _mfNagStarted = true; setInterval(checkMyFixReminders, 30 * 60 * 1000); }
+    let d = null;
+    try { d = await _lrFetch('?view=mine-count'); } catch (_) { return; }
+    const n = Number(d && d.n || 0);
+    if (!n) {
+        _mfHideNag();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+        return;
+    }
+    const b = _mfNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('myFixAlertBubbleText');
+    if (t) {
+        t.dataset.summary = 'You have ' + n + ' listing' + (n === 1 ? '' : 's') + ' to fix. Open it to see what Ethan found.';
+        t.dataset.sig = 'myfixes:' + n;
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+window.checkMyFixReminders = checkMyFixReminders;
+
 // --- Listings live on the online store with no picture ----------------------
 //
 // Rides the SAME ?view=counts fetch as the Categories nag rather than adding a
@@ -71241,6 +73006,17 @@ async function ecDisable(sku, btn) {
     _ecApply(sku, b.item || { state: 'disabled', error: null });
 }
 
+// ⚠️ NO REFRESH BUTTON (Ethan, 2026-11-23). The page reads fresh on every open
+// and after every action; the one gap was a tab left open all day. So it
+// re-reads itself when the tab comes back after two minutes or more away.
+let _ecHiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { _ecHiddenAt = Date.now(); return; }
+    const away = _ecHiddenAt && Date.now() - _ecHiddenAt >= 2 * 60 * 1000;
+    _ecHiddenAt = 0;
+    const pane = document.getElementById('ecBody');
+    if (away && pane && pane.offsetParent !== null) ecRefresh();
+});
 async function ecRefresh() {
     if (_ecBusy) return;
     _ecBusy = true;
@@ -71555,6 +73331,17 @@ function _ddPlace(host) {
     // Flip above the button when there is more room up than down.
     const below = window.innerHeight - r.bottom;
     const h = Math.min(list.scrollHeight + 12, 280);
+    // ⚠️ data-dd-down on the <select>: ALWAYS below, never flipped — for a picker
+    // whose context sits above it (Listing Fixes' category picker, Ethan
+    // 2026-11-20: "The dropdown should go down so it isn't covering the listing
+    // info"). If the window is short the list shortens rather than flips.
+    if (host._ddSel && host._ddSel.hasAttribute('data-dd-down')) {
+        list.style.bottom = '';
+        list.style.top = Math.round(r.bottom + 5) + 'px';
+        list.style.maxHeight = Math.max(140, Math.min(280, Math.round(below - 16))) + 'px';
+        return;
+    }
+    list.style.maxHeight = '';
     if (below < h && r.top > below) {
         list.style.top = '';
         list.style.bottom = Math.round(window.innerHeight - r.top + 5) + 'px';
