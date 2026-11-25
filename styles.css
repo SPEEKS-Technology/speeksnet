@@ -13426,6 +13426,9 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-btn-secondary:hover:not(:disabled) { border-color: var(--sage-professional); color: var(--sage-deep); }
 .b2b-btn-danger { background: #fcecec; color: #d1443b; border-color: #f7dada; margin-right: auto; }
 .b2b-btn-danger:hover:not(:disabled) { background: #d1443b; color: #fff; border-color: #d1443b; }
+/* Armed write-off / destructive confirm on the right side of a modal footer (no margin-right: auto). */
+.b2b-btn-confirm-danger { background: #b91c1c; color: #fff; border-color: #b91c1c; }
+.b2b-btn-confirm-danger:hover:not(:disabled) { background: #991b1b; border-color: #991b1b; }
 .b2b-btn:disabled { opacity: .45; cursor: not-allowed; }
 .b2b-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(31,157,87,.16); }
 .b2b-add { margin-top: 12px; width: 100%; }
@@ -24414,9 +24417,10 @@ select.dd-native {
     color: #fff;
 }
 @media (max-width: 620px) {
-    .b2b-splitrow { flex-wrap: wrap; }
+    .b2b-splitrow, .b2b-moverow { flex-wrap: wrap; }
     .b2b-splitrow-m b { max-width: 100%; white-space: normal; }
     .b2b-splitrow-s { width: 100%; }
+    .b2b-moverow .b2b-movenow { width: 100%; padding-left: 30px; }
 }
 
 /* Move Lines. A tick list rather than chips: here the destination is picked once

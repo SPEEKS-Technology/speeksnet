@@ -3383,3 +3383,116 @@ t('sort by brand: the button is drawn on an empty deal and shown once there are 
         return _srcOf(_b2bPaintTotals).indexOf('_b2bPaintSortBtn()') > -1 || 'nothing repaints it as lines come and go';
     } finally { _b2bModalItems = keep; box.remove(); }
 });
+// --- recycle many lines out at once (Nick, 2026-11-04) -----------------------
+function _recFixture() {
+    return [
+        { id: 'r1', line_no: 1, sku: 'S1', make: 'Dell', model: 'Scrap tower', quantity: 4, listed_qty: 0, recycled_qty: 1, disposition: 'recycle', listings: [] },
+        { id: 'r2', line_no: 2, sku: 'S2', make: 'HP', model: 'Laptop', quantity: 3, listed_qty: 1, recycled_qty: 0, disposition: 'purchase', cost: 50, listings: [] },
+        { id: 'r3', line_no: 3, sku: 'S3', make: 'Acer', model: 'Done', quantity: 2, listed_qty: 2, recycled_qty: 0, disposition: 'purchase', cost: 10, listings: [] },
+        { id: 'r4', line_no: 4, sku: 'S4', make: 'Old', model: 'Monitor', quantity: 2, listed_qty: 0, recycled_qty: 0, disposition: 'recycle', listings: [] },
+    ];
+}
+function _recWith(fn) {
+    var keep = _b2bModalItems, keepD = _b2bModalDeal, keepR = sessionStorage.getItem('speeksUserRole'), keepP = _b2bPendingUnit;
+    var body = document.createElement('div'), foot = document.createElement('div');
+    body.id = 'b2bRecycleManyBody'; foot.id = 'b2bRecycleManyFooter';
+    document.body.appendChild(body); document.body.appendChild(foot);
+    sessionStorage.setItem('speeksUserRole', 'mocd');
+    try {
+        _b2bModalItems = _recFixture();
+        _b2bModalDeal = { id: 'rec-deal', ref: 'REC-1', stage: 'listing', listing_store: 'OVL' };
+        _b2bPendingUnit = null;
+        return fn(body, foot);
+    } finally {
+        _b2bModalItems = keep; _b2bModalDeal = keepD; _b2bRecSel = {}; _b2bRecArmed = false; _b2bPendingUnit = keepP;
+        sessionStorage.setItem('speeksUserRole', keepR);
+        body.remove(); foot.remove();
+    }
+}
+t('recycle many: the listing screen offers it, other stages do not', function () {
+    if (_b2bRecycleManyBtn({ id: 'x', stage: 'listing' }).indexOf('b2bOpenRecycleMany()') < 0) return 'no button on listing';
+    if (_b2bRecycleManyBtn({ id: 'x', stage: 'pricing' })) return 'offered outside listing';
+    return _srcOf(_b2bStageListing).indexOf('_b2bRecycleManyBtn(deal)') > -1 || 'not in the listing tools row';
+});
+t('recycle many: opens with the outstanding recycle lines ticked and Title Case shortcuts', function () {
+    return _recWith(function (body, foot) {
+        b2bOpenRecycleMany();
+        var sel = Object.keys(_b2bRecSel).sort().join(',');
+        if (sel !== 'r1,r4') return 'ticked: ' + sel;
+        if (body.innerHTML.indexOf('Done') > -1) return 'a finished line is offered';
+        if (body.querySelectorAll('.b2b-moverow').length !== 3) return 'expected 3 outstanding lines';
+        if (body.textContent.indexOf('Recycle Lines Only (2)') < 0 || body.textContent.indexOf('Select All') < 0) {
+            return 'shortcuts not in Title Case';
+        }
+        return foot.textContent.indexOf('Recycle Out 5 Units') > -1 || 'footer: ' + foot.textContent.replace(/\s+/g, ' ');
+    });
+});
+t('recycle many: ticking a bought line adds its cost and requires a second confirmation click', function () {
+    return _recWith(function (body, foot) {
+        b2bOpenRecycleMany();
+        b2bRecToggle('r2');
+        var f = foot.textContent.replace(/\s+/g, ' ');
+        if (f.indexOf('Recycle Out 7 Units') < 0) return 'footer: ' + f;
+        if (f.indexOf('$100.00 written off') < 0) return 'no cost in: ' + f;
+        // First click arms confirmation instead of recycling immediately.
+        b2bRecycleMany();
+        if (!_b2bRecArmed) return 'did not arm confirmation for bought items';
+        var by = {}; _b2bModalItems.forEach(function (i) { by[i.id] = i; });
+        if (by.r2.recycled_qty !== 0 || by.r1.recycled_qty !== 1) return 'recycled on first click before confirm';
+        if (!foot.querySelector('.b2b-btn-confirm-danger')) return 'confirm button missing danger styling';
+        if (foot.textContent.indexOf('Confirm Write-Off ($100.00)') < 0) return 'confirm label: ' + foot.textContent;
+        if (body.textContent.indexOf('Confirm Cost Write-Off') < 0) return 'missing warning banner';
+        // Changing selection disarms confirmation.
+        b2bRecToggle('r4');
+        if (_b2bRecArmed) return 'selection change did not disarm';
+        // Re-arm and confirm executes the recycle.
+        b2bRecycleMany();
+        if (!_b2bRecArmed) return 'did not re-arm';
+        b2bRecycleMany();
+        by = {}; _b2bModalItems.forEach(function (i) { by[i.id] = i; });
+        if (by.r2.recycled_qty !== 2) return 'r2 recycled ' + by.r2.recycled_qty + ', expected 2';
+        if (by.r1.recycled_qty !== 4) return 'r1 recycled ' + by.r1.recycled_qty + ', expected 4';
+        if (by.r4.recycled_qty !== 0) return 'unticked r4 was recycled';
+        return !_b2bRecArmed && Object.keys(_b2bRecSel).length === 0 || 'state outlived confirmation';
+    });
+});
+t('recycle many: scrap-only selection recycles every outstanding unit in one click', function () {
+    return _recWith(function () {
+        b2bOpenRecycleMany();
+        b2bRecycleMany();
+        var by = {}; _b2bModalItems.forEach(function (i) { by[i.id] = i; });
+        if (by.r1.recycled_qty !== 4) return 'r1 recycled ' + by.r1.recycled_qty + ', expected 4';
+        if (by.r4.recycled_qty !== 2) return 'r4 recycled ' + by.r4.recycled_qty + ', expected 2';
+        if (by.r2.recycled_qty !== 0) return 'an unticked line was recycled';
+        return Object.keys(_b2bRecSel).length === 0 || 'the selection outlives the action';
+    });
+});
+t('recycle many: nothing ticked disables the button with clean label, and a store sees only its own lines', function () {
+    return _recWith(function (body, foot) {
+        b2bOpenRecycleMany();
+        b2bRecPick('none');
+        var btn = foot.querySelector('.b2b-btn-primary');
+        if (!btn || !btn.disabled) return 'enabled with nothing ticked';
+        if (btn.textContent.trim() !== 'Recycle Out') return 'bad empty label: "' + btn.textContent + '"';
+        return _srcOf(_b2bRecLines).indexOf('_b2bMyLines()') > -1 || 'not scoped to the lines this user answers for';
+    });
+});
+t('recycle many: clears a pending barcode scan when that line is recycled out', function () {
+    return _recWith(function () {
+        _b2bPendingUnit = 'r1';
+        b2bOpenRecycleMany();
+        b2bRecycleMany();
+        if (_b2bPendingUnit !== null) return 'pending scan survived on recycled line: ' + _b2bPendingUnit;
+        // Pending scan on an unticked line survives.
+        _b2bModalItems = _recFixture();
+        _b2bPendingUnit = 'r2';
+        b2bOpenRecycleMany();
+        b2bRecycleMany();
+        return _b2bPendingUnit === 'r2' || 'cleared pending scan on an unticked line';
+    });
+});
+t('recycle many: failed save after celebrate restores the listing screen instead of hiding the rollback', function () {
+    var src = _srcOf(_b2bRecycleApply);
+    return (src.indexOf("!document.getElementById('b2bListRows')") > -1 && src.indexOf('_b2bStageListing(_b2bModalDeal)') > -1)
+        || 'rollback does not restore listing when celebrate replaced the checklist';
+});

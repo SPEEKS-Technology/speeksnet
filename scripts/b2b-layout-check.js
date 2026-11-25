@@ -505,4 +505,50 @@ t('board: picking a stage in the row narrows the board to it', function () {
     } finally { _b2bStageFocus = keep; }
 });
 
+// ---------------------------------------------------------------------------
+// RECYCLE OUT (MANY LINES) MODAL (2026-11)
+// ---------------------------------------------------------------------------
+[390, 820, 1440].forEach(function (w) {
+    t('recycle many: picker rows and armed confirm footer fit at ' + w + 'px without overflow', function () {
+        var keepI = _b2bModalItems, keepD = _b2bModalDeal, keepR = sessionStorage.getItem('speeksUserRole');
+        sessionStorage.setItem('speeksUserRole', 'mocd');
+        try {
+            _b2bModalItems = [
+                { id: 'rm1', line_no: 1, sku: 'B2B-9999-01', make: 'Dell', model: 'OptiPlex 7090 Micro Workstation Desktop With Long Description', quantity: 12, listed_qty: 2, recycled_qty: 0, disposition: 'purchase', cost: 125, listings: [] },
+                { id: 'rm2', line_no: 2, sku: 'B2B-9999-02', make: 'HP', model: 'Scrap Pallet Monitors', quantity: 6, listed_qty: 0, recycled_qty: 1, disposition: 'recycle', listings: [] },
+            ];
+            _b2bModalDeal = { id: 'rm-deal', ref: 'RM-1', stage: 'listing', listing_store: 'OVL' };
+            _b2bRecSel = { rm1: true, rm2: true };
+            _b2bRecArmed = true;
+            var host = stage(Math.min(w, 640),
+                '<div class="manage-content" id="b2bRecycleManyBody"></div>'
+                + '<div class="manage-footer flex-end" id="b2bRecycleManyFooter"></div>');
+            _b2bPaintRecycleMany();
+            var bad = overflowing(host);
+            if (bad.length) return 'overflows: ' + bad.slice(0, 4).join(', ');
+            var btn = host.querySelector('.b2b-btn-confirm-danger');
+            if (!btn) return 'armed confirm button missing';
+            var r = btn.getBoundingClientRect();
+            return (r.width > 80 && r.height >= 28) || 'confirm button sized ' + Math.round(r.width) + 'x' + Math.round(r.height);
+        } finally {
+            _b2bModalItems = keepI; _b2bModalDeal = keepD; _b2bRecSel = {}; _b2bRecArmed = false;
+            sessionStorage.setItem('speeksUserRole', keepR);
+        }
+    });
+});
+t('recycle many: armed write-off confirm button clears WCAG AA', function () {
+    function lum(c) {
+        var m = c.match(/\d+/g).slice(0, 3).map(function (v) {
+            v = v / 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];
+    }
+    var host = stage(600, '<button class="b2b-btn b2b-btn-confirm-danger">Confirm Write-Off ($100.00)</button>');
+    var s = getComputedStyle(host.querySelector('.b2b-btn-confirm-danger'));
+    var ratio = (Math.max(lum(s.color), lum(s.backgroundColor)) + 0.05)
+              / (Math.min(lum(s.color), lum(s.backgroundColor)) + 0.05);
+    return ratio >= 4.5 || 'contrast ' + ratio.toFixed(2) + ':1';
+});
+
 document.getElementById('layout-host') && document.getElementById('layout-host').remove();
