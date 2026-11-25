@@ -425,6 +425,7 @@ async function collect(sb: any, wantStores: string[], windowDays: number) {
   // timeout. These two sets are what keep the difference.
   const brokeStores = new Set<string>();       // nothing from this store is conclusive
   const unjudged = new Set<string>();          // "<store>:<ebay id>" we could not settle
+  const qlJudged: string[] = [];               // settled through ShopifyQL (older than 60 days)
 
   const sinceIso = new Date(Date.now() - windowDays * 86400_000).toISOString();
   const sinceDay = sinceIso.slice(0, 10);
@@ -450,7 +451,7 @@ async function collect(sb: any, wantStores: string[], windowDays: number) {
   // matter how old, so nothing falls out of the discovery window and stops
   // being chased at the point it has become most serious.
   const openRows = await sbGet(
-    `refund_mismatch_state?select=issue_key,store_code,ebay_order_id,direction&resolved_at=is.null`);
+    `refund_mismatch_state?select=issue_key,store_code,ebay_order_id,direction,shopify_order_name,shopify_order_id,reversed_at&resolved_at=is.null`);
 
   for (const store of wantStores) {
     const shopRow = shopRows.find((s: any) =>
@@ -582,6 +583,39 @@ async function collect(sb: any, wantStores: string[], windowDays: number) {
         }
       }
 
+      // OLDER THAN SHOPIFY WILL SHOW US (2026-11-04). Our tokens lack
+      // read_all_orders, so an order past ~60 days comes back EMPTY from the
+      // lookup above — and an open row on such an order was "unjudged" every day
+      // forever: never closed when a manager fixed it, never re-confirmed when
+      // they didn't. 16 open rows ($3,971) were stuck like that on 11-04, and
+      // Shopify had in fact been refunded on 12 of them. ShopifyQL's sales
+      // table has no age limit, so for an OPEN row (we stored its Shopify order
+      // name when it was first seen) the refund is read from there instead.
+      // Only refunds: a cancel with no money returned doesn't show in sales,
+      // so a row that needs one stays unjudged rather than being called fixed.
+      if (!copies.length) {
+        const known = openRows.find((r: any) => r.store_code === store && String(r.ebay_order_id) === eid);
+        if (known?.shopify_order_name) {
+          try {
+            const back = await refundedByQl(shop, shopRow.access_token, known.shopify_order_name);
+            if (back !== null) {
+              copies = [{
+                id: known.shopify_order_id, name: known.shopify_order_name,
+                totalRefundedSet: { shopMoney: { amount: String(back) } },
+                // ShopifyQL gives no refund date. Carry the one recorded when the
+                // row was first seen, or the age resets to 0 every morning and the
+                // row drops under the 3-day bar (found in the 11-04 dry run).
+                refunds: known.reversed_at ? [{ createdAt: known.reversed_at }] : [],
+                cancelledAt: null, createdAt: null,
+              }];
+              qlJudged.push(`${store}:${eid}`);
+            }
+          } catch (e) {
+            problems.push(`${store} ${eid}: ShopifyQL read — ${String(e).slice(0, 120)}`);
+          }
+        }
+      }
+
       // No Shopify counterpart at all. Real, but a DIFFERENT problem — the sale
       // never reached the books rather than a half-done reversal — and mixing
       // the two would send managers hunting for an order that does not exist.
@@ -619,7 +653,24 @@ async function collect(sb: any, wantStores: string[], windowDays: number) {
     }
   }
 
-  return { found, problems, stats, brokeStores, unjudged };
+  return { found, problems, stats, brokeStores, unjudged, qlJudged };
+}
+
+// How much of a Shopify order has been refunded, by NAME, at any age (see the
+// "older than Shopify will show us" note in collect). null = ShopifyQL has no
+// such order, which is NOT the same as "not refunded" and must stay unjudged.
+async function refundedByQl(shop: string, token: string, name: string): Promise<number | null> {
+  const since = new Date(Date.now() - 730 * 86400_000).toISOString().slice(0, 10);
+  const until = new Date().toISOString().slice(0, 10);
+  const safe = String(name).replace(/[^#A-Za-z0-9-]/g, "");
+  const ql = `FROM sales SHOW gross_sales, returns WHERE order_name = '${safe}' GROUP BY order_name SINCE ${since} UNTIL ${until}`;
+  const d: any = await shopifyQuery(shop, token,
+    `query($q: String!) { shopifyqlQuery(query: $q) { parseErrors tableData { rows } } }`, { q: ql });
+  const t = d?.shopifyqlQuery;
+  if (t?.parseErrors?.length) throw new Error(`parse: ${JSON.stringify(t.parseErrors).slice(0, 120)}`);
+  const row = (t?.tableData?.rows || []).find((r: any) => String(r.order_name || "") === safe);
+  if (!row) return null;
+  return r2(Math.abs(num(row.returns)));
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +863,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const sb = createClient(SUPABASE_URL, SERVICE_KEY);
-    const { found, problems, stats, brokeStores, unjudged } = await collect(sb, wantStores, windowDays);
+    const { found, problems, stats, brokeStores, unjudged, qlJudged } = await collect(sb, wantStores, windowDays);
     const now = new Date();
     const nowIso = now.toISOString();
 
@@ -894,7 +945,7 @@ Deno.serve(async (req: Request) => {
         // Blind spots, stated rather than implied. All-zero findings with a
         // store listed here is "we could not look", which reads identically to
         // "nothing is wrong" if only the counts are printed.
-        blindStores: [...brokeStores], unjudgedOrders: [...unjudged],
+        blindStores: [...brokeStores], unjudgedOrders: [...unjudged], judgedViaShopifyQL: qlJudged,
         stats, problems,
         mismatches: aged.map((m) => ({
           store: m.store, ebay: m.ebayOrderId, shopify: m.shopifyOrderName,
@@ -1007,7 +1058,7 @@ Deno.serve(async (req: Request) => {
       ok: true, monthEnd: isMonthEnd(now), thresholdDays,
       open: aged.length, due: due.length, mailed: mailedKeys.size, onRepeatNotice: toldTwice.length,
       resolved: settled.length, sent,
-      blindStores: [...brokeStores], unjudgedOrders: [...unjudged],
+      blindStores: [...brokeStores], unjudgedOrders: [...unjudged], judgedViaShopifyQL: qlJudged,
       stats, problems,
     });
   } catch (err: any) {

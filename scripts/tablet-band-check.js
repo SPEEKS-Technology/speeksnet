@@ -545,7 +545,6 @@ t('Past weeks is cut from the phone for the store-floor managers', function () {
         // Cut on a phone...
         if (at('Manager', true) !== false) return 'a Manager keeps Past weeks on a phone';
         if (at('Assistant Manager', true) !== false) return 'an ASM keeps Past weeks on a phone';
-        if (at('Multi-Store Manager', true) !== false) return 'an MSM keeps Past weeks on a phone';
         // ...kept for leadership, and kept for everyone on a tablet, where the
         // seven columns fit. That split is the whole point of the tablet tier.
         if (at('District Manager', true) !== true) return 'a DM lost Past weeks on a phone';

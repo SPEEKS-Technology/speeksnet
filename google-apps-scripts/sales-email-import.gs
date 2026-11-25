@@ -4534,6 +4534,9 @@ function _deParse(body) {
   if (av.why) warn('Available card: ' + av.why);
   out.availableCount = av.count != null ? av.count : null;
   out.availableCost  = av.cost != null ? av.cost : null;
+  // The card's Projection: what that stock is worth (day_end_facts.available_value,
+  // 0180 — Ethan 2026-11-08, the QuickPortal shows in-stock VALUE, not cost).
+  out.availableValue = av.projection != null ? av.projection : null;
   out.queueCount     = _deCardCount(lines, /^in queue$/i);
   out.liveCount      = _deCardCount(lines, /^live$/i);
 

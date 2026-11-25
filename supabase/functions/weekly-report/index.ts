@@ -61,7 +61,6 @@ const DEFAULT_TO   = 'ethan.kushnir@speekstechnology.com';
 // run. Editing recipients happens in that tool, not here.
 let LEADERSHIP_TO: string[] = ['ethan.kushnir@speekstechnology.com', 'paul.kushnir@pikinvestments.com'];
 // Per-store manager recipients. Falls back to DEFAULT_TO if a store is empty.
-// (Multi-store managers are listed under each store they run.)
 let STORE_TO: Record<string, string[]> = {
   OVL: ['nickhett707@gmail.com'],
   LEE: ['jurellguild@outlook.com'],

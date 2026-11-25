@@ -79,7 +79,7 @@ try {
 const USERS = [
     { name: 'Ballwin Team', role: 'Store', store: 'BAL' }, { name: 'Bret Daubert', role: 'Employee', store: 'BAL' },
     { name: 'Garrett Burnell', role: 'Assistant Manager', store: 'BAL' },
-    { name: 'Joseph Ortega', role: 'Multi-Store Manager', store: 'BAL' }, { name: 'Zach Marbs', role: 'Employee', store: 'BAL' },
+    { name: 'Joseph Ortega', role: 'Manager', store: 'BAL' }, { name: 'Zach Marbs', role: 'Employee', store: 'BAL' },
     { name: 'Ethan Kushnir', role: 'District Manager', store: 'CORP' }, { name: 'Haydn Davis', role: 'MOCD', store: 'CORP' },
     { name: 'Paul Kushnir', role: 'CEO', store: 'CORP' },
     { name: 'Caleb Starr', role: 'Employee', store: 'LEE' }, { name: 'Drew Nyman', role: 'Employee', store: 'LEE' },

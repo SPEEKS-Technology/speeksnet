@@ -275,18 +275,21 @@ t('audit §1: .ws-panel sizes from a measured offset, not a guess', function () 
 
 t('audit §2: tab labels do not wrap, and the strip can scroll', function () {
     var host = stage(700,
-        '<div class="mb-view-toggle b2b-view-toggle" role="tablist">'
-        + '<button class="mb-view-btn" role="tab">Needs You</button>'
-        + '<button class="mb-view-btn" role="tab">Pipeline</button>'
-        + '<button class="mb-view-btn" role="tab">Completed</button>'
-        + '<button class="mb-view-btn" role="tab">Evaluations</button>'
-        + '<button class="mb-view-btn" role="tab">Clients</button>'
-        // Five tabs, which is the real set since the Overview went on 2026-09-10.
-        + '</div>');
-    var strip = host.querySelector('.b2b-view-toggle');
-    var first = host.querySelector('.mb-view-btn');
-    if (getComputedStyle(first).whiteSpace !== 'nowrap') return '"Needs You" can still wrap to two lines';
-    if (getComputedStyle(strip).overflowX !== 'auto') return 'the strip cannot scroll, so the last tab is unreachable';
+        // Since 2026-10-31 the views are the page's .ws-subtabs row (the same as
+        // Operations and Workspace) rather than a pill strip in the card head.
+        '<div class="b2b-wrap"><div class="ws-subtabs b2b-view-tabs" role="tablist">'
+        + '<button class="ws-tab" role="tab">Pipeline</button>'
+        + '<button class="ws-tab" role="tab">Completed</button>'
+        + '<button class="ws-tab" role="tab">Evaluations</button>'
+        + '<button class="ws-tab" role="tab">Clients</button>'
+        + '</div></div>');
+    var strip = host.querySelector('.b2b-view-tabs');
+    var tabs = host.querySelectorAll('.ws-tab');
+    if (getComputedStyle(tabs[0]).whiteSpace !== 'nowrap') return 'a tab label can wrap to two lines';
+    // Every tab must be reachable: inside the strip, or the strip scrolls to it.
+    var sr = strip.getBoundingClientRect(), last = tabs[tabs.length - 1].getBoundingClientRect();
+    if (last.right > sr.right + 1 && getComputedStyle(strip).overflowX !== 'auto')
+        return 'the last tab runs past the strip and the strip cannot scroll';
     // The strip itself must not exceed the frame -- that was the clipping.
     return strip.getBoundingClientRect().width <= host.clientWidth + 1
         || 'strip is ' + Math.round(strip.getBoundingClientRect().width) + 'px in ' + host.clientWidth + 'px';
@@ -500,6 +503,52 @@ t('board: picking a stage in the row narrows the board to it', function () {
         if (cols.length !== 1) return 'expected 1 column, got ' + cols.length;
         return !!host.querySelector('.b2b-flow-s.on') || 'the picked tile is not marked';
     } finally { _b2bStageFocus = keep; }
+});
+
+// ---------------------------------------------------------------------------
+// RECYCLE OUT (MANY LINES) MODAL (2026-11)
+// ---------------------------------------------------------------------------
+[390, 820, 1440].forEach(function (w) {
+    t('recycle many: picker rows and armed confirm footer fit at ' + w + 'px without overflow', function () {
+        var keepI = _b2bModalItems, keepD = _b2bModalDeal, keepR = sessionStorage.getItem('speeksUserRole');
+        sessionStorage.setItem('speeksUserRole', 'mocd');
+        try {
+            _b2bModalItems = [
+                { id: 'rm1', line_no: 1, sku: 'B2B-9999-01', make: 'Dell', model: 'OptiPlex 7090 Micro Workstation Desktop With Long Description', quantity: 12, listed_qty: 2, recycled_qty: 0, disposition: 'purchase', cost: 125, listings: [] },
+                { id: 'rm2', line_no: 2, sku: 'B2B-9999-02', make: 'HP', model: 'Scrap Pallet Monitors', quantity: 6, listed_qty: 0, recycled_qty: 1, disposition: 'recycle', listings: [] },
+            ];
+            _b2bModalDeal = { id: 'rm-deal', ref: 'RM-1', stage: 'listing', listing_store: 'OVL' };
+            _b2bRecSel = { rm1: true, rm2: true };
+            _b2bRecArmed = true;
+            var host = stage(Math.min(w, 640),
+                '<div class="manage-content" id="b2bRecycleManyBody"></div>'
+                + '<div class="manage-footer flex-end" id="b2bRecycleManyFooter"></div>');
+            _b2bPaintRecycleMany();
+            var bad = overflowing(host);
+            if (bad.length) return 'overflows: ' + bad.slice(0, 4).join(', ');
+            var btn = host.querySelector('.b2b-btn-confirm-danger');
+            if (!btn) return 'armed confirm button missing';
+            var r = btn.getBoundingClientRect();
+            return (r.width > 80 && r.height >= 28) || 'confirm button sized ' + Math.round(r.width) + 'x' + Math.round(r.height);
+        } finally {
+            _b2bModalItems = keepI; _b2bModalDeal = keepD; _b2bRecSel = {}; _b2bRecArmed = false;
+            sessionStorage.setItem('speeksUserRole', keepR);
+        }
+    });
+});
+t('recycle many: armed write-off confirm button clears WCAG AA', function () {
+    function lum(c) {
+        var m = c.match(/\d+/g).slice(0, 3).map(function (v) {
+            v = v / 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];
+    }
+    var host = stage(600, '<button class="b2b-btn b2b-btn-confirm-danger">Confirm Write-Off ($100.00)</button>');
+    var s = getComputedStyle(host.querySelector('.b2b-btn-confirm-danger'));
+    var ratio = (Math.max(lum(s.color), lum(s.backgroundColor)) + 0.05)
+              / (Math.min(lum(s.color), lum(s.backgroundColor)) + 0.05);
+    return ratio >= 4.5 || 'contrast ' + ratio.toFixed(2) + ':1';
 });
 
 document.getElementById('layout-host') && document.getElementById('layout-host').remove();

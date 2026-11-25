@@ -102,19 +102,24 @@ const chicagoDay = (iso: string) => DAY_FMT.format(new Date(iso));
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 // --- WHEN A MONTH CLOSES, and what that does to a shipping charge ----------
-// The rule, from the CFO (2026-08-27):
-//   · the month closes at 7pm Central on the 1st, so the stores have that day
-//     to ship what sold on the last day of the month;
+// The rule, from the CFO (2026-08-27), with the close day moved by Ethan
+// (2026-11-02):
+//   · the month closes at 7pm Central on the 7th. It was the 1st, giving the
+//     stores one day to ship what sold on the last day. Ethan moved it so late
+//     labels and anything else that settles in the first week still count in
+//     the month they belong to — 13% of labels post 2-3 days after the sale
+//     and a tail posts later than that, all of which the 1st pushed into the
+//     NEXT month. He cleared the change against the CFO's rule himself;
 //   · never on a day the stores are shut — they buy ZERO labels on a Sunday
 //     (measured: 0 of 2,403 in July) and they close for Thanksgiving,
 //     Christmas and New Year's Day — so it slips to the first eligible
 //     business day;
 //   · anything applied after that stays in the new month. No back-dating.
 //
-// Of the three holidays only New Year's Day can ever land on a close. The 1st
-// and 2nd of a month are the only candidates and neither Thanksgiving (4th
-// Thursday of November) nor Christmas can fall there, so December always
-// closes on Jan 2 at the earliest and the other two never bite.
+// Since the close moved to the 7th none of the three can land on it (the
+// candidates are the 7th-9th; New Year's is the 1st, Christmas the 25th,
+// Thanksgiving the 22nd-28th). The checks stay so the rule still reads whole
+// if the day moves again.
 function isStoreHoliday(y: number, m0: number, day: number): boolean {
   if (m0 === 0 && day === 1) return true;    // New Year's Day
   if (m0 === 11 && day === 25) return true;  // Christmas
@@ -125,6 +130,13 @@ function isStoreHoliday(y: number, m0: number, day: number): boolean {
   return false;
 }
 
+// The day of the next month the close aims at, before slipping past a Sunday
+// or holiday. Was 1 until 2026-11-02.
+// ⚠️ netprofit-schedule.gs has its own copy (NPS_CLOSE_DAY). The close run asks
+// this function for the date and REFUSES to close if the two disagree, so
+// change both together.
+const CLOSE_DAY = 7;
+
 // The last day whose charges still belong to the month that just ended.
 // ym is the month being closed, e.g. "2026-07". Returns YYYY-MM-DD.
 function monthCloseDay(ym: string): string {
@@ -132,7 +144,7 @@ function monthCloseDay(ym: string): string {
   const m0 = Number(ym.slice(5, 7)) - 1;
   const ny = m0 === 11 ? y + 1 : y;
   const nm0 = (m0 + 1) % 12;
-  for (let day = 1; day < 15; day++) {
+  for (let day = CLOSE_DAY; day < CLOSE_DAY + 14; day++) {
     if (new Date(Date.UTC(ny, nm0, day)).getUTCDay() === 0) continue;
     if (isStoreHoliday(ny, nm0, day)) continue;
     const mm = String(nm0 + 1).padStart(2, "0");
@@ -153,7 +165,8 @@ function monthCloseDay(ym: string): string {
 // when it was charged.
 //
 // The exception is the close. Once a month is shut nothing may re-open it, so
-// a label that turns up afterwards books to the day it was charged.
+// a label that turns up afterwards books to the day it was charged — since
+// 2026-11-02 that means one bought more than a week into the next month.
 // ⚠️ WHICH DAY A REFUND BOOKS TO. Ethan's call, 2026-09-02, and the reasoning
 // matters more than the setting because either answer is defensible.
 //
@@ -257,14 +270,35 @@ let EBAY_APPS: Record<string, any> = {};
 const EBAY_FIN_RE =
   /^https:\/\/apiz(?:\.sandbox)?\.ebay\.com\/sell\/finances\/v1\/transaction(?:\?[^#]*)?$/;
 
+// ⚠️ A 5xx IS RETRIED HERE, PER PAGE. 2026-11-04 6:11am: OVL and LEE each got
+// one HTTP 500 errorId 135000 ("problem with an eBay internal system") and the
+// whole store's fee + shipping went #N/A on 3 days, with a "Claude fixes it"
+// email — for a blip every earlier pass had read cleanly. A 5xx or 429 says
+// nothing about our request, so the same GET is asked again after a pause.
+// 4xx (bad token, bad filter) is still returned at once: retrying can't fix it.
+// Budget: worst case adds ~7s per store against the 150s ceiling, and only on
+// a page that is already failing.
+const EBAY_RETRY_PAUSES_MS = [1000, 2500, 4000];
 async function ebayGet(url: string, token: string): Promise<Response> {
   if (!EBAY_FIN_RE.test(url)) {
     throw new Error(`refused: not a read-only eBay finances URL -> ${url}`);
   }
-  return await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-  });
+  for (let i = 0; ; i++) {
+    let res: Response | null = null;
+    try {
+      res = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+    } catch (e) {
+      // A dropped connection is the same kind of transient as a 5xx.
+      if (i >= EBAY_RETRY_PAUSES_MS.length) throw e;
+    }
+    if (res && res.status < 500 && res.status !== 429) return res;
+    if (i >= EBAY_RETRY_PAUSES_MS.length) return res as Response;
+    if (res) await res.body?.cancel();
+    await new Promise((s) => setTimeout(s, EBAY_RETRY_PAUSES_MS[i]));
+  }
 }
 
 // Minted per run and deliberately never persisted.
@@ -489,17 +523,55 @@ Deno.serve(async (req: Request) => {
   //   * a row's SALE half never travels, only its RETURN half. An exchange
   //     books the returned item and its replacement under one order name, and
   //     dragging the replacement back would invent revenue on the wrong day.
+  //
+  // ⚠️ PAGED, BECAUSE SHOPIFYQL STOPS AT 1,000 ROWS WITHOUT SAYING SO. A query
+  // with no LIMIT gets an implicit LIMIT 1000 and no error, and the rows come
+  // back largest-first — so what falls off the end is the REFUNDS. OVL October
+  // 2026 was the first month over (1,065 day×order rows): 65 rows and $22,280
+  // of returns vanished, and the tab carried $201,650 of sales against
+  // Shopify's $180,030. Every day without a return still tied to the cent,
+  // which is why nothing looked wrong. September peaked at 858 rows, so this
+  // had never bitten before; holiday volume puts every store at risk.
+  // ORDER BY day, order_name keeps the pages from overlapping (checked:
+  // 1,000 + 65 rows, no repeats, totals exact against the ungrouped query).
+  const QL_PAGE = 1000;
+  const QL_PAGE_CAP = 20;
   const tQl0 = Date.now();
-  const qlBody = await gql(
-    `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day, order_name SINCE ${from} UNTIL ${to}") {
-         parseErrors tableData { rows } } }`);
+  const qlRaw: any[] = [];
+  let ql: any = null;
+  let qlPages = 0;
+  for (; qlPages < QL_PAGE_CAP; qlPages++) {
+    const qlBody = await gql(
+      `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day, order_name SINCE ${from} UNTIL ${to} ORDER BY day, order_name LIMIT ${QL_PAGE} OFFSET ${qlPages * QL_PAGE}") {
+           parseErrors tableData { rows } } }`);
+    ql = qlBody?.data?.shopifyqlQuery;
+    if (ql?.parseErrors?.length) break;
+    const page = ql?.tableData?.rows || [];
+    qlRaw.push(...page);
+    if (page.length < QL_PAGE) { qlPages++; break; }
+  }
   timing.shopifyql = Date.now() - tQl0;
-  const ql = qlBody?.data?.shopifyqlQuery;
+  health.shopifyql_pages = qlPages;
+  health.shopifyql_rows = qlRaw.length;
   if (ql?.parseErrors?.length) {
     warnings.push(`shopifyql: ${ql.parseErrors.join("; ")}`);
     health.shopifyql_errors = ql.parseErrors.map(String);
   }
-  const qlRows = (ql?.tableData?.rows || []).map((row: any) => ({
+  // A short month is worse than no month — see the empty-answer guard below.
+  // A failed LATER page is the same hazard as the cap: page one alone is a
+  // complete-looking month with its refunds cut off.
+  const qlLaterPageFailed = qlRaw.length > 0 && (!ql?.tableData || !!ql?.parseErrors?.length);
+  if (qlPages >= QL_PAGE_CAP || qlLaterPageFailed) {
+    return json({
+      error: qlLaterPageFailed
+        ? `shopifyql page ${qlPages + 1} failed after ${qlRaw.length} rows — refusing to `
+          + "report a month that may be missing its refunds."
+        : `shopifyql still returning full pages after ${QL_PAGE_CAP} — refusing to `
+          + "report a month that may be missing its refunds. Split the range.",
+      store, from, to, rows: qlRaw.length, parseErrors: ql?.parseErrors ?? null,
+    }, 502);
+  }
+  const qlRows = qlRaw.map((row: any) => ({
     day: String(row.day).slice(0, 10),
     order: String(row.order_name || ""),
     net: round2(Number(row.net_sales) || 0),
@@ -513,7 +585,19 @@ Deno.serve(async (req: Request) => {
   // month of $0.00 — which the sheet would happily write over real figures. A
   // store with genuinely no sales in a range is not a case worth supporting at
   // the cost of that.
-  if (!qlRows.length) {
+  //
+  // One exception, from 2026-11-01: the 6:10am pass on the 1st asks for a
+  // range that is only today, and a store that has not sold online since
+  // midnight genuinely has no rows (BAL, a Sunday, before opening). That is
+  // not a month of zeros — there is nothing earlier to overwrite — and the
+  // refusal mailed a "broken" alert that the 2pm pass then cleared. Accepted
+  // only when the query itself answered (tableData present, no parse errors):
+  // a FAILED query on the 1st is still refused like any other day.
+  const qlAnsweredEmpty = !!ql?.tableData && !ql?.parseErrors?.length;
+  const rangeIsToday = from === to && from === chicagoDay(new Date().toISOString());
+  if (!qlRows.length && qlAnsweredEmpty && rangeIsToday) {
+    warnings.push(`shopifyql: no sales yet today (${from}) — reporting the day as $0`);
+  } else if (!qlRows.length) {
     return json({
       error: "shopifyql returned no sales rows for this range — refusing to "
         + "report a month of zeros. Check the date range and the query.",

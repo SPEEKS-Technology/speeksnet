@@ -56,9 +56,6 @@ const ALL_STORES_ROLES = ["district manager", "ceo"];
 // only role held back is the TV board, which has no operator sitting at it and
 // no Operations page to reach this from.
 const NO_ACCESS_ROLES = ["store"];
-// Mirrors MULTISTORE_MANAGER_STORES in speeks.js. Duplicated deliberately: the
-// backend must not take the browser's word for which stores someone manages.
-const MULTISTORE_MANAGER_STORES = ["BAL", "MPL"];
 
 // shopify_stores.store_code is null on every row, so the mapping lives here the
 // same way it lives in ebay-inventory. Used only to build an admin link.
@@ -144,13 +141,9 @@ async function scopeFor(pin: string, reading = false): Promise<Scope | null> {
 
   const corp = CORP_ROLES.includes(role);
 
-  // A Multi-Store Manager runs two stores and needs both, not just the one
-  // their user row happens to name.
   const stores = corp
     ? [...STORE_ORDER]
-    : role === "multi-store manager"
-      ? [...MULTISTORE_MANAGER_STORES]
-      : home && home !== "CORP" ? [home] : [];
+    : home && home !== "CORP" ? [home] : [];
 
   // Somebody with no store and no corp role has nothing to list against. That
   // is a data problem, not a permission one, but it still has no answer here.

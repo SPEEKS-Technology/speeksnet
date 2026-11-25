@@ -177,7 +177,9 @@ async function boot(browser, role, width) {
                 .map(e => e.getAttribute('data-tip') || e.id || String(e.className).split(' ')[0]),
         };
     });
-    ok(nav.gearShown === false, 'Settings is gone from the phone top bar');
+    // Back on phones 2026-11-21 (Ethan): Settings is where Phone Alerts are turned
+    // on, and a phone is the device that needs it. Round 7 had taken it off.
+    ok(nav.gearShown === true, 'Settings is on the phone top bar (Phone Alerts live there)');
     console.log('       still there: ' + nav.shown.join(', '));
 
     // The handle was a ::before on .modal-header - assert it draws nothing.

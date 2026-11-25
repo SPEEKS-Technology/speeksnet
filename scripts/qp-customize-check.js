@@ -188,41 +188,39 @@ t('My Listing Goals: today\'s goal and role, the week as a seven-day strip', fun
     return d.querySelectorAll('.qp-ai-day').length === 7 && cols.slice(0, 3) === 'gwg' ? true : 'columns ' + cols;
 });
 
-// A multi-store manager's layout is kept per store (2026-10-26).
-t('a multi-store manager saves a layout per store; everyone else one', function () {
-    var keep = {}; ['speeksUserName', 'speeksUserStore', 'speeksMultiStore'].forEach(function (k) { keep[k] = sessionStorage.getItem(k); });
+// One layout per person, whatever store they are at (the per-store "@STORE"
+// layouts went with the Multi-Store Manager role, 2026-11-08).
+t('a layout is saved per person, not per store', function () {
+    var keep = {}; ['speeksUserName', 'speeksUserStore'].forEach(function (k) { keep[k] = sessionStorage.getItem(k); });
     sessionStorage.setItem('speeksUserName', 'Pat Example'); sessionStorage.setItem('speeksUserStore', 'MPL');
-    sessionStorage.removeItem('speeksMultiStore');
-    var one = _qpStoreKey();
-    sessionStorage.setItem('speeksMultiStore', 'true');
     var mpl = _qpStoreKey();
     sessionStorage.setItem('speeksUserStore', 'BAL');
     var bal = _qpStoreKey();
     Object.keys(keep).forEach(function (k) { if (keep[k] === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, keep[k]); });
-    return one === QP_LAYOUT_KEY + 'pat example' && mpl === QP_LAYOUT_KEY + 'pat example@mpl' && bal === QP_LAYOUT_KEY + 'pat example@bal'
-        ? true : [one, mpl, bal].join(' / ');
+    return mpl === QP_LAYOUT_KEY + 'pat example' && bal === mpl ? true : [mpl, bal].join(' / ');
 });
 
-// 2026-10-26 (Ethan, from a multi-store manager's real login):
-// 1. A save is pinned to the store it was made on — switching BAL → MPL inside
-//    the half-second debounce used to save BAL's layout as MPL's.
-t('a waiting save goes out as the store it was made on', function () {
-    var keep = {}; ['speeksUserName', 'speeksUserStore', 'speeksMultiStore', 'speeksTestSession'].forEach(function (k) { keep[k] = sessionStorage.getItem(k); });
+// 2026-10-26 (Ethan): a save is pinned to who made it, when it was made — not
+// to whoever is signed in when the half-second debounce fires. (It used to be
+// pinned to the store too; that half went with the MSM role, 2026-11-08.)
+t('a waiting save goes out as the person who made it, with no store', function () {
+    var keep = {}; ['speeksUserName', 'speeksUserStore', 'speeksTestSession'].forEach(function (k) { keep[k] = sessionStorage.getItem(k); });
     var sent = [], realFetch = window.fetch;
     window.fetch = function (url, init) { if (String(url).indexOf('qp-layout') !== -1) sent.push(JSON.parse(init.body)); return Promise.resolve({ json: function () { return {}; } }); };
     try {
-        sessionStorage.setItem('speeksUserName', 'Pat Example'); sessionStorage.setItem('speeksMultiStore', 'true');
+        sessionStorage.setItem('speeksUserName', 'Pat Example');
         sessionStorage.setItem('speeksUserStore', 'BAL');
         _qpSave([{ items: ['feed', 'actions'], w: null }]);
-        sessionStorage.setItem('speeksUserStore', 'MPL');      // the switch, before the debounce fires
+        sessionStorage.setItem('speeksUserName', 'Someone Else');   // before the debounce fires
         _qpFlushSave();
     } finally {
         window.fetch = realFetch;
         Object.keys(keep).forEach(function (k) { if (keep[k] === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, keep[k]); });
-        try { localStorage.removeItem(QP_LAYOUT_KEY + 'pat example@bal'); } catch (_) {}
+        try { localStorage.removeItem(QP_LAYOUT_KEY + 'pat example'); } catch (_) {}
     }
     if (sent.length !== 1) return sent.length + ' saves sent';
-    return sent[0].store === 'BAL' && sent[0].user === 'Pat Example' ? true : 'sent as ' + sent[0].store;
+    if (sent[0].user !== 'Pat Example') return 'sent as ' + sent[0].user;
+    return !('store' in sent[0]) || 'still sends a store: ' + sent[0].store;
 });
 
 // 2. A tab's label stays put when its count gets shorter ("0/15" → "0/2"):

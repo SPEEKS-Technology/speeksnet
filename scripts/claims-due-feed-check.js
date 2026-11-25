@@ -81,10 +81,32 @@ t('manager: shows, stays through Snooze and Mark-all-read, clears when resolved'
                         if (_cdAsked.length) return 'DM asked the server: ' + _cdAsked.join(' ');
                         if (card()) return 'DM got the card';
                         as('CEO', 'ALL');
-                        return checkClaimsDueAlerts().then(function () { return !card() || 'CEO got the card'; });
+                        return checkClaimsDueAlerts().then(function () {
+                            if (card()) return 'CEO got the card';
+                            // ONLY TODAY, TOMORROW OR LATE (2026-11-06). BAL case
+                            // 5389732731 was due Dec 3 and sat on the card as "Due
+                            // Today". Anything further out stays off the card;
+                            // something two days out with a tomorrow item beside it
+                            // shows only the tomorrow one. Chained here, not its own
+                            // test: tests share _cdReply and run concurrently.
+                            as('Manager', 'BAL');
+                            _cdReply.dueAlerts = [Object.assign({}, chargeback, { due: '2026-10-11', overdue: false })];
+                            return checkClaimsDueAlerts().then(function () {
+                                if (card()) return 'an item three days out is on the card';
+                                _cdReply.dueAlerts = [Object.assign({}, card2, { due: '2026-10-09' }),
+                                                      Object.assign({}, chargeback, { due: '2026-10-10', overdue: false })];
+                                return checkClaimsDueAlerts().then(function () {
+                                    var f = card();
+                                    if (!f) return 'a due-tomorrow item is not shown';
+                                    if (/Chargeback/.test(f.snippet)) return 'the two-days-out item is listed: ' + f.snippet;
+                                    return /due tomorrow/.test(f.snippet) || 'tomorrow not named: ' + f.snippet;
+                                });
+                            });
+                        });
                     });
                 });
             });
         });
     });
 });
+

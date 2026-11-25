@@ -2521,22 +2521,10 @@ _b2bModalItems = b2bFixtureItems();
 // ---------------------------------------------------------------------------
 // Split completion, 2026-09-26 review. Every complete call used to send no
 // store, which the server can only resolve for a one-store deal: corp could
-// never finish a split deal, a multi-store manager never their part, and the
-// card's quick Complete waited on the deal-wide count.
+// never finish a split deal, and the card's quick Complete waited on the
+// deal-wide count. (The multi-store manager checks went with the MSM role,
+// 2026-11-08.)
 // ---------------------------------------------------------------------------
-function _asMsm(fn) {
-    var m = sessionStorage.getItem('speeksMultiStore');
-    sessionStorage.setItem('speeksMultiStore', 'true');
-    try { return _asRole('manager', 'MPL', fn); }
-    finally { sessionStorage.setItem('speeksMultiStore', m); }
-}
-function _splitItems() {
-    return [
-        { id: 'm1', listing_store: 'MPL', quantity: 2, listed_qty: 2, recycled_qty: 0 },
-        { id: 'm2', listing_store: 'MPL', quantity: 1, listed_qty: 0, recycled_qty: 1 },
-        { id: 'o1', listing_store: 'OVL', quantity: 2, listed_qty: 0, recycled_qty: 0 },
-    ];
-}
 
 t('review corp gets no quick Complete while a part is still outstanding', function () {
     return _asRole('ceo', 'CORP', function () {
@@ -2580,21 +2568,6 @@ t('review an unsplit deal keeps the whole-deal quick Complete', function () {
         if (_b2bClosableParts(d) !== null) return 'an unsplit deal was treated as split';
         var q = _b2bQuickAction(d);
         return (q && q.label === 'Complete Deal') || 'lost the plain Complete';
-    });
-});
-t('review a multi-store manager can close their part from the loaded lines', function () {
-    return _asMsm(function () {
-        var d = _b2bSplitDeal();
-        var parts = _b2bClosableParts(d, _splitItems());
-        return JSON.stringify(parts) === '["MPL"]' || 'got ' + JSON.stringify(parts);
-    });
-});
-t('review a multi-store manager Complete does not wait on another store', function () {
-    return _asMsm(function () {
-        var saved = _b2bModalItems;
-        _b2bModalItems = _splitItems();
-        try { return _b2bAllSatisfied() || 'OVL lines held the button back'; }
-        finally { _b2bModalItems = saved; }
     });
 });
 // Filtered by deal id: other checks' async sends land in B2B_SENT while these
@@ -2737,12 +2710,6 @@ t('open a line with one real serial among NO SERIALs still picks by serial', fun
             if (html.indexOf('type="number"') >= 0) return 'offered a count on a serialled line';
             return html.indexOf('M1') >= 0 || 'the real serial is not listed';
         } finally { _b2bSplitting = null; }
-    });
-});
-t('open a multi-store manager scopes the board and items to both stores', function () {
-    return _asMsm(function () {
-        if (_b2bFetchScope() !== 'BAL,MPL') return 'board scope was ' + _b2bFetchScope();
-        return _b2bScopeQs() === '&store=' + encodeURIComponent('BAL,MPL') || 'item scope was ' + _b2bScopeQs();
     });
 });
 t('open corp is still unscoped', function () {
@@ -3398,6 +3365,24 @@ t('review: the numbers block is always on the page, hidden until there is a line
 t('review: closing a deal drops a half-built listing split', function () {
     return _srcOf(b2bCloseDeal).indexOf('_b2bSplitMode = false') > -1 || 'split mode carries over to the next deal';
 });
+t('sort by brand: the button is drawn on an empty deal and shown once there are two lines', function () {
+    var keep = _b2bModalItems, box = document.createElement('div');
+    try {
+        _b2bModalItems = [];
+        box.innerHTML = _b2bPricingTools(B2B_FIXTURE_DEAL);
+        document.body.appendChild(box);
+        var btn = document.getElementById('b2bSortBtn');
+        if (!btn) return 'a deal opened with no lines never gets the button';
+        if (btn.style.display !== 'none') return 'shown with nothing to sort';
+        _b2bModalItems = [{ id: 'a', quantity: 1, listings: [] }, { id: 'b', quantity: 1, listings: [] }];
+        _b2bPaintSortBtn();
+        if (btn.style.display === 'none') return 'still hidden with two lines';
+        _b2bModalItems = [_b2bModalItems[0]];
+        _b2bPaintSortBtn();
+        if (btn.style.display !== 'none') return 'still shown after dropping to one line';
+        return _srcOf(_b2bPaintTotals).indexOf('_b2bPaintSortBtn()') > -1 || 'nothing repaints it as lines come and go';
+    } finally { _b2bModalItems = keep; box.remove(); }
+});
 // --- recycle many lines out at once (Nick, 2026-11-04) -----------------------
 function _recFixture() {
     return [
@@ -3408,7 +3393,7 @@ function _recFixture() {
     ];
 }
 function _recWith(fn) {
-    var keep = _b2bModalItems, keepD = _b2bModalDeal, keepR = sessionStorage.getItem('speeksUserRole');
+    var keep = _b2bModalItems, keepD = _b2bModalDeal, keepR = sessionStorage.getItem('speeksUserRole'), keepP = _b2bPendingUnit;
     var body = document.createElement('div'), foot = document.createElement('div');
     body.id = 'b2bRecycleManyBody'; foot.id = 'b2bRecycleManyFooter';
     document.body.appendChild(body); document.body.appendChild(foot);
@@ -3416,9 +3401,10 @@ function _recWith(fn) {
     try {
         _b2bModalItems = _recFixture();
         _b2bModalDeal = { id: 'rec-deal', ref: 'REC-1', stage: 'listing', listing_store: 'OVL' };
+        _b2bPendingUnit = null;
         return fn(body, foot);
     } finally {
-        _b2bModalItems = keep; _b2bModalDeal = keepD; _b2bRecSel = {};
+        _b2bModalItems = keep; _b2bModalDeal = keepD; _b2bRecSel = {}; _b2bRecArmed = false; _b2bPendingUnit = keepP;
         sessionStorage.setItem('speeksUserRole', keepR);
         body.remove(); foot.remove();
     }
@@ -3428,26 +3414,49 @@ t('recycle many: the listing screen offers it, other stages do not', function ()
     if (_b2bRecycleManyBtn({ id: 'x', stage: 'pricing' })) return 'offered outside listing';
     return _srcOf(_b2bStageListing).indexOf('_b2bRecycleManyBtn(deal)') > -1 || 'not in the listing tools row';
 });
-t('recycle many: opens with the outstanding recycle lines ticked and nothing else', function () {
+t('recycle many: opens with the outstanding recycle lines ticked and Title Case shortcuts', function () {
     return _recWith(function (body, foot) {
         b2bOpenRecycleMany();
         var sel = Object.keys(_b2bRecSel).sort().join(',');
         if (sel !== 'r1,r4') return 'ticked: ' + sel;
         if (body.innerHTML.indexOf('Done') > -1) return 'a finished line is offered';
         if (body.querySelectorAll('.b2b-moverow').length !== 3) return 'expected 3 outstanding lines';
+        if (body.textContent.indexOf('Recycle Lines Only (2)') < 0 || body.textContent.indexOf('Select All') < 0) {
+            return 'shortcuts not in Title Case';
+        }
         return foot.textContent.indexOf('Recycle Out 5 Units') > -1 || 'footer: ' + foot.textContent.replace(/\s+/g, ' ');
     });
 });
-t('recycle many: ticking a bought line adds its outstanding units and its cost', function () {
+t('recycle many: ticking a bought line adds its cost and requires a second confirmation click', function () {
     return _recWith(function (body, foot) {
         b2bOpenRecycleMany();
         b2bRecToggle('r2');
         var f = foot.textContent.replace(/\s+/g, ' ');
         if (f.indexOf('Recycle Out 7 Units') < 0) return 'footer: ' + f;
-        return f.indexOf('$100.00 written off') > -1 || 'no cost in: ' + f;
+        if (f.indexOf('$100.00 written off') < 0) return 'no cost in: ' + f;
+        // First click arms confirmation instead of recycling immediately.
+        b2bRecycleMany();
+        if (!_b2bRecArmed) return 'did not arm confirmation for bought items';
+        var by = {}; _b2bModalItems.forEach(function (i) { by[i.id] = i; });
+        if (by.r2.recycled_qty !== 0 || by.r1.recycled_qty !== 1) return 'recycled on first click before confirm';
+        if (!foot.querySelector('.b2b-btn-confirm-danger')) return 'confirm button missing danger styling';
+        if (foot.textContent.indexOf('Confirm Write-Off ($100.00)') < 0) return 'confirm label: ' + foot.textContent;
+        if (body.textContent.indexOf('Confirm Cost Write-Off') < 0) return 'missing warning banner';
+        // Changing selection disarms confirmation.
+        b2bRecToggle('r4');
+        if (_b2bRecArmed) return 'selection change did not disarm';
+        // Re-arm and confirm executes the recycle.
+        b2bRecycleMany();
+        if (!_b2bRecArmed) return 'did not re-arm';
+        b2bRecycleMany();
+        by = {}; _b2bModalItems.forEach(function (i) { by[i.id] = i; });
+        if (by.r2.recycled_qty !== 2) return 'r2 recycled ' + by.r2.recycled_qty + ', expected 2';
+        if (by.r1.recycled_qty !== 4) return 'r1 recycled ' + by.r1.recycled_qty + ', expected 4';
+        if (by.r4.recycled_qty !== 0) return 'unticked r4 was recycled';
+        return !_b2bRecArmed && Object.keys(_b2bRecSel).length === 0 || 'state outlived confirmation';
     });
 });
-t('recycle many: recycles every outstanding unit on the ticked lines only', function () {
+t('recycle many: scrap-only selection recycles every outstanding unit in one click', function () {
     return _recWith(function () {
         b2bOpenRecycleMany();
         b2bRecycleMany();
@@ -3458,11 +3467,32 @@ t('recycle many: recycles every outstanding unit on the ticked lines only', func
         return Object.keys(_b2bRecSel).length === 0 || 'the selection outlives the action';
     });
 });
-t('recycle many: nothing ticked leaves the button disabled, and a store sees only its own lines', function () {
+t('recycle many: nothing ticked disables the button with clean label, and a store sees only its own lines', function () {
     return _recWith(function (body, foot) {
         b2bOpenRecycleMany();
         b2bRecPick('none');
-        if (!foot.querySelector('.b2b-btn-primary').disabled) return 'enabled with nothing ticked';
+        var btn = foot.querySelector('.b2b-btn-primary');
+        if (!btn || !btn.disabled) return 'enabled with nothing ticked';
+        if (btn.textContent.trim() !== 'Recycle Out') return 'bad empty label: "' + btn.textContent + '"';
         return _srcOf(_b2bRecLines).indexOf('_b2bMyLines()') > -1 || 'not scoped to the lines this user answers for';
     });
+});
+t('recycle many: clears a pending barcode scan when that line is recycled out', function () {
+    return _recWith(function () {
+        _b2bPendingUnit = 'r1';
+        b2bOpenRecycleMany();
+        b2bRecycleMany();
+        if (_b2bPendingUnit !== null) return 'pending scan survived on recycled line: ' + _b2bPendingUnit;
+        // Pending scan on an unticked line survives.
+        _b2bModalItems = _recFixture();
+        _b2bPendingUnit = 'r2';
+        b2bOpenRecycleMany();
+        b2bRecycleMany();
+        return _b2bPendingUnit === 'r2' || 'cleared pending scan on an unticked line';
+    });
+});
+t('recycle many: failed save after celebrate restores the listing screen instead of hiding the rollback', function () {
+    var src = _srcOf(_b2bRecycleApply);
+    return (src.indexOf("!document.getElementById('b2bListRows')") > -1 && src.indexOf('_b2bStageListing(_b2bModalDeal)') > -1)
+        || 'rollback does not restore listing when celebrate replaced the checklist';
 });

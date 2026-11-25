@@ -48,6 +48,7 @@ const DECLS = [
   /^const SCREEN_NOT = /m,
   /^function screenSizePresent/m,
   /^function screenSizeText/m,
+  /^function titleStatesScreen/m,
 ].map(sliceDecl).join('\n\n')
   // The ONLY transformation: drop the TypeScript annotations. Nothing inside a
   // regex literal or a string is touched.
@@ -56,7 +57,16 @@ const DECLS = [
   .replace(/\)\s*: (string|boolean|number)(?: \| null)?\s*\{/g, ') {');
 
 const R = eval(DECLS + '\n;({ PLACEHOLDER, CARRIERS, lockStatedByCarrier, SCREEN_SHELVES,'
-  + ' SCREEN_NOT, screenSizePresent, screenSizeText })');
+  + ' SCREEN_NOT, screenSizePresent, screenSizeText, titleStatesScreen })');
+
+// OVL KS01-7857A-R3R3, denied 2026-11-05: title said 14", field said 15.6".
+const HP = 'HP Pavilion 14" 14M-BA013DX 14" i3-7100U 2.4GHz 8GB RAM 500GB HDD';
+ok(R.screenSizePresent(HP, '15.6"') === false && R.titleStatesScreen(HP) === true,
+   'a title already stating 14" is not missing a screen (field 15.6" is a conflict)');
+ok(R.titleStatesScreen('Factory Unlocked Apple iPhone 13 128GB Starlight') === false,
+   'a bare model number is not a stated screen');
+ok(R.titleStatesScreen('Samsung Galaxy Tab A8 10.5 Inch 32GB') === true, '"10.5 Inch" is a stated screen');
+ok(R.titleStatesScreen('Apple iPad 9th Gen 64GB Wi-Fi') === false, 'no measurement, so the rule may still fire');
 
 console.log('\nPART ONE — the slice, and the rules themselves');
 

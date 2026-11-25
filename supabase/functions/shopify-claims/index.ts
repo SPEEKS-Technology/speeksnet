@@ -8,7 +8,7 @@ const corsHeaders = {
 
 // Shopify Insurance Claims / Item-Not-Received refund cases that store managers
 // open. Stored in `shopify_claims`; scoped by store so a manager only sees their
-// own store's cases and a Multi-Store Manager sees every store they manage.
+// own store's cases (?stores= still takes a comma list).
 const STATUSES = ["in_progress", "recovered", "denied"];
 
 function parseMoney(v: unknown): number | null {
@@ -197,6 +197,22 @@ Deno.serve(async (req: Request) => {
         });
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("claims", store);
+        // Emailed too since 2026-11-03: the red card only ever reached a manager
+        // who happened to be on the site. Same people the card goes to
+        // (_CLAIM_ALERT_ROLES), so the switch and the card can't disagree.
+        const from = body.from ? String(body.from).trim() : "";
+        await queueNotification({
+          category: "claims",
+          kind: "claim_review_reminder",
+          title: `${from || "The DM"} asked you to review your claims`,
+          body: body.message ? String(body.message).trim().slice(0, 300) : undefined,
+          link: "workspace.html#claims",
+          store,
+          audienceStores: [store],
+          audienceRoles: ["manager", "owner (manager)", "owner manager"],
+          audienceFeature: "tool-claims-store",
+          excludeUser: from || null,
+        });
         return jsonResponse({ success: true });
       }
 
@@ -227,12 +243,19 @@ Deno.serve(async (req: Request) => {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const who = body.requested_by ? String(body.requested_by).trim() : null;
+        // WHY (Ethan, 2026-11-21: "so I know why they are trying to delete the
+        // claim"). The request dialog requires it. Deliberately NOT refused here
+        // when missing: the backend deploys ahead of the front end, and the live
+        // site's old trash button sends no reason — refusing would break every
+        // delete request until the merge. A blank one shows "No reason given".
+        const reason = String(body.reason || "").trim().slice(0, 500) || null;
         // .select() so the notification can name the case. Without it the DM is
         // told "a claim" and has to go hunting for which one.
         const { data: claim, error } = await supabase.from("shopify_claims")
           .update({
             delete_requested_at: new Date().toISOString(),
             delete_requested_by: who,
+            delete_reason: reason,
           })
           .eq("id", id)
           .select("store, case_number, reason_type").maybeSingle();
@@ -255,7 +278,7 @@ Deno.serve(async (req: Request) => {
             category: "requests",
             kind: "claim_delete_request",
             title: `Delete request — insurance claim${store ? ` — ${store}` : ""}`,
-            body: `${who || "A manager"} asked to delete ${ref ? `case ${ref}` : "a claim"}${kind ? ` (${kind})` : ""}. Nothing is removed until you approve it.`,
+            body: `${who || "A manager"} asked to delete ${ref ? `case ${ref}` : "a claim"}${kind ? ` (${kind})` : ""}.${reason ? ` Why: "${reason}".` : ""} Nothing is removed until you approve it.`,
             link: "index.html",
             store: store || null,
             audienceRoles: ["district manager"],
@@ -271,7 +294,7 @@ Deno.serve(async (req: Request) => {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const { error } = await supabase.from("shopify_claims")
-          .update({ delete_requested_at: null, delete_requested_by: null })
+          .update({ delete_requested_at: null, delete_requested_by: null, delete_reason: null })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("claims", null);

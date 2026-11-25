@@ -91,8 +91,7 @@ const SHOP_BY_STORE: Record<string, string> = {
 // the DM can hand either half to an ASM in Feature Access and have it actually
 // work, rather than granting a button that 403s (see [[kpi-role-gate]]).
 const CORP_ROLES = ["district manager", "ceo", "mocd"];
-const STORE_ROLES = ["manager", "owner (manager)", "owner manager", "multi-store manager"];
-const MSM_STORES = ["BAL", "MPL"];
+const STORE_ROLES = ["manager", "owner (manager)", "owner manager"];
 
 // The junk drawer we are emptying. A proposal always leaves this one.
 //
@@ -208,7 +207,6 @@ async function scopeFor(pin: string, reading = false): Promise<Scope | null> {
   // this person file", never "whose catalogue" — that stays the store on their
   // user row, and corp is the only thing that means all five.
   const stores = corp ? STORES
-    : role === "multi-store manager" ? MSM_STORES
     : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
   if (!stores.length) return null;
   return { name: user.name || "", role, stores, corp, mayCats, mayPhotos, mayTitles };
