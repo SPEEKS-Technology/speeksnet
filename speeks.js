@@ -44007,6 +44007,10 @@ const EMAIL_LIST_GROUPS = [
                   + 'buy or sell, or a monthly one once the Monthly Breakdown is in. Copied on every store\'s email.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `record_watch_${s}`, label: `Company Records — ${s}`,
               desc: `The ${s} manager and ASM: the same email, whenever it is about ${s}.` })),
+            { key: 'record_watch_CORP', label: 'Company Records — CORP',
+              desc: '6:40am, only on a morning all five stores together broke or came within 5% of a '
+                  + 'company-wide record (daily buy or sell; monthly revenue, profit, margin, conversion). '
+                  + 'Leadership is copied too, so left empty it goes to Leadership only.' },
             { key: 'fb_boosts', label: 'Facebook Boosts',
               desc: 'Monday 8am — Facebook Marketplace boosts: the amount boosted last week, how many are '
                   + 'running and ending soon, and each store\'s open boosts. Boosts are the ones staff record '

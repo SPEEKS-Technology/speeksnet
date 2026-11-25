@@ -47,12 +47,27 @@
 // COMPANY rows are the whole company summed — best day, best month — from 2026
 // only. The per-card headline is the top store; see 0117 for why the two split.
 //
+// CORP — THE COMPANY IS JUDGED TOO (2026-11-25). Ethan: "just like we have for
+// the stores records, can we have company wide buying months, buying days,
+// selling months, selling days, revenue, etc. get sent out to CORP with the
+// same parameters." Same rules as a store — morning only, record or within 5%,
+// one mail holding everything — judged against the Company rows. It is logged
+// as store 'CORP' (the Records tab calls the same rows 'Company'), and judged
+// only once ALL FIVE stores have been: a company day with four stores in is not
+// a company day. That also keeps step 3 honest, which already holds the company
+// scan back until all five are judged. A day one store never reports is never
+// judged for the company either — the same as it never raises the record.
+//
+// Company conversion is shown to two places (a weighted average) where a
+// store's is whole, so it is judged at that precision.
+//
 // SUNDAY IS CLOSED: nothing runs, Monday judges Saturday. Same rule, and the
 // same reason, as processed-report and cash-report.
 //
 // RECIPIENTS: record_watch_<STORE> (manager + ASM) plus record_watch_leadership
 // (DM + CEO) on every store's mail. Leadership falls back to Ethan and Paul while
-// that list is empty; a store with an empty list just goes to leadership.
+// that list is empty; a store with an empty list just goes to leadership. The
+// company mail goes to record_watch_CORP plus leadership the same way.
 //
 // Params (all need ?secret=):
 //   dryRun=1        judge and compute, write nothing, return JSON
@@ -72,7 +87,9 @@ const LEADERSHIP_KEY = 'record_watch_leadership';
 const FALLBACK_TO = ['ethan.kushnir@speekstechnology.com', 'paul.kushnir@pikinvestments.com'];
 
 const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-const FROM = '2026-01-01';
+const CORP = 'CORP';        // record_watch_log / mail key for the company
+const COMPANY = 'Company';  // the same thing's store value in `records`
+const FROM ='2026-01-01';
 const FROM_YEAR = 2026;
 const NEAR = 0.95;        // "within 5%"
 const RETRY_DAYS = 7;     // how far back an unsent mail is still worth sending
@@ -103,13 +120,13 @@ const L = {
 type Metric = keyof typeof L;
 
 const STORE_COLOR: Record<string, string> = {
-  OVL: '#7c3aed', LEE: '#2563eb', WSP: '#16a34a', MPL: '#ea580c', BAL: '#dc2626',
+  OVL: '#7c3aed', LEE: '#2563eb', WSP: '#16a34a', MPL: '#ea580c', BAL: '#dc2626', CORP: '#1a1c1e',
 };
 const STORE_TINT: Record<string, string> = {
-  OVL: '#f1ebfd', LEE: '#e8f0fb', WSP: '#e8f7ee', MPL: '#fdf0e7', BAL: '#fcecec',
+  OVL: '#f1ebfd', LEE: '#e8f0fb', WSP: '#e8f7ee', MPL: '#fdf0e7', BAL: '#fcecec', CORP: '#eef1f3',
 };
 const STORE_RING: Record<string, string> = {
-  OVL: '#ddd0fb', LEE: '#cfe0f7', WSP: '#c6ecd6', MPL: '#f8dcc7', BAL: '#f6d5d5',
+  OVL: '#ddd0fb', LEE: '#cfe0f7', WSP: '#c6ecd6', MPL: '#f8dcc7', BAL: '#f6d5d5', CORP: '#d5dbe0',
 };
 // The same palette as the cash, processed and weekly mail, so they read as one family.
 const C = {
@@ -144,8 +161,8 @@ const FMT: Record<Metric, (x: number) => string> = {
 };
 // How far apart two figures are, in words. A rate's gap is in points — "2.15
 // points short" — because "$" or "%" of a percentage reads as nonsense.
-const gapText = (m: Metric, d: number) =>
-  m === 'margin' ? `${d.toFixed(2)} points`
+const gapText = (m: Metric, d: number, corp = false) =>
+  m === 'margin' || (m === 'conv' && corp) ? `${d.toFixed(2)} points`
     : m === 'conv' ? `${Math.round(d)} point${Math.round(d) === 1 ? '' : 's'}`
     : FMT[m](d);
 
@@ -286,9 +303,12 @@ Deno.serve(async (req: Request) => {
     // One metric against its record. null when there is nothing honest to say:
     // no record yet, or a record already dated on/after this period (raised by a
     // run that did not judge it).
-    const judge = (s: string, m: Metric, value: number | undefined, on: string, when: string): Hit | null => {
-      if (value === undefined || !(value > 0)) return null;
-      const rec = recOf(s, L[m]);
+    const judge = (s: string, m: Metric, value: number | undefined | null, on: string, when: string): Hit | null => {
+      if (value === undefined || value === null || !(value > 0)) return null;
+      // The company is CORP in the log and the mail, 'Company' on the Records tab.
+      const corp = s === CORP;
+      const rec = recOf(corp ? COMPANY : s, L[m]);
+      const fmt = corp && m === 'conv' ? pct2 : FMT[m];
       const prior = recNum(rec);
       if (!prior || (rec?.record_on && String(rec.record_on) >= on)) return null;
       // A hand-typed record carries no record_on, but its period can still say
@@ -297,15 +317,15 @@ Deno.serve(async (req: Request) => {
         || String(rec.period || '').trim().toLowerCase() === dayText(on).toLowerCase()) return null;
       // Decided at the precision the record is SHOWN: $89,486.21 has not beaten
       // a typed $89,486, it has tied it — "beat by $0" is not a record.
-      const shown = (x: number) => parseNum(FMT[m](x)) ?? x;
+      const shown = (x: number) => parseNum(fmt(x)) ?? x;
       const sv = shown(value), sp = shown(prior);
       const pct = value / prior * 100;
       const kind = sv > sp ? 'record' : (sv >= sp * NEAR ? 'near' : null);
       if (!kind) return null;
       return {
         metric: m, label: L[m], kind, value, prior, pct,
-        valueText: FMT[m](value), priorText: String(rec.value || FMT[m](prior)).trim(),
-        gapText: gapText(m, Math.abs(value - prior)),
+        valueText: fmt(value), priorText: String(rec.value || fmt(prior)).trim(),
+        gapText: gapText(m, Math.abs(value - prior), corp),
         priorPeriod: rec.period || '', when,
       };
     };
@@ -329,6 +349,27 @@ Deno.serve(async (req: Request) => {
     });
     const months = Object.values(mm).filter((r) => Number(r.mo.slice(0, 4)) >= FROM_YEAR);
     const marginCounts = (r: M) => MARGIN_SKIP[r.store] !== r.mo;
+
+    // One company month from its store rows. Margin is summed GP over summed
+    // sales, leaving out any store in a skipped opening month for the same reason
+    // as above. Conversion is each store's close rate weighted by its # of
+    // customers. Shared by the CORP judging (step 2) and the raise (step 3), so
+    // the mail and the Records tab can never disagree about a company figure.
+    const companyMonth = (mo: string, rs: M[]) => {
+      const sum = (f: (r: M) => number | undefined, set = rs) => set.reduce((a, r) => a + (f(r) ?? 0), 0);
+      const settled = rs.filter(marginCounts);
+      const sNs = sum((r) => r.ns, settled);
+      const withC = rs.filter((r) => r.ccr !== undefined && r.nc);
+      const cNc = sum((r) => r.nc, withC);
+      return {
+        mo, ns: sum((r) => r.ns), gp: sum((r) => r.gp),
+        // The company's NP only for a month every store has one, or a month with
+        // four stores' NP would set a company record nobody earned.
+        np: rs.length === STORES.length && rs.every((r) => r.np !== undefined) ? sum((r) => r.np) : null,
+        pct: sNs ? sum((r) => r.gp, settled) / sNs * 100 : null,
+        ccr: cNc ? withC.reduce((a, r) => a + (r.ccr! * r.nc!), 0) / cNc : null,
+      };
+    };
 
     const logs = logRes.data || [];
     const scopeOf = (l: any) => l.scope || 'daily';
@@ -379,6 +420,36 @@ Deno.serve(async (req: Request) => {
       });
       judgedMonth.add(s);
     }
+    // CORP — only once every store is judged for the day / month (see header).
+    if (!judgedDay.has(CORP) && STORES.every((s) => judgedDay.has(s))) {
+      const rows = daily.filter((r) => r.date === day);
+      const buy = rows.reduce((a, r) => a + r.buy, 0), sell = rows.reduce((a, r) => a + r.sell, 0);
+      const when = prettyDay(day);
+      const hits = [judge(CORP, 'buy', buy, day, when), judge(CORP, 'sell', sell, day, when)].filter(Boolean);
+      verdicts.push({
+        day, store: CORP, scope: 'daily', buy, sell,
+        buy_record: recNum(recOf(COMPANY, L.buy)), buy_period: recOf(COMPANY, L.buy)?.period || null,
+        sell_record: recNum(recOf(COMPANY, L.sell)), sell_period: recOf(COMPANY, L.sell)?.period || null,
+        figures: { buy, sell }, hits,
+      });
+      judgedDay.add(CORP);
+    }
+    if (!judgedMonth.has(CORP) && STORES.every((s) => judgedMonth.has(s))) {
+      const c = companyMonth(month, STORES.map((s) => mm[`${s}|${month}`]).filter(Boolean));
+      const when = monthText(month);
+      const hits = [
+        judge(CORP, 'rev', c.ns, month, when),
+        judge(CORP, 'gp', c.gp, month, when),
+        judge(CORP, 'margin', c.pct, month, when),
+        judge(CORP, 'conv', c.ccr, month, when),
+        judge(CORP, 'np', c.np, month, when),
+      ].filter(Boolean);
+      verdicts.push({
+        day: month, store: CORP, scope: 'monthly',
+        figures: { net_sales: c.ns, gross_profit: c.gp, gross_profit_pct: c.pct, customer_close_rate: c.ccr, net_profit: c.np }, hits,
+      });
+      judgedMonth.add(CORP);
+    }
     if (writes && verdicts.length) {
       const { error } = await sb.from('record_watch_log').insert(verdicts);
       if (error) throw new Error('log: ' + error.message);
@@ -418,27 +489,11 @@ Deno.serve(async (req: Request) => {
     const cb = best(days, (r) => r.buy, (r) => r.date); put('Company', 'buy', cb?.buy, cb?.date, false);
     const cs = best(days, (r) => r.sell, (r) => r.date); put('Company', 'sell', cs?.sell, cs?.date, false);
 
-    // Company monthly. Margin is summed GP over summed sales, leaving out any
-    // store in a skipped opening month for the same reason as above. Conversion
-    // is each store's close rate weighted by its # of customers.
+    // Company monthly — see companyMonth.
     const allMonth = STORES.every((s) => judgedMonth.has(s));
     const byMo: Record<string, M[]> = {};
     usableM.filter((r) => r.mo < month || allMonth).forEach((r) => (byMo[r.mo] = byMo[r.mo] || []).push(r));
-    const co = Object.entries(byMo).map(([mo, rs]) => {
-      const sum = (f: (r: M) => number | undefined, set = rs) => set.reduce((a, r) => a + (f(r) ?? 0), 0);
-      const settled = rs.filter(marginCounts);
-      const sNs = sum((r) => r.ns, settled);
-      const withC = rs.filter((r) => r.ccr !== undefined && r.nc);
-      const cNc = sum((r) => r.nc, withC);
-      return {
-        mo, ns: sum((r) => r.ns), gp: sum((r) => r.gp),
-        // The company's NP only for a month every store has one, or a month with
-        // four stores' NP would set a company record nobody earned.
-        np: rs.length === STORES.length && rs.every((r) => r.np !== undefined) ? sum((r) => r.np) : null,
-        pct: sNs ? sum((r) => r.gp, settled) / sNs * 100 : null,
-        ccr: cNc ? withC.reduce((a, r) => a + (r.ccr! * r.nc!), 0) / cNc : null,
-      };
-    });
+    const co = Object.entries(byMo).map(([mo, rs]) => companyMonth(mo, rs));
     const crv = best(co, (r) => r.ns, (r) => r.mo); put('Company', 'rev', crv?.ns, crv?.mo, true);
     const cgp = best(co, (r) => r.gp, (r) => r.mo); put('Company', 'gp', cgp?.gp, cgp?.mo, true);
     const cnp = best(co, (r) => r.np, (r) => r.mo); put('Company', 'np', cnp?.np, cnp?.mo, true);
@@ -482,7 +537,7 @@ Deno.serve(async (req: Request) => {
           (scopeOf(l) === 'monthly' ? l.day >= prevMonth(recent) : l.day >= recent)), ...verdicts];
     const byStore: Record<string, any[]> = {};
     pool.filter((v: any) => (v.hits || []).length).forEach((v: any) => (byStore[v.store] = byStore[v.store] || []).push(v));
-    const bundles = STORES.filter((s) => byStore[s]).map((s) => ({
+    const bundles = [...STORES, CORP].filter((s) => byStore[s]).map((s) => ({
       store: s, rows: byStore[s],
       // Daily first, then monthly, each in the order the tab lists them.
       hits: byStore[s].sort((a: any, b: any) => (scopeOf(a) === 'daily' ? 0 : 1) - (scopeOf(b) === 'daily' ? 0 : 1))
@@ -501,7 +556,7 @@ Deno.serve(async (req: Request) => {
     const sent: any[] = [];
     if (!dryRun && bundles.length) {
       const { data: recips } = await sb.from('email_recipients').select('list_key, email')
-        .in('list_key', [LEADERSHIP_KEY, ...STORES.map((s) => `record_watch_${s}`)]);
+        .in('list_key', [LEADERSHIP_KEY, ...[...STORES, CORP].map((s) => `record_watch_${s}`)]);
       const list = (k: string) => (recips || []).filter((r: any) => r.list_key === k).map((r: any) => String(r.email).toLowerCase());
       const lead = list(LEADERSHIP_KEY);
       for (const b of bundles) {
@@ -543,18 +598,20 @@ Deno.serve(async (req: Request) => {
 type Bundle = { store: string; hits: Hit[]; day: string | null; month: string | null };
 
 function subjectFor(b: Bundle): string {
+  const corp = b.store === CORP;
+  const who = corp ? 'The company' : b.store;
   const recs = b.hits.filter((h) => h.kind === 'record');
-  if (recs.length > 1) return `${b.store} set ${recs.length} new store records`;
+  if (recs.length > 1) return `${who} set ${recs.length} new ${corp ? 'company-wide' : 'store'} records`;
   if (recs.length === 1) {
     const h = recs[0];
     const more = b.hits.length > 1 ? ' (and came close on another)' : '';
-    return `${b.store} set a new ${h.label} — ${h.valueText}${more}`;
+    return `${who} set a new ${corp ? 'company-wide ' : ''}${h.label} — ${h.valueText}${more}`;
   }
   const h = b.hits.reduce((a, x) => (x.pct > a.pct ? x : a));
   const gap = 100 - h.pct;
   return gap < 0.05
-    ? `${b.store} tied its ${h.label}`
-    : `${b.store} came within ${gap.toFixed(1)}% of its ${h.label}`;
+    ? `${who} tied its ${corp ? 'company-wide ' : ''}${h.label}`
+    : `${who} came within ${gap.toFixed(1)}% of its ${corp ? 'company-wide ' : ''}${h.label}`;
 }
 
 function badge(s: string) {
@@ -590,8 +647,16 @@ function hitBlock(h: Hit) {
 
 function buildEmail(b: Bundle): string {
   const recs = b.hits.filter((h) => h.kind === 'record').length;
-  const title = recs > 1 ? 'New Store Records' : (recs ? 'New Store Record' : 'Close to a Store Record');
-  const intro = recs > 1
+  const corp = b.store === CORP;
+  const kind = corp ? 'Company-Wide' : 'Store';
+  const title = recs > 1 ? `New ${kind} Records` : (recs ? `New ${kind} Record` : `Close to a ${kind} Record`);
+  const intro = corp
+    ? (recs > 1
+      ? `All five stores together set ${recs} new company-wide records. Congratulations to everyone!`
+      : recs
+        ? 'All five stores together set a new company-wide record. Congratulations to everyone!'
+        : 'All five stores together came within 5% of a company-wide record. That\'s how close the company got.')
+    : recs > 1
     ? `${esc(b.store)} set ${recs} new store records. Congratulations to the whole team!`
     : recs
       ? `${esc(b.store)} set a new store record. Congratulations to the whole team!`
