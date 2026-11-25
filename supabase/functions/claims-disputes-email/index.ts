@@ -717,7 +717,7 @@ function managerNudge(store: string, rows: Row[], today: string) {
 // ---------------------------------------------------------------------------
 // 3. The DM digest
 // ---------------------------------------------------------------------------
-function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], toConfirm: any[], today: string, closing: Row[] = [], writtenOff: Row[] = []) {
+function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], toConfirm: any[], today: string, closing: Row[] = [], writtenOff: Row[] = [], stillOpen: Row[] = []) {
   // ROW RULES ACROSS THE WHOLE ROW (desktop, 2026-10-24). The line used to sit
   // on the store cell only, so on a wide screen each store got a short stub
   // under its name and the numbers floated free of it. Every cell carries the
@@ -760,6 +760,21 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
   if (!any) table = `<tr><td style="padding:16px 14px;border-top:1px solid ${C.line};font-size:13px;color:${C.ink};">Nothing is outstanding at any store this morning.</td></tr>`;
 
   let body = table;
+  // STILL NOT DONE FROM YESTERDAY'S 4PM (Ethan, 2026-11-25: wants to be told the
+  // next morning about what was due and didn't get done). Exactly the items on
+  // yesterday's 4:05 dm_due_today mail (hold_email_log) that still need a person
+  // today — so the store was told at 8:35 and again at 4:00, and it is still
+  // open. Repeats every morning while it stays that way only if it keeps making
+  // the 4pm list; a missed window is left to "worth a conversation" below.
+  if (stillOpen.length) {
+    const stores = [...new Set(stillOpen.map((r) => r.store))].sort();
+    body += sectionRow(`Flagged at 4pm yesterday — still not done (${stillOpen.length})`, C.bad);
+    for (const s of stores) {
+      const list = stillOpen.filter((r) => r.store === s).sort(bySoonest);
+      body += `<tr><td style="padding:10px 14px 0;border-top:1px solid ${C.line};font-size:13px;font-weight:800;color:${C.ink};">${esc(STORE_NAME[s] || s)} — ${list.length}</td></tr>`;
+      body += list.map((r) => itemRow(r, today)).join("");
+    }
+  }
   if (newMissed.length) {
     body += sectionRow("New — worth a conversation", C.bad);
     body += newMissed.map((r) => `<tr><td style="padding:14px;border-top:1px solid ${C.line};">
@@ -1019,7 +1034,7 @@ Deno.serve(async (req: Request) => {
     const html =
       kind === "manager_nudge" ? managerNudge("WSP", dueToday, day)
       : kind === "dm_due_today" ? dmDueToday({ WSP: dueToday }, day)
-      : kind === "dm_digest" ? dmDigest(byStore, counts, missed, toConfirm, day)
+      : kind === "dm_digest" ? dmDigest(byStore, counts, missed, toConfirm, day, [], [], dueToday.slice(0, 2))
       : managerDaily("WSP", wsp, new Set(["dispute|d3", "ebay_case|c2", "mismatch|m1"]),
                      { returns: 6, claims: 0, quiet: 2 }, day);
     return new Response(html, { headers: { ...cors, "Content-Type": "text/html; charset=utf-8" } });
@@ -1194,16 +1209,26 @@ Deno.serve(async (req: Request) => {
         .filter((c) => c.state_note === "written_off" && !told.has(`ebay_case|${c.case_key}`))
         .map(caseRow);
 
+      // Yesterday's 4:05 DM list, still open this morning (see STILL NOT DONE in
+      // dmDigest). `mailable` is the same "still needs a person" test the 4pm used,
+      // so an item answered, settled, checked in or replied to since drops off.
+      const yesterday = addDaysIso(today, -1);
+      const flaggedRows = await sbAll(`hold_email_log?select=item_type,item_key&kind=eq.dm_due_today&sent_on=eq.${yesterday}`);
+      const flagged = new Set(flaggedRows.map((r: any) => `${r.item_type}|${r.item_key}`));
+      const missedKeys = new Set(newMissed.map((r) => `${r.type}|${r.key}`));
+      const stillOpen = rows.filter((r) => flagged.has(`${r.type}|${r.key}`) && mailable(r, today)
+        && !missedKeys.has(`${r.type}|${r.key}`));
+
       const backupWarn = await backupWarning();
-      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || toConfirm.length || closing.length || writtenOff.length || dmWarn.length || backupWarn.length;
+      const anything = STORES.some((s) => byStore[s].length) || stillOpen.length || newMissed.length || toConfirm.length || closing.length || writtenOff.length || dmWarn.length || backupWarn.length;
       if (!anything) sent.push({ skipped: "nothing outstanding anywhere" });
       else {
-        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, toConfirm, today, closing, writtenOff), dmWarn), backupWarn);
+        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, toConfirm, today, closing, writtenOff, stillOpen), dmWarn), backupWarn);
         previews.push(html);
         const subject = `Claims & Disputes — what is still with the managers`;
         const to = await listFor("claims_disputes_dm");
         if (!to.length) sent.push({ skipped: "no recipients" });
-        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, toConfirm: toConfirm.length, writtenOff: writtenOff.length, backupWarn });
+        else if (dry) sent.push({ to, subject, stillOpen: stillOpen.length, newMissed: newMissed.length, toConfirm: toConfirm.length, writtenOff: writtenOff.length, backupWarn });
         else {
           const r = await relay(to.join(","), subject, html);
           // Only the missed windows are logged for this mail: they are the ones
