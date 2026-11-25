@@ -76,7 +76,7 @@ t('header button: shown to a dev-tracker holder, hidden from everyone else', fun
 });
 
 // ============================================================================
-// THE SUITE (dev.html = dev.js + dev.css, 2026-11-19). Run with
+// THE SUITE — the pipeline (dev.html = dev.js + dev.css, 2026-11-24). Run with
 //   -Js dev.js -Css dev.css
 // dev.js would boot on DOMContentLoaded — sign-in check, network, realtime — so
 // DEV_NO_BOOT stops it; these drive window.Dev against a fixture instead.
@@ -93,16 +93,17 @@ Dev.stub(function (url, body) {
     if (body === undefined) return new Promise(function () {});
     DV_SENT.push({ url: url, body: body });
     if (DV_FAIL) return Promise.reject(new Error('the server said no'));
-    return Promise.resolve({ success: true });
+    return Promise.resolve({ success: true, branch: body.action === 'start_branch' ? body.prefix + '/' + body.slug : undefined });
 });
 function last() { return DV_SENT[DV_SENT.length - 1] || {}; }
 
+var BR = 'Main-December-Update-2---Ethan';
 function dvFixture(opts) {
     var day = 86400000, now = Date.now();
     var T = function (id, status, extra) {
         var b = { id: id, title: 'Ticket ' + id, description: 'What is wrong.', type: 'bug', area: 'b2b', priority: 'normal', status: status,
             assignee_id: null, assignee_name: null, reporter_id: 'e', reporter_name: 'Ethan Kushnir', reporter_store: 'CORP', stores: [],
-            release_id: null, due: null, source: 'dev', github_number: null, closed_at: null, attachments: [],
+            release_id: null, due: null, source: 'dev', github_number: null, closed_at: null, attachments: [], branch: null, branch_done: false,
             created_at: new Date(now - 5 * day).toISOString(), updated_at: new Date(now - id * 1000).toISOString() };
         for (var k in extra) b[k] = extra[k];
         return b;
@@ -110,50 +111,64 @@ function dvFixture(opts) {
     return {
         me: { id: 'n', name: 'Nick Hettinger', role: 'Manager', test: !!(opts && opts.test) },
         can: { dev: true, publish: false },
+        pipeline: {
+            live: { id: 57, version: 'v3.12.3', title: 'v3.12.3', published_at: new Date(now - 3 * day).toISOString() },
+            next: { id: 14, size: 'major', title: (opts && 'title' in opts) ? opts.title : 'Main December Update', version: 'v3.13.0',
+                versions: { minor: 'v3.12.4', major: 'v3.13.0', overhaul: 'v4.0.0' }, needs_title: true },
+        },
         devs: [{ id: 'e', name: 'Ethan Kushnir', store: 'CORP', role: 'District Manager' }, { id: 'n', name: 'Nick Hettinger', store: 'OVL', role: 'Manager' }],
-        types: [{ key: 'bug', label: 'Bug', active: true }, { key: 'suggestion', label: 'Suggestion', active: true }, { key: 'task', label: 'Task', active: true }],
+        types: [{ key: 'bug', label: 'Bug', active: true }, { key: 'suggestion', label: 'Suggestion', active: true }, { key: 'improvement', label: 'Improvement', active: true }, { key: 'task', label: 'Task', active: true }],
         areas: [{ key: 'b2b', label: 'B2B', active: true }, { key: 'claims', label: 'Claims', active: true }],
-        releases: [{ id: 1, version: null, title: 'Main December Update', status: 'in_progress' }],
+        releases: [
+            { id: 14, version: null, title: 'Main December Update', status: 'in_progress', size: 'major' },
+            { id: 57, version: 'v3.12.3', title: 'v3.12.3', status: 'published', published_at: new Date(now - 3 * day).toISOString() },
+            // The old split: the name and the number as two rows, published seconds apart.
+            { id: 13, version: null, title: 'Main November Update', status: 'published', published_at: new Date(now - 20 * day).toISOString() },
+            { id: 16, version: 'v3.11.0', title: 'v3.11.0', status: 'published', published_at: new Date(now - 20 * day - 23000).toISOString() },
+        ],
         tickets: [
-            T(1000, 'triage', { source: 'idea', attachments: [{ name: 'photo.jpg', url: 'https://example.invalid/signed' }, { name: 'old.pdf', url: null }] }),
-            T(1001, 'backlog', { priority: 'low' }),
-            T(1002, 'backlog', { priority: 'urgent', assignee_id: 'n', assignee_name: 'Nick Hettinger' }),
-            T(1003, 'in_progress', { area: 'claims', type: 'suggestion', title: 'Sort the B2B list by brand' }),
-            T(573, 'done', { source: 'github_import', github_number: 573, closed_at: new Date(now - day).toISOString() }),
+            T(1000, 'triage', { source: 'idea', title: 'From the shop floor', attachments: [{ name: 'photo.jpg', url: 'https://example.invalid/signed' }, { name: 'old.pdf', url: null }] }),
+            T(1001, 'backlog', { priority: 'low', title: 'Low one' }),
+            T(1002, 'backlog', { priority: 'urgent', assignee_id: 'n', assignee_name: 'Nick Hettinger', title: 'Urgent one' }),
+            T(1003, 'in_progress', { area: 'claims', type: 'suggestion', title: 'Sort the B2B list by brand', branch: 'feat/b2b-sort', branch_done: true }),
+            T(1004, 'in_progress', { type: 'improvement', title: '<b>Expense</b> export', branch: 'feat/b2b-sort' }),
+            T(1005, 'in_review', { title: 'On a merged branch still', branch: 'feat/projects-completion-signoff' }),
+            T(568, 'on_prerelease', { type: 'bug', title: 'Fix box order tool cart', release_id: 14, branch: 'fix/box-order-cart' }),
+            T(572, 'on_prerelease', { type: 'improvement', title: 'Submit an Idea moved to SPEEKSNET', release_id: 14, branch: null }),
+            T(573, 'done', { source: 'github_import', github_number: 573, release_id: 13, title: 'Customer Callback Fixes', closed_at: new Date(now - day).toISOString() }),
             T(66, 'wont_do', { source: 'github_import', github_number: 66, closed_at: new Date(now - 2 * day).toISOString(), title: 'Test 1' }),
         ],
         events: [
             { id: 1, ticket_id: 66, kind: 'created', actor_name: 'Nick Hettinger', created_at: new Date(now - 9 * day).toISOString() },
             { id: 2, ticket_id: 66, kind: 'status', actor_name: 'GitHub', from_value: 'backlog', to_value: 'wont_do', note: 'Closed on GitHub as not planned', created_at: new Date(now - 2 * day).toISOString() },
             { id: 3, ticket_id: 1003, kind: 'linked', actor_name: 'GitHub', to_value: 'pr', note: 'PR #612', created_at: new Date(now - 3 * day).toISOString() },
+            { id: 4, ticket_id: 1003, kind: 'branch', actor_name: 'Nick Hettinger', to_value: 'feat/b2b-sort', note: 'Put on feat/b2b-sort', created_at: new Date(now - 4 * day).toISOString() },
         ],
         comments: [
             { id: 10, ticket_id: 1003, body: 'Mine to fix.', author_name: 'Nick Hettinger', author_id: 'n', source: 'speeksnet', created_at: new Date(now - day).toISOString() },
-            { id: 11, ticket_id: 1003, body: 'From GitHub.', author_name: 'Ethan Kushnir', author_id: 'e', source: 'github', created_at: new Date(now - 4 * day).toISOString() },
+            { id: 11, ticket_id: 1003, body: 'From GitHub.', author_name: 'Ethan Kushnir', author_id: 'e', source: 'github', created_at: new Date(now - 4.5 * day).toISOString() },
         ],
         links: [
             { id: 1, ticket_id: 1003, kind: 'commit', ref: 'abcdef1234567890', url: 'https://github.com/x/commit/abcdef1', title: 'Sort SN-1003' },
-            { id: 2, ticket_id: 1003, kind: 'branch', ref: 'feat/sn-1003-sort', url: 'https://github.com/x/tree/feat/sn-1003-sort', state: 'active' },
+            { id: 2, ticket_id: 1003, kind: 'branch', ref: 'feat/b2b-sort', url: 'https://github.com/x/tree/feat/b2b-sort', state: 'active' },
             { id: 3, ticket_id: 1003, kind: 'pr', ref: '612', url: 'https://github.com/x/pull/612', title: 'B2B sort by brand', state: 'open', base: 'pre-release', author: 'Eckushnir',
               checks: [
                   { kind: 'migration', level: 'error', text: '0192 is already used in the database by 0192_dev_github_sync' },
                   { kind: 'buster', level: 'warn', text: 'speeks.js changed but no cache-buster was bumped' },
-                  { kind: 'function', level: 'todo', text: 'Deploy the b2b-deals function' },
-                  { kind: 'migration', level: 'ok', text: '0193_x — applied' },
                   { kind: 'migration', level: 'warn', text: '<img src=x onerror=alert(1)>' },
               ] },
         ],
         branches: [
-            { name: 'feat/sn-1003-sort', kind: 'ticket', ticket_id: 1003, ahead: 2, behind: 0, merged: false, pr_number: 612, pr_state: 'open', last_commit_message: 'Sort', last_commit_author: 'back707', last_commit_at: new Date(now - day).toISOString() },
+            { name: 'feat/b2b-sort', kind: 'untracked', ahead: 2, behind: 0, merged: false, pr_number: 612, pr_state: 'open', last_commit_author: 'Eckushnir', last_commit_at: new Date(now - day).toISOString() },
             { name: 'main', kind: 'base', ahead: 6, behind: 9, merged: false, last_commit_at: new Date(now - 7 * day).toISOString() },
-            { name: 'Main-December-Update-2---Ethan', kind: 'untracked', ahead: 17, behind: 10, merged: false, pr_number: 576, pr_state: 'open', last_commit_at: new Date(now - 2 * day).toISOString() },
+            { name: BR, kind: 'untracked', ahead: 17, behind: 40, merged: false, pr_number: 576, pr_state: 'open', last_commit_author: 'Eckushnir', last_commit_at: new Date(now - 2 * day).toISOString() },
             { name: 'feat/projects-completion-signoff', kind: 'untracked', ahead: 0, behind: 1, merged: true, pr_number: 581, pr_state: 'merged', last_commit_at: new Date(now - 3 * day).toISOString() },
+            { name: 'App-Icon-Green---Ethan', kind: 'untracked', ahead: 0, behind: 1, merged: true, pr_number: 587, pr_state: 'merged', last_commit_at: new Date(now - 4 * day).toISOString() },
             { name: 'pre-release', kind: 'base', ahead: 0, behind: 0, merged: false, last_commit_at: new Date(now - day).toISOString() },
-            { name: 'release/v3.13.0', kind: 'release', marked_kind: 'release', marked_by: 'Ethan Kushnir', ahead: 4, behind: 0, merged: false, last_commit_at: new Date(now - day).toISOString() },
         ],
     };
 }
-function dvStage(view, opts) {
+function dvStage(opts) {
     ['dvApp', 'dvLayer', 'dvToasts'].forEach(function (id) {
         if (!document.getElementById(id)) { var d = document.createElement('div'); d.id = id; document.body.appendChild(d); }
     });
@@ -161,12 +176,14 @@ function dvStage(view, opts) {
     document.getElementById('dvApp').innerHTML = '';
     Dev.closePop(); Dev.closeModal();
     Dev.setData(dvFixture(opts));
-    Dev.S.view = view || 'open'; Dev.S.query = ''; Dev.S.openId = null; Dev.S.selId = null;
-    Dev.S.filters = { area: '', type: '', assignee: '' }; Dev.S.startOpen = false; Dev.S.editingDesc = false; Dev.S.editingComment = null;
+    Dev.S.query = ''; Dev.S.openId = null; Dev.S.editingDesc = false; Dev.S.editingComment = null; Dev.S.titleDraft = null;
+    Dev.S.fresh.clear(); Dev.S.landed.clear();
     Dev.renderShell(); Dev.renderAll();
     return document.getElementById('dvApp');
 }
-function ids() { return Array.prototype.map.call(document.querySelectorAll('.dv-row'), function (r) { return r.getAttribute('data-id'); }).join(','); }
+function cardIds(sel) { return Array.prototype.map.call(document.querySelectorAll(sel + ' .dv-card'), function (c) { return c.getAttribute('data-id'); }).join(','); }
+function lane(name) { return document.querySelector('.dv-lane[data-lane="' + name + '"]'); }
+function laneNames() { return Array.prototype.map.call(document.querySelectorAll('.dv-lane'), function (l) { return l.getAttribute('data-lane'); }); }
 // The page attaches Dev.onKey to document at boot, which the harness skips —
 // so a key goes straight to the handler, with the target it would have had.
 function key(k, target) {
@@ -174,232 +191,284 @@ function key(k, target) {
     Object.defineProperty(e, 'target', { value: target || document.body });
     Dev.onKey(e);
 }
+function optText(re) { return Array.prototype.filter.call(document.querySelectorAll('.dv-opt'), function (o) { return re.test(o.textContent); })[0]; }
 
 t('suite: boots nothing in the harness (DEV_NO_BOOT) and exposes Dev', function () {
-    return (typeof Dev === 'object' && typeof Dev.renderAll === 'function') || 'no window.Dev';
-});
-t('views: the sidebar counts every view, Triage hot when something waits', function () {
-    dvStage('open');
-    var c = Dev.counts();
-    if (c.triage !== 1 || c.backlog !== 2 || c.in_progress !== 1 || c.closed !== 2 || c.open !== 4 || c.mine !== 1) return JSON.stringify(c);
-    var hot = document.querySelector('.dv-nav[data-view="triage"] .dv-nav-count.hot');
-    return (hot && hot.textContent === '1') || 'triage count not flagged';
-});
-t('views: Branches counts the branches that need a ticket', function () {
-    dvStage('open');
-    return Dev.counts().branches === 2 || 'branches: ' + Dev.counts().branches;
-});
-t('list: urgent first, low last, within a view', function () {
-    dvStage('backlog');
-    return ids() === '1002,1001' || 'order ' + ids();
-});
-t('list: All Open is grouped by status, in workflow order', function () {
-    dvStage('open');
-    var g = Array.prototype.map.call(document.querySelectorAll('.dv-group'), function (x) { return x.textContent.replace(/\d+$/, '').trim(); }).join('|');
-    return g === 'Triage|Backlog|In Progress' || g;
-});
-t("list: Done holds Done and Won't Do, most recently closed first", function () {
-    dvStage('closed');
-    return ids() === '573,66' || 'order ' + ids();
-});
-t('list: My Work is what is assigned to me', function () {
-    dvStage('mine');
-    return ids() === '1002' || ids();
-});
-t('search: "SN-573", "#573" and "573" all find the imported ticket, across every view', function () {
-    dvStage('triage');
-    var bad = ['SN-573', '#573', '573', 'sn573'].filter(function (q) { Dev.S.query = q; Dev.renderList(); return ids() !== '573'; });
-    return !bad.length || 'missed: ' + bad.join(', ');
-});
-t('search: words match title, description and people', function () {
-    dvStage('open');
-    Dev.S.query = 'brand sort'; Dev.renderList();
-    if (ids() !== '1003') return 'words: ' + ids();
-    Dev.S.query = 'ethan'; Dev.renderList();
-    return ids().split(',').length === 6 || 'reporter: ' + ids();
-});
-t('filters: area, "No area", and assignee narrow the list', function () {
-    dvStage('open');
-    Dev.S.filters.area = 'claims'; Dev.renderList();
-    if (ids() !== '1003') return 'claims: ' + ids();
-    Dev.S.filters.area = ''; Dev.S.filters.assignee = 'n'; Dev.renderList();
-    if (ids() !== '1002') return 'mine: ' + ids();
-    Dev.S.filters.assignee = '__none'; Dev.renderList();
-    return ids() === '1000,1001,1003' || 'unassigned: ' + ids();
-});
-t('list: what people typed is escaped', function () {
-    dvStage('backlog');
-    Dev.idx.byId.get(1001).title = '<img src=x onerror=alert(1)>'; Dev.renderList();
-    return !document.querySelector('.dv-row img') || 'a title became markup';
-});
-t('keys: J/K move the selection, Enter opens, J then follows in the panel, Esc closes', function () {
-    dvStage('backlog');
-    key('j'); if (Dev.S.selId !== 1002) return 'first j: ' + Dev.S.selId;
-    key('j'); if (Dev.S.selId !== 1001) return 'second j: ' + Dev.S.selId;
-    key('k'); key('Enter');
-    if (Dev.S.openId !== 1002 || !document.querySelector('.dv-panel')) return 'Enter did not open 1002';
-    key('j'); if (Dev.S.openId !== 1001) return 'panel did not follow: ' + Dev.S.openId;
-    key('Escape');
-    return (Dev.S.openId === null && !document.querySelector('.dv-panel')) || 'Esc left the panel open';
-});
-t('keys: G then a letter switches view; typing in a box is left alone', function () {
-    dvStage('open');
-    key('g'); key('c');
-    if (Dev.S.view !== 'branches') return 'g c went to ' + Dev.S.view;
-    key('g'); key('t');
-    if (Dev.S.view !== 'triage') return 'g t went to ' + Dev.S.view;
-    key('j', document.getElementById('dvSearch'));
-    return Dev.S.selId === null || 'a j typed in search moved the selection';
-});
-t('keys: ? opens the shortcuts sheet', function () {
-    dvStage('open'); key('?');
-    var ok = !!document.querySelector('.dv-keys');
-    Dev.closeModal();
-    return ok || 'no shortcuts sheet';
+    return (typeof Dev === 'object' && typeof Dev.renderAll === 'function' && typeof Dev.moveTicket === 'function') || 'window.Dev missing';
 });
 
-t('panel: an imported ticket says where it came from; Submit a Ticket says so too', function () {
-    dvStage('closed'); Dev.open(573);
-    if (!/was #573/.test(document.querySelector('.dv-panel-id').textContent)) return 'no import note';
-    Dev.open(1000);
-    return /from Submit a Ticket/.test(document.querySelector('.dv-panel-id').textContent) || 'no intake note';
+// ---- the three places -------------------------------------------------------
+t('backlog: open tickets on no branch; Submit a Ticket ones on top; urgent before low', function () {
+    dvStage();
+    var all = cardIds('#dvBacklog');
+    if (all !== '1000,1002,1001') return 'backlog ' + all;
+    var grp = document.querySelector('#dvBacklog .dv-grp-h').textContent;
+    return /1 new/.test(grp) && /From Submit a Ticket/.test(grp) || 'first group: ' + grp;
 });
-t("panel: Won't Do shows its reason at the top", function () {
-    dvStage('closed'); Dev.open(66);
-    var c = document.querySelector('.dv-callout');
-    return (c && /not planned/.test(c.textContent)) || 'no reason callout';
+t('branches: a column per unmerged branch AND per branch a ticket is on; never main / pre-release', function () {
+    dvStage();
+    var names = laneNames();
+    if (names.indexOf('main') >= 0 || names.indexOf('pre-release') >= 0) return 'a base branch got a column';
+    if (names.indexOf('feat/b2b-sort') < 0 || names.indexOf(BR) < 0) return 'unmerged branch missing: ' + names.join(', ');
+    if (names.indexOf('feat/projects-completion-signoff') < 0) return 'a merged branch with a ticket still on it lost its column';
+    return names.indexOf('App-Icon-Green---Ethan') < 0 || 'a merged, empty branch still has a column';
 });
-t('panel: attachments link out; an expired one says so', function () {
-    dvStage('triage'); Dev.open(1000);
-    var a = document.querySelector('.dv-file[href="https://example.invalid/signed"]');
-    if (!a || !/photo\.jpg/.test(a.textContent)) return 'no link';
-    var dead = Array.prototype.filter.call(document.querySelectorAll('span.dv-file'), function (s) { return /old\.pdf/.test(s.textContent); })[0];
-    return (dead && /expired/.test(dead.title)) || 'unsigned attachment not explained';
+t('branches: merged and empty ones are offered for tidying, not shown', function () {
+    dvStage();
+    var tidy = Dev.tidyBranches().map(function (b) { return b.name; }).join(',');
+    if (tidy !== 'App-Icon-Green---Ethan') return 'tidy list: ' + tidy;
+    return /1 merged branch to tidy/.test(document.getElementById('dvLanesK').textContent) || 'no tidy button';
 });
-t('panel: the title edits in place for a dev, not for a test account', function () {
-    dvStage('backlog'); Dev.open(1001);
-    if (document.getElementById('dvTitle').getAttribute('contenteditable') !== 'plaintext-only') return 'not editable for a dev';
-    if (document.querySelector('.dv-prop[data-pick="status"]').disabled) return 'status locked for a dev';
-    dvStage('backlog', { test: true }); Dev.open(1001);
-    if (document.getElementById('dvTitle').hasAttribute('contenteditable')) return 'editable for a test account';
-    if (!document.querySelector('.dv-prop[data-pick="status"]').disabled) return 'status open to a test account';
-    return !!document.querySelector('.dv-readonly') || 'no read-only badge';
+t('branches: each column shows its tickets, progress, PR and how far behind', function () {
+    dvStage();
+    var l = lane('feat/b2b-sort');
+    if (cardIds('.dv-lane[data-lane="feat/b2b-sort"]') !== '1003,1004') return 'cards ' + cardIds('.dv-lane[data-lane="feat/b2b-sort"]');
+    if (!/1\/2 done/.test(l.querySelector('.dv-lane-p').textContent)) return 'progress: ' + l.querySelector('.dv-lane-p').textContent;
+    if (!/#612/.test(l.querySelector('.dv-lane-m').textContent)) return 'no PR pill';
+    if (!l.querySelector('.dv-card[data-id="1003"]').classList.contains('done')) return 'a ticked ticket is not shown done';
+    var far = lane(BR).querySelector('.dv-behind');
+    return (far && far.classList.contains('far') && /40 behind/.test(far.textContent)) || 'far-behind branch not flagged';
 });
-t('panel: Code lists the PR first, with every check by level, then the branch, then the commit', function () {
-    dvStage('open'); Dev.open(1003);
-    var kinds = Array.prototype.map.call(document.querySelectorAll('.dv-code-item .dv-code-line'), function (l) {
-        return /#612/.test(l.textContent) ? 'pr' : /feat\/sn-1003/.test(l.textContent) ? 'branch' : /abcdef1/.test(l.textContent) ? 'commit' : '?';
-    }).join(',');
-    if (kinds !== 'pr,branch,commit') return kinds;
-    var lv = Array.prototype.map.call(document.querySelectorAll('.dv-check'), function (c) { return c.className.replace('dv-check ', ''); }).join(',');
-    if (lv !== 'error,warn,todo,ok,warn') return 'levels ' + lv;
-    return !document.querySelector('.dv-checks img') || 'a check became markup';
+t('branches: a GitHub login shows as the dev it belongs to', function () {
+    dvStage();
+    return Dev.personFor('Eckushnir') === 'Ethan Kushnir' && Dev.personFor('someone-else') === 'someone-else' || 'personFor wrong';
 });
-t('panel: activity interleaves comments and history by time; only my own comment has Edit', function () {
-    dvStage('open'); Dev.open(1003);
-    var order = Array.prototype.map.call(document.querySelectorAll('.dv-activity > li'), function (li) { return li.classList.contains('dv-comment') ? 'c' : 'e'; }).join('');
-    // GitHub's comment (4 days ago), the PR link (3), my comment (1).
-    if (order !== 'cec') return 'order ' + order;
-    var edits = document.querySelectorAll('[data-act="comment-edit"]');
-    return (edits.length === 1 && edits[0].getAttribute('data-cid') === '10') || 'edit buttons: ' + edits.length;
+t('pre-release: the merged tickets, as patch notes grouped by type, each saying its branch', function () {
+    dvStage();
+    var heads = Array.prototype.map.call(document.querySelectorAll('.dv-notes h4'), function (h) { return h.firstChild.textContent; }).join(',');
+    if (heads !== 'Improved,Fixed') return 'headings ' + heads;
+    var n = document.querySelector('.dv-note[data-open="568"]');
+    return (n && /from fix\/box-order-cart/.test(n.textContent)) || 'no "from <branch>" on SN-568';
 });
-t('panel: history reads in words ("GitHub linked a pull request")', function () {
-    dvStage('open'); Dev.open(1003);
-    return /GitHub linked a pull request/.test(document.querySelector('.dv-activity').textContent) || 'history text';
+t('pre-release: the next version from the live one, and what each size would make', function () {
+    dvStage();
+    if (document.querySelector('.dv-ver-now').textContent !== 'v3.13.0') return 'version ' + document.querySelector('.dv-ver-now').textContent;
+    if (!/v3\.12\.3/.test(document.querySelector('.dv-ver-from').textContent)) return 'no "from v3.12.3"';
+    var sizes = Array.prototype.map.call(document.querySelectorAll('.dv-sizes button'), function (b) { return b.textContent.replace(/\s+/g, ''); }).join(',');
+    if (sizes !== 'Minorv3.12.4,Majorv3.13.0,Overhaulv4.0.0') return 'sizes ' + sizes;
+    return document.querySelector('.dv-sizes button.on').getAttribute('data-size') === 'major' || 'major not selected';
 });
-
-t('save: a status change shows at once and sends the change', function () {
-    dvStage('backlog');
-    var t1 = Dev.idx.byId.get(1001);
-    Dev.setStatus(t1, 'in_progress');
-    if (t1.status !== 'in_progress') return 'not optimistic';
+t('pre-release: a major update with no title says so; Go live is drawn but not wired yet', function () {
+    dvStage({ title: '' });
+    var warn = document.querySelector('.dv-ready .warn');
+    if (!warn || !/needs a title/.test(warn.textContent)) return 'no title warning';
+    if (!document.getElementById('dvNextTitle').classList.contains('need')) return 'title box not marked';
+    return document.querySelector('.dv-golive').disabled || 'Go live is clickable before step 5 exists';
+});
+t('pre-release: picking Minor moves the version at once, drops the title box, and saves', function () {
+    dvStage();
+    Dev.setSize('minor');
+    if (document.querySelector('.dv-ver-now').textContent !== 'v3.12.4') return 'version ' + document.querySelector('.dv-ver-now').textContent;
+    if (document.getElementById('dvNextTitle')) return 'a minor update still asks for a title';
     var b = last().body || {};
-    return (b.action === 'status' && b.id === 1001 && b.to === 'in_progress') || 'sent ' + JSON.stringify(b);
+    return (b.action === 'set_next' && b.size === 'minor') || 'sent ' + JSON.stringify(b);
 });
-t('save: a refused change goes back, and says why', function () {
-    dvStage('backlog');
+t('pre-release: the title saves as it is typed (debounced), not on every key', function () {
+    dvStage();
+    var i = document.getElementById('dvNextTitle');
+    var sent = DV_SENT.length;
+    i.value = 'December Update';
+    Dev.onInput({ target: i });
+    if (DV_SENT.length !== sent) return 'sent on the keystroke';
+    if (document.getElementById('dvHTitle').textContent !== 'December Update') return 'heading did not follow';
+    Dev.saveNextTitle(true);   // the send itself is synchronous; only its answer waits
+    var b = last().body || {};
+    return (b.action === 'set_next' && b.title === 'December Update') || 'sent ' + JSON.stringify(b);
+});
+
+// ---- moving work ------------------------------------------------------------
+t('move: onto a branch shows at once (In progress) and sends to_branch', function () {
+    dvStage();
+    Dev.moveTicket(Dev.idx.byId.get(1001), BR);
     var t1 = Dev.idx.byId.get(1001);
+    if (t1.branch !== BR || t1.status !== 'in_progress') return 'ticket ' + t1.branch + ' / ' + t1.status;
+    if (cardIds('.dv-lane[data-lane="' + BR + '"]') !== '1001') return 'not in the column';
+    if (/1001/.test(cardIds('#dvBacklog'))) return 'still in the backlog';
+    var b = last().body || {};
+    return (b.action === 'to_branch' && b.ids[0] === 1001 && b.branch === BR) || 'sent ' + JSON.stringify(b);
+});
+t('move: back to the Backlog sends branch: null and clears the tick', function () {
+    dvStage();
+    Dev.moveTicket(Dev.idx.byId.get(1003), null);
+    var t1 = Dev.idx.byId.get(1003);
+    if (t1.branch !== null || t1.status !== 'backlog' || t1.branch_done) return 'ticket ' + JSON.stringify([t1.branch, t1.status, t1.branch_done]);
+    var b = last().body || {};
+    return (b.action === 'to_branch' && b.branch === null && 'branch' in b) || 'sent ' + JSON.stringify(b);
+});
+t('move: a refused move goes back, and says why', function () {
+    dvStage();
+    var t1 = Dev.idx.byId.get(1002);
     DV_FAIL = true;
-    var p = Dev.optimistic(t1, { priority: 'urgent' }, { action: 'edit', id: 1001, priority: 'urgent' });
+    var p = Dev.optimistic(t1, { branch: BR, status: 'in_progress' }, { action: 'to_branch', ids: [1002], branch: BR });
     DV_FAIL = false;
-    if (t1.priority !== 'urgent') return 'not optimistic';
+    if (t1.branch !== BR) return 'not optimistic';
+    // (Later checks restage the board before this settles, so it asserts on the
+    // ticket and the toast, not on where a card is drawn.)
     return p.then(function () {
-        if (t1.priority !== 'low') return 'not put back: ' + t1.priority;
+        if (t1.branch !== null || t1.status !== 'backlog') return 'not put back: ' + t1.branch;
         var said = Array.prototype.some.call(document.querySelectorAll('.dv-toast.bad'), function (x) { return /Not saved — the server said no/.test(x.textContent); });
         return said || 'no failure toast';
     });
 });
-t("save: Won't Do asks why before anything is sent", function () {
-    dvStage('backlog'); Dev.open(1001);
+t('move: merged or shipped tickets never move', function () {
+    dvStage();
     var sent = DV_SENT.length;
-    Dev.pickFor(Dev.idx.byId.get(1001), 'status', document.querySelector('.dv-prop[data-pick="status"]'));
-    var wont = Array.prototype.filter.call(document.querySelectorAll('.dv-opt'), function (o) { return /Won't Do/.test(o.textContent); })[0];
-    if (!wont) return 'no Won\'t Do option';
-    wont.click();
+    Dev.moveTicket(Dev.idx.byId.get(568), BR);
+    Dev.moveTicket(Dev.idx.byId.get(573), BR);
+    return (DV_SENT.length === sent && Dev.idx.byId.get(568).status === 'on_prerelease') || 'a merged ticket moved';
+});
+t('move: dropping a card on a column moves it there', function () {
+    dvStage();
+    if (!window.__dvListening) { Dev.listen(); window.__dvListening = true; }
+    var card = document.querySelector('#dvBacklog .dv-card[data-id="1001"]');
+    var zone = lane(BR).querySelector('.dv-drop');
+    var dt = new DataTransfer();
+    card.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    zone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    var b = last().body || {};
+    return (b.action === 'to_branch' && b.ids[0] === 1001 && b.branch === BR) || 'sent ' + JSON.stringify(b);
+});
+t('tick: the box ticks at once, the progress follows, and branch_done is sent', function () {
+    dvStage();
+    Dev.onClick({ target: lane('feat/b2b-sort').querySelector('[data-chk="1004"]'), stopPropagation: function () {} });
+    if (!/2\/2 done/.test(lane('feat/b2b-sort').querySelector('.dv-lane-p').textContent)) return 'progress did not follow';
+    var b = last().body || {};
+    return (b.action === 'branch_done' && b.id === 1004 && b.done === true) || 'sent ' + JSON.stringify(b);
+});
+t('move menu: the other branches, a new branch, back to the Backlog, Won\'t do', function () {
+    dvStage();
+    Dev.moveMenu(Dev.idx.byId.get(1003), document.querySelector('.dv-card[data-id="1003"] .dv-more'));
+    var txt = document.querySelector('.dv-pop').textContent;
+    Dev.closePop();
+    if (/feat\/b2b-sort/.test(txt)) return 'offers the branch it is already on';
+    if (txt.indexOf(BR) < 0) return 'missing another branch';
+    return (/A new branch/.test(txt) && /Back to the Backlog/.test(txt) && /Won't do/.test(txt)) || 'menu: ' + txt;
+});
+t('move menu: a Backlog ticket is not offered "Back to the Backlog"; Won\'t do asks why first', function () {
+    dvStage();
+    var anchor = document.querySelector('.dv-card[data-id="1001"] .dv-more');
+    Dev.moveMenu(Dev.idx.byId.get(1001), anchor);
+    if (/Back to the Backlog/.test(document.querySelector('.dv-pop').textContent)) { Dev.closePop(); return 'offered to a backlog ticket'; }
+    var sent = DV_SENT.length;
+    optText(/Won't do/).click();
     var ok = !!document.getElementById('dvWhy') && DV_SENT.length === sent;
     Dev.closePop();
     return ok || 'no reason box, or it was sent at once';
 });
 
-t('start work: prefixes follow the type (Bug fix, Suggestion/Improvement feat, Task chore)', function () {
-    var p = [Dev.prefixFor('bug'), Dev.prefixFor('suggestion'), Dev.prefixFor('improvement'), Dev.prefixFor('task')].join(',');
-    if (p !== 'fix,feat,feat,chore') return p;
-    return Dev.slugify('  Sort the B2B list — by Brand!! ') === 'sort-the-b2b-list-by-brand' || Dev.slugify('  Sort the B2B list — by Brand!! ');
-});
-t('start work: offered on an open ticket with no branch; the form previews the name', function () {
-    dvStage('backlog'); Dev.open(1001);
-    var btn = document.querySelector('[data-act="start"]');
-    if (!btn) return 'no Start work';
-    Dev.onClick({ target: btn });
-    var prev = document.getElementById('dvBranchPreview');
-    return (prev && prev.textContent === 'fix/sn-1001-ticket-1001') || 'preview: ' + (prev && prev.textContent);
-});
-t('start work: not offered when a branch exists, the ticket is closed, or for a test account', function () {
-    dvStage('open'); Dev.open(1003);
-    if (document.querySelector('[data-act="start"]')) return 'offered with a branch';
-    dvStage('closed'); Dev.open(573);
-    if (document.querySelector('[data-act="start"]')) return 'offered on a closed ticket';
-    dvStage('backlog', { test: true }); Dev.open(1001);
-    return !document.querySelector('[data-act="start"]') || 'offered to a test account';
+// ---- test accounts ----------------------------------------------------------
+t('read-only: a test account can look but not move, tick, size or start anything', function () {
+    dvStage({ test: true });
+    if (document.querySelector('.dv-card[draggable="true"]')) return 'cards draggable';
+    if (document.querySelector('.dv-more:not(.show)')) return 'move buttons shown';
+    if (!document.querySelector('.dv-chk').disabled) return 'tick box live';
+    if (!document.querySelector('.dv-sizes button').disabled) return 'size buttons live';
+    if (document.querySelector('.dv-addlane')) return 'Start a branch offered';
+    Dev.newTicket();
+    return !document.getElementById('dvNewTitle') || 'new-ticket form opened';
 });
 
-t('branches: base first, then the ones needing a ticket, then ticket, then release', function () {
-    dvStage('branches');
-    var names = Array.prototype.map.call(document.querySelectorAll('.dv-brow[data-branch]'), function (r) { return r.getAttribute('data-branch'); }).join(',');
-    return names === 'pre-release,main,Main-December-Update-2---Ethan,feat/projects-completion-signoff,feat/sn-1003-sort,release/v3.13.0' || names;
+// ---- search -----------------------------------------------------------------
+t('search: narrows every column, and finds tickets that already moved on', function () {
+    dvStage();
+    var s = document.getElementById('dvSearch');
+    s.value = 'callback'; s.dispatchEvent(new Event('input'));
+    var gone = document.querySelector('#dvBacklog .dv-found[data-open="573"]');
+    var shown = document.querySelectorAll('.dv-card').length;
+    s.value = ''; s.dispatchEvent(new Event('input'));
+    if (shown) return shown + ' cards still showing';
+    return !!gone || 'the live ticket was not found';
 });
-t('branches: a branch with no ticket is flagged and can be linked or marked', function () {
-    dvStage('branches');
-    var row = document.querySelector('.dv-brow[data-branch="Main-December-Update-2---Ethan"]');
-    if (!/No ticket/.test(row.textContent)) return 'not flagged';
-    return (!!row.querySelector('[data-blink]') && !!row.querySelector('[data-bmark]')) || 'no Link / Mark';
+t('search: "SN-573" + Enter opens that ticket, wherever it is', function () {
+    dvStage();
+    var s = document.getElementById('dvSearch');
+    s.value = 'SN-573'; s.dispatchEvent(new Event('input'));
+    s.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    var ok = Dev.S.openId === 573;
+    s.value = ''; s.dispatchEvent(new Event('input')); Dev.closePanel();
+    return ok || 'opened ' + Dev.S.openId;
 });
-t('branches: only a fully merged branch offers Delete; never main or pre-release', function () {
-    dvStage('branches');
-    var del = Array.prototype.map.call(document.querySelectorAll('[data-bdelete]'), function (b) { return b.getAttribute('data-bdelete'); }).join(',');
-    return del === 'feat/projects-completion-signoff' || 'delete offered on: ' + del;
-});
-t('branches: a ticket branch opens its ticket; a test account gets no buttons', function () {
-    dvStage('branches');
-    var tag = document.querySelector('.dv-brow[data-branch="feat/sn-1003-sort"] [data-open]');
-    if (!tag || tag.getAttribute('data-open') !== '1003') return 'no ticket link';
-    dvStage('branches', { test: true });
-    return !document.querySelector('.dv-bactions button') || 'buttons for a test account';
+t('search: words match title, description and branch', function () {
+    dvStage();
+    var t1 = Dev.idx.byId.get(1003);
+    return (Dev.matchesQuery(t1, 'sort brand') && Dev.matchesQuery(t1, 'b2b-sort') && !Dev.matchesQuery(t1, 'nothing like it')) || 'match wrong';
 });
 
-t('hash: dev.html#SN-573 (the Submit a Ticket email link) opens that ticket', function () {
-    var was = location.hash;
-    var set = function (h) { history.replaceState(null, '', location.pathname + location.search + h); };
-    try {
-        dvStage('triage');
-        set('#SN-573'); Dev.openFromHash();
-        if (Dev.S.openId !== 573) return 'opened ' + Dev.S.openId;
-        Dev.closePanel(); set('#SN-99999'); Dev.openFromHash();
-        return Dev.S.openId === null || 'opened a ticket that does not exist';
-    } finally { set(was || ''); }
+// ---- the panel -----------------------------------------------------------------
+t('panel: the stepper and "Where" say where it is', function () {
+    dvStage();
+    var cur = function (id) { Dev.open(id); var c = document.querySelector('.dv-stepper .cur'); return c ? c.textContent : '-'; };
+    var got = [cur(1001), cur(1003), cur(568), cur(573)].join(',');
+    if (got !== 'Backlog,On a branch,Pre-release,Live') return 'stages ' + got;
+    Dev.open(568);
+    if (!/ships in v3\.13\.0/.test(document.querySelector('.dv-where').textContent)) return 'pre-release does not say which version';
+    Dev.open(573);
+    var w = document.querySelector('.dv-where').textContent;
+    Dev.closePanel();
+    return /Live in v3\.11\.0/.test(w) || 'live ticket says ' + w;
 });
-t('new ticket: C opens it; Create sends the title and the chosen fields', function () {
-    dvStage('backlog');
+t("panel: Won't Do shows its reason, and no stepper", function () {
+    dvStage(); Dev.open(66);
+    var c = document.querySelector('.dv-callout.no');
+    var ok = c && /Closed on GitHub as not planned/.test(c.textContent) && !document.querySelector('.dv-stepper');
+    Dev.closePanel();
+    return ok || 'callout / stepper wrong';
+});
+t('panel: Code lists the PR first with every check; markup in a check is shown, not run', function () {
+    dvStage(); Dev.open(1003);
+    var kinds = Array.prototype.map.call(document.querySelectorAll('.dv-code-item .dv-code-line > svg:first-child'), function () { return 1; }).length;
+    var first = document.querySelector('.dv-code-item');
+    var ok = kinds === 3 && /#612/.test(first.textContent) && document.querySelectorAll('.dv-check').length === 3 && !document.querySelector('.dv-checks img');
+    Dev.closePanel();
+    return ok || 'code section wrong';
+});
+t('panel: history reads in words, branch moves included', function () {
+    dvStage(); Dev.open(1003);
+    var txt = document.querySelector('.dv-activity').textContent;
+    Dev.closePanel();
+    return (/GitHub linked a pull request/.test(txt) && /put it on feat\/b2b-sort/.test(txt)) || 'history: ' + txt.slice(0, 200);
+});
+t('panel: activity interleaves comments and history by time; only my own comment has Edit', function () {
+    dvStage(); Dev.open(1003);
+    var order = Array.prototype.map.call(document.querySelectorAll('.dv-activity > li'), function (li) { return li.classList.contains('dv-comment') ? 'c' : 'e'; }).join('');
+    var edits = document.querySelectorAll('[data-act="comment-edit"]');
+    Dev.closePanel();
+    // branch event (4d), GitHub's comment (4.5d — older), PR link (3d), my comment (1d)
+    if (order !== 'ceec') return 'order ' + order;
+    return (edits.length === 1 && edits[0].getAttribute('data-cid') === '10') || 'edit buttons: ' + edits.length;
+});
+t('panel: the title edits in place for a dev, not for a test account', function () {
+    dvStage(); Dev.open(1001);
+    var dev = document.getElementById('dvTitle').getAttribute('contenteditable');
+    dvStage({ test: true }); Dev.open(1001);
+    var test = document.getElementById('dvTitle').getAttribute('contenteditable');
+    Dev.closePanel();
+    return (dev === 'plaintext-only' && test === null) || 'dev ' + dev + ' / test ' + test;
+});
+t('panel: attachments link out; an expired one says so', function () {
+    dvStage(); Dev.open(1000);
+    var a = document.querySelectorAll('.dv-file');
+    var ok = a.length === 2 && a[0].tagName === 'A' && a[1].tagName === 'SPAN' && /expired/.test(a[1].title);
+    Dev.closePanel();
+    return ok || 'attachments wrong';
+});
+
+// ---- the top bar -------------------------------------------------------------
+t('live: the pill shows the live version; its menu folds the old name+number split into one', function () {
+    dvStage();
+    if (!/v3\.12\.3/.test(document.getElementById('dvLivePill').textContent)) return 'pill ' + document.getElementById('dvLivePill').textContent;
+    Dev.liveMenu(document.getElementById('dvLivePill'));
+    var rels = Array.prototype.map.call(document.querySelectorAll('.dv-rel'), function (r) { return r.querySelector('.dv-rel-v').textContent + '|' + r.querySelector('.dv-rel-n').textContent; });
+    var shipped = !!document.querySelector('.dv-rel [data-open="573"]');
+    Dev.closePop();
+    if (rels.join(',') !== 'v3.12.3|,v3.11.0|Main November Update') return 'releases ' + rels.join(',');
+    return shipped || 'the November ticket is not listed under v3.11.0';
+});
+
+// ---- creating -----------------------------------------------------------------
+t('new ticket: C opens it; Create sends the title and fields, Backlog by default', function () {
+    dvStage();
     key('c');
     var title = document.getElementById('dvNewTitle');
     if (!title) return 'no form';
@@ -407,10 +476,68 @@ t('new ticket: C opens it; Create sends the title and the chosen fields', functi
     Dev.onClick({ target: document.querySelector('[data-act="new-create"]') });
     var b = last().body || {};
     Dev.closeModal();
-    return (b.action === 'create' && b.title === 'A new thing' && b.status === 'backlog' && !!b.type) || 'sent ' + JSON.stringify(b);
+    return (b.action === 'create' && b.title === 'A new thing' && b.branch === null && !!b.type && !('status' in b)) || 'sent ' + JSON.stringify(b);
 });
-t('new ticket: a test account is told, not given the form', function () {
-    dvStage('backlog', { test: true });
-    Dev.newTicket();
-    return !document.getElementById('dvNewTitle') || 'form opened for a test account';
+t('new ticket: started from a branch menu, it is created on that branch', function () {
+    dvStage();
+    Dev.newTicket(BR);
+    document.getElementById('dvNewTitle').value = 'On the branch';
+    Dev.onClick({ target: document.querySelector('[data-act="new-create"]') });
+    var b = last().body || {};
+    Dev.closeModal();
+    return (b.action === 'create' && b.branch === BR) || 'sent ' + JSON.stringify(b);
+});
+t('new branch: B opens it, previews the name, and sends start_branch with the open ticket', function () {
+    dvStage(); Dev.open(1001); Dev.closePanel();
+    Dev.newBranch([1001]);
+    var slug = document.getElementById('dvBrSlug');
+    if (!slug) return 'no form';
+    slug.value = 'Low One Fix!'; slug.dispatchEvent(new Event('input'));
+    if (document.getElementById('dvBrPreview').textContent !== 'fix/low-one-fix') return 'preview ' + document.getElementById('dvBrPreview').textContent;
+    document.getElementById('dvBrGo').click();
+    var b = last().body || {};
+    Dev.closeModal();
+    return (b.action === 'start_branch' && b.prefix === 'fix' && b.slug === 'low-one-fix' && b.ticket_ids[0] === 1001) || 'sent ' + JSON.stringify(b);
+});
+t('branch menu: GitHub, the PR, the checkout command; Delete only once merged and empty', function () {
+    dvStage();
+    Dev.branchMenu(BR, lane(BR).querySelector('[data-bmore]'));
+    var open = document.querySelector('.dv-pop').textContent;
+    Dev.closePop();
+    if (!/Open on GitHub/.test(open) || !/Open PR #576/.test(open) || !/checkout command/.test(open)) return 'menu: ' + open;
+    if (/Delete/.test(open)) return 'Delete offered on an unmerged branch';
+    Dev.branchMenu('feat/projects-completion-signoff', lane('feat/projects-completion-signoff').querySelector('[data-bmore]'));
+    var merged = document.querySelector('.dv-pop').textContent;
+    Dev.closePop();
+    return !/Delete/.test(merged) || 'Delete offered while a ticket is still on it';
+});
+
+// ---- the rest ------------------------------------------------------------------
+t('escaping: what people typed is shown, not run', function () {
+    dvStage();
+    var c = document.querySelector('.dv-card[data-id="1004"] .dv-card-title');
+    return (c.textContent === '<b>Expense</b> export' && !c.querySelector('b')) || 'title rendered as HTML';
+});
+t('hash: dev.html#SN-573 (the Submit a Ticket email link) opens that ticket', function () {
+    dvStage();
+    var was = location.hash;
+    var set = function (h) { history.replaceState(null, '', location.pathname + location.search + h); };
+    try {
+        set('#SN-573'); Dev.openFromHash();
+        if (Dev.S.openId !== 573) return 'opened ' + Dev.S.openId;
+        Dev.closePanel(); set('#SN-99999'); Dev.openFromHash();
+        return Dev.S.openId === null || 'opened a ticket that does not exist';
+    } finally { set(was || ''); }
+});
+t('keys: ? opens the shortcuts; Esc closes the panel', function () {
+    dvStage();
+    key('?');
+    var keys = !!document.querySelector('.dv-keys');
+    Dev.closeModal();
+    Dev.open(1001); key('Escape');
+    return (keys && Dev.S.openId === null) || 'shortcuts ' + keys + ', open ' + Dev.S.openId;
+});
+t('history words: branch moves and ticks read as sentences', function () {
+    var on = Dev.eventText({ kind: 'branch', to_value: 'feat/x' }), off = Dev.eventText({ kind: 'branch', from_value: 'feat/x', to_value: null }), d = Dev.eventText({ kind: 'branch_done', to_value: 'done' });
+    return (/put it on/.test(on) && /took it off/.test(off) && /marked it done/.test(d)) || [on, off, d].join(' | ');
 });
