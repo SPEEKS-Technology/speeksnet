@@ -9936,7 +9936,7 @@ function _pgAdminRowHtml(s, i, n) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/></svg>
           </label>
           <button type="button" class="pg-ebtn" onclick="pgEditShot(${s.id})">Edit</button>
-          <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteShot(${s.id})" title="Delete this photo">&times;</button>
+          <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteShot(${s.id})" title="Delete This Row">&times;</button>
         </div>
       </div>`;
 }
@@ -10108,9 +10108,13 @@ async function pgDeleteShot(id) {
     const s = _pgShotById(id);
     if (!s) return;
     if (!await _pgAsk({
-        title: `Delete &ldquo;${_pgEsc(s.label)}&rdquo;?`,
-        body: 'This cannot be undone, and every store loses it straight away.',
-        ok: 'Delete Photo', danger: true,
+        // Worded as the ROW, never "photo" (2026-11-25, Ethan's wording): "Delete
+        // Photo" here read as Remove photo, and Game Console's Everything Included
+        // row was lost by someone who only wanted its picture gone.
+        title: 'Delete This Row?',
+        body: `&ldquo;${_pgEsc(s.label)}&rdquo; is removed for every store straight away, and it cannot be undone.`
+            + (s.img ? '<br><br>To remove only the picture, cancel, click <b>Edit</b> on this row, then <b>Remove photo</b>.' : ''),
+        ok: 'Delete This Row', danger: true,
     })) return;
     if (!await _pgPost({ action: 'deleteShot', id })) return;
     if (_pgAdmin.editing === id) _pgAdmin.editing = null;
