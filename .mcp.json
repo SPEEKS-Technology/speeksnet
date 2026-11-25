@@ -3,6 +3,13 @@
     "supabase": {
       "type": "http",
       "url": "https://mcp.supabase.com/mcp?project_ref=ejzaqmyxxrkmxvzbjeuo"
+    },
+    "speeksnet-dev": {
+      "type": "http",
+      "url": "https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/dev-mcp",
+      "headers": {
+        "x-speeksnet-dev-key": "${SPEEKSNET_DEV_KEY:-}"
+      }
     }
   }
 }

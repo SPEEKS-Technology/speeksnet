@@ -119,39 +119,55 @@ A Claude connector for development work. It's separate from the read-only
 | `dev_board` | The pipeline: next version and size, what's merged, each branch and its tickets, the backlog |
 | `get_ticket` | One ticket: description, comments, branch, PR, history |
 | `search_tickets` | Find tickets by text, type, stage |
-| `create_ticket` | New ticket in the Backlog |
+| `create_ticket` | New ticket in the Backlog, or straight onto a branch |
 | `start_branch` | Create a branch from `pre-release` and put tickets on it |
 | `assign_to_branch` / `unassign` | Move tickets onto or off a branch |
 | `mark_done` | Tick / untick a ticket on its branch |
 | `comment` | Comment on a ticket |
 
-It deliberately has no Go live, merge or delete. Merging happens on GitHub (a PR
-into `pre-release`, after the user says yes), and sync takes it from there.
-Every action shows in the ticket's history as **"Claude, for Nick"** (or Ethan).
+It deliberately has no Go live, merge or delete, and can't set the next
+update's size or title. Merging happens on GitHub (a PR into `pre-release`,
+after the user says yes), and sync takes it from there. Every action shows in
+the ticket's history as **"Claude, for Nick"** (or Ethan).
+
+It's the `dev-mcp` edge function. It holds no rules of its own: every read and
+write goes through `dev-tickets` / `github-webhook` as the key's owner, so
+Claude can do exactly what that person can in the suite, no more.
 
 **Setup (Claude Code):**
-- The server is declared in the repo's `.mcp.json`, and its key comes from your
-  own environment, never the repo (the repo is public).
-- Get your personal key from the suite (your menu → Claude connector), then set
-  it once:
+- The server is declared in the repo's `.mcp.json` (`speeksnet-dev`). It sends
+  the key in an `x-speeksnet-dev-key` header read from your own environment,
+  never from the repo (the repo is public).
+- Make your personal key in the suite: your avatar (top right) → **Claude
+  connector** → **Make a key**. It's shown once; only a hash is kept. Then set it
+  once, in PowerShell (the suite gives you this line with the key filled in):
   ```powershell
   [Environment]::SetEnvironmentVariable('SPEEKSNET_DEV_KEY', '<your key>', 'User')
   ```
-- Restart Claude. A key can be revoked from the same place.
+- Restart Claude, and approve the `speeksnet-dev` server when Claude Code asks.
+- No key set, or a revoked one: the tools still list, and every call answers
+  with what to do about it.
+- Revoke a key from the same screen; it stops working at once. A PIN change
+  gives a person a new id, which retires their keys — make a new one.
+
+**claude.ai** can't send a header: add a custom connector with the URL the
+suite shows (`…/functions/v1/dev-mcp/<your key>`). Anyone with that URL acts as
+you, so keep it in your own account, not an org-wide one.
 
 ---
 
-## What works today vs. after the pipeline build
+## What's built
 
-| | Today | After the build |
-|---|---|---|
-| Branch from `pre-release`, PR into `pre-release`, no `main` | ✅ enforced by branch protection | same |
-| `SN-n` in commits / `Closes SN-n` in PRs links tickets | ✅ GitHub sync (Phase 4) | same |
-| Branch columns, tickets on branches, ticking done | ❌ | ✅ |
-| Merge moves the branch's tickets to pre-release | partly (only tickets named in the PR) | ✅ every ticket on the branch |
-| The `speeksnet-dev` connector | ❌ | ✅ |
-| Go live (version, merge to main, tag, notes) | ❌ done by hand | ✅ |
+| | Status |
+|---|---|
+| Branch from `pre-release`, PR into `pre-release`, no `main` | ✅ enforced by branch protection |
+| `SN-n` in commits / `Closes SN-n` in PRs links tickets | ✅ GitHub sync |
+| Merge moves every ticket on the branch to pre-release | ✅ live (`github-webhook`) |
+| Branch columns, tickets on branches, ticking done | ✅ in the suite — on speeksnet.com once the dev-tracker PR ships |
+| The `speeksnet-dev` connector | ✅ `dev-mcp` + `.mcp.json` |
+| Starting a branch from the suite / connector | waits on the GitHub App's Contents write |
+| Go live (version, merge to main, tag, notes) | ❌ still done by hand — §6b step 5 |
 
-Until the connector exists, follow rules 1–6 by hand. Name the tickets in
-commits and PRs, and tell the user which tickets a branch is for, so they can
-put them on it in the suite.
+Where the connector isn't set up, follow rules 1–6 by hand: name the tickets
+in commits and PRs, and tell the user which tickets a branch is for, so they
+can put them on it in the suite.

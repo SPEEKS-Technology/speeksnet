@@ -17,7 +17,7 @@ window.DEV_NO_BOOT = true;
 // the harness page has a scrollbar the real one (overflow: hidden) never shows.
 (function () { var st = document.createElement('style'); st.textContent = '*{animation:none!important;transition:none!important}'; document.head.appendChild(st); })();
 var VW = function () { return document.documentElement.clientWidth; };
-Dev.stub(function (url, body) { return body === undefined ? new Promise(function () {}) : Promise.resolve({ success: true }); });
+Dev.stub(function (url, body) { return body === undefined ? new Promise(function () {}) : Promise.resolve({ success: true, key: body.action === 'mcp_key_create' ? 'sndev_' + new Array(44).join('x') : undefined, keys: /^mcp_key/.test(body.action) ? [{ id: 1, label: 'A label long enough to need cutting short on a phone screen, really', hint: 'xxxx', created_at: new Date().toISOString(), last_used_at: new Date().toISOString() }] : undefined }); });
 
 var LONG = 'https://github.com/SPEEKS-Technology/speeksnet/blob/pre-release/supabase/functions/b2b-deals/index.ts#L1234-L1290';
 var LONGBR = 'Main-December-Update-2---Ethan-and-a-much-longer-name-than-anyone-would-type';
@@ -210,4 +210,19 @@ t('layout @' + W + ': the new-ticket and new-branch forms fit', function () {
     if (a !== true) return a;
     Dev.newBranch([573]);
     return fits('branch');
+});
+t('layout @' + W + ': the Claude connector screen, with a new key and its setup lines, fits', function () {
+    stage();
+    Dev.connector();
+    var m = document.querySelector('.dv-connector');
+    if (!m) return 'no connector screen';
+    m.querySelector('#dvKeyMake').click();
+    return new Promise(function (res) { setTimeout(res, 0); }).then(function () {
+        if (!m.querySelector('.dv-newkey')) return 'no new-key block';
+        var r = m.getBoundingClientRect();
+        var bad = spills(m);
+        Dev.closeModal();
+        if (r.right > VW() + 1 || r.left < 0) return 'screen off the window';
+        return !bad.length || bad.slice(0, 3).join('; ');
+    });
 });

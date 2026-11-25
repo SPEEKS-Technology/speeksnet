@@ -342,7 +342,7 @@ function renderShell() {
             <button class="dv-icon-btn" data-act="keys" title="Keyboard shortcuts (?)">${ICON.keyboard}</button>
             <a class="dv-back" href="index.html" title="Back to SPEEKSNET">${ICON.back}<span>SPEEKSNET</span></a>
             <span class="dv-live" id="dvLive" title="Changes appear without reloading"><i></i></span>
-            <span id="dvMe">${avatar(me().name, 'lg dv-me')}</span>
+            <button class="dv-mebtn" id="dvMe" data-act="me-menu" title="${esc(me().name)}">${avatar(me().name, 'lg dv-me')}</button>
         </header>
         <main class="dv-pipe" id="dvPipe">
             <section class="dv-col dv-backlog" id="dvBacklog" aria-label="Backlog"></section>
@@ -1187,6 +1187,76 @@ function liveMenu(anchor) {
     }).join('') || '<div class="dv-pop-empty">Nothing published yet.</div>', 'dv-menu-wide');
 }
 
+// ---- the Claude connector (dev-mcp, 0209) ---------------------------------
+// Each developer's own key: made here, shown ONCE, stored only as a hash.
+// Claude's writes through it show as "Claude, for <name>" in the history.
+const MCP_URL = `${BASE}/dev-mcp`;
+function meMenu(anchor) {
+    menu(anchor, `<div class="dv-pop-lbl">${esc(me().name || '')}${me().test ? ' · test account' : ''}</div>
+        <button class="dv-opt" data-act="connector">${ICON.code}<span>Claude connector…</span></button>
+        <button class="dv-opt" data-act="keys">${ICON.keyboard}<span>Keyboard shortcuts</span></button>
+        <a class="dv-opt" href="index.html">${ICON.back}<span>Back to SPEEKSNET</span></a>`);
+}
+function usedText(ts) {
+    if (!ts) return 'never used';
+    const w = when(ts);
+    return w === 'now' ? 'used just now' : /^\d+[mhd]$/.test(w) ? `used ${w} ago` : `used ${w}`;
+}
+function keyRows(keys) {
+    const live = (keys || []).filter((k) => !k.revoked_at);
+    if (!live.length) return `<div class="dv-emptybox">No keys yet.</div>`;
+    return live.map((k) => `<div class="dv-key-row">
+        <span class="dv-mono">sndev_…${esc(k.hint)}</span>
+        <span class="dv-key-label">${esc(k.label || 'No label')}</span>
+        <span class="dv-muted" title="${esc(fullDate(k.created_at))}">made ${esc(shortDate(k.created_at))} · ${esc(usedText(k.last_used_at))}</span>
+        <button class="dv-btn dv-btn-danger dv-btn-sm" data-revoke="${k.id}">Revoke</button>
+    </div>`).join('');
+}
+async function connector() {
+    closePop();
+    const m = openModal(`<div class="dv-modal-top">${ICON.code}Claude connector<button class="dv-icon-btn" data-act="modal-close" title="Close (Esc)">${ICON.x}</button></div>
+        <div class="dv-modal-body dv-conn">
+            <p>Lets Claude see this pipeline and keep it true while it works: find or create the ticket, start a branch with tickets on it, move and tick tickets, comment. It can't merge, go live or delete. What it changes shows in the history as <b>Claude, for ${esc((me().name || '').split(/\s+/)[0])}</b>. The rules it follows are in <span class="dv-mono">docs/DEVELOPMENT-WORKFLOW.md</span>.</p>
+            <div id="dvConnNew"></div>
+            <div class="dv-conn-h">Your keys</div>
+            <div id="dvConnKeys"><div class="dv-emptybox">Loading…</div></div>
+            ${canWrite() ? `<div class="dv-inrow dv-conn-make"><input class="dv-input" id="dvKeyLabel" placeholder="Label, e.g. Nick's desktop" maxlength="60"><button class="dv-btn dv-btn-primary" id="dvKeyMake">${ICON.plus}Make a key</button></div>` : '<div class="dv-readonly">Test accounts can\'t have keys.</div>'}
+        </div>`, 'dv-connector');
+    m.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeModal(); } });
+    const draw = (keys) => { const h = $('#dvConnKeys', m); if (h) h.innerHTML = keyRows(keys); };
+    if (!canWrite()) { draw([]); return; }
+    m.addEventListener('click', async (e) => {
+        const r = e.target.closest('[data-revoke]');
+        if (!r) return;
+        r.disabled = true;
+        try { draw((await post({ action: 'mcp_key_revoke', key_id: Number(r.dataset.revoke) })).keys); toast('Key revoked — it stops working at once'); }
+        catch (err) { r.disabled = false; toast(err.message, { bad: true }); }
+    });
+    $('#dvKeyMake', m).addEventListener('click', async () => {
+        const btn = $('#dvKeyMake', m);
+        btn.disabled = true;
+        try {
+            const r = await post({ action: 'mcp_key_create', label: ($('#dvKeyLabel', m).value || '').trim() });
+            draw(r.keys);
+            $('#dvKeyLabel', m).value = '';
+            // The only time the key is ever shown.
+            const ps = `[Environment]::SetEnvironmentVariable('SPEEKSNET_DEV_KEY', '${r.key}', 'User')`;
+            $('#dvConnNew', m).innerHTML = `<div class="dv-newkey">
+                <b>Your new key — copy it now. It won't be shown again.</b>
+                <div class="dv-newkey-row"><code class="dv-mono">${esc(r.key)}</code><button class="dv-btn dv-btn-sm" data-copyk="${esc(r.key)}">${ICON.copy}Copy</button></div>
+                <div class="dv-conn-step"><span>1</span>Claude Code: run this once in PowerShell, then restart Claude. The repo's <span class="dv-mono">.mcp.json</span> already points at the connector.</div>
+                <div class="dv-newkey-row"><code class="dv-mono">${esc(ps)}</code><button class="dv-btn dv-btn-sm" data-copyk="${esc(ps)}">${ICON.copy}Copy</button></div>
+                <div class="dv-conn-step"><span>2</span>Or claude.ai (Settings → Connectors → Add custom connector), with this URL. Anyone with the URL acts as you, so keep it to your own account.</div>
+                <div class="dv-newkey-row"><code class="dv-mono">${esc(MCP_URL + '/' + r.key)}</code><button class="dv-btn dv-btn-sm" data-copyk="${esc(MCP_URL + '/' + r.key)}">${ICON.copy}Copy</button></div>
+            </div>`;
+            $$('[data-copyk]', m).forEach((b) => b.addEventListener('click', () => copy(b.dataset.copyk, 'Copied')));
+        } catch (err) { toast(err.message, { bad: true }); }
+        finally { btn.disabled = false; }
+    });
+    try { draw((await post({ action: 'mcp_keys' })).keys); }
+    catch (err) { const h = $('#dvConnKeys', m); if (h) h.innerHTML = `<div class="dv-emptybox">Couldn't load your keys — ${esc(err.message)}</div>`; }
+}
+
 // ---- hash: dev.html#SN-573 opens that ticket ------------------------------
 // replaceState, not location.hash =: no history entries, no navigation (a
 // hash assignment is one, and hung the headless checks — see the handoff).
@@ -1233,6 +1303,8 @@ function onClick(e) {
         case 'keys': return shortcuts();
         case 'sync': return sync();
         case 'tidy': return tidyMenu(el);
+        case 'me-menu': if (pop) { closePop(); return; } return meMenu(el);
+        case 'connector': return connector();
         case 'live-menu': if (pop) { closePop(); return; } return liveMenu(el);
         case 'retry': S.gate = null; $('#dvApp').innerHTML = '<div class="dv-boot"><div class="dv-boot-mark"></div></div>'; return load();
         case 'close': return closePanel();
@@ -1412,7 +1484,7 @@ function boot() {
 window.Dev = {
     S, idx, setData, renderAll, renderShell, renderBoard, renderPanel, open, closePanel,
     lanes, backlogTickets, laneTickets, preTickets, tidyBranches, stageOf, matchesQuery, personFor,
-    moveTicket, toggleDone, setSize, saveNextTitle, moveMenu, branchMenu, liveMenu, newBranch,
+    moveTicket, toggleDone, setSize, saveNextTitle, moveMenu, branchMenu, liveMenu, newBranch, connector, meMenu,
     stIcon, priIcon, slugify, eventText, onClick, onKey, onInput, onDrop, picker, menu, closePop,
     newTicket, closeModal, toast, optimistic, setStatus, pickFor, openFromHash, syncHash, load, listen,
     stub: (fn) => { stub = fn; },

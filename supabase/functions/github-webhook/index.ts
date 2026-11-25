@@ -790,17 +790,32 @@ Deno.serve(async (req: Request) => {
   }
 
   // ---- "Sync with GitHub" from the Development page ----
-  const pin = req.headers.get("x-user-pin") || "";
-  if (!pin) return json({ success: false, error: "Sign in again — your session has no PIN." }, 401);
-  const { data: u } = await sb.from("users").select("id, name, role").eq("pin", pin).maybeSingle();
-  if (!u) return json({ success: false, error: "Only a real account can sync (test accounts can't)." }, 403);
+  // CLAUDE (dev-mcp, 0209): service-role bearer + x-act-as: <users.id>, the
+  // same as dev-tickets — and only start_branch. Written as "Claude, for <name>".
+  const actAs = req.headers.get("x-act-as") || "";
+  const svc = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const bearer = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  const viaClaude = !!actAs && bearer.length === svc.length && svc.length > 0 && [...bearer].reduce((d, c, i) => d | (c.charCodeAt(0) ^ svc.charCodeAt(i)), 0) === 0;
+  if (actAs && !viaClaude) return json({ success: false, error: "Not allowed." }, 401);
+  let u: any = null;
+  if (viaClaude) {
+    ({ data: u } = await sb.from("users").select("id, name, role").eq("id", actAs).maybeSingle());
+    if (!u) return json({ success: false, error: "That connector key belongs to someone no longer on the roster." }, 401);
+  } else {
+    const pin = req.headers.get("x-user-pin") || "";
+    if (!pin) return json({ success: false, error: "Sign in again — your session has no PIN." }, 401);
+    ({ data: u } = await sb.from("users").select("id, name, role").eq("pin", pin).maybeSingle());
+    if (!u) return json({ success: false, error: "Only a real account can sync (test accounts can't)." }, 403);
+  }
   if (!(await holdsDevTracker(sb, String(u.name || ""), String(u.role || "")))) {
     return json({ success: false, error: "The development tracker isn't switched on for you." }, 403);
   }
   let b: any = {};
   try { b = await req.json(); } catch { /* empty body is fine */ }
   const action = String(b.action || "reconcile");
-  const who = { name: String(u.name), id: String(u.id) };
+  if (viaClaude && action !== "start_branch") return json({ success: false, error: "Through Claude, only start_branch." }, 403);
+  const first = String(u.name || "").trim().split(/\s+/)[0];
+  const who = { name: viaClaude ? `Claude, for ${first}` : String(u.name), id: String(u.id) };
   if (action === "reconcile") {
     const days = Number(b.days) > 0 && Number(b.days) <= 30 ? Number(b.days) : undefined;
     const r = await runReconcile(sb, who, days);

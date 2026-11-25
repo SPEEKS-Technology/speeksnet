@@ -93,7 +93,9 @@ Dev.stub(function (url, body) {
     if (body === undefined) return new Promise(function () {});
     DV_SENT.push({ url: url, body: body });
     if (DV_FAIL) return Promise.reject(new Error('the server said no'));
-    return Promise.resolve({ success: true, branch: body.action === 'start_branch' ? body.prefix + '/' + body.slug : undefined });
+    return Promise.resolve({ success: true, branch: body.action === 'start_branch' ? body.prefix + '/' + body.slug : undefined,
+        key: body.action === 'mcp_key_create' ? 'sndev_FAKEFAKEFAKEFAKEFAKEFAKE1234' : undefined,
+        keys: /^mcp_key/.test(body.action) ? [{ id: 7, label: 'Desk', hint: '1234', created_at: new Date().toISOString(), last_used_at: null, revoked_at: null }] : undefined });
 });
 function last() { return DV_SENT[DV_SENT.length - 1] || {}; }
 
@@ -540,4 +542,41 @@ t('keys: ? opens the shortcuts; Esc closes the panel', function () {
 t('history words: branch moves and ticks read as sentences', function () {
     var on = Dev.eventText({ kind: 'branch', to_value: 'feat/x' }), off = Dev.eventText({ kind: 'branch', from_value: 'feat/x', to_value: null }), d = Dev.eventText({ kind: 'branch_done', to_value: 'done' });
     return (/put it on/.test(on) && /took it off/.test(off) && /marked it done/.test(d)) || [on, off, d].join(' | ');
+});
+
+// ---- the Claude connector (dev-mcp, 0209) -------------------------------------
+t('connector: your avatar opens a menu with "Claude connector"', function () {
+    dvStage();
+    Dev.onClick({ target: document.getElementById('dvMe') });
+    var ok = !!optText(/Claude connector/);
+    Dev.closePop();
+    return ok || 'no Claude connector in the menu';
+});
+t('connector: lists your keys, and a new key is shown once with its setup line and claude.ai URL', function () {
+    dvStage();
+    Dev.connector();
+    var m = document.querySelector('.dv-connector');
+    if (!m) return 'no connector screen';
+    if (last().body.action !== 'mcp_keys') return 'did not ask for the keys: ' + last().body.action;
+    m.querySelector('#dvKeyLabel').value = 'Desk';
+    m.querySelector('#dvKeyMake').click();
+    var b = last().body;
+    if (b.action !== 'mcp_key_create' || b.label !== 'Desk') return 'sent ' + JSON.stringify(b);
+    return new Promise(function (res) { setTimeout(res, 0); }).then(function () {
+        var txt = m.textContent;
+        if (!/sndev_FAKEFAKEFAKEFAKEFAKEFAKE1234/.test(txt)) return 'key not shown';
+        if (!/won't be shown again/.test(txt)) return 'no "shown once" warning';
+        if (!/SetEnvironmentVariable\('SPEEKSNET_DEV_KEY', 'sndev_FAKE/.test(txt)) return 'no PowerShell line with the key in it';
+        if (!/functions\/v1\/dev-mcp\/sndev_FAKE/.test(txt)) return 'no claude.ai URL';
+        return /sndev_…1234/.test(m.querySelector('#dvConnKeys').textContent) || 'key list not redrawn';
+    });
+});
+t('connector: a test account is told it can\'t have keys, and nothing is sent', function () {
+    dvStage({ test: true });
+    var sent = DV_SENT.length;
+    Dev.connector();
+    var m = document.querySelector('.dv-connector');
+    var ok = m && /can't have keys/.test(m.textContent) && !m.querySelector('#dvKeyMake') && DV_SENT.length === sent;
+    Dev.closeModal();
+    return ok || 'test account got the key controls, or a request went out';
 });

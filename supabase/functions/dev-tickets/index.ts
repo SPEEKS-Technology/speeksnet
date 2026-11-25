@@ -36,6 +36,14 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //   set_next    {size?, title?}     the next update's size / title
 // Every branch change writes a 'branch' history row whose time github-webhook
 // reads on a merge: only tickets that were on the branch when it merged move.
+//
+// CLAUDE (0209, docs/DEVELOPMENT-WORKFLOW.md): the dev-mcp function calls this
+// one AS a person — service-role bearer + x-act-as: <users.id> — after checking
+// that person's own connector key. Same rules, same Feature Access check; what
+// it writes is signed "Claude, for <first name>" and stays so on every read.
+//   mcp_keys / mcp_key_create {label} / mcp_key_revoke {key_id}
+//                                   a person's own keys — PIN only, never via
+//                                   Claude. A new key is returned ONCE.
 // ============================================================================
 
 const corsHeaders = {
@@ -113,6 +121,28 @@ const day = (v: unknown) => {
 const storeList = (v: unknown) =>
   [...new Set((Array.isArray(v) ? v : []).map((s) => String(s).toUpperCase().trim()).filter((s) => STORES.includes(s)))];
 
+// ---- Claude (dev-mcp, 0209) ---------------------------------------------------
+// What Claude writes is signed "Claude, for <first name>".
+const CLAUDE_RE = /^Claude, for /;
+function secretEquals(a: string, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+// A connector key: "sndev_" + 32 random bytes, base64url. Only its SHA-256 is kept.
+function newKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let s = "";
+  for (const x of bytes) s += String.fromCharCode(x);
+  return "sndev_" + btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function sha256Hex(s: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(d)).map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+const MAX_KEYS = 5;
+
 // ---- the pipeline ----------------------------------------------------------
 const SIZES = ["minor", "major", "overhaul"];
 // Open = still in the Backlog or on a branch; anything past that moved on by a merge.
@@ -170,15 +200,29 @@ Deno.serve(async (req: Request) => {
   const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   // ---- who is asking ----
-  const pin = req.headers.get("x-user-pin") || "";
-  if (!pin) return json({ success: false, error: "Sign in again — your session has no PIN." }, 401);
-  let { data: u } = await sb.from("users").select("id, name, role, store").eq("pin", pin).maybeSingle();
+  // CLAUDE (dev-mcp, 0209): server to server, the service-role key as the
+  // bearer and x-act-as = the users.id its connector key belongs to. Only an
+  // edge function holds that key. Everything below then runs exactly as for
+  // that person — same Feature Access check — but every name it WRITES is
+  // "Claude, for <first name>", so the history says who asked and who did it.
+  const actAs = req.headers.get("x-act-as") || "";
+  const viaClaude = !!actAs && secretEquals((req.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""), Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "");
+  if (actAs && !viaClaude) return json({ success: false, error: "Not allowed." }, 401);
+  let u: any = null;
   let test = false;
-  if (!u && req.method === "GET") {
-    ({ data: u } = await sb.from("test_users").select("name, role, store").eq("pin", pin).maybeSingle());
-    test = !!u;
+  if (viaClaude) {
+    ({ data: u } = await sb.from("users").select("id, name, role, store").eq("id", actAs).maybeSingle());
+    if (!u) return json({ success: false, error: "That connector key belongs to someone no longer on the roster (a PIN change gives a person a new id) — make a new key in the suite." }, 401);
+  } else {
+    const pin = req.headers.get("x-user-pin") || "";
+    if (!pin) return json({ success: false, error: "Sign in again — your session has no PIN." }, 401);
+    ({ data: u } = await sb.from("users").select("id, name, role, store").eq("pin", pin).maybeSingle());
+    if (!u && req.method === "GET") {
+      ({ data: u } = await sb.from("test_users").select("name, role, store").eq("pin", pin).maybeSingle());
+      test = !!u;
+    }
+    if (!u) return json({ success: false, error: "That PIN isn't recognised." }, 401);
   }
-  if (!u) return json({ success: false, error: "That PIN isn't recognised." }, 401);
   const viewer: Viewer = { id: (u as any).id ? String((u as any).id) : null, name: String(u.name || "").trim(), role: String(u.role || ""), store: String(u.store || ""), test };
   const allowed = await accessResolver(sb);
   const can = {
@@ -192,8 +236,10 @@ Deno.serve(async (req: Request) => {
   // Who can be given a ticket: anyone who holds dev-tracker. Assigning work to
   // someone who can't open the tracker hands them something they can't see.
   const devs = people.filter((p) => allowed("dev-tracker", p.name, p.role));
-  // The CURRENT name for anyone still on the roster, so a rename follows them.
-  const nameOf = (id: unknown, stored: unknown) => (id && byId.get(String(id))?.name) || String(stored ?? "");
+  // The CURRENT name for anyone still on the roster, so a rename follows them —
+  // except what Claude wrote, which keeps saying it was Claude.
+  const nameOf = (id: unknown, stored: unknown) =>
+    CLAUDE_RE.test(String(stored ?? "")) ? String(stored) : (id && byId.get(String(id))?.name) || String(stored ?? "");
 
   // ---- read ----
   if (req.method === "GET") {
@@ -248,7 +294,7 @@ Deno.serve(async (req: Request) => {
   try { b = await req.json(); } catch { return json({ success: false, error: "Invalid JSON" }, 400); }
   const action = String(b.action || "");
   const now = new Date().toISOString();
-  const me: Ref = { id: viewer.id, name: viewer.name };
+  const me: Ref = { id: viewer.id, name: viaClaude ? `Claude, for ${viewer.name.split(/\s+/)[0] || viewer.name}` : viewer.name };
 
   // Writes need a real person: a test account never gets this far on a POST
   // (no users row), but be explicit about it.
@@ -277,6 +323,36 @@ Deno.serve(async (req: Request) => {
     if (id === null || id === undefined || id === "") return { ok: true, ref: null };
     const p = devs.find((d) => d.id === String(id));
     return p ? { ok: true, ref: { id: p.id, name: p.name } } : { ok: false, ref: null };
+  }
+
+  // ---- Claude connector keys (0209): a person, with their PIN, only ----
+  // Never through the connector itself: a key can't make or list keys.
+  if (action === "mcp_keys" || action === "mcp_key_create" || action === "mcp_key_revoke") {
+    if (viaClaude) return json({ success: false, error: "Keys are managed in the suite, not through Claude." }, 403);
+    const mine = async () => {
+      const { data } = await sb.from("dev_mcp_keys").select("id, label, hint, created_at, last_used_at, revoked_at")
+        .eq("user_id", me.id).order("created_at", { ascending: false });
+      return data || [];
+    };
+    if (action === "mcp_key_create") {
+      const active = (await mine()).filter((k: any) => !k.revoked_at).length;
+      if (active >= MAX_KEYS) return json({ success: false, error: `You have ${MAX_KEYS} keys already — revoke one first.` }, 409);
+      const key = newKey();
+      const { error } = await sb.from("dev_mcp_keys").insert({
+        user_id: me.id, user_name: me.name, label: clip(b.label, 60) || "", secret_hash: await sha256Hex(key), hint: key.slice(-4),
+      });
+      if (error) return json({ success: false, error: error.message }, 500);
+      // The only time the key itself leaves the server.
+      return json({ success: true, key, keys: await mine() });
+    }
+    if (action === "mcp_key_revoke") {
+      const kid = Number(b.key_id);
+      const { data: row, error } = await sb.from("dev_mcp_keys").update({ revoked_at: now })
+        .eq("id", kid).eq("user_id", me.id).is("revoked_at", null).select("id").maybeSingle();
+      if (error) return json({ success: false, error: error.message }, 500);
+      if (!row) return json({ success: false, error: "That key is already revoked, or isn't yours." }, 404);
+    }
+    return json({ success: true, keys: await mine() });
   }
 
   // ---- the pipeline ----
