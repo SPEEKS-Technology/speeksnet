@@ -49,7 +49,6 @@ const cors = {
 };
 
 const OPEN = ["triage", "backlog", "in_progress", "in_review"];
-const PRI: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
 
 // ---- who ---------------------------------------------------------------------
 type Who = { userId: string; name: string };
@@ -110,13 +109,21 @@ function stage(t: any): string {
   return t.branch ? "on_branch" : "backlog";
 }
 const brief = (t: any) => ({
-  id: ref(t.id), title: t.title, type: t.type, priority: t.priority, stage: stage(t),
+  id: ref(t.id), title: t.title, type: t.type, stage: stage(t),
   ...(t.branch ? { branch: t.branch } : {}), ...(t.branch && OPEN.includes(t.status) ? { done_on_branch: !!t.branch_done } : {}),
   ...(t.status === "triage" ? { new_from_submit_a_ticket: true } : {}),
   ...(t.assignee_name ? { assignee: t.assignee_name } : {}),
 });
-const byPri = (a: any, b: any) => (PRI[a.priority] ?? 2) - (PRI[b.priority] ?? 2) || Number(b.id) - Number(a.id);
+// Tickets have no priority (Nick, 2026-11-25): newest first.
+const byPri = (a: any, b: any) => Number(b.id) - Number(a.id);
 
+// PRs merged into pre-release, not on main, whose branch carries no ticket in
+// the next update and that no such ticket links to (0210).
+function untracked(d: any): any[] {
+  const pre = (d.tickets || []).filter((t: any) => t.status === "on_prerelease");
+  const linked = new Set((d.links || []).filter((l: any) => l.kind === "pr" && pre.some((t: any) => Number(t.id) === Number(l.ticket_id))).map((l: any) => String(l.ref)));
+  return (d.prerelease_prs || []).filter((p: any) => !linked.has(String(p.pr_number)) && !pre.some((t: any) => p.head && t.branch === p.head));
+}
 function board(d: any) {
   const tickets: any[] = d.tickets || [];
   const cached: any[] = (d.branches || []).filter((b: any) => b.kind !== "base");
@@ -130,6 +137,9 @@ function board(d: any) {
       version: next.version, size: next.size, title: next.title || null,
       ...(next.needs_title && !String(next.title || "").trim() ? { warning: `A ${next.size} update needs a title before it can go live (set in the suite).` } : {}),
       merged_tickets: tickets.filter((t) => t.status === "on_prerelease").map((t) => ({ id: ref(t.id), title: t.title, type: t.type, ...(t.branch ? { from: t.branch } : {}) })),
+      // Merged into pre-release with no ticket on its branch: it ships with no
+      // patch note unless one is written (create_ticket with already_merged).
+      merged_without_a_ticket: untracked(d).map((p: any) => ({ pr: p.pr_number, title: p.title, branch: p.head, merged: p.merged_at })),
     } : null,
     branches: [...names].map((n) => {
       const b = cached.find((x) => x.name === n) || { name: n };
@@ -174,8 +184,8 @@ const TOOLS = [
       title: { type: "string", maxLength: 200 },
       description: { type: "string", description: "What's wrong or wanted, and how to tell it's done." },
       type: { type: "string", enum: ["bug", "suggestion", "improvement", "task"], description: "bug → Fixed, suggestion → New, improvement → Improved, task → Behind the scenes (in the patch notes)." },
-      priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
       branch: { type: "string", description: "Put it on this branch at once (optional)." },
+      already_merged: { type: "boolean", description: "The work is ALREADY merged into pre-release with no ticket (dev_board lists these under merged_without_a_ticket): the ticket goes straight into the next update as its patch note. Give the merged branch as branch." },
     }, required: ["title", "type"], additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: false } },
   { name: "start_branch", description: "Create a branch on GitHub from pre-release and put tickets on it, in one step. Name it for the work (lower case, hyphens), not a ticket number: one branch can carry several tickets. Then check it out locally with: git fetch origin && git switch <kind>/<name>.",
     inputSchema: { type: "object", properties: {
@@ -228,7 +238,7 @@ async function callTool(who: Who, name: string, a: Record<string, unknown>): Pro
       const rel = (d.releases || []).find((r: any) => Number(r.id) === Number(t.release_id));
       const typeLabel = ((d.types || []).find((x: any) => x.key === t.type) || {}).label || t.type;
       return {
-        id: ref(t.id), title: t.title, description: t.description || "", type: typeLabel, priority: t.priority,
+        id: ref(t.id), title: t.title, description: t.description || "", type: typeLabel,
         stage: stage(t), status: t.status, branch: t.branch || null, ...(t.branch && OPEN.includes(t.status) ? { done_on_branch: !!t.branch_done } : {}),
         ...(t.status === "on_prerelease" ? { ships_in: d.pipeline?.next?.version || "the next update" } : {}),
         ...(t.status === "done" && rel ? { shipped_in: rel.version || rel.title } : {}),
@@ -256,8 +266,8 @@ async function callTool(who: Who, name: string, a: Record<string, unknown>): Pro
       return { count: list.length, shown: Math.min(limit, list.length), tickets: list.slice(0, limit).map(brief) };
     }
     case "create_ticket": {
-      const r = await call("dev-tickets", who, { action: "create", title: a.title, description: a.description || "", type: a.type, priority: a.priority || "normal", branch: a.branch || null });
-      return { created: ref(r.ticket.id), title: r.ticket.title, where: r.ticket.branch ? `on ${r.ticket.branch}` : "Backlog", url: `${SUITE}#SN-${r.ticket.id}` };
+      const r = await call("dev-tickets", who, { action: "create", title: a.title, description: a.description || "", type: a.type, branch: a.branch || null, prerelease: a.already_merged === true });
+      return { created: ref(r.ticket.id), title: r.ticket.title, where: r.ticket.status === "on_prerelease" ? "the next update (pre-release)" : r.ticket.branch ? `on ${r.ticket.branch}` : "Backlog", url: `${SUITE}#SN-${r.ticket.id}` };
     }
     case "start_branch": {
       const ids = Array.isArray(a.ticket_ids) && a.ticket_ids.length ? idsOf(a.ticket_ids) : [];

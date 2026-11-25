@@ -47,6 +47,7 @@ function fixture() {
         areas: [{ key: 'quickportal', label: 'QuickPortal and the Command Center', active: true }],
         releases: [{ id: 14, version: null, title: 'Main December Update', status: 'in_progress' },
             { id: 57, version: 'v3.12.3', title: 'v3.12.3 — the one with a name long enough to need cutting short in a menu', status: 'published', published_at: new Date(now).toISOString() }],
+        prerelease_prs: [{ pr_number: 590, title: 'B2B-Recycle-Out-modal-for-recycling-multiple-lines-at-once-with-a-title-that-never-breaks', head: LONGBR, url: LONG, merged_at: new Date(now - 3600000).toISOString() }],
         tickets: [
             T(573, 'triage', { title: 'Supercalifragilisticexpialidocious-callback-refresh-after-match-v2-with-no-spaces-at-all' }),
             T(574, 'in_review', { branch: LONGBR }),
@@ -225,4 +226,29 @@ t('layout @' + W + ': the Claude connector screen, with a new key and its setup 
         if (r.right > VW() + 1 || r.left < 0) return 'screen off the window';
         return !bad.length || bad.slice(0, 3).join('; ');
     });
+});
+t('layout @' + W + ': a collapsed Backlog' + (NARROW ? ' is a bar above the branches' : ' is a slim rail, and the branches take the room'), function () {
+    stage();
+    try { localStorage.removeItem('dv.blc'); } catch (_) {}
+    var lw = document.querySelector('.dv-lanes-wrap').getBoundingClientRect().width;
+    Dev.toggleBacklog(true);
+    var bl = document.getElementById('dvBacklog').getBoundingClientRect();
+    var lw2 = document.querySelector('.dv-lanes-wrap').getBoundingClientRect().width;
+    var bad = spills(document.getElementById('dvBacklog'));
+    Dev.toggleBacklog(false);
+    try { localStorage.removeItem('dv.blc'); } catch (_) {}
+    if (bad.length) return bad.slice(0, 3).join('; ');
+    if (NARROW) return bl.height <= 60 || 'collapsed backlog is ' + Math.round(bl.height) + 'px tall';
+    if (bl.width > 60) return 'rail is ' + Math.round(bl.width) + 'px wide';
+    return lw2 > lw + 150 || 'branches did not widen: ' + Math.round(lw) + ' → ' + Math.round(lw2);
+});
+t('layout @' + W + ': pre-release dragged wide still fits, and the branches keep room', function () {
+    if (NARROW) return true;   // no resizing when stacked
+    stage();
+    Dev.layout.prew = 540; Dev.applyLayout();
+    var lanes = document.querySelector('.dv-lanes-wrap').getBoundingClientRect().width;
+    var bad = spills(document.getElementById('dvPre'));
+    Dev.resetWidth('pre');
+    if (bad.length) return bad.slice(0, 3).join('; ');
+    return lanes >= 340 || 'branches squeezed to ' + Math.round(lanes);
 });

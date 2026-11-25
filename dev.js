@@ -70,13 +70,18 @@ const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
 const PREFIXES = ['feat', 'fix', 'chore'];
 const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
 // The patch notes' headings, by ticket type, in the order they read.
+const gi = (d) => `<svg class="dv-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const NOTE_GROUPS = [
-    { type: 'suggestion',  label: 'New',               color: 'var(--violet)' },
-    { type: 'improvement', label: 'Improved',          color: 'var(--blue)' },
-    { type: 'bug',         label: 'Fixed',             color: 'var(--danger)' },
-    { type: 'task',        label: 'Behind the scenes', color: 'var(--grey)' },
+    { type: 'suggestion',  label: 'New',               color: 'var(--violet)', icon: gi('<path d="M8 2.5l1.4 3.6 3.6 1.4-3.6 1.4L8 12.5 6.6 8.9 3 7.5l3.6-1.4z"/>') },
+    { type: 'improvement', label: 'Improved',          color: 'var(--blue)',   icon: gi('<path d="M8 13V3.5M4 7.5l4-4 4 4"/>') },
+    { type: 'bug',         label: 'Fixed',             color: 'var(--danger)', icon: gi('<path d="M3.5 8.5l3 3 6-7"/>') },
+    { type: 'task',        label: 'Behind the scenes', color: 'var(--grey)',   icon: gi('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/>') },
 ];
 const typeColor = (k) => (NOTE_GROUPS.find((g) => g.type === k) || { color: 'var(--grey)' }).color;
+// The notes' sections, in reading order, each with its tickets; an unknown type goes under "Other".
+const noteGroups = (list) => NOTE_GROUPS.concat([{ type: null, label: 'Other', color: 'var(--grey)', icon: gi('<circle cx="8" cy="8" r="1.5"/>') }])
+    .map((g) => Object.assign({}, g, { list: list.filter((t) => g.type ? t.type === g.type : !NOTE_GROUPS.some((x) => x.type === t.type)) }))
+    .filter((g) => g.list.length);
 const SIZES = [
     { key: 'minor',    label: 'Minor' },
     { key: 'major',    label: 'Major' },
@@ -176,6 +181,9 @@ const ICON = {
     bang: `<svg class="dv-ico" viewBox="0 0 16 16"><path d="M8 4v5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="8" cy="12" r="1.2" fill="currentColor"/></svg>`,
     rocket: `<svg class="dv-ico" viewBox="0 0 16 16"><path d="M9.5 2.5c2.2-.6 4-.5 4-.5s.1 1.8-.5 4L9 10 6 7l3.5-4.5zM6 7L3.5 7.3 2 9.5l3 .5M9 10l-.3 2.5L6.5 14l-.5-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="10.6" cy="5.4" r="1" fill="currentColor"/></svg>`,
     chev: `<svg class="dv-ico" viewBox="0 0 16 16"><path d="M4.5 6l3.5 3.5L11.5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    pencil: `<svg class="dv-ico" viewBox="0 0 16 16"><path d="M10.5 2.8l2.7 2.7-7.4 7.4-3.3.6.6-3.3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+    collapse: `<svg class="dv-ico" viewBox="0 0 16 16"><path d="M9.5 4L5.5 8l4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    expand: `<svg class="dv-ico" viewBox="0 0 16 16"><path d="M6.5 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
 };
 
 // Status: a ring that fills as the work moves along — used in the history.
@@ -283,10 +291,12 @@ function matchesQuery(t, q) {
     return words.every((w) => hay.includes(w));
 }
 const shown = (t) => !S.query.trim() || matchesQuery(t, S.query.trim());
-const byPriority = (a, b) => ((PRIORITY[a.priority] || PRIORITY.normal).rank - (PRIORITY[b.priority] || PRIORITY.normal).rank)
-    || String(b.updated_at).localeCompare(String(a.updated_at));
-const backlogTickets = () => tickets().filter((t) => isOpen(t) && !t.branch).sort(byPriority);
-const laneTickets = (name) => tickets().filter((t) => isOpen(t) && t.branch === name).sort(byPriority);
+// Tickets have no priority (Nick, 2026-11-25 — the column stays in the data,
+// unused). The Backlog reads newest first; a branch reads in the order its
+// tickets were raised, like a to-do list.
+const newestFirst = (a, b) => Number(b.id) - Number(a.id);
+const backlogTickets = () => tickets().filter((t) => isOpen(t) && !t.branch).sort(newestFirst);
+const laneTickets = (name) => tickets().filter((t) => isOpen(t) && t.branch === name).sort((a, b) => Number(a.id) - Number(b.id));
 const preTickets = () => tickets().filter((t) => t.status === 'on_prerelease').sort((a, b) => Number(a.id) - Number(b.id));
 
 // The columns: every branch that isn't fully merged, every branch a ticket is
@@ -296,15 +306,28 @@ const preTickets = () => tickets().filter((t) => t.status === 'on_prerelease').s
 function lanes() {
     const cached = ((S.data && S.data.branches) || []).filter((b) => b.kind !== 'base');
     const byName = new Map(cached.map((b) => [b.name, b]));
-    const names = new Set(cached.filter((b) => !b.merged).map((b) => b.name));
+    // "Merged" (0193) means nothing on it that pre-release lacks — which is also
+    // true of a branch started a minute ago with no commits yet. That one is
+    // work about to begin, so it keeps its column until a PR of it merges.
+    const names = new Set(cached.filter((b) => !b.merged || !b.pr_number).map((b) => b.name));
     for (const t of tickets()) if (isOpen(t) && t.branch) names.add(t.branch);
     for (const n of S.fresh) names.add(n);
     return Array.from(names)
         .map((n) => byName.get(n) || { name: n, kind: 'untracked', ahead: 0, behind: 0, pending: S.fresh.has(n), unknown: !S.fresh.has(n) })
         .sort((a, b) => (a.pending ? 1 : 0) - (b.pending ? 1 : 0) || String(b.last_commit_at || '').localeCompare(String(a.last_commit_at || '')) || a.name.localeCompare(b.name));
 }
-// Fully merged, nothing on it: safe to delete (the Phase 5 rule).
-const tidyBranches = () => ((S.data && S.data.branches) || []).filter((b) => b.kind !== 'base' && b.merged && !laneTickets(b.name).length);
+// Its PR merged, nothing left on it, no tickets: safe to delete (the Phase 5
+// rule). A brand-new empty branch isn't offered here — it has a column, and
+// its own menu can delete it.
+const tidyBranches = () => ((S.data && S.data.branches) || []).filter((b) => b.kind !== 'base' && b.merged && b.pr_number && !laneTickets(b.name).length);
+// 0210: merged into pre-release, not on main, and no ticket in the next update
+// covers it (none on its branch, none linked to the PR) — it would ship with
+// no patch note.
+function untrackedMerges() {
+    const pre = preTickets();
+    const linked = new Set(((S.data && S.data.links) || []).filter((l) => l.kind === 'pr' && pre.some((t) => Number(t.id) === Number(l.ticket_id))).map((l) => String(l.ref)));
+    return ((S.data && S.data.prerelease_prs) || []).filter((p) => !linked.has(String(p.pr_number)) && !pre.some((t) => p.head && t.branch === p.head));
+}
 // What shipped in a release (or in any of the rows folded into it, below).
 const shippedIn = (rid) => {
     const ids = [Number(rid)].concat(((S.data && S.data.releases) || []).filter((r) => Number(r._into) === Number(rid)).map((r) => Number(r.id)));
@@ -363,6 +386,10 @@ function renderShell() {
         }
     });
     $('#dvLanes').addEventListener('scroll', fadeEdge, { passive: true });
+    const pipeEl = $('#dvPipe');
+    pipeEl.addEventListener('pointerdown', (e) => { const h = e.target.closest && e.target.closest('.dv-resize'); if (h) startResize(h.dataset.resize, e); });
+    pipeEl.addEventListener('dblclick', (e) => { const h = e.target.closest && e.target.closest('.dv-resize'); if (h) resetWidth(h.dataset.resize); });
+    applyLayout();
     setLive(S.live);
 }
 function renderAll() {
@@ -411,7 +438,6 @@ function cardHtml(t, onBranch) {
         <div class="dv-card-main">
             <div class="dv-card-title">${esc(t.title)}</div>
             <div class="dv-card-meta">
-                ${t.priority === 'urgent' || t.priority === 'high' ? priIcon(t.priority) : ''}
                 <span class="dv-card-id">SN-${id}</span>
                 <span class="dv-ty" style="--c:${typeColor(t.type)}"><i></i>${esc(labelOf('types', t.type))}</span>
                 ${comments ? `<span class="dv-card-n" title="${plural(comments, 'comment')}">${comments}</span>` : ''}
@@ -433,8 +459,15 @@ function renderBacklog() {
     const q = S.query.trim();
     // Searching also finds what has already moved on, so an old ticket is one search away.
     const gone = q ? tickets().filter((t) => !isOpen(t) && matchesQuery(t, q)).sort((a, b) => Number(b.id) - Number(a.id)).slice(0, 12) : [];
+    // Collapsed: a slim rail that still takes a dropped card (back to the Backlog).
+    if (layout.collapsed) {
+        host.innerHTML = `<button class="dv-rail dv-drop" data-zone="backlog" data-act="bl-expand" title="Show the Backlog ( [ )">
+            ${ICON.expand}<span class="dv-count">${all.length}</span>${fresh.length ? `<span class="dv-new">${fresh.length} new</span>` : ''}<span class="dv-rail-t">Backlog</span></button>`;
+        return;
+    }
     host.innerHTML = `
-        <div class="dv-col-h"><div class="dv-stagek">Waiting</div><div class="dv-row-h"><h2>Backlog</h2><span class="dv-count">${all.length}</span></div><p>Drag a ticket onto a branch to start it</p></div>
+        <div class="dv-resize" data-resize="backlog" title="Drag to resize · double-click to reset" aria-hidden="true"></div>
+        <div class="dv-col-h"><div class="dv-stagek">Waiting<button class="dv-icon-btn dv-push dv-collapse" data-act="bl-collapse" title="Hide the Backlog ( [ )" aria-label="Hide the Backlog">${ICON.collapse}</button></div><div class="dv-row-h"><h2>Backlog</h2><span class="dv-count">${all.length}</span></div><p>Drag a ticket onto a branch to start it</p></div>
         <div class="dv-col-b dv-drop" data-zone="backlog" data-scroll="backlog">
             ${fresh.length ? `<div class="dv-grp"><div class="dv-grp-h"><span class="dv-new">${fresh.length} new</span>From Submit a Ticket</div>${fresh.map((t) => cardHtml(t)).join('')}</div>` : ''}
             <div class="dv-grp"><div class="dv-grp-h">Ideas and requests<span class="dv-ct">${rest.length}</span></div>
@@ -456,11 +489,12 @@ function laneHtml(b) {
     const behind = Number(b.behind) || 0;
     const meta = b.pending ? '<span class="dv-pill none">Being created…</span>'
         : b.unknown ? '<span class="dv-pill none" title="Not on GitHub, or not synced yet">Not on GitHub yet</span>'
+        : !b.pr_number && !Number(b.ahead) && !behind ? '<span class="dv-ahead">Nothing committed yet</span>'
         : `<span class="dv-ahead" title="Commits on this branch that pre-release doesn't have">+${Number(b.ahead) || 0}</span>${behind ? `<span class="dv-behind${behind > 25 ? ' far' : ''}" title="Commits on pre-release this branch doesn't have yet">${behind} behind</span>` : ''}`;
     return `<div class="dv-lane${S.fresh.has(b.name) ? ' fresh' : ''}" data-lane="${esc(b.name)}">
         <div class="dv-lane-h">
             <div class="dv-row-h">${ICON.branch}<span class="dv-lane-nm" title="${esc(b.name)}">${esc(b.name)}</span>${who ? avatar(who) : ''}<button class="dv-more show" data-bmore="${esc(b.name)}" title="Branch" aria-label="Branch actions">${ICON.more}</button></div>
-            <div class="dv-lane-m">${pr}${b.merged ? '<span class="dv-pill merged" title="Everything on it is on pre-release">Merged</span>' : ''}${meta}</div>
+            <div class="dv-lane-m">${pr}${b.merged && b.pr_number ? '<span class="dv-pill merged" title="Everything on it is on pre-release">Merged</span>' : ''}${meta}</div>
             <div class="dv-lane-p"><div class="dv-prog"><b style="width:${ts.length ? (done / ts.length) * 100 : 0}%"></b></div><span>${done}/${ts.length} done</span></div>
         </div>
         <div class="dv-lane-b dv-drop" data-zone="branch" data-branch="${esc(b.name)}" data-scroll="lane:${esc(b.name)}">
@@ -495,6 +529,7 @@ function renderPre() {
     if (!host) return;
     const p = pipe(), next = p.next, live = p.live;
     const pre = preTickets();
+    const pending = untrackedMerges();
     const building = tickets().filter((t) => isOpen(t) && t.branch).length;
     const w = canWrite();
     // Keep the title box's cursor if someone is typing in it.
@@ -512,7 +547,8 @@ function renderPre() {
                 ? `<div class="dv-tfield"><input id="dvNextTitle" value="${esc(title || '')}" placeholder="Name this update" maxlength="120" ${w ? '' : 'disabled'} class="${missing ? 'need' : ''}" aria-label="Update title"></div>`
                 : `<div class="dv-tnote">Minor updates don't need a title.</div>`}
             <div class="dv-ready">
-                <div class="${pre.length ? 'ok' : 'wait'}"><i>${pre.length ? ICON.tick : ICON.dash}</i><span>${pre.length ? `<b>${plural(pre.length, 'ticket')}</b> merged and ready` : 'Nothing merged yet'}</span></div>
+                <div class="${pre.length ? 'ok' : 'wait'}"><i>${pre.length ? ICON.tick : ICON.dash}</i><span>${pre.length ? `<b>${plural(pre.length, 'ticket')}</b> merged and ready` : 'No tickets merged yet'}</span></div>
+                ${pending.length ? `<div class="warn"><i>${ICON.bang}</i><span><b>${plural(pending.length, 'merge')}</b> without a patch note</span></div>` : ''}
                 <div class="wait"><i>${ICON.dash}</i><span>${building ? `<b>${building}</b> still on branches. They join when their branch merges.` : 'Nothing else in progress'}</span></div>
                 ${missing ? `<div class="warn"><i>${ICON.bang}</i><span>A ${esc(next.size)} update needs a title</span></div>` : ''}
             </div>
@@ -520,19 +556,40 @@ function renderPre() {
             <div class="dv-golive-note">Go live is the next piece being built. Until then, releases are made by hand.</div>
         </div>`;
     }
-    const notes = NOTE_GROUPS.concat([{ type: null, label: 'Other', color: 'var(--grey)' }]).map((g) => {
-        const list = pre.filter((t) => (g.type ? t.type === g.type : !NOTE_GROUPS.some((x) => x.type === t.type)) && shown(t));
-        if (!list.length) return '';
-        return `<h4 style="--c:${g.color}">${esc(g.label)}<span class="dv-ct">${list.length}</span></h4>` + list.map((t) =>
-            `<button class="dv-note${S.landed.has(Number(t.id)) ? ' land' : ''}" data-open="${t.id}"><span class="dv-card-id">SN-${t.id}</span>
-                <span class="dv-note-t">${esc(t.title)}${t.branch ? `<span class="dv-via">from ${esc(t.branch)}</span>` : ''}</span>${avatar(t.assignee_name)}</button>`).join('');
-    }).join('');
+    // The patch notes, drawn the way they'll read: a card per update, a line per
+    // ticket under New / Improved / Fixed / Behind the scenes. Each line is its
+    // ticket's title — the pencil rewords it in place. Above it, anything merged
+    // with no ticket at all (0210), which would otherwise ship unannounced.
+    const groups = noteGroups(pre).map((g) => Object.assign({}, g, { list: g.list.filter(shown) })).filter((g) => g.list.length);
+    const title = next ? String((S.titleDraft != null ? S.titleDraft : next.title) || '').trim() : '';
+    const card = groups.length ? `<div class="dv-ncard">
+            <div class="dv-ncard-top"><span class="dv-ncard-k">What's new in</span><span class="dv-ncard-v">${esc(next ? next.version : '')}</span></div>
+            ${next && next.needs_title && title ? `<div class="dv-ncard-t">${esc(title)}</div>` : ''}
+            <div class="dv-nsums">${groups.map((g) => `<span style="--c:${g.color}"><i></i>${g.list.length} ${esc(g.label.toLowerCase())}</span>`).join('')}</div>
+            ${groups.map((g) => `<section class="dv-nsec" style="--c:${g.color}"><h4><i>${g.icon}</i>${esc(g.label)}</h4>
+                ${g.list.map((t) => `<div class="dv-note${S.landed.has(Number(t.id)) ? ' land' : ''}" data-open="${t.id}" role="button" tabindex="0">
+                    <span class="dv-note-dot"></span>
+                    <span class="dv-note-t">${esc(t.title)}<span class="dv-via">SN-${t.id}${t.branch ? ` · ${esc(t.branch)}` : ''}</span></span>
+                    ${w ? `<button class="dv-reword" data-reword="${t.id}" title="Reword this line (it's the ticket's title)" aria-label="Reword SN-${t.id}">${ICON.pencil}</button>` : ''}
+                </div>`).join('')}</section>`).join('')}
+        </div>` : '';
+    const needs = pending.length ? `<div class="dv-needs">
+            <div class="dv-needs-h"><i>${ICON.bang}</i>Merged without a patch note<span class="dv-ct">${pending.length}</span></div>
+            <p>On pre-release, so ${esc(next ? next.version : 'the next update')} ships ${pending.length === 1 ? 'it' : 'them'} — but nothing says what ${pending.length === 1 ? 'it does' : 'they do'} yet.</p>
+            ${pending.map((p) => `<div class="dv-need">
+                <div class="dv-need-main"><a class="dv-need-t" href="${esc(p.url || `${REPO_URL}/pull/${p.pr_number}`)}" target="_blank" rel="noopener">${esc(p.title)}</a>
+                    <span class="dv-via">PR #${p.pr_number}${p.head ? ` · ${esc(p.head)}` : ''} · merged ${esc(when(p.merged_at))}${/^\d+[mhd]$/.test(when(p.merged_at)) ? ' ago' : ''}</span></div>
+                ${w ? `<button class="dv-btn dv-btn-sm" data-note-pr="${p.pr_number}">${ICON.pencil}Write the note</button>` : ''}
+            </div>`).join('')}
+        </div>` : '';
     host.innerHTML = `
-        <div class="dv-col-h"><div class="dv-stagek"><i></i>Next update</div><div class="dv-row-h"><h2>Pre-release</h2><span class="dv-count">${pre.length}</span></div><p>Everything merged here ships in the next update</p></div>
+        <div class="dv-resize" data-resize="pre" title="Drag to resize · double-click to reset" aria-hidden="true"></div>
+        <div class="dv-col-h"><div class="dv-stagek"><i></i>Next update</div><div class="dv-row-h"><h2>Pre-release</h2><span class="dv-count">${pre.length + pending.length}</span></div><p>Everything merged here ships in the next update</p></div>
         <div class="dv-col-b" data-scroll="pre">
             ${hero}
-            <div class="dv-notes-h">Patch notes<span class="dv-auto">Written automatically</span></div>
-            <div class="dv-notes">${notes || '<div class="dv-emptybox">When a branch merges, its tickets show up here.</div>'}</div>
+            <div class="dv-notes-h">Patch notes<span class="dv-auto">Written automatically</span>${groups.length ? `<button class="dv-icon-btn dv-push" data-act="copy-notes" title="Copy the patch notes as text">${ICON.copy}</button>` : ''}</div>
+            ${needs}
+            ${card || (needs ? '' : '<div class="dv-emptybox">When a branch merges, its tickets show up here.</div>')}
         </div>`;
     if (typing) { const i = $('#dvNextTitle'); if (i) { i.focus(); try { i.setSelectionRange(caret[0], caret[1]); } catch (_) {} } }
 }
@@ -676,7 +733,6 @@ function renderPanel() {
             ${desc}
             <dl class="dv-props">
                 ${whereHtml(t)}
-                ${prop('priority', 'Priority', `${priIcon(t.priority)}<span>${esc((PRIORITY[t.priority] || PRIORITY.normal).label)}</span>`, w)}
                 ${prop('assignee', 'Assignee', `${avatar(t.assignee_name)}<span class="${t.assignee_name ? '' : 'placeholder'}">${esc(t.assignee_name || 'Unassigned')}</span>`, w)}
                 ${prop('type', 'Type', `<span class="dv-ty" style="--c:${typeColor(t.type)}"><i></i></span><span>${esc(labelOf('types', t.type))}</span>`, w)}
                 ${prop('area', 'Area', `${ICON.box}<span class="${t.area ? '' : 'placeholder'}">${esc(t.area ? labelOf('areas', t.area) : 'No area')}</span>`, w)}
@@ -816,23 +872,31 @@ function confirmDialog({ title, body, ok, danger }) {
 function shortcuts() {
     const rows = [
         ['Search', ['/']], ['New ticket', ['C']], ['Start a branch', ['B']], ['Close', ['Esc']],
-        ['Assignee (ticket open)', ['A']], ['Priority (ticket open)', ['P']], ['Move (ticket open)', ['M']], ['Send comment', ['Ctrl', 'Enter']],
+        ['Assignee (ticket open)', ['A']], ['Move (ticket open)', ['M']], ['Hide / show the Backlog', ['[']], ['Send comment', ['Ctrl', 'Enter']],
     ];
     openModal(`<div class="dv-modal-top">Keyboard shortcuts<button class="dv-icon-btn" data-act="modal-close">${ICON.x}</button></div>
         <div class="dv-modal-body">${rows.map(([l, k]) => `<div class="dv-key"><span>${l}</span><span>${k.map((x) => `<kbd>${x}</kbd>`).join('')}</span></div>`).join('')}
         <p class="dv-keys-tip">Drag a ticket onto a branch to start it, or back to the Backlog to put it off.</p></div>`, 'dv-keys');
 }
 
-const draft = { priority: 'normal', type: 'task', area: '', assignee_id: '', branch: '' };
-function newTicket(branch) {
+const draft = { type: 'task', area: '', assignee_id: '', branch: '', prerelease: false };
+// newTicket()            a new ticket in the Backlog
+// newTicket('feat/x')    …straight onto that branch
+// newTicket({ pr })      the patch note for a PR already merged into pre-release
+//                        with no ticket (0210): made straight into the next update
+function newTicket(arg) {
     if (!canWrite()) { toast('Test accounts can only read.', { bad: true }); return; }
     const types = (S.data.types || []).filter((t) => t.active !== false);
     if (!types.some((t) => t.key === draft.type)) draft.type = (types[0] || {}).key || 'task';
-    draft.branch = typeof branch === 'string' ? branch : '';
-    const m = openModal(`<div class="dv-modal-top">${ICON.plus}New ticket<button class="dv-icon-btn" data-act="modal-close" title="Close (Esc)">${ICON.x}</button></div>
+    const pr = arg && typeof arg === 'object' ? arg.pr : null;
+    draft.branch = pr ? (pr.head || '') : typeof arg === 'string' ? arg : '';
+    draft.prerelease = !!pr;
+    const m = openModal(`<div class="dv-modal-top">${pr ? `${ICON.merge}Patch note for PR #${pr.pr_number}` : `${ICON.plus}New ticket`}<button class="dv-icon-btn" data-act="modal-close" title="Close (Esc)">${ICON.x}</button></div>
         <div class="dv-modal-body">
-            <input class="dv-new-title" id="dvNewTitle" placeholder="Ticket title" maxlength="200" autocomplete="off">
-            <div class="dv-new-hint">The title becomes the patch note, word for word — write it for a store manager.</div>
+            <input class="dv-new-title" id="dvNewTitle" placeholder="${pr ? 'What changed, for a store manager' : 'Ticket title'}" maxlength="200" autocomplete="off" value="${pr ? esc(pr.title) : ''}">
+            <div class="dv-new-hint">${pr
+                ? `Already merged into pre-release${pr.head ? ` from <span class="dv-mono">${esc(pr.head)}</span>` : ''}. This goes straight into the next update's patch notes — reword the PR's title for a store manager.`
+                : 'The title becomes the patch note, word for word — write it for a store manager.'}</div>
             <textarea class="dv-new-desc" id="dvNewDesc" placeholder="Add a description…"></textarea>
         </div>
         <div class="dv-new-props" id="dvNewProps"></div>
@@ -842,6 +906,7 @@ function newTicket(branch) {
     drawDraftProps();
     const title = $('#dvNewTitle', m), desc = $('#dvNewDesc', m);
     title.focus();
+    if (pr) title.select();
     const grow = () => { desc.style.height = 'auto'; desc.style.height = Math.min(desc.scrollHeight, innerHeight * .4) + 'px'; };
     desc.addEventListener('input', grow);
     title.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); desc.focus(); } });
@@ -855,9 +920,10 @@ function drawDraftProps() {
     if (!host) return;
     const dev = (S.data.devs || []).find((d) => d.id === draft.assignee_id);
     host.innerHTML = `
-        <button class="dv-chipsel" data-npick="branch">${draft.branch ? ICON.branch : ICON.inbox}<span class="${draft.branch ? 'dv-mono' : ''}">${esc(draft.branch || 'Backlog')}</span></button>
+        ${draft.prerelease
+            ? `<span class="dv-chipsel dv-chip-pre">${ICON.merge}<span>Next update</span></span>`
+            : `<button class="dv-chipsel" data-npick="branch">${draft.branch ? ICON.branch : ICON.inbox}<span class="${draft.branch ? 'dv-mono' : ''}">${esc(draft.branch || 'Backlog')}</span></button>`}
         <button class="dv-chipsel" data-npick="type"><span class="dv-ty" style="--c:${typeColor(draft.type)}"><i></i></span>${esc(labelOf('types', draft.type))}</button>
-        <button class="dv-chipsel" data-npick="priority">${priIcon(draft.priority)}${esc(PRIORITY[draft.priority].label)}</button>
         <button class="dv-chipsel" data-npick="area">${ICON.box}${esc(draft.area ? labelOf('areas', draft.area) : 'Area')}</button>
         <button class="dv-chipsel" data-npick="assignee">${dev ? avatar(dev.name) : ICON.user}${esc(dev ? dev.name : 'Assignee')}</button>`;
 }
@@ -868,12 +934,14 @@ async function createTicket() {
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
         const r = await post({ action: 'create', title: title.trim(), description: $('#dvNewDesc').value, type: draft.type, area: draft.area || null,
-            priority: draft.priority, assignee_id: draft.assignee_id || null, branch: draft.branch || null, stores: [] });
+            assignee_id: draft.assignee_id || null, branch: draft.branch || null, stores: [], ...(draft.prerelease ? { prerelease: true } : {}) });
         closeModal();
-        Object.assign(draft, { area: '', assignee_id: '', branch: '' });
+        const wasNote = draft.prerelease;
+        Object.assign(draft, { area: '', assignee_id: '', branch: '', prerelease: false });
         if (r.ticket) S.landed.add(Number(r.ticket.id));
         await load(true);
-        toast(`Created SN-${r.ticket && r.ticket.id}${r.ticket && r.ticket.branch ? ` on ${r.ticket.branch}` : ''}`);
+        toast(wasNote ? `SN-${r.ticket && r.ticket.id} added to the patch notes`
+            : `Created SN-${r.ticket && r.ticket.id}${r.ticket && r.ticket.branch ? ` on ${r.ticket.branch}` : ''}`);
     } catch (e) {
         btn.disabled = false; btn.textContent = 'Create ticket';
         toast(`Couldn't create it — ${e.message}`, { bad: true });
@@ -1056,7 +1124,6 @@ function moveMenu(t, anchor) {
 function pickFor(t, kind, anchor) {
     if (!canWrite()) return;
     const items = {
-        priority: () => PRIORITY_ORDER.map((k) => ({ value: k, label: PRIORITY[k].label, html: priIcon(k) })),
         assignee: () => [{ value: '', label: 'Unassigned', html: avatar('') }].concat((S.data.devs || []).map((d) => ({ value: d.id, label: d.name, html: avatar(d.name), hint: d.store }))),
         type: () => (S.data.types || []).filter((x) => x.active !== false).map((x) => ({ value: x.key, label: x.label, html: `<span class="dv-ty" style="--c:${typeColor(x.key)}"><i></i></span>`, hint: x.dev_only ? 'dev' : '' })),
         area: () => [{ value: '', label: 'No area', html: ICON.box }].concat((S.data.areas || []).filter((x) => x.active !== false).map((x) => ({ value: x.key, label: x.label, html: ICON.box }))),
@@ -1257,6 +1324,82 @@ async function connector() {
     catch (err) { const h = $('#dvConnKeys', m); if (h) h.innerHTML = `<div class="dv-emptybox">Couldn't load your keys — ${esc(err.message)}</div>`; }
 }
 
+// ---- the patch notes as text, and rewording a line --------------------------
+function notesText() {
+    const next = pipe().next;
+    const title = next && next.needs_title ? String((S.titleDraft != null ? S.titleDraft : next.title) || '').trim() : '';
+    const lines = [`What's new in ${next ? next.version : 'the next update'}${title ? ` — ${title}` : ''}`, ''];
+    for (const g of noteGroups(preTickets())) { lines.push(g.label); g.list.forEach((t) => lines.push(`- ${t.title}`)); lines.push(''); }
+    return lines.join('\n').trim();
+}
+function reword(t, anchor) {
+    if (!canWrite() || !t) return;
+    formPop(anchor, `<label for="dvReword">Reword the note <span class="dv-muted">— it's SN-${t.id}'s title, read by every store manager</span></label>
+        <input class="dv-input" id="dvReword" maxlength="200" value="${esc(t.title)}">
+        <div style="display:flex;gap:6px;justify-content:flex-end"><button class="dv-btn dv-btn-ghost dv-btn-sm" data-rw="cancel">Cancel</button><button class="dv-btn dv-btn-primary dv-btn-sm" data-rw="save">Save</button></div>`, (el) => {
+        const input = $('#dvReword', el);
+        input.focus(); input.select();
+        const go = () => { const v = input.value.replace(/\s+/g, ' ').trim(); closePop(); if (v && v !== t.title) optimistic(t, { title: v }, { action: 'edit', id: t.id, title: v }, 'Patch note reworded'); };
+        $('[data-rw="save"]', el).addEventListener('click', go);
+        $('[data-rw="cancel"]', el).addEventListener('click', closePop);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    });
+}
+
+// ---- the side columns: the Backlog collapses; both resize ----------------
+// Nick, 2026-11-25: collapsible Backlog, side columns adjustable "within a
+// certain range". Each person's choice is kept in this browser (localStorage),
+// and none of it applies when the window is narrow enough to stack the columns.
+const store = { get(k) { try { return localStorage.getItem('dv.' + k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem('dv.' + k, v); } catch (_) {} } };
+const SIDE = { backlog: { min: 220, max: 460, def: 288, key: 'blw' }, pre: { min: 300, max: 540, def: 360, key: 'prew' } };
+const layout = { blw: Number(store.get('blw')) || null, prew: Number(store.get('prew')) || null, collapsed: store.get('blc') === '1' };
+function applyLayout() {
+    const pipeEl = $('#dvPipe');
+    if (!pipeEl) return;
+    pipeEl.classList.toggle('dv-blc', layout.collapsed);
+    pipeEl.style.setProperty('--bl-w', layout.collapsed ? '48px' : layout.blw ? layout.blw + 'px' : '');
+    if (!layout.collapsed && !layout.blw) pipeEl.style.removeProperty('--bl-w');
+    if (layout.prew) pipeEl.style.setProperty('--pre-w', layout.prew + 'px'); else pipeEl.style.removeProperty('--pre-w');
+    fadeEdge();
+}
+function toggleBacklog(force) {
+    layout.collapsed = typeof force === 'boolean' ? force : !layout.collapsed;
+    store.set('blc', layout.collapsed ? '1' : '0');
+    renderBacklog();
+    applyLayout();
+}
+// Drag a column's inner edge. The branches always keep at least 340px.
+function startResize(which, e) {
+    const pipeEl = $('#dvPipe');
+    const col = which === 'backlog' ? $('#dvBacklog') : $('#dvPre');
+    if (!pipeEl || !col) return;
+    e.preventDefault();
+    const s = SIDE[which], x0 = e.clientX, w0 = col.getBoundingClientRect().width;
+    const other = (which === 'backlog' ? $('#dvPre') : $('#dvBacklog')).getBoundingClientRect().width;
+    const max = Math.max(s.min, Math.min(s.max, pipeEl.clientWidth - other - 340));
+    document.body.classList.add('dv-resizing');
+    const move = (ev) => {
+        const w = Math.round(Math.max(s.min, Math.min(max, w0 + (which === 'backlog' ? ev.clientX - x0 : x0 - ev.clientX))));
+        layout[s.key] = w;
+        pipeEl.style.setProperty(which === 'backlog' ? '--bl-w' : '--pre-w', w + 'px');
+        fadeEdge();
+    };
+    const up = () => {
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.body.classList.remove('dv-resizing');
+        if (layout[s.key]) store.set(s.key, String(layout[s.key]));
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+}
+function resetWidth(which) {
+    const s = SIDE[which];
+    layout[s.key] = null;
+    store.set(s.key, '');
+    applyLayout();
+}
+
 // ---- hash: dev.html#SN-573 opens that ticket ------------------------------
 // replaceState, not location.hash =: no history entries, no navigation (a
 // hash assignment is one, and hung the headless checks — see the handoff).
@@ -1270,7 +1413,7 @@ function openFromHash() {
 }
 
 // ---- events (one delegated handler) -------------------------------------
-const ACTIONABLE = '[data-act],[data-id],[data-open],[data-chk],[data-more],[data-bmore],[data-size],[data-pick],[data-npick],[data-copy],[data-bdelete]';
+const ACTIONABLE = '[data-act],[data-id],[data-open],[data-chk],[data-more],[data-bmore],[data-size],[data-pick],[data-npick],[data-copy],[data-bdelete],[data-reword],[data-note-pr]';
 function onClick(e) {
     if (!e.target || !e.target.closest) return;
     const el = e.target.closest(ACTIONABLE);
@@ -1288,6 +1431,8 @@ function onClick(e) {
     if (d.more) { e.stopPropagation(); return moveMenu(ticket(d.more), el); }
     if (d.bmore) { e.stopPropagation(); return branchMenu(d.bmore, el); }
     if (d.size) return setSize(d.size);
+    if (d.reword) { e.stopPropagation(); return reword(ticket(d.reword), el); }
+    if (d.notePr) { const p = ((S.data && S.data.prerelease_prs) || []).find((x) => String(x.pr_number) === d.notePr); return p && newTicket({ pr: p }); }
     if (d.open) { closePop(); return open(Number(d.open)); }
     if (d.id && el.classList.contains('dv-card')) return open(Number(d.id));
     if (d.copy) { closePop(); return copy(d.copy.replace(/&amp;/g, '&'), 'Command copied'); }
@@ -1305,6 +1450,9 @@ function onClick(e) {
         case 'tidy': return tidyMenu(el);
         case 'me-menu': if (pop) { closePop(); return; } return meMenu(el);
         case 'connector': return connector();
+        case 'copy-notes': return copy(notesText(), 'Patch notes copied');
+        case 'bl-collapse': return toggleBacklog(true);
+        case 'bl-expand': return toggleBacklog(false);
         case 'live-menu': if (pop) { closePop(); return; } return liveMenu(el);
         case 'retry': S.gate = null; $('#dvApp').innerHTML = '<div class="dv-boot"><div class="dv-boot-mark"></div></div>'; return load();
         case 'close': return closePanel();
@@ -1339,7 +1487,6 @@ function saveDesc(t) {
 function draftPick(kind, anchor) {
     const items = {
         branch: [{ value: '', label: 'Backlog', html: ICON.inbox }].concat(lanes().filter((b) => !b.unknown).map((b) => ({ value: b.name, label: b.name, html: ICON.branch, mono: true }))),
-        priority: PRIORITY_ORDER.map((k) => ({ value: k, label: PRIORITY[k].label, html: priIcon(k) })),
         type: (S.data.types || []).filter((x) => x.active !== false).map((x) => ({ value: x.key, label: x.label, html: `<span class="dv-ty" style="--c:${typeColor(x.key)}"><i></i></span>` })),
         area: [{ value: '', label: 'No area' }].concat((S.data.areas || []).filter((x) => x.active !== false).map((x) => ({ value: x.key, label: x.label, html: ICON.box }))),
         assignee: [{ value: '', label: 'Unassigned', html: avatar('') }].concat((S.data.devs || []).map((d) => ({ value: d.id, label: d.name, html: avatar(d.name) }))),
@@ -1415,12 +1562,12 @@ function onKey(e) {
             if (c) { e.preventDefault(); open(Number(c.dataset.id)); }
             return;
         }
-        case 'a': case 'p': case 'm': {
+        case '[': e.preventDefault(); return toggleBacklog();
+        case 'a': case 'm': {
             if (!t) return;
             if (e.key === 'm') { const b = $('[data-act="move"]'); if (b) { e.preventDefault(); moveMenu(t, b); } return; }
-            const kind = { a: 'assignee', p: 'priority' }[e.key];
-            const anchor = $(`.dv-prop[data-pick="${kind}"]`);
-            if (anchor) { e.preventDefault(); pickFor(t, kind, anchor); }
+            const anchor = $('.dv-prop[data-pick="assignee"]');
+            if (anchor) { e.preventDefault(); pickFor(t, 'assignee', anchor); }
         }
     }
 }
@@ -1485,6 +1632,7 @@ window.Dev = {
     S, idx, setData, renderAll, renderShell, renderBoard, renderPanel, open, closePanel,
     lanes, backlogTickets, laneTickets, preTickets, tidyBranches, stageOf, matchesQuery, personFor,
     moveTicket, toggleDone, setSize, saveNextTitle, moveMenu, branchMenu, liveMenu, newBranch, connector, meMenu,
+    untrackedMerges, notesText, reword, toggleBacklog, applyLayout, resetWidth, layout,
     stIcon, priIcon, slugify, eventText, onClick, onKey, onInput, onDrop, picker, menu, closePop,
     newTicket, closeModal, toast, optimistic, setStatus, pickFor, openFromHash, syncHash, load, listen,
     stub: (fn) => { stub = fn; },

@@ -243,7 +243,7 @@ Deno.serve(async (req: Request) => {
 
   // ---- read ----
   if (req.method === "GET") {
-    const [t, c, e, l, r, ty, ar, br] = await Promise.all([
+    const [t, c, e, l, r, ty, ar, br, pp] = await Promise.all([
       sb.from("dev_tickets").select("*").order("id", { ascending: false }),
       sb.from("dev_ticket_comments").select("*").order("created_at", { ascending: true }),
       sb.from("dev_ticket_events").select("*").order("created_at", { ascending: true }),
@@ -253,8 +253,10 @@ Deno.serve(async (req: Request) => {
       sb.from("dev_ticket_areas").select("*").order("sort"),
       // Phase 5: the Branches tab's cache, kept by github-webhook (0193).
       sb.from("github_branches").select("*").order("name"),
+      // 0210: merged into pre-release, not yet on main — the patch notes.
+      sb.from("dev_prerelease_prs").select("pr_number, title, head, author, url, merged_at").is("shipped_at", null).order("merged_at"),
     ]);
-    const err = [t, c, e, l, r, ty, ar, br].find((x) => x.error)?.error;
+    const err = [t, c, e, l, r, ty, ar, br, pp].find((x) => x.error)?.error;
     if (err) return json({ success: false, error: err.message }, 500);
     // Attachments (0191) are paths in the private idea-attachments bucket; each
     // read signs a link good for a few hours — long enough to open it from a
@@ -283,6 +285,7 @@ Deno.serve(async (req: Request) => {
       types: ty.data || [],
       areas: ar.data || [],
       branches: br.data || [],
+      prerelease_prs: pp.data || [],
       // id, name, store and role only — never a PIN.
       devs: devs.map((p) => ({ id: p.id, name: p.name, store: p.store, role: p.role })),
     });
@@ -430,18 +433,27 @@ Deno.serve(async (req: Request) => {
     // Straight onto a branch, if one was named (the connector's create + assign).
     const onBranch = b.branch ? branchName(b.branch) : null;
     if (b.branch && !onBranch) return json({ success: false, error: "That isn't a branch name tickets can go on." }, 400);
-    const status = onBranch ? "in_progress" : ["triage", "backlog"].includes(String(b.status)) ? String(b.status) : "backlog";
+    // prerelease: true — the patch note for work that's ALREADY merged into
+    // pre-release with no ticket (0210's "needs a patch note"): made straight
+    // into the next update, on the branch that merged.
+    const merged = b.prerelease === true;
+    let nextId: number | null = null;
+    if (merged) {
+      const { data: rid } = await sb.rpc("dev_next_release");
+      nextId = rid ? Number(rid) : null;
+    }
+    const status = merged ? "on_prerelease" : onBranch ? "in_progress" : ["triage", "backlog"].includes(String(b.status)) ? String(b.status) : "backlog";
     const { data: row, error } = await sb.from("dev_tickets").insert({
-      branch: onBranch,
+      branch: onBranch, ...(merged ? { branch_done: true, branch_done_at: now } : {}),
       title, description: clip(b.description, 20000) || "", type, area: area.value, priority, status,
       assignee_id: who.ref?.id ?? null, assignee_name: who.ref?.name ?? null,
       reporter_id: me.id, reporter_name: me.name, reporter_store: viewer.store || null,
-      stores: storeList(b.stores), release_id: rel.value, due: day(b.due), source: "dev",
+      stores: storeList(b.stores), release_id: merged ? nextId : rel.value, due: day(b.due), source: "dev",
       closed_at: CLOSED.includes(status) ? now : null,
     }).select().single();
     if (error) return json({ success: false, error: error.message }, 500);
     await event(row.id, "created", { to_value: status });
-    if (onBranch) await event(row.id, "branch", { to_value: onBranch, note: `Put on ${onBranch}` });
+    if (onBranch) await event(row.id, "branch", { to_value: onBranch, note: merged ? `Written for ${onBranch}, already merged into pre-release` : `Put on ${onBranch}` });
     await broadcastChange();
     return json({ success: true, ticket: row });
   }

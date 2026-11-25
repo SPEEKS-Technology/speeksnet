@@ -343,7 +343,7 @@ kbd {
    update. Teal is pre-release's colour and nothing else's; sage is "done /
    go"; amber is "needs you".
    ============================================================================ */
-.dv-pipe { display: grid; grid-template-columns: 288px minmax(0, 1fr) 360px; min-height: 0; min-width: 0; }
+.dv-pipe { display: grid; grid-template-columns: var(--bl-w, 288px) minmax(0, 1fr) var(--pre-w, 360px); min-height: 0; min-width: 0; }
 .dv-col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .dv-col-h { padding: 14px 16px 10px; flex: none; }
 .dv-row-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -565,12 +565,66 @@ a.dv-opt { text-decoration: none; }
   .dv-key-row .dv-muted { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
 }
 
+/* the side columns: resize handles, the collapsed Backlog (2026-11-25) */
+.dv-backlog, .dv-pre { position: relative; }
+.dv-resize { position: absolute; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 4; touch-action: none; }
+.dv-backlog .dv-resize { right: -4px; }
+.dv-pre .dv-resize { left: -4px; }
+.dv-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
+.dv-resize:hover::after, body.dv-resizing .dv-resize::after { background: var(--accent-ring); }
+body.dv-resizing { cursor: col-resize; user-select: none; }
+body.dv-resizing * { cursor: col-resize !important; }
+.dv-collapse { width: 22px; height: 22px; margin-top: -4px; }
+.dv-collapse .dv-ico { width: 14px; height: 14px; }
+.dv-rail { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; border: 0; background: transparent; color: var(--text-3); transition: background .12s, color .12s; }
+.dv-rail:hover { background: var(--bg-hover); color: var(--text); }
+.dv-rail > .dv-ico { width: 16px; height: 16px; }
+.dv-rail .dv-new { padding: 0 5px; }
+.dv-rail-t { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 600; font-size: 12px; letter-spacing: .04em; color: var(--text-2); }
+
+/* the patch notes, drawn the way they read */
+.dv-notes-h .dv-icon-btn { width: 24px; height: 24px; }
+.dv-notes-h .dv-icon-btn .dv-ico { width: 13px; height: 13px; }
+.dv-ncard { margin-top: 10px; border: 1px solid var(--line-2); border-radius: 14px; background: linear-gradient(180deg, var(--bg-raise), var(--bg-panel)); padding: 14px 12px 8px; }
+.dv-ncard-top { display: flex; align-items: baseline; gap: 8px; padding: 0 4px; }
+.dv-ncard-k { font-size: 12px; color: var(--text-3); }
+.dv-ncard-v { font: 600 15px var(--mono); letter-spacing: -.02em; }
+.dv-ncard-t { padding: 2px 4px 0; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.dv-nsums { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 4px 2px; }
+.dv-nsums span { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); font-size: 11.5px; color: var(--text-2); }
+.dv-nsums i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.dv-nsec { margin-top: 12px; }
+.dv-nsec h4 { margin: 0 4px 4px; display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--c); }
+.dv-nsec h4 i { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: color-mix(in srgb, var(--c) 16%, transparent); }
+.dv-nsec h4 i .dv-ico { width: 12px; height: 12px; }
+.dv-nsec .dv-note { grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; cursor: pointer; }
+.dv-note-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--c); margin: 7px 2px 0 6px; opacity: .8; }
+.dv-reword { opacity: 0; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); display: grid; place-items: center; padding: 0; transition: opacity .12s, background .12s; }
+.dv-reword .dv-ico { width: 13px; height: 13px; }
+.dv-note:hover .dv-reword, .dv-note:focus-within .dv-reword, .dv-reword:focus-visible { opacity: 1; }
+.dv-reword:hover { background: var(--bg-active); color: var(--text); }
+.dv-note .dv-via { opacity: .85; }
+
+/* merged into pre-release with no patch note (0210) */
+.dv-needs { margin-top: 10px; border: 1px solid rgba(240,168,58,.35); background: linear-gradient(180deg, var(--warn-soft), rgba(240,168,58,.04)); border-radius: 12px; padding: 12px; }
+.dv-needs-h { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--warn); }
+.dv-needs-h i { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: rgba(240,168,58,.18); }
+.dv-needs-h i .dv-ico { width: 11px; height: 11px; }
+.dv-needs p { margin: 6px 0 8px; font-size: 12px; color: var(--text-2); line-height: 1.45; }
+.dv-need { display: flex; align-items: center; gap: 10px; padding: 8px 0 2px; border-top: 1px solid rgba(240,168,58,.18); min-width: 0; }
+.dv-need-main { flex: 1; min-width: 0; }
+.dv-need-t { display: block; font-size: 12.8px; line-height: 1.35; text-decoration: none; overflow-wrap: anywhere; }
+.dv-need-t:hover { color: var(--accent); }
+.dv-need .dv-btn { flex: none; }
+.dv-need .dv-btn .dv-ico { width: 12px; height: 12px; }
+.dv-chip-pre { border-style: solid !important; border-color: var(--teal-line) !important; color: var(--teal) !important; background: var(--teal-soft) !important; cursor: default; }
+
 /* ---- narrower screens --------------------------------------------------- */
 /* The pipeline reads left to right; below ~1240px the side columns give up
    width before the branches do, and on a narrow window the three parts stack
    and the page scrolls down instead (the branches still scroll sideways). */
 @media (max-width: 1240px) {
-  .dv-pipe { grid-template-columns: 252px minmax(0, 1fr) 316px; }
+  .dv-pipe { grid-template-columns: var(--bl-w, 252px) minmax(0, 1fr) var(--pre-w, 316px); }
   .dv-hint { display: none; }
   .dv-search { flex-basis: 200px; }
 }
@@ -582,6 +636,10 @@ a.dv-opt { text-decoration: none; }
   .dv-lanes-wrap { height: 70vh; min-height: 420px; }
   .dv-pre { border-left: 0; border-top: 1px solid var(--teal-line); }
   .dv-pre .dv-col-b { overflow: visible; }
+  .dv-resize { display: none; }
+  .dv-blc .dv-backlog { max-height: none; }
+  .dv-rail { flex-direction: row; height: 44px; padding: 0 16px; }
+  .dv-rail-t { writing-mode: horizontal-tb; transform: none; }
   .dv-brand-name small, .dv-back span, #dvNewBtn span, .dv-search kbd { display: none; }
   .dv-search { flex: 1 1 120px; width: auto; }
   .dv-livepill > span:not(.dv-ldot) { display: none; }

@@ -84,6 +84,9 @@ notes are written automatically from the titles of the tickets that merged.
     will bite you", #4
 - After merging, **do nothing to the tickets by hand.** GitHub sync moves every
   ticket on the branch to pre-release, and they appear in the patch notes.
+- **A merge with no ticket on its branch still ships.** The suite flags it as
+  "Merged without a patch note". Write one: `create_ticket` with
+  `already_merged: true` and the merged branch, titled for a store manager.
 - **Don't delete the branch.** The suite offers deletion once a branch is fully
   merged.
 
@@ -165,7 +168,8 @@ you, so keep it in your own account, not an org-wide one.
 | Merge moves every ticket on the branch to pre-release | ✅ live (`github-webhook`) |
 | Branch columns, tickets on branches, ticking done | ✅ in the suite — on speeksnet.com once the dev-tracker PR ships |
 | The `speeksnet-dev` connector | ✅ `dev-mcp` + `.mcp.json` |
-| Starting a branch from the suite / connector | waits on the GitHub App's Contents write |
+| Starting a branch from the suite / connector | ✅ (Contents write accepted 2026-11-25) |
+| Every merge into pre-release in the patch notes, ticket or not | ✅ (`dev_prerelease_prs`) |
 | Go live (version, merge to main, tag, notes) | ❌ still done by hand — §6b step 5 |
 
 Where the connector isn't set up, follow rules 1–6 by hand: name the tickets

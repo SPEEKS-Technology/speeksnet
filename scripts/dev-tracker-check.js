@@ -152,6 +152,7 @@ function dvFixture(opts) {
         ],
         links: [
             { id: 1, ticket_id: 1003, kind: 'commit', ref: 'abcdef1234567890', url: 'https://github.com/x/commit/abcdef1', title: 'Sort SN-1003' },
+            { id: 9, ticket_id: 572, kind: 'pr', ref: '592', url: 'https://github.com/x/pull/592', title: 'Idea button backend', state: 'merged', base: 'pre-release' },
             { id: 2, ticket_id: 1003, kind: 'branch', ref: 'feat/b2b-sort', url: 'https://github.com/x/tree/feat/b2b-sort', state: 'active' },
             { id: 3, ticket_id: 1003, kind: 'pr', ref: '612', url: 'https://github.com/x/pull/612', title: 'B2B sort by brand', state: 'open', base: 'pre-release', author: 'Eckushnir',
               checks: [
@@ -160,12 +161,18 @@ function dvFixture(opts) {
                   { kind: 'migration', level: 'warn', text: '<img src=x onerror=alert(1)>' },
               ] },
         ],
+        prerelease_prs: [
+            { pr_number: 590, title: 'B2B: Recycle Out modal', head: 'feat/b2b-mass-recycle', url: 'https://github.com/x/pull/590', merged_at: new Date(now - 3600000).toISOString() },
+            { pr_number: 591, title: 'Box order cart', head: 'fix/box-order-cart', url: 'https://github.com/x/pull/591', merged_at: new Date(now - day).toISOString() },
+            { pr_number: 592, title: 'Idea button backend', head: 'feat/idea-backend', url: 'https://github.com/x/pull/592', merged_at: new Date(now - day).toISOString() },
+        ],
         branches: [
             { name: 'feat/b2b-sort', kind: 'untracked', ahead: 2, behind: 0, merged: false, pr_number: 612, pr_state: 'open', last_commit_author: 'Eckushnir', last_commit_at: new Date(now - day).toISOString() },
             { name: 'main', kind: 'base', ahead: 6, behind: 9, merged: false, last_commit_at: new Date(now - 7 * day).toISOString() },
             { name: BR, kind: 'untracked', ahead: 17, behind: 40, merged: false, pr_number: 576, pr_state: 'open', last_commit_author: 'Eckushnir', last_commit_at: new Date(now - 2 * day).toISOString() },
             { name: 'feat/projects-completion-signoff', kind: 'untracked', ahead: 0, behind: 1, merged: true, pr_number: 581, pr_state: 'merged', last_commit_at: new Date(now - 3 * day).toISOString() },
             { name: 'App-Icon-Green---Ethan', kind: 'untracked', ahead: 0, behind: 1, merged: true, pr_number: 587, pr_state: 'merged', last_commit_at: new Date(now - 4 * day).toISOString() },
+            { name: 'chore/connector-test', kind: 'untracked', ahead: 0, behind: 0, merged: true, pr_number: null, sha: 'c327c36', last_commit_at: new Date(now - 5 * day).toISOString() },
             { name: 'pre-release', kind: 'base', ahead: 0, behind: 0, merged: false, last_commit_at: new Date(now - day).toISOString() },
         ],
     };
@@ -200,7 +207,7 @@ t('suite: boots nothing in the harness (DEV_NO_BOOT) and exposes Dev', function 
 });
 
 // ---- the three places -------------------------------------------------------
-t('backlog: open tickets on no branch; Submit a Ticket ones on top; urgent before low', function () {
+t('backlog: open tickets on no branch; Submit a Ticket ones on top; then newest first (no priority)', function () {
     dvStage();
     var all = cardIds('#dvBacklog');
     if (all !== '1000,1002,1001') return 'backlog ' + all;
@@ -237,10 +244,10 @@ t('branches: a GitHub login shows as the dev it belongs to', function () {
 });
 t('pre-release: the merged tickets, as patch notes grouped by type, each saying its branch', function () {
     dvStage();
-    var heads = Array.prototype.map.call(document.querySelectorAll('.dv-notes h4'), function (h) { return h.firstChild.textContent; }).join(',');
+    var heads = Array.prototype.map.call(document.querySelectorAll('.dv-nsec h4'), function (h) { return h.textContent.trim(); }).join(',');
     if (heads !== 'Improved,Fixed') return 'headings ' + heads;
     var n = document.querySelector('.dv-note[data-open="568"]');
-    return (n && /from fix\/box-order-cart/.test(n.textContent)) || 'no "from <branch>" on SN-568';
+    return (n && /SN-568 · fix\/box-order-cart/.test(n.textContent)) || 'no branch on SN-568: ' + (n && n.textContent);
 });
 t('pre-release: the next version from the live one, and what each size would make', function () {
     dvStage();
@@ -252,8 +259,8 @@ t('pre-release: the next version from the live one, and what each size would mak
 });
 t('pre-release: a major update with no title says so; Go live is drawn but not wired yet', function () {
     dvStage({ title: '' });
-    var warn = document.querySelector('.dv-ready .warn');
-    if (!warn || !/needs a title/.test(warn.textContent)) return 'no title warning';
+    var warn = Array.prototype.filter.call(document.querySelectorAll('.dv-ready .warn'), function (w) { return /needs a title/.test(w.textContent); })[0];
+    if (!warn) return 'no title warning';
     if (!document.getElementById('dvNextTitle').classList.contains('need')) return 'title box not marked';
     return document.querySelector('.dv-golive').disabled || 'Go live is clickable before step 5 exists';
 });
@@ -579,4 +586,77 @@ t('connector: a test account is told it can\'t have keys, and nothing is sent', 
     var ok = m && /can't have keys/.test(m.textContent) && !m.querySelector('#dvKeyMake') && DV_SENT.length === sent;
     Dev.closeModal();
     return ok || 'test account got the key controls, or a request went out';
+});
+
+// ---- 2026-11-25: Nick's feedback -----------------------------------------------
+t('priority: gone from cards, the panel and the new-ticket form', function () {
+    dvStage();
+    if (document.querySelector('.dv-card .dv-pri')) return 'a card still shows priority';
+    Dev.open(1002);
+    var panel = document.querySelector('.dv-panel').textContent;
+    Dev.closePanel();
+    if (/Priority/.test(panel)) return 'the panel still has Priority';
+    Dev.newTicket();
+    var chips = document.getElementById('dvNewProps').textContent;
+    document.getElementById('dvNewTitle').value = 'No priority';
+    Dev.onClick({ target: document.querySelector('[data-act="new-create"]') });
+    var b = last().body || {};
+    Dev.closeModal();
+    if (/Normal|Urgent/.test(chips)) return 'the form still offers priority';
+    return !('priority' in b) || 'create still sends priority';
+});
+t('branches: a branch started a moment ago (nothing committed) has a column, and isn\'t offered for tidying', function () {
+    dvStage();
+    if (laneNames().indexOf('chore/connector-test') < 0) return 'no column for the new branch';
+    if (!/Nothing committed yet/.test(lane('chore/connector-test').textContent)) return 'does not say it is empty';
+    return Dev.tidyBranches().every(function (b) { return b.name !== 'chore/connector-test'; }) || 'offered for tidying';
+});
+t('patch notes: a merge with no ticket is flagged; one covered by its branch or a linked PR is not', function () {
+    dvStage();
+    var flagged = Dev.untrackedMerges().map(function (p) { return p.pr_number; }).join(',');
+    if (flagged !== '590') return 'flagged ' + flagged;
+    var box = document.querySelector('.dv-needs');
+    if (!box || !/B2B: Recycle Out modal/.test(box.textContent) || !/PR #590/.test(box.textContent)) return 'no "merged without a patch note" box';
+    if (!document.querySelector('.dv-ready .warn')) return 'readiness does not mention it';
+    return document.querySelector('#dvPre .dv-count').textContent === '3' || 'pre-release count ' + document.querySelector('#dvPre .dv-count').textContent;
+});
+t('patch notes: "Write the note" makes the ticket straight into the next update, on the merged branch', function () {
+    dvStage();
+    Dev.onClick({ target: document.querySelector('[data-note-pr="590"]') });
+    var title = document.getElementById('dvNewTitle');
+    if (!title || title.value !== 'B2B: Recycle Out modal') return 'not prefilled with the PR title';
+    title.value = 'Recycle several lines at once';
+    Dev.onClick({ target: document.querySelector('[data-act="new-create"]') });
+    var b = last().body || {};
+    Dev.closeModal();
+    return (b.action === 'create' && b.prerelease === true && b.branch === 'feat/b2b-mass-recycle' && b.title === 'Recycle several lines at once') || 'sent ' + JSON.stringify(b);
+});
+t('patch notes: the card sums up by section, and a line rewords in place', function () {
+    dvStage();
+    var sums = Array.prototype.map.call(document.querySelectorAll('.dv-nsums span'), function (s) { return s.textContent; }).join(',');
+    if (sums !== '1 improved,1 fixed') return 'sums ' + sums;
+    Dev.onClick({ target: document.querySelector('[data-reword="568"]'), stopPropagation: function () {} });
+    var input = document.getElementById('dvReword');
+    if (!input) return 'no reword box';
+    input.value = 'The box order cart adds up right';
+    document.querySelector('[data-rw="save"]').click();
+    var b = last().body || {};
+    return (b.action === 'edit' && b.id === 568 && b.title === 'The box order cart adds up right') || 'sent ' + JSON.stringify(b);
+});
+t('patch notes: copy as text reads like the note', function () {
+    dvStage();
+    var txt = Dev.notesText();
+    return /^What's new in v3\.13\.0 — Main December Update\n\nImproved\n- Submit an Idea moved to SPEEKSNET\n\nFixed\n- Fix box order tool cart$/.test(txt) || JSON.stringify(txt);
+});
+t('backlog: collapses to a rail that still takes a dropped card, and comes back', function () {
+    dvStage();
+    try { localStorage.removeItem('dv.blc'); } catch (_) {}
+    Dev.toggleBacklog(true);
+    var rail = document.querySelector('#dvBacklog .dv-rail');
+    if (!rail || !rail.classList.contains('dv-drop') || rail.getAttribute('data-zone') !== 'backlog') { Dev.toggleBacklog(false); return 'no rail drop zone'; }
+    if (!document.getElementById('dvPipe').classList.contains('dv-blc')) { Dev.toggleBacklog(false); return 'pipe not marked collapsed'; }
+    Dev.onClick({ target: rail });
+    var back = !!document.querySelector('#dvBacklog .dv-card') && !Dev.layout.collapsed;
+    try { localStorage.removeItem('dv.blc'); } catch (_) {}
+    return back || 'did not expand';
 });

@@ -57,6 +57,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //   SN-n puts that ticket on it, if it's on no branch yet.
 //     start_branch {prefix, slug, ticket_ids}  create feat|fix|chore/<slug> from
 //                                          pre-release with those tickets on it
+//   Every PR merged into pre-release is also recorded (dev_prerelease_prs,
+//   0210), ticket or not, and marked shipped when its merge commit is on main —
+//   the suite's patch notes show what's merged but not shipped.
 //
 //   CHECKS — on every PR that touches a ticket, from its changed files, shown
 //   on the ticket (and, Phase 6, on the release checklist):
@@ -285,6 +288,25 @@ class Run {
       await this.move(t, "on_prerelease", `${head} merged into pre-release (PR #${prNumber})`, false, rid ? { release_id: rid } : {});
     }
   }
+  // 0210: every PR merged into pre-release, until its merge commit is on main.
+  // shipped_at isn't sent, so a replay never un-ships a row.
+  async prMerged(pr: any) {
+    const { error } = await this.sb.from("dev_prerelease_prs").upsert({
+      pr_number: pr.number, title: String(pr.title || "").slice(0, 300), head: pr.head?.ref || null,
+      author: pr.user?.login || null, url: pr.html_url || null, merged_at: pr.merged_at,
+      merge_sha: pr.merge_commit_sha || null, synced_at: new Date().toISOString(),
+    }, { onConflict: "pr_number" });
+    if (error) this.summary.errors.push(`dev_prerelease_prs #${pr.number}: ${error.message}`);
+  }
+  async shipCheck() {
+    const { data: rows } = await this.sb.from("dev_prerelease_prs").select("pr_number, merge_sha").is("shipped_at", null);
+    for (const r of rows || []) {
+      if (r.merge_sha && await this.included(r.merge_sha)) {
+        await this.sb.from("dev_prerelease_prs").update({ shipped_at: new Date().toISOString() }).eq("pr_number", r.pr_number);
+        this.summary.moved.push(`PR #${r.pr_number} reached main`);
+      }
+    }
+  }
   private nextId: number | null = null;
   async nextRelease(): Promise<number | null> {
     if (this.nextId) return this.nextId;
@@ -323,8 +345,12 @@ class Run {
     const state = pr.merged_at ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "open";
     const base = String(pr.base?.ref || "");
     const head = pr.head?.repo?.full_name === REPO ? String(pr.head?.ref || "") : "";
-    // The pipeline: the branch's own tickets, whether or not the PR names them.
-    if (state === "merged" && base === "pre-release" && head) await this.mergeBranch(head, pr.merged_at, pr.number);
+    // The pipeline: the branch's own tickets, whether or not the PR names them —
+    // and the merge itself, for the patch notes (0210), ticket or not.
+    if (state === "merged" && base === "pre-release") {
+      await this.prMerged(pr);
+      if (head) await this.mergeBranch(head, pr.merged_at, pr.number);
+    }
     const tickets = await this.ticketsFor(`${pr.title}\n${pr.head?.ref || ""}`);
     for (const t of await this.ticketsFor(String(pr.body || ""), true)) if (!tickets.includes(t)) tickets.push(t);
     if (!tickets.length) return;
@@ -523,6 +549,7 @@ class Run {
       for (const c of commits) await this.commit({ id: c.sha, message: c.commit?.message || "", url: c.html_url, author: c.author?.login || c.commit?.author?.name });
     }
     await this.reachedMain();
+    await this.shipCheck();
     await this.syncAllBranches();
     return { prs: prs.length, branches: branches.length };
   }
@@ -550,7 +577,7 @@ async function handleDelivery(sb: Sb, event: string, delivery: string | null, p:
         const branch = ref.slice(11);
         await run.branch(branch, p.after || null, !!p.deleted);
         if (!p.deleted) for (const c of p.commits || []) await run.commit({ id: c.id, message: c.message, url: c.url, author: c.author?.username || c.author?.name });
-        if (branch === "main" && !p.deleted) await run.reachedMain();
+        if (branch === "main" && !p.deleted) { await run.reachedMain(); await run.shipCheck(); }
         // The panel: a push to pre-release or main changes every branch's
         // ahead/behind; any other push changes just its own row.
         if (p.deleted) await sb.from("github_branches").delete().eq("name", branch);
