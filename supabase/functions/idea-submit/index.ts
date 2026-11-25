@@ -20,6 +20,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // Answers {success:true} only once the relay has accepted the mail, so the
 // popup's "Submitted" is now true, and a failure comes back as an error the
 // popup can show instead of a false confirmation.
+//
+// 2026-11-25: the footer cell's square background painted over the card's
+// rounded bottom corners (Outlook showed the border cut off), so the footer
+// carries its own 11px bottom radius (12px card minus the 1px border).
 // ============================================================================
 
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
@@ -56,7 +60,7 @@ function buildEmail(name: string, category: string, desc: string, store: string,
     `<td style="padding:6px 0;color:#1a1c1e;font-size:14px;font-weight:600;">${v}</td></tr>`;
   return `<!doctype html><html><body style="margin:0;background:#f1f5f2;font-family:Arial,Helvetica,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f2;padding:24px 12px;"><tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #eaefeb;border-radius:12px;">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #eaefeb;border-radius:12px;border-collapse:separate;overflow:hidden;">
   <tr><td style="padding:20px 24px 8px;"><div style="font-size:12px;color:#1f9d57;font-weight:700;letter-spacing:.04em;">NEW IDEA</div>
     <div style="font-size:20px;color:#1a1c1e;font-weight:800;margin-top:4px;">${esc(category)}</div></td></tr>
   <tr><td style="padding:8px 24px;"><table cellpadding="0" cellspacing="0">
@@ -64,7 +68,7 @@ function buildEmail(name: string, category: string, desc: string, store: string,
   </table></td></tr>
   <tr><td style="padding:8px 24px 16px;"><div style="background:#f7faf8;border:1px solid #eaefeb;border-radius:8px;padding:14px 16px;color:#1a1c1e;font-size:14px;line-height:1.5;white-space:pre-wrap;">${esc(desc)}</div></td></tr>
   ${file ? `<tr><td style="padding:0 24px 20px;font-size:13px;color:#64707c;">Attachment: <a href="${esc(file.url)}" style="color:#1f9d57;font-weight:700;">${esc(file.name)}</a></td></tr>` : ""}
-  <tr><td style="padding:14px;text-align:center;color:#9aa6ad;font-size:10.5px;border-top:1px solid #eaefeb;background:#f7faf8;">Sent from Submit an Idea on SPEEKSNET.</td></tr>
+  <tr><td style="padding:14px;text-align:center;color:#9aa6ad;font-size:10.5px;border-top:1px solid #eaefeb;background:#f7faf8;border-radius:0 0 11px 11px;">Sent from Submit an Idea on SPEEKSNET.</td></tr>
 </table></td></tr></table></body></html>`;
 }
 
