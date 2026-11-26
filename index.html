@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SPEEKSNET | QuickPortal</title>
+  <!-- Arriving back from the arcade: cover the page from its very first paint
+       (styles.css, LISTING XP ARCADE). speeks.js is defer, so without this the
+       dashboard flashes before the portal overlay exists. -->
+  <script>try { if (sessionStorage.getItem('speeksArcPortal')) document.documentElement.classList.add('arc-landing'); } catch (e) {}</script>
   <style>
     /* Critical anti-FOUC: keep slide-in side panels out of flow until styles.css loads.
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */

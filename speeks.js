@@ -33979,6 +33979,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (document.getElementById('ccWidget')) initBoardPage();
             initOperations();
             initB2bPage();   // gated: a board that lands on b2b.html is sent home
+            initArcadePage();   // gated the same way (LISTING XP ARCADE)
             return;
         }
         initDashboardData();
@@ -33986,6 +33987,7 @@ document.addEventListener("DOMContentLoaded", () => {
         initWorkspace();
         initOperations();
         initB2bPage();
+        initArcadePage();
         // A #jump=<feature> deep-link from the search box: land, then spotlight
         // the panel that was asked for.
         try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
@@ -45610,6 +45612,12 @@ const FEATURE_CATALOG = [
     // widget while the Workspace tab stayed off at the role level.
     { key: 'cc-kpis',                  label: 'Command Center · Weekly KPIs tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    // The Listing XP arcade (2026-11-17): the QuickPortal launcher AND the page
+    // behind it, one key, so nobody gets a button onto a page that sends them
+    // home. DM only while it runs on sample numbers; the one-store pilot grants
+    // it per person. arcade-operator is the month-end screen inside it.
+    { key: 'widget-arcade',            label: 'Listing XP Arcade (launcher + page)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
+    { key: 'arcade-operator',          label: 'Listing XP Arcade · Operator (month-end)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
     { key: 'widget-district-live',     label: 'District Live Dashboard',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-watch',    label: 'District Matrix',               tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
@@ -57069,6 +57077,8 @@ function _qptApply(main) {
         _qptWire(main);
     }
     main.classList.add('qp-tabs-on');
+    // The way into the arcade: top of the At a Glance rail (LISTING XP ARCADE).
+    try { if (typeof arcLauncherFill === 'function') arcLauncherFill(root); } catch (_) { /* never break the dashboard */ }
     const stash = main.querySelector(':scope > .qpt-stash');
     const byKey = {};
     _qpBlocks(main).concat(Array.from(main.querySelectorAll('.qpt-stash .qp-cell > [data-qp-block]'))).forEach(b => { byKey[_qpKey(b)] = b; });
