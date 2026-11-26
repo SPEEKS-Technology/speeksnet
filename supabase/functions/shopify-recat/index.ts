@@ -92,6 +92,8 @@ const SHOP_BY_STORE: Record<string, string> = {
 // work, rather than granting a button that 403s (see [[kpi-role-gate]]).
 const CORP_ROLES = ["district manager", "ceo", "mocd"];
 const STORE_ROLES = ["manager", "owner (manager)", "owner manager"];
+const FIX_KEY = "ec-view-fix-queue";
+const FIX_ROLES = ["manager", "owner (manager)", "owner manager", "assistant manager"];
 
 // The junk drawer we are emptying. A proposal always leaves this one.
 //
@@ -197,7 +199,14 @@ async function scopeFor(pin: string, reading = false): Promise<Scope | null> {
     featureSays(CATS_KEY, role, name), featureSays(PHOTOS_KEY, role, name),
     featureSays(TITLES_KEY, role, name),
   ]);
-  const mayCats = saidCats === null ? byRoleCats : saidCats;
+  // THE FIX QUEUE (listing-review, 0189) carries this tool's category lines on
+  // a store's cards, Approve Fix and Dismiss included — and ASMs work that queue
+  // (Ethan, 2026-11-18) though Categories never defaulted on for them. So the
+  // Fix Queue key also opens filing. ⚠️ FIX_ROLES must match FEATURE_CATALOG's
+  // def for ec-view-fix-queue and FIX_ROLES in listing-review.
+  const saidFix = await featureSays(FIX_KEY, role, name);
+  const mayFix = saidFix === null ? (corp || FIX_ROLES.includes(role)) : saidFix;
+  const mayCats = (saidCats === null ? byRoleCats : saidCats) || mayFix;
   const mayPhotos = saidPhotos === null ? byRolePhotos : saidPhotos;
   const mayTitles = saidTitles === null ? byRoleTitles : saidTitles;
   // Only a reader holding NEITHER half is a stranger to this function. Holding

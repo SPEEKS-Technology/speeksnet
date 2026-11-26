@@ -261,6 +261,15 @@ export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake
 export function verdictOf(findings: { code: string }[], score: number, reorder: unknown, deletion: unknown) {
   if (findings.some(f => f.code === "retake")) return "retake";
   if (score < PASS_BAR) return "fix";
+  // ⚠️ A MISSING GUIDE SHOT NEVER PASSES (Ethan, 2026-11-18, guide-only LEE test:
+  // the Astro MixAmp passed missing Side and Opposite Side — "the only passed
+  // one was missing two shots from the misc. section"). The free view still
+  // costs no points; it just can't leave the row in Passed. Any tier counts:
+  // a passed row must mean the listing matches the guide. Asked, he chose this
+  // over "two or more missing flags" knowing it flips five October passes (WSP
+  // PS5 Slim, OVL Dell WD15 lot, OVL Synology — one side each; OVL Galaxy S26
+  // Ultra — a settings screen; OVL Xbox One controller — the serial closeup).
+  if (findings.some(f => f.code === "missing_shot")) return "fix";
   // ⚠️ REVISED THE NEXT DAY (Ethan, 2026-10-15, WSP SanDisk): "in the quick fix
   // show it, but when the order or deletion is good, it can go away". Quick
   // Fixes is for what can be APPROVED; the small notes ride along there, and a
@@ -900,8 +909,15 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     const extraToo = p.shots.some(s => /^extra$/i.test(s.trim()));
     const views = p.shots.map(s => s.trim()).filter(s => !/^extra$/i.test(s) && shotIx(s) >= 0);
     return views.length > 0 && views.every(s => !INFO_SHOT.test(s) && !shotRepeatable(s) && !/^(box|extra accessor|everything included)/i.test(s)
-      && r.photos.some(o => o.n < p.n && (extraToo ? o.shots : o.shots.slice(0, 1)).some(x => x.trim().toLowerCase() === s.toLowerCase())));
+      && r.photos.some(o => o.n < p.n && (extraToo && p.whole_item ? o.shots : o.shots.slice(0, 1)).some(x => x.trim().toLowerCase() === s.toLowerCase())));
   };
+  // ⚠️ A CLOSEUP OWNS A SLOT AN EARLIER PHOTO ONLY ALSO COVERS (Ethan,
+  // 2026-11-18, LEE Happrun projector: photo 1 is "Front, Front (Lens Open)",
+  // photo 2 the lens closeup — "Extra, Front (Lens Open)" — was sent to the end;
+  // "the 2nd photo should be the 3rd photo ... because it is front of projector",
+  // the Lens Open slot after Everything Included). The "Extra too" widening above
+  // stays for WHOLE-ITEM photos (a second whole view is an extra); a closeup is
+  // matched only against earlier MAIN labels, like any other photo.
   // A spec screen the sheet has no shot for ("CPU" on the desktop sheet) sorts
   // with the sheet's first spec screen, so the screens stay together.
   const firstInfo = sheet.shots.findIndex(s => INFO_SHOT.test(s.label));

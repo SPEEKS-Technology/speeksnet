@@ -86,6 +86,8 @@ const SHOP_BY_STORE: Record<string, string> = {
 // ⚠️ Keep in step with the FEATURE_CATALOG entry when the panel lands.
 const PQ_KEY = "ec-view-picture-quality";
 const PQ_DEFAULT_ROLES = ["district manager", "ceo"];
+const FIX_KEY = "ec-view-fix-queue";
+const FIX_DEFAULT_ROLES = ["district manager", "ceo", "manager", "owner (manager)", "owner manager", "assistant manager"];
 
 // The cheaper model by default, because the task is recognition against a
 // reference, not deep reasoning — and the calibration run is what decides
@@ -95,6 +97,10 @@ const PQ_DEFAULT_ROLES = ["district manager", "ceo"];
 // Sonnet wrote ~4x the output tokens. See scratchpad ab.mjs / ab-score.mjs.
 const DEFAULT_MODEL = "claude-opus-5-5";
 const DEFAULT_EFFORT = "medium";   // low wandered run to run on small visual calls (calibration 2026-09-25)
+// What a call's cache did to its bill, in input-token terms: a cache READ is
+// billed at a tenth of input, a cache WRITE at 1.25×. The live path used to
+// count both at full price, so its costs read high (2026-11-23).
+const cacheDisc = (u: any) => (u?.cache_read_input_tokens || 0) * 0.9 - (u?.cache_creation_input_tokens || 0) * 0.25;
 const PRICES: Record<string, [number, number]> = {   // $ per million in / out
   "claude-sonnet-5": [2, 10],
   "claude-opus-5": [5, 25],
@@ -110,7 +116,10 @@ const RECIPE = "pq-v18";  // v18 2026-10-11: PayMore's Good/Fair wording decides
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
-const PHOTO_PX = 800;
+// GUIDE-ONLY (Ethan, 2026-11-23): naming which guide shot a photo is does not
+// need 800px — 512 cuts each photo's tokens by about 60%. The full check keeps 800.
+const GUIDE_ONLY = Deno.env.get("PQ_FULL_CHECK") !== "1";
+const PHOTO_PX = GUIDE_ONLY ? 512 : 800;
 const MAX_IDS = 12;
 const CONCURRENCY = 4;
 
@@ -179,7 +188,18 @@ async function scopeFor(pin: string): Promise<Scope | null> {
   const slug = role.replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
   const forUser = list.find((r: any) => lc(r.subject_type) === "user" && lc(r.subject) === lc(name));
   const forRole = list.find((r: any) => lc(r.subject_type) === "role" && lc(r.subject) === slug);
-  const allowed = forUser ? !!forUser.enabled : forRole ? !!forRole.enabled : PQ_DEFAULT_ROLES.includes(role);
+  let allowed = forUser ? !!forUser.enabled : forRole ? !!forRole.enabled : PQ_DEFAULT_ROLES.includes(role);
+  // THE FIX QUEUE (listing-review, 0189) puts this tool's lines on a manager's
+  // card, and its Approve Order / Dismiss buttons call this function. So whoever
+  // holds the Fix Queue may take those actions here too. ⚠️ FIX_DEFAULT_ROLES
+  // must match FEATURE_CATALOG's def for ec-view-fix-queue and FIX_ROLES in
+  // listing-review.
+  if (!allowed) {
+    const fx = await rows(`feature_overrides?feature_key=eq.${FIX_KEY}&select=subject_type,subject,enabled`);
+    const fu = fx.find((r: any) => lc(r.subject_type) === "user" && lc(r.subject) === lc(name));
+    const fr = fx.find((r: any) => lc(r.subject_type) === "role" && lc(r.subject) === slug);
+    allowed = fu ? !!fu.enabled : fr ? !!fr.enabled : FIX_DEFAULT_ROLES.includes(role);
+  }
   if (!allowed) return null;
   const corp = ["district manager", "ceo", "mocd"].includes(role);
   const stores = corp ? STORES
@@ -220,15 +240,15 @@ const parseList = (v: unknown): string => {
 };
 
 type Listing = {
-  id: string; title: string; handle: string; sku: string; price: number; collections: string[]; tags: string[];
+  id: string; title: string; handle: string; sku: string; price: number; collections: string[]; tags: string[]; createdAt?: string;
   condition: string; cosmetic: string; functional: string; included: string; notIncluded: string;
   // mediaId is what productReorderMedia moves; thumb is what the panel draws.
   photos: { url: string; width: number; height: number; src: string; mediaId: string; thumb: string }[];
 };
 
-async function fetchListings(shop: string, token: string, ids: string[]): Promise<Listing[]> {
+async function fetchListings(shop: string, token: string, ids: string[], px = PHOTO_PX): Promise<Listing[]> {
   const q = `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
-      id title handle tags
+      id title handle tags createdAt
       variants(first: 1) { nodes { sku price } }
       collections(first: 12) { nodes { handle } }
       condition: metafield(namespace: "custom", key: "condition") { value }
@@ -238,13 +258,13 @@ async function fetchListings(shop: string, token: string, ids: string[]): Promis
       notIncluded: metafield(namespace: "custom", key: "not_included") { value }
       media(first: 40) { nodes { ... on MediaImage { id image {
         url
-        sized: url(transform: { maxWidth: ${PHOTO_PX}, maxHeight: ${PHOTO_PX} })
+        sized: url(transform: { maxWidth: ${px}, maxHeight: ${px} })
         thumb: url(transform: { maxWidth: 240, maxHeight: 240 })
         width height } } } }
   } } }`;
   const data = await gql(shop, token, q, { ids });
   return (data.nodes || []).filter(Boolean).map((p: any) => ({
-    id: p.id, title: p.title, handle: p.handle || "", sku: p.variants?.nodes?.[0]?.sku || "",
+    id: p.id, title: p.title, handle: p.handle || "", createdAt: p.createdAt || undefined, sku: p.variants?.nodes?.[0]?.sku || "",
     price: Number(p.variants?.nodes?.[0]?.price || 0),
     collections: (p.collections?.nodes || []).map((c: any) => c.handle),
     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
@@ -529,6 +549,87 @@ title_notes: only where the photos show the title is wrong or incomplete — a m
 
 summary: one plain sentence a store manager would understand.`;
 
+// --- GUIDE-ONLY: the question asked now ---------------------------------------------
+//
+// ⚠️ THE CHECK IS GUIDE SHOTS, SQUARE PHOTOS AND GUIDE ORDER — NOTHING ELSE
+// (Ethan, 2026-11-18, made real 2026-11-23: "I thought we changed this tool to
+// look just for guide photos, square photos, and guide order? We can probably
+// cut everything else"). Until now the full forty-field review still ran and
+// the extras were stripped by hand. Now the model is asked only which guide
+// shot each photo is and which shots are missing; SQUARE is measured from the
+// photo's own size and ORDER is worked out from the shot names, both in
+// rules.ts, both free. Framing, reflections, cords, the stand, units, "says new
+// but looks used" and every other finding are no longer asked or shown.
+//
+// The wording below is LIFTED from REVIEW_SYSTEM as the file loads, so the two
+// can never say different things about what counts as a shot or a missing one.
+// PQ_FULL_CHECK=1 brings the full review back (kept for calibration only).
+const pickLines = (...prefixes: string[]) => REVIEW_SYSTEM.split("\n")
+  .filter(line => prefixes.some(pre => line.startsWith(pre))).join("\n\n");
+const GUIDE_SYSTEM = `You check the photos of one used-electronics listing against the store's Picture Guide sheet for that kind of item. You only say which guide shot each photo is and which guide shots are missing; the store's code works out the rest (photo order, square photos). Be exact.
+
+${pickLines("sheet_fits:")}
+
+For each photo (numbered from 1, in listing order), report:
+${pickLines("- shots:", "- whole_item:")}
+
+${pickLines("missing_shots:", "A shot of a feature")}
+
+${pickLines("needed_missing:")}
+
+${pickLines("all_sides_shown:")}
+
+${pickLines("flat_package:")}
+
+${pickLines("serial:")}
+
+${pickLines("lead_ok:")}
+
+${pickLines("suggested_order:")}`;
+const GuideReport = z.object({
+  sheet_fits: z.boolean(),
+  better_sheet: z.string().nullable(),
+  photos: z.array(z.object({ n: z.number().int(), shots: z.array(z.string()), whole_item: z.boolean() })),
+  missing_shots: z.array(z.string()),
+  needed_missing: z.array(z.string()),
+  all_sides_shown: z.boolean(),
+  flat_package: z.boolean(),
+  serial: z.enum(["shown", "hidden_behind_cover", "not_shown"]),
+  lead_ok: z.boolean(),
+  suggested_order: z.array(z.number().int()),
+});
+// The short answer as the full report the rules read: everything not asked is
+// "nothing wrong", so rules.ts runs unchanged and the guide findings come out.
+function fromGuide(g: z.infer<typeof GuideReport>): ReportT {
+  return {
+    ...g,
+    photos: g.photos.map(ph => ({ ...ph, repeats: null, framing: "matches" as const, framing_problems: [], issues: [], note: "" })),
+    flaw_views: [], units_claimed: null, all_units_shown: true, units_together: true,
+    screen_never_on: false, new_claim_wrong: false,
+    main_flaw: { stated: null, source: "none" as const, shown: "not_applicable" as const, photo: null },
+    setups: [], setup_difference: "", title_notes: [], summary: "",
+  } as ReportT;
+}
+const REVIEW_FORMAT = () => GUIDE_ONLY ? GuideReport : Report;
+const parseReport = (raw: unknown): ReportT => GUIDE_ONLY ? fromGuide(GuideReport.parse(raw)) : Report.parse(raw);
+// The findings guide-only keeps; everything else decide() can find is dropped.
+const GUIDE_CODES = new Set(["missing_shot", "retake", "order", "not_square", "no_photos", "no_sheet"]);
+function guideOnly(d: any, l: { photos: unknown[]; price: number }) {
+  if (!GUIDE_ONLY) return d;
+  const findings = d.findings.filter((f: { code: string }) => GUIDE_CODES.has(f.code));
+  const pic = pictureScore(findings, l.photos.length, l.price);
+  return { ...d, findings, deletion: null, pictureScore: pic.score, costs: pic.costs,
+           verdict: verdictOf(findings, pic.score, d.reorder, null) };
+}
+// ⚠️ THE SECOND LOOK, GUIDE-ONLY: only when a SHOT is called missing (Ethan,
+// 2026-11-23, took the recommendation). Order and square are worked out in
+// code and need no second opinion; what one look can get wrong is which shot a
+// photo is, and that is how a shot gets wrongly called missing.
+function secondLookWanted(lr: any, sheet: any, r: ReportT): boolean {
+  if (!GUIDE_ONLY) return needsSecondLook(lr, sheet, r);
+  return guideOnly(decide(lr, sheet, r), lr).findings.some((f: { code: string }) => f.code === "missing_shot" || f.code === "retake");
+}
+
 // --- the framing look ----------------------------------------------------------
 //
 // ⚠️ CENTRED, LEVEL AND BIG ENOUGH ARE ASKED IN A CALL OF THEIR OWN (Ethan,
@@ -677,16 +778,42 @@ function gameSheetFor(l: Listing, sheet: Sheet | null, sheets: Sheet[]): Sheet |
   return sheets.find(s => s.slug === (noCase ? "video-games-disk-cartridge-only" : "video-games")) || sheet;
 }
 
+const pickQuestion = (l: Listing, sheets: Sheet[]) =>
+  "SHEETS:\n" + sheets.map(s => `${s.slug} — ${s.name}${s.group ? ` (${s.group})` : ""}`).join("\n") +
+  `\n\nLISTING:\nTITLE: ${l.title}\nCOLLECTIONS: ${l.collections.join(", ")}\nCONDITION: ${l.condition}` +
+  `\nINCLUDED: ${l.included}\nNOT INCLUDED: ${l.notIncluded}`;
+// ⚠️ THE SHEET PICK RUNS ON HAIKU (Ethan, 2026-11-25). It is a text question —
+// "which Picture Guide sheet is this listing?" — and Haiku 5.5 answered it the
+// same as Opus on all 20 listings of the cost-trim test (?picktest, 11-25) for
+// $0.006 against ~$0.24: ~$35–45 a month at our volume. The LOOK at the photos
+// stays on DEFAULT_MODEL. A smaller photo size was tested the same day and NOT
+// taken (384px changed 2 of 10 missing-shot calls) — keep PHOTO_PX at 512.
+const PICK_MODEL = "claude-haiku-5-5";
 async function pickSheet(client: Anthropic, model: string, l: Listing, sheets: Sheet[]) {
   const res = await client.messages.parse({
     model, max_tokens: 4000, system: PICK_SYSTEM,
-    messages: [{ role: "user", content:
-      "SHEETS:\n" + sheets.map(s => `${s.slug} — ${s.name}${s.group ? ` (${s.group})` : ""}`).join("\n") +
-      `\n\nLISTING:\nTITLE: ${l.title}\nCOLLECTIONS: ${l.collections.join(", ")}\nCONDITION: ${l.condition}` +
-      `\nINCLUDED: ${l.included}\nNOT INCLUDED: ${l.notIncluded}` }],
+    messages: [{ role: "user", content: pickQuestion(l, sheets) }],
     output_config: { effort: "low", format: zodOutputFormat(SheetPick) },
   } as any);
   return { pick: res.parsed_output as z.infer<typeof SheetPick> | null, usage: res.usage };
+}
+// ⚠️ THE PICK GOES IN THE BATCH TOO (Ethan, 2026-11-23, "the best combination of
+// price to quality"): the same question, the same model, at half price. It was
+// asked live, at full price, because the review needs the sheet's guide photos
+// before it can be sent — so now the pick is its own round: a "pick" batch, and
+// the poller sends each listing's review as a follow-up. Answers arrive one
+// round later (~5–15 min); nothing about the pick itself changed. Saves ~$0.006
+// a listing, ~$14 a month at 2,300 listings.
+function pickParams(l: Listing, sheets: Sheet[], model: string) {
+  const fmt: any = zodOutputFormat(SheetPick);
+  return { model, max_tokens: 4000, system: PICK_SYSTEM,
+           messages: [{ role: "user", content: pickQuestion(l, sheets) }],
+           output_config: { effort: "low", format: { type: fmt.type, schema: fmt.schema } } };
+}
+// A pick's answer → the sheet to grade on, or null (no confident match).
+function sheetFromPick(l: Listing, pick: z.infer<typeof SheetPick> | null, sheets: Sheet[]): Sheet | null {
+  const sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
+  return gameSheetFor(l, sheet, sheets);
 }
 
 // The sheet and its examples go first and are cached, so a store's fifty
@@ -718,14 +845,14 @@ async function review(client: Anthropic, model: string, effort: string, l: Listi
   const res = await client.messages.parse({
     // 16000, not 8000: at effort "medium" the thinking ate the budget and the
     // JSON came back cut off mid-string on two of five listings.
-    model, max_tokens: 16000, system: REVIEW_SYSTEM,
+    model, max_tokens: GUIDE_ONLY ? 6000 : 16000, system: GUIDE_ONLY ? GUIDE_SYSTEM : REVIEW_SYSTEM,
     messages: [{ role: "user", content: [...sheetBlocks, ...listingBlocks] }],
-    output_config: { effort, format: zodOutputFormat(Report) },
+    output_config: { effort, format: zodOutputFormat(REVIEW_FORMAT()) },
   } as any);
-  const parsed = res.parsed_output as ReportT | null;
+  const parsed = res.parsed_output as any;
   // Null means the answer did not validate — never read that as "all clear".
   if (!parsed) throw new Error("the review returned nothing that matched its schema");
-  return { report: parsed, usage: res.usage };
+  return { report: (GUIDE_ONLY ? fromGuide(parsed) : parsed) as ReportT, usage: res.usage };
 }
 
 // --- the verdict, in code ---------------------------------------------------
@@ -761,9 +888,16 @@ const forRules = (l: Listing, standard: Map<string, number>): ListingR => ({ ...
 
 // --- the stamp ---------------------------------------------------------------
 
+// ⚠️ PHOTOS ONLY, UNDER THE GUIDE-ONLY CHECK (Ethan, 2026-11-24: "only re-grade
+// when photos change"). The stamp decides when a listing is graded AGAIN, and the
+// guide-only question is about the photos against the sheet — so a title fix
+// from the title tool, or an edited condition note, no longer pays for a fresh
+// photo grade (~5–10% of the monthly bill). The full check (PQ_FULL_CHECK=1)
+// reads the notes and title too, so it keeps them in its stamp.
 async function stampFor(l: Listing, sheet: Sheet | null) {
   const basis = JSON.stringify({ RECIPE, sheet: sheet ? [sheet.slug, sheet.updated] : null,
-    photos: l.photos.map(p => p.src.split("?")[0]), c: [l.condition, l.cosmetic, l.included, l.notIncluded, l.title] });
+    photos: l.photos.map(p => p.src.split("?")[0]),
+    ...(GUIDE_ONLY ? {} : { c: [l.condition, l.cosmetic, l.included, l.notIncluded, l.title] }) });
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(basis));
   return RECIPE + ":" + Array.from(new Uint8Array(d)).slice(0, 12).map(b => b.toString(16).padStart(2, "0")).join("");
 }
@@ -777,15 +911,15 @@ async function finalRow(l: Listing, sheet: Sheet, standard: Map<string, number>,
                         first: ReportT, second: ReportT | null, faults?: Map<number, string[]>) {
   const lr = forRules(l, standard);
   let report = first;
-  let d = decide(lr, sheet, report, faults);
-  const firstLook = { verdict: d.verdict, findings: d.findings.map(f => f.text) };
+  let d = guideOnly(decide(lr, sheet, report, faults), lr);
+  const firstLook = { verdict: d.verdict, findings: d.findings.map((f: any) => f.text) };
   let secondLook: typeof firstLook | null = null;
   if (second) {
-    const d2 = decide(lr, sheet, second, faults);
-    secondLook = { verdict: d2.verdict, findings: d2.findings.map(f => f.text) };
+    const d2 = guideOnly(decide(lr, sheet, second, faults), lr);
+    secondLook = { verdict: d2.verdict, findings: d2.findings.map((f: any) => f.text) };
     const d1 = d;
     report = agree(report, second);
-    d = decide(lr, sheet, report, faults);
+    d = guideOnly(decide(lr, sheet, report, faults), lr);
     // A reorder stands only if each look, on its own, asked for one: the
     // Synology's "Everything Included is not in the first three" came from
     // one look's labels and the next look's labels disagreed.
@@ -801,7 +935,7 @@ async function finalRow(l: Listing, sheet: Sheet, standard: Map<string, number>,
            title_notes: report.title_notes, sheet_slug: sheet.slug, sheet_name: sheet.name,
            stamp: await stampFor(l, sheet),
            report: { ...report, orderScore: d.orderScore, pictureScore: d.pictureScore, costs: d.costs,
-             sheetPick: pick, reSheeted, looks: second ? 2 : 1, firstLook, secondLook,
+             sheetPick: pick, reSheeted, looks: second ? 2 : 1, firstLook, secondLook, guideOnly: GUIDE_ONLY,
              notesAsSent: sentences(l.cosmetic).map(s => (isStandardSentence(s, standard.get(norm(s)) || 0) ? "[standard] " : "[unit] ") + s) } };
 }
 
@@ -821,8 +955,10 @@ async function saveRows(rowsOut: any[]) {
 
 // --- the sweep ----------------------------------------------------------------
 
+// `trim` (?trimtest=1 only): a cheaper sheet-pick model and/or smaller photos,
+// to measure a saving against saved grades before switching it on (2026-11-25).
 async function runReviews(store: string, ids: string[], model: string, effort: string, save: boolean,
-                          withFraming = false) {
+                          withFraming = false, trim: { px?: number; pickModel?: string } = {}) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
   const client = new Anthropic({ apiKey });
@@ -831,20 +967,26 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
     // No store-wide sentence count any more: isStandardSentence (rules.ts) judges
     // a note by what it says, so reading every listing in the store just to
     // count its sentences was pure wait. boilerplateFor stays for reference.
-    fetchListings(shop, token, ids), loadSheets(), Promise.resolve(new Map<string, number>())]);
+    fetchListings(shop, token, ids, trim.px || PHOTO_PX), loadSheets(), Promise.resolve(new Map<string, number>())]);
   const price = PRICES[model] || PRICES[DEFAULT_MODEL];
-  let tin = 0, tout = 0;
+  let tin = 0, tout = 0, tdisc = 0;
   const out: any[] = [];
+  const rix = listerIndex(await rows("users?select=name,role,store").catch(() => []) || []);
 
   const one = async (l: Listing) => {
-    const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model };
+    const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model,
+                   lister_name: listerFrom(l.tags, rix, store)?.name || null };
     try {
       if (!l.photos.length) {
         return { ...base, verdict: "fix", findings: [{ code: "no_photos", text: "This listing has no photos." }],
                  stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null };
       }
-      const { pick, usage: u1 } = await pickSheet(client, model, l, sheets);
-      tin += u1?.input_tokens || 0; tout += u1?.output_tokens || 0;
+      const pm = trim.pickModel || PICK_MODEL;
+      const { pick, usage: u1 } = await pickSheet(client, pm, l, sheets);
+      // Costed at the pick model's own price, folded into this run's input-token
+      // terms so cost_usd stays one number.
+      const pp = PRICES[pm] || price;
+      tin += (u1?.input_tokens || 0) * pp[0] / price[0] + (u1?.output_tokens || 0) * pp[1] / price[0]; 
       let sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
       sheet = gameSheetFor(l, sheet, sheets);
       if (!sheet) {
@@ -856,6 +998,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
       let inTok = (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0);
       let outTok = usage?.output_tokens || 0;
       tin += inTok; tout += outTok;
+      let ldisc = cacheDisc(usage); tdisc += ldisc;
       // The text alone cannot always tell (the Pyle title says "Speaker"; the
       // photos show a pair). One re-grade on the sheet the photos point to.
       const better = !report.sheet_fits && report.better_sheet ? sheets.find(s => s.slug === report.better_sheet) : null;
@@ -864,6 +1007,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
         ({ report, usage } = await review(client, model, effort, l, sheet, standard, others(sheet)));
         const extra = (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0);
         inTok += extra; tin += extra; tout += usage?.output_tokens || 0; outTok += usage?.output_tokens || 0;
+        { const dd = cacheDisc(usage); ldisc += dd; tdisc += dd; }
       }
       // The framing look — see framingLook. Same "seen twice" rule as the main
       // review: a second look only when the first finds something, and a photo
@@ -903,10 +1047,11 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
       // only problem is framing has already been looked at twice above.
       // Only when the flag is close to the line — see needsSecondLook (rules.ts).
       let second: ReportT | null = null;
-      if (needsSecondLook(lr, sheet, report)) {
+      if (secondLookWanted(lr, sheet, report)) {
         const again = await review(client, model, effort, l, sheet, standard, others(sheet));
         const extra = (again.usage?.input_tokens || 0) + (again.usage?.cache_read_input_tokens || 0) + (again.usage?.cache_creation_input_tokens || 0);
         inTok += extra; tin += extra; tout += again.usage?.output_tokens || 0; outTok += again.usage?.output_tokens || 0;
+        { const dd = cacheDisc(again.usage); ldisc += dd; tdisc += dd; }
         second = again.report;
       }
       const row = await finalRow(l, sheet, standard, pick, !!better, report, second, faults);
@@ -916,7 +1061,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
                  cache: {
                  read: usage?.cache_read_input_tokens || 0, wrote: usage?.cache_creation_input_tokens || 0 } },
                input_tokens: inTok, output_tokens: outTok,
-               cost_usd: Math.round((inTok / 1e6 * price[0] + outTok / 1e6 * price[1]) * 1e5) / 1e5 };
+               cost_usd: Math.round(((inTok - ldisc) / 1e6 * price[0] + outTok / 1e6 * price[1]) * 1e5) / 1e5 };
     } catch (e) {
       return { ...base, verdict: "error", stamp: "error", findings: [{ code: "error", text: String((e as Error).message || e).slice(0, 300) }] };
     }
@@ -928,17 +1073,18 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
 
   if (save) {
     await saveRows(out);
+    await recordFlags(store, out, new Map(listings.map(l => [l.id, l])), rix);
     // Written down so "what did that cost" has an answer that is not an estimate.
     try {
       await sb("ai_usage_log", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
         tool: "picture-quality", store_code: store, model, effort, batches: out.length, items: out.length,
-        input_tokens: tin, output_tokens: tout, cost_usd: tin / 1e6 * price[0] + tout / 1e6 * price[1] }) });
+        input_tokens: tin, output_tokens: tout, cost_usd: (tin - tdisc) / 1e6 * price[0] + tout / 1e6 * price[1] }) });
     } catch (e) { console.error("ai_usage_log write failed:", String(e)); }
   }
 
   return {
     store, model, effort, saved: save, reviewed: out.length,
-    cost_usd: Math.round((tin / 1e6 * price[0] + tout / 1e6 * price[1]) * 1e4) / 1e4,
+    cost_usd: Math.round(((tin - tdisc) / 1e6 * price[0] + tout / 1e6 * price[1]) * 1e4) / 1e4,
     tokens: { input: tin, output: tout },
     verdicts: out.reduce((a: any, r) => (a[r.verdict] = (a[r.verdict] || 0) + 1, a), {}),
     results: out,
@@ -1018,9 +1164,9 @@ function reviewParams(l: Listing, sheet: Sheet, standard: Map<string, number>, o
     "OTHER SHEETS (only if this one is clearly wrong for the item): " + otherSheets +
     "\n\nTHE LISTING:\n" + listingText(l, standard) + "\n\nIts photos, in listing order:" }];
   l.photos.forEach((p, i) => listingBlocks.push({ type: "text", text: `Photo ${i + 1}` }, urlImage(p.url)));
-  const fmt: any = zodOutputFormat(Report);
+  const fmt: any = zodOutputFormat(REVIEW_FORMAT());
   return {
-    model, max_tokens: 16000, system: REVIEW_SYSTEM,
+    model, max_tokens: GUIDE_ONLY ? 6000 : 16000, system: GUIDE_ONLY ? GUIDE_SYSTEM : REVIEW_SYSTEM,
     messages: [{ role: "user", content: [...sheetBlocks, ...listingBlocks] }],
     // The format object carries a parse function the batch cannot send; the
     // schema is what matters, and the answer is parsed with Report below.
@@ -1032,8 +1178,12 @@ function reviewParams(l: Listing, sheet: Sheet, standard: Map<string, number>, o
 // — saved on the row's report so the panel can outline it as NEW (Ethan,
 // 2026-10-15: "have the entire box border for these highlighted so I know which
 // ones are new for me to review tomorrow"). Follow-ups carry it ({...p}).
-type Pending = { pid: string; kind: "first" | "resheet" | "second"; sheet: string; pick: unknown;
-                 reSheeted: boolean; stamp: string; first?: ReportT; sample?: boolean };
+type Pending = { pid: string; kind: "pick" | "first" | "resheet" | "second"; sheet: string; pick: unknown;
+                 reSheeted: boolean; stamp: string; first?: ReportT; sample?: boolean;
+                 // THE 5-MINUTE CHECK (0206): its follow-ups (a re-sheet, a second
+                 // look) are asked LIVE at collection, not sent as another batch
+                 // round, so the lister hears back in one round.
+                 quick?: boolean };
 const customId = (p: Pending) => `${p.kind[0]}${p.pid.split("/").pop()}`;
 
 async function submitBatch(client: Anthropic, store: string, model: string, effort: string,
@@ -1048,6 +1198,185 @@ async function submitBatch(client: Anthropic, store: string, model: string, effo
   return batch.id as string;
 }
 
+// --- THE 5-MINUTE CHECK (Ethan, 2026-11-24) --------------------------------------
+//
+// "Grade them as they come in … so they can try to fix it in real time." Every
+// 5 minutes, 7am–9pm CT (0206 cron pq-quick), each store's listings are read
+// STRAIGHT FROM SHOPIFY — not ebay_catalog, which refreshes hourly, so a new
+// listing could sit unseen for up to an hour. One is taken when it is:
+//  - live on the online store and IN STOCK (Ethan: "so we don't accidentally
+//    grade something that might have sold very fast"),
+//  - untouched for QUICK.settleMin minutes — the lister has stopped adding or
+//    moving photos, so it is not graded half-done and paid for twice,
+//  - new (QUICK.newDays) or carrying an open photo fix (a lister re-shooting an
+//    older one gets a fresh grade the same way),
+//  - and changed since its last grade (the stamp), so nothing is paid twice.
+// The sheet pick is asked LIVE (about a penny), the look goes into a half-price
+// batch, the poller (every 2 minutes) collects it and asks any second look live.
+// A batch still out after QUICK.lateMin is cancelled and graded live, so nobody
+// waits on a slow queue. Expected: the grade lands ~10–20 minutes after the
+// lister's last change, for about the batched price.
+// ⚠️ OFF until Ethan says go: the cron gets {off:true} until PQ_QUICK_ON=1.
+// &dry=1 lists what WOULD be graded — Shopify reads only, no model, free.
+const QUICK = { settleMin: 5, newDays: 3, perStore: 20, lateMin: 20 };
+
+// ⚠️ EVERY PHOTO FLAG COUNTS, EVEN ONE FIXED IN MINUTES (Ethan, 2026-11-24: "any
+// flag should count as a flag against the lister because it is important we have
+// data on which listers struggle the most"). The morning ledger (listing-review
+// daily) only sees what is STILL open at 6am, so a flag the 5-minute check
+// raised and the lister fixed by lunch never reached it. Written here, the moment
+// the grade is saved: one listing_flags row per (listing, "photos"), the same
+// shape the morning job writes — week = the Monday (CT) of the week it was
+// LISTED, so it lands in the same bucket as its listed count. ignore-duplicates:
+// an existing row keeps the store's dismissal; the morning job still updates it.
+const ctMondayOf = (at: string) => {
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date(at));
+  const d = new Date(day + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+};
+const FLAGGING = new Set(["retake", "fix", "reorder"]);
+async function recordFlags(store: string, saved: any[], listings: Map<string, Listing>, ix: ListerIx) {
+  const out = saved.filter(r => FLAGGING.has(r.verdict)).map(r => {
+    const l = listings.get(r.product_id);
+    if (!l?.createdAt) return null;
+    return { week: ctMondayOf(l.createdAt), store_code: store, product_id: r.product_id, source: "photos",
+             lister_tag: listerFrom(l.tags, ix, store)?.tag || rawListerTag(l.tags) || null };
+  }).filter(Boolean);
+  if (!out.length) return;
+  try {
+    await sb("listing_flags?on_conflict=store_code,product_id,source", { method: "POST",
+      headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(out) });
+  } catch (e) { console.error("listing_flags write failed:", String(e)); }
+}
+const quoteIds = (ids: string[]) => encodeURIComponent(ids.map(i => `"${i}"`).join(","));
+// Midnight Central at the start of PQ_QUICK_FROM (or today), as epoch ms.
+function quickFrom(): number {
+  const ctDayNow = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(Deno.env.get("PQ_QUICK_FROM") || "") ? Deno.env.get("PQ_QUICK_FROM")! : ctDayNow;
+  const noon = new Date(day + "T12:00:00Z");
+  const h = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour12: false, hour: "2-digit" }).format(noon)) % 24;
+  return Date.parse(day + "T00:00:00Z") + (12 - h) * 3600000;
+}
+async function quickCandidates(store: string, shop: string, token: string) {
+  // ⚠️ BY CREATION DATE, NOT "RECENTLY UPDATED" (2026-11-25). The first version
+  // read the 250 most recently UPDATED products; OVL and LEE pass 250 updates in
+  // 48 hours (price and stock syncs count), so on a busy day a new listing could
+  // fall off the end and never be graded. Two reads instead: every listing CREATED
+  // in the window (the work), plus the last 6 hours' updates (re-shoots of a
+  // listing with an open photo fix, older than the 3-day window).
+  const from0 = Math.max(quickFrom(), Date.now() - QUICK.newDays * 86400000);
+  const q = `query($q: String!, $s: ProductSortKeys!) { products(first: 250, query: $q, sortKey: $s, reverse: true) {
+      nodes { id createdAt updatedAt totalInventory onlineStoreUrl variants(first: 1) { nodes { sku } } } } }`;
+  const [made, touched] = await Promise.all([
+    gql(shop, token, q, { q: `created_at:>='${new Date(from0).toISOString()}' status:active`, s: "CREATED_AT" }),
+    gql(shop, token, q, { q: `updated_at:>'${new Date(Date.now() - 6 * 3600000).toISOString()}' status:active`, s: "UPDATED_AT" }),
+  ]);
+  const byId = new Map<string, any>();
+  for (const n of [...(made?.products?.nodes || []), ...(touched?.products?.nodes || [])]) byId.set(String(n.id), n);
+  const nodes: any[] = [...byId.values()];
+  const open = new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
+    + `&verdict=in.(retake,fix,reorder)&select=product_id&limit=1000`)).map((r: any) => String(r.product_id)));
+  const settled = Date.now() - QUICK.settleMin * 60000, fresh = Date.now() - QUICK.newDays * 86400000;
+  // ⚠️ NO BACKLOG (Ethan, 2026-11-25: "we only need to start grading listings made
+  // from the day we start and on … the backlog … will come much later"). Nothing
+  // listed before PQ_QUICK_FROM (a YYYY-MM-DD, Central — set it to the go-live day
+  // with PQ_QUICK_ON) is ever taken, re-shot or not. Unset = start of today (CT),
+  // so a forgotten secret can never sweep up the old catalogue.
+  const from = quickFrom();
+  // ⚠️ LIVE ON THE ONLINE STORE *OR* EBAY, AND IN STOCK (Ethan, 2026-11-25: "both
+  // in stock eBay and Online store listings only") — the title tool's rule (0189).
+  // Online store = Shopify's own onlineStoreUrl, read live. eBay = ebay_live, by
+  // SKU, which the ebay-catalog live sweep refreshes every 6 hours and PayMore's
+  // tool lists about a day late — so an eBay-only listing is graded when it shows
+  // up there, still inside the 3-day window, just not within minutes. Only
+  // ~37% of new in-stock listings were on the online store (11-25 dry run).
+  const onEbay = new Set<string>((await allRows(`ebay_live?store_code=eq.${store}&select=sku&order=sku`))
+    .map((r: any) => String(r.sku || "").trim()).filter(Boolean));
+  const c = { seen: nodes.length, notLive: 0, liveOnEbayOnly: 0, outOfStock: 0, stillEditing: 0, older: 0, beforeStart: 0, from: new Date(from).toISOString(), ids: [] as string[] };
+  for (const n of nodes) {
+    const sku = String(n.variants?.nodes?.[0]?.sku || "").trim();
+    const ebay = !!sku && onEbay.has(sku);
+    if (!n.onlineStoreUrl && !ebay) { c.notLive++; continue; }
+    if (!n.onlineStoreUrl) c.liveOnEbayOnly++;
+    if (!(Number(n.totalInventory) > 0)) { c.outOfStock++; continue; }
+    if (Date.parse(n.createdAt) < from) { c.beforeStart++; continue; }
+    if (Date.parse(n.updatedAt) > settled) { c.stillEditing++; continue; }
+    if (Date.parse(n.createdAt) < fresh && !open.has(String(n.id))) { c.older++; continue; }
+    c.ids.push(String(n.id));
+  }
+  return c;
+}
+async function quickSweep(store: string, dry: boolean) {
+  const { shop, token } = await shopFor(store);
+  const c = await quickCandidates(store, shop, token);
+  const { ids, ...counts } = c;
+  if (!ids.length) return { store, ...counts, toGrade: 0 };
+  const [flying, sheets, seenRows] = await Promise.all([inFlight(store), loadSheets(),
+    rows(`picture_quality_reviews?store_code=eq.${store}&product_id=in.(${quoteIds(ids)})&select=product_id,stamp`)]);
+  const seen = new Map<string, string>(seenRows.map((r: any) => [String(r.product_id), String(r.stamp || "")]));
+  const todo: Listing[] = [];
+  const want = ids.filter(id => !flying.has(id));
+  for (let i = 0; i < want.length && todo.length < QUICK.perStore; i += 25) {
+    for (const l of await fetchListings(shop, token, want.slice(i, i + 25))) {
+      if (todo.length >= QUICK.perStore) break;
+      const was = seen.get(l.id);
+      if (was && was.startsWith(RECIPE + ":")) {
+        const same = await Promise.all(sheets.map(s => stampFor(l, s)));
+        if (same.includes(was) || was === await stampFor(l, null)) continue;
+      }
+      todo.push(l);
+    }
+  }
+  if (dry) return { store, ...counts, inFlight: ids.length - want.length, toGrade: todo.length,
+                    listings: todo.map(l => ({ id: l.id, title: l.title, photos: l.photos.length })) };
+  if (!todo.length) return { store, ...counts, toGrade: 0 };
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
+  const client = new Anthropic({ apiKey });
+  const model = DEFAULT_MODEL, effort = DEFAULT_EFFORT;
+  const price = PRICES[model] || PRICES[DEFAULT_MODEL];
+  const ix = listerIndex(await rows("users?select=name,role,store").catch(() => []) || []);
+  const standard = new Map<string, number>();
+  const reqs: { p: Pending; params: unknown }[] = [], direct: any[] = [];
+  let tin = 0, tout = 0, tdisc = 0, next = 0;
+  const one = async () => {
+    while (next < todo.length) {
+      const l = todo[next++];
+      const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model,
+                     lister_name: listerFrom(l.tags, ix, store)?.name || null };
+      try {
+        if (!l.photos.length) {
+          direct.push({ ...base, verdict: "fix", findings: [{ code: "no_photos", text: "This listing has no photos." }],
+                        stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null });
+          continue;
+        }
+        const { pick, usage } = await pickSheet(client, PICK_MODEL, l, sheets);
+        tin += (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0);
+        tout += usage?.output_tokens || 0; tdisc += cacheDisc(usage);
+        const ps = sheetFromPick(l, pick, sheets);
+        if (!ps) {
+          direct.push({ ...base, verdict: "no_sheet", stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null,
+                        findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }] });
+          continue;
+        }
+        const oth = sheets.filter(x => x.slug !== ps.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+        reqs.push({ p: { pid: l.id, kind: "first", sheet: ps.slug, pick, reSheeted: false, stamp: await stampFor(l, ps), quick: true },
+                    params: reviewParams(l, ps, standard, oth, model, effort) });
+      } catch (e) { console.error("quick pick failed", l.id, String(e)); }   // picked up again next run
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, one));
+  await saveRows(direct);
+  await recordFlags(store, direct, new Map(todo.map(l => [l.id, l])), ix);
+  const batch = await submitBatch(client, store, model, effort, reqs);
+  const pkp = PRICES[PICK_MODEL];
+  const cost = (tin - tdisc) / 1e6 * pkp[0] + tout / 1e6 * pkp[1];
+  if (tin || tout) await logUsage(store, PICK_MODEL, "low", "quick-pick", reqs.length + direct.length, tin, tout, cost);
+  return { store, ...counts, toGrade: todo.length, submitted: reqs.length, savedDirect: direct.length, batch,
+           pickCost: Math.round(cost * 1e4) / 1e4 };
+}
+
 // Listings in flight in a batch not yet collected — never sent twice.
 async function inFlight(store: string) {
   const open = await rows(`pq_batches?store_code=eq.${store}&status=eq.submitted&select=items`);
@@ -1057,14 +1386,17 @@ async function inFlight(store: string) {
 // NEW listings only — created in the last `days` days — whose saved grade is
 // missing or stale. The one-time backfill of the existing catalogue is a
 // separate decision (Ethan, 2026-10-11: "do not include the one time backfill").
-async function batchSweep(store: string, limit: number, days: number, model: string, effort: string, regrade = false, random = false) {
+async function batchSweep(store: string, limit: number, days: number, model: string, effort: string, regrade = false, random = false, only: string[] = [], settleMin = 0) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
   const client = new Anthropic({ apiKey });
   const { shop, token } = await shopFor(store);
   const since = new Date(Date.now() - days * 86400000).toISOString();
+  // settleMin (the trickle): leave a listing alone until it is this many minutes
+  // old, so a lister still adding photos is not graded half-done and paid twice.
+  const settled = settleMin > 0 ? `&product_created_at=lte.${new Date(Date.now() - settleMin * 60000).toISOString()}` : "";
   const cat: any[] = await rows(`ebay_catalog?store_code=eq.${store}&quantity=gt.0&online_published=is.true`
-    + `&product_created_at=gte.${since}&select=product_id&order=product_created_at.desc&limit=1000`);
+    + `&product_created_at=gte.${since}${settled}&select=product_id&order=product_created_at.desc&limit=1000`);
   let ids = [...new Set(cat.map(c => String(c.product_id || "")).filter(Boolean)
     .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`))];
   // &regrade=1 — the store's OPEN rows, graded again whatever their stamp (a
@@ -1073,6 +1405,10 @@ async function batchSweep(store: string, limit: number, days: number, model: str
   if (random) ids = ids.map(id => [Math.random(), id] as const).sort((a, b) => a[0] - b[0]).map(x => x[1]);
   if (regrade) ids = [...new Set<string>((await allRows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open&select=product_id&order=product_id`))
     .map((r: any) => String(r.product_id) as string))];
+  // &ids= on the batch path — EXACTLY these listings, graded again whatever
+  // their stamp: the Fix Queue's overnight re-grade of cards a store marked
+  // fixed (listing-review ?regrade=1). The same half-price Batch as the nightly.
+  if (only.length) { ids = only; regrade = true; }
   const flying = await inFlight(store);
   const seen = new Map<string, string>((await allRows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp&order=product_id`))
     .map((r: any) => [String(r.product_id), String(r.stamp || "")]));
@@ -1098,8 +1434,8 @@ async function batchSweep(store: string, limit: number, days: number, model: str
       todo.push(l);
     }
   }
-  // …then the sheet picks, EIGHT AT A TIME. One after another, a first night's
-  // hundred listings at ~3s a pick would outrun the function's time limit.
+  // …then each one's sheet pick goes into the batch (see pickParams); the poller
+  // sends the review once the pick is back. No model is called here any more.
   let next = 0;
   const pickOne = async () => {
     while (next < todo.length) {
@@ -1111,30 +1447,15 @@ async function batchSweep(store: string, limit: number, days: number, model: str
                       stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null });
         continue;
       }
-      try {
-        const { pick, usage } = await pickSheet(client, model, l, sheets);
-        pickIn += usage?.input_tokens || 0; pickOut += usage?.output_tokens || 0;
-        let sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
-        sheet = gameSheetFor(l, sheet, sheets);
-        if (!sheet) {
-          direct.push({ ...base, verdict: "no_sheet", stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null,
-                        findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }] });
-          continue;
-        }
-        const others = sheets.filter(x => x.slug !== sheet!.slug).map(x => `${x.slug} (${x.name})`).join(", ");
-        reqs.push({ p: { pid: l.id, kind: "first", sheet: sheet.slug, pick, reSheeted: false, stamp: await stampFor(l, sheet), ...(random ? { sample: true } : {}) },
-                    params: reviewParams(l, sheet, standard, others, model, effort) });
-      } catch (e) {
-        // One failed pick costs that listing tonight, not the whole batch.
-        console.error("pick failed", l.id, String((e as Error).message || e));
-      }
+      reqs.push({ p: { pid: l.id, kind: "pick", sheet: "", pick: null, reSheeted: false, stamp: await stampFor(l, null), ...(random ? { sample: true } : {}) },
+                  params: pickParams(l, sheets, PICK_MODEL) });
     }
   };
   await Promise.all(Array.from({ length: 8 }, pickOne));
   await saveRows(direct);
   const batchId = await submitBatch(client, store, model, effort, reqs);
   const price = PRICES[model] || PRICES[DEFAULT_MODEL];
-  await logUsage(store, model, effort, "sweep-pick", reqs.length + direct.length, pickIn, pickOut, pickIn / 1e6 * price[0] + pickOut / 1e6 * price[1]);
+  if (pickIn || pickOut) await logUsage(store, model, effort, "sweep-pick", reqs.length + direct.length, pickIn, pickOut, pickIn / 1e6 * price[0] + pickOut / 1e6 * price[1]);
   return { store, candidates: ids.length, submitted: reqs.length, savedDirect: direct.length, batch: batchId };
 }
 
@@ -1155,9 +1476,30 @@ async function pollBatches() {
   const sheets = await loadSheets();
   const standard = new Map<string, number>();
   const report: any[] = [];
+  const ix = listerIndex(await rows("users?select=name,role,store").catch(() => []) || []);
   for (const b of open) {
     const info = await (client as any).messages.batches.retrieve(b.batch_id);
-    if (info.processing_status !== "ended") { report.push({ batch: b.batch_id, status: info.processing_status }); continue; }
+    if (info.processing_status !== "ended") {
+      // THE 5-MINUTE CHECK DOES NOT WAIT ON A SLOW QUEUE (0206): a quick batch
+      // still out after QUICK.lateMin is cancelled and its listings graded live.
+      const its = Object.values((b.items || {}) as Record<string, Pending>);
+      const late = its.length > 0 && its.every(p => p.quick) && Deno.env.get("PQ_QUICK_ON") === "1"
+        && Date.now() - Date.parse(b.submitted_at) > QUICK.lateMin * 60000;
+      if (!late) { report.push({ batch: b.batch_id, status: info.processing_status }); continue; }
+      try { await (client as any).messages.batches.cancel(b.batch_id); } catch (e) { console.error("cancel failed", String(e)); }
+      await sb(`pq_batches?id=eq.${b.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ status: "failed", finished_at: new Date().toISOString(), result: { cancelled: true, late: true } }) });
+      const pids = [...new Set(its.map(p => p.pid))];
+      const live = await runReviews(b.store_code, pids, b.model, b.effort, true);
+      report.push({ batch: b.batch_id, store: b.store_code, late: true, gradedLive: live.reviewed, cost_usd: live.cost_usd });
+      continue;
+    }
+    // ⚠️ ONE COLLECTOR PER BATCH. The poll runs every 2 minutes now (0206); a
+    // collection with live second looks can outlast that, and two collectors
+    // would save twice and pay for the second looks twice. Claim it first.
+    const claim = await (await sb(`pq_batches?id=eq.${b.id}&status=eq.submitted`, { method: "PATCH",
+      headers: { Prefer: "return=representation" }, body: JSON.stringify({ status: "collecting" }) })).json();
+    if (!Array.isArray(claim) || !claim.length) { report.push({ batch: b.batch_id, skipped: "another poll is collecting it" }); continue; }
     const { shop, token } = await shopFor(b.store_code);
     const items: Record<string, Pending> = b.items || {};
     const pids = [...new Set(Object.values(items).map(p => p.pid))];
@@ -1165,7 +1507,16 @@ async function pollBatches() {
     for (let i = 0; i < pids.length; i += 25) for (const l of await fetchListings(shop, token, pids.slice(i, i + 25))) live.set(l.id, l);
     const price = PRICES[b.model] || PRICES[DEFAULT_MODEL];
     let tin = 0, tcache = 0, tout = 0, ok = 0, failed = 0, changed = 0;
+    let lin = 0, lout = 0, ldisc = 0, liveLooks = 0;   // live follow-ups (quick), full price
+    const liveLook = async (l: Listing, sh: Sheet) => {
+      const r = await review(client, b.model, b.effort, l, sh, standard,
+        sheets.filter(x => x.slug !== sh.slug).map(x => `${x.slug} (${x.name})`).join(", "));
+      lin += (r.usage?.input_tokens || 0) + (r.usage?.cache_read_input_tokens || 0) + (r.usage?.cache_creation_input_tokens || 0);
+      lout += r.usage?.output_tokens || 0; ldisc += cacheDisc(r.usage); liveLooks++;
+      return r.report;
+    };
     const save: any[] = [], follow: { p: Pending; params: unknown }[] = [];
+    const quickDone: Promise<void>[] = [];
     for await (const res of await (client as any).messages.batches.results(b.batch_id)) {
       const p = items[res.custom_id];
       if (!p) continue;
@@ -1174,15 +1525,53 @@ async function pollBatches() {
       const u = msg.usage || {};
       tin += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0); tcache += u.cache_read_input_tokens || 0; tout += u.output_tokens || 0;
       const l = live.get(p.pid);
+      if (p.kind === "pick") {
+        if (!l || await stampFor(l, null) !== p.stamp) { changed++; continue; }
+        const ptext = (msg.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
+        let pick: z.infer<typeof SheetPick>;
+        try { pick = SheetPick.parse(JSON.parse(ptext)); } catch { failed++; continue; }
+        ok++;
+        const ps = sheetFromPick(l, pick, sheets);
+        if (!ps) {
+          save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model: b.model,
+                      lister_name: listerFrom(l.tags, ix, b.store_code)?.name || null,
+                      verdict: "no_sheet", stamp: p.stamp, sheet_slug: null, sheet_name: null,
+                      findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }],
+                      ...(p.sample ? { report: { sample: new Date().toISOString() } } : {}) });
+          continue;
+        }
+        const oth = sheets.filter(x => x.slug !== ps.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+        follow.push({ p: { ...p, kind: "first", sheet: ps.slug, pick, stamp: await stampFor(l, ps) },
+                      params: reviewParams(l, ps, standard, oth, b.model, b.effort) });
+        continue;
+      }
       const sheet = sheets.find(s => s.slug === p.sheet);
       // Gone, or edited since it was sent: that grade is about photos that are
       // no longer there. The next sweep sends it again.
       if (!l || !sheet || await stampFor(l, sheet) !== p.stamp) { changed++; continue; }
       const text = (msg.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
       let parsed: ReportT;
-      try { parsed = Report.parse(JSON.parse(text)); } catch { failed++; continue; }
+      try { parsed = parseReport(JSON.parse(text)); } catch { failed++; continue; }
       ok++;
       const others = (s: Sheet) => sheets.filter(x => x.slug !== s.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+      // The 5-minute check: re-sheet and second look asked live, right now.
+      if (p.quick && p.kind === "first") {
+        quickDone.push((async () => {
+          try {
+            let sh = sheet, first = parsed, reSheeted = p.reSheeted;
+            const better = !first.sheet_fits && first.better_sheet ? sheets.find(s => s.slug === first.better_sheet) : null;
+            if (better && (gameSheetFor(l, better, sheets) === better || caseCall(sheet, better))) {
+              sh = better; reSheeted = true; first = await liveLook(l, better);
+            }
+            const second = secondLookWanted(forRules(l, standard), sh, first) ? await liveLook(l, sh) : null;
+            const row = await finalRow(l, sh, standard, p.pick, reSheeted, first, second);
+            save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length,
+                        model: b.model, lister_name: listerFrom(l.tags, ix, b.store_code)?.name || null,
+                        ...row, report: { ...row.report, batch: b.batch_id, quick: true } });
+          } catch (e) { failed++; console.error("quick follow-up failed", p.pid, String(e)); }
+        })());
+        continue;
+      }
       if (p.kind === "first") {
         // The photos point at a better sheet: one re-grade on it, as live.
         const better = !parsed.sheet_fits && parsed.better_sheet ? sheets.find(s => s.slug === parsed.better_sheet) : null;
@@ -1192,7 +1581,7 @@ async function pollBatches() {
           continue;
         }
       }
-      if (p.kind !== "second" && needsSecondLook(forRules(l, standard), sheet, parsed)) {
+      if (p.kind !== "second" && secondLookWanted(forRules(l, standard), sheet, parsed)) {
         follow.push({ p: { ...p, kind: "second", first: parsed }, params: reviewParams(l, sheet, standard, others(sheet), b.model, b.effort) });
         continue;
       }
@@ -1200,9 +1589,16 @@ async function pollBatches() {
       const second = p.kind === "second" ? parsed : null;
       const row = await finalRow(l, sheet, standard, p.pick, p.reSheeted, first, second);
       save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length,
-                  model: b.model, ...row, report: { ...row.report, batch: b.batch_id, ...(p.sample ? { sample: new Date().toISOString() } : {}) } });
+                  model: b.model, lister_name: listerFrom(l.tags, ix, b.store_code)?.name || null,
+                  ...row, report: { ...row.report, batch: b.batch_id, ...(p.sample ? { sample: new Date().toISOString() } : {}) } });
     }
+    await Promise.all(quickDone);
     await saveRows(save);
+    await recordFlags(b.store_code, save, live, ix);
+    if (liveLooks) {
+      const lc = (lin - ldisc) / 1e6 * price[0] + lout / 1e6 * price[1];
+      await logUsage(b.store_code, b.model, b.effort, "quick-live", liveLooks, lin, lout, lc);
+    }
     // Batch tokens are half price; a cache read is a tenth of input.
     const cost = (tin / 1e6 * price[0] + tcache / 1e6 * price[0] * 0.1 + tout / 1e6 * price[1]) * 0.5;
     const next = await submitBatch(client, b.store_code, b.model, b.effort, follow);
@@ -2345,6 +2741,94 @@ Deno.serve(async (req: Request) => {
       const pids = [...new Set(Object.values((b.items || {}) as Record<string, Pending>).map(p => p.pid))];
       return json({ cancelled: cancelId, store: b.store_code, processing_status: info?.processing_status, request_counts: info?.request_counts, pids });
     }
+    // ?trickle=1 — THE ALL-DAY GUIDE CHECK (Ethan, 2026-11-23: "batch every
+    // 15–30 minutes across all stores"). Every store's listings made in the last
+    // day that are at least 30 minutes old and not yet graded (or changed since)
+    // go into that store's half-price Batch; ?poll=1 collects them through the
+    // day. One listing is graded once unless it changes — the stamp check in
+    // batchSweep. Up to 40 per store per run, so a bulk-listing day cannot run
+    // away with the bill.
+    // ⚠️ OFF until Ethan says go (every run is paid): the cron fires and gets
+    // {off:true}. Turn on:  npx supabase secrets set PQ_TRICKLE_ON=1 --project-ref ejzaqmyxxrkmxvzbjeuo
+    // Leave PQ_NIGHTLY_PAUSED=1 when it is on — the trickle replaces the nightly.
+    // A hand run: &force=1[&store=LEE].
+    // ?picktest=1&store=X&ids=a,b&pickModel=… — PAID (text only, pennies): ask
+    // the sheet pick again on another model and compare with the saved sheet.
+    // Saves nothing. Ethan's cost-trim test, 2026-11-25.
+    if (url.searchParams.get("picktest") === "1") {
+      const st = (url.searchParams.get("store") || "").toUpperCase();
+      const pm = url.searchParams.get("pickModel") || "claude-haiku-5-5";
+      if (!STORES.includes(st) || !PRICES[pm]) return json({ error: "store and a known pickModel please" }, 400);
+      const ids = (url.searchParams.get("ids") || "").split(",").map(x => x.trim()).filter(Boolean).slice(0, 200);
+      const apiKey = Deno.env.get("ANTHROPIC_API_KEY")!;
+      const client = new Anthropic({ apiKey });
+      const { shop, token } = await shopFor(st);
+      const [ls, sheets, saved] = await Promise.all([
+        (async () => { const o: Listing[] = []; for (let i = 0; i < ids.length; i += 25) o.push(...await fetchListings(shop, token, ids.slice(i, i + 25))); return o; })(),
+        loadSheets(), rows(`picture_quality_reviews?store_code=eq.${st}&product_id=in.(${quoteIds(ids)})&select=product_id,sheet_slug,report`)]);
+      const was = new Map<string, any>(saved.map((r: any) => [String(r.product_id), r]));
+      let tin = 0, tout = 0;
+      const out = await Promise.all(ls.map(async l => {
+        const { pick, usage } = await pickSheet(client, pm, l, sheets);
+        tin += (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0); tout += usage?.output_tokens || 0;
+        const got = sheetFromPick(l, pick, sheets)?.slug || null;
+        const r = was.get(l.id);
+        // The sheet the saved grade was first PICKED on (before any re-sheet by the photos).
+        const firstPick = r?.report?.sheetPick?.slug || null;
+        return { id: l.id, title: l.title, saved: r?.sheet_slug || null, savedPick: firstPick, got, same: got === (r?.sheet_slug || null) || got === firstPick };
+      }));
+      const price = PRICES[pm];
+      const cost = tin / 1e6 * price[0] + tout / 1e6 * price[1];
+      await logUsage(st, pm, "low", "picktest", out.length, tin, tout, cost);
+      return json({ store: st, pickModel: pm, n: out.length, same: out.filter(o => o.same).length, cost_usd: Math.round(cost * 1e4) / 1e4, results: out });
+    }
+    // ?trimtest=1&store=X&ids=a,b&px=384[&pickModel=…] — PAID (~$0.08 a listing,
+    // live): grade these listings again with the trim applied and compare with
+    // their saved grades. Saves nothing.
+    if (url.searchParams.get("trimtest") === "1") {
+      const st = (url.searchParams.get("store") || "").toUpperCase();
+      if (!STORES.includes(st)) return json({ error: "pass ?store=" }, 400);
+      const ids = (url.searchParams.get("ids") || "").split(",").map(x => x.trim()).filter(Boolean).slice(0, MAX_IDS * 2);
+      const px = Math.min(Math.max(Number(url.searchParams.get("px") || PHOTO_PX), 256), 800);
+      const pm = url.searchParams.get("pickModel") || undefined;
+      return streamed(async () => {
+        const saved = await rows(`picture_quality_reviews?store_code=eq.${st}&product_id=in.(${quoteIds(ids)})&select=product_id,verdict,findings,stamp`);
+        const was = new Map<string, any>(saved.map((r: any) => [String(r.product_id), r]));
+        const res: any = await runReviews(st, ids, DEFAULT_MODEL, DEFAULT_EFFORT, false, false, { px, pickModel: pm });
+        await logUsage(st, DEFAULT_MODEL, DEFAULT_EFFORT, `trimtest-${px}`, res.reviewed, res.tokens.input, res.tokens.output, res.cost_usd);
+        const codes = (f: any[]) => (f || []).map((x: any) => x.code === "missing_shot" ? "missing:" + (x.shot || "") : x.code).sort();
+        return { store: st, px, pickModel: pm || DEFAULT_MODEL, cost_usd: res.cost_usd, results: res.results.map((r: any) => {
+          const w = was.get(r.product_id);
+          return { id: r.product_id, title: r.title, was: w?.verdict || null, now: r.verdict, same: w?.verdict === r.verdict,
+                   wasFindings: codes(w?.findings), nowFindings: codes(r.findings), photosChanged: !!w && w.stamp !== r.stamp };
+        }) };
+      });
+    }
+    // ?quick=1 — THE 5-MINUTE CHECK (see quickSweep). &dry=1 is free and runs
+    // even while it is off. &force=1 runs it once while off (a paid test).
+    if (url.searchParams.get("quick") === "1") {
+      const forced = url.searchParams.get("force") === "1", dry = url.searchParams.get("dry") === "1";
+      if (!dry && !forced && Deno.env.get("PQ_QUICK_ON") !== "1") {
+        return json({ off: true, note: "The 5-minute picture check is off (PQ_QUICK_ON is not 1) — nothing submitted." });
+      }
+      const one = (url.searchParams.get("store") || "").toUpperCase();
+      const which = STORES.includes(one) ? [one] : STORES;
+      return streamed(async () => ({ dry, quick: await Promise.all(which.map(st =>
+        quickSweep(st, dry).catch((e: unknown) => ({ store: st, error: String((e as Error)?.message || e) })))) }));
+    }
+    if (url.searchParams.get("trickle") === "1") {
+      const forced = url.searchParams.get("force") === "1";
+      if (Deno.env.get("PQ_TRICKLE_ON") !== "1" && !forced) {
+        return json({ off: true, note: "All-day guide check is off (PQ_TRICKLE_ON is not 1) — nothing submitted." });
+      }
+      const one = (url.searchParams.get("store") || "").toUpperCase();
+      const which = STORES.includes(one) ? [one] : STORES;
+      return streamed(async () => ({
+        trickle: await Promise.all(which.map(st =>
+          batchSweep(st, 40, 1, DEFAULT_MODEL, DEFAULT_EFFORT, false, false, [], 30)
+            .catch((e: unknown) => ({ store: st, error: String((e as Error)?.message || e) })))),
+      }));
+    }
     const store = (url.searchParams.get("store") || "").toUpperCase();
     if (!STORES.includes(store)) return json({ error: "pass ?store=OVL|LEE|WSP|MPL|BAL" }, 400);
     const model = url.searchParams.get("model") || DEFAULT_MODEL;
@@ -2379,8 +2863,10 @@ Deno.serve(async (req: Request) => {
       }
       const days = forced ? Math.min(Math.max(Number(url.searchParams.get("days") || 3), 1), 30) : NIGHTLY.days;
       const limit = forced ? Math.min(sweep, 200) : NIGHTLY.limit;
-      return streamed(() => batchSweep(store, limit, days, model, effort, url.searchParams.get("regrade") === "1",
-        !forced || url.searchParams.get("random") === "1"));
+      const only = forced ? (url.searchParams.get("ids") || "").split(",").map(s => s.trim()).filter(Boolean)
+        .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`) : [];
+      return streamed(() => batchSweep(store, only.length ? Math.min(only.length, 200) : limit, days, model, effort,
+        url.searchParams.get("regrade") === "1", !forced || url.searchParams.get("random") === "1", only));
     }
     if (sweep > 0) {
       return streamed(async () => {

@@ -72,6 +72,9 @@ const LIST_KEYS = new Set([
   // every store's mail.
   "record_watch_leadership",
   ...STORES.map((s) => `record_watch_${s}`),
+  // record_watch_CORP: the company-wide version (2026-11-25) — all five stores
+  // summed. Leadership is copied as on the store mails; empty = leadership only.
+  "record_watch_CORP",
   // unrestocked_returns: the 7:35am Returned But Not Back In Stock mail
   // (unrestocked-returns, 0153) — the DM. Empty, it falls back to
   // claims_disputes_dm.
@@ -79,6 +82,14 @@ const LIST_KEYS = new Set([
   // unrestocked_returns_<STORE>: the same mail cut to one store, sent only on
   // mornings that store has a line open (2026-11-06, 0178). Empty = no store copy.
   ...STORES.map((s) => `unrestocked_returns_${s}`),
+  // fb_boosts: the Monday Facebook Boosts email (fb-boost-report, 2026-11-13)
+  // — boosts staff record in the Marketplace Lister. Empty, it falls back to
+  // claims_disputes_dm.
+  "fb_boosts",
+  // credential_expiry: the 7:50am Expiring Credentials mail (credential-expiry,
+  // 0196, 2026-11-21) — a key/secret/token is within 60 days of expiring.
+  // Empty, it falls back to Ethan.
+  "credential_expiry",
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

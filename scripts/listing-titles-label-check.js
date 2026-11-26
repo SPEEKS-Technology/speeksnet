@@ -41,7 +41,7 @@ const strip = s => s
     .replace(/function hasPartCode\([^)]*\)\s*:\s*boolean\s*\{/,
              'function hasPartCode(title, specs) {')
     .replace(/:\s*Record<[^>]*>(\s*\|\s*undefined)?/g, '')
-    .replace(/\)\s*:\s*(number|boolean|\[number,\s*number\])\s*\{/g, ') {')
+    .replace(/\)\s*:\s*(number|boolean|string|\[number,\s*number\])\s*\{/g, ') {')
     .replace(/(\w)\??\s*:\s*\[number,\s*number\]/g, '$1')
     .replace(/:\s*number\[\]\[\]/g, '')
     .replace(/(\w+)\s*:\s*number\b(?=\s*[,)])/g, '$1')
@@ -122,6 +122,7 @@ const helpers = strip([
     between('const IDENTITY_FIELDS = [', '\n\ntype NameVerdict'),
     between('function listingSaysItself', '\n\n// How many notes nobody has carried'),
     between('function fieldBacksCorrection', '\n\n// ⚠️ EVERY FAILED DESIGN'),
+    between('function hasPartCode', '\n\n// The label answer'),
 ].join('\n\n'));
 const decision = strip(between(
     '  if (nameVerdict && nameVerdict.verdict !== "ok") {',
@@ -139,14 +140,18 @@ try {
 
 console.log('\n== 4. Through the real decision ==');
 {
-    // BAL's ADATA, with the MPN repeating the title's typo.
+    // BAL's ADATA, with the MPN repeating the title's typo — and, as on the real
+    // listing, its Model field carrying the label's 38. Two sources against one
+    // (see labelAlone; section 6 has the same row with nothing backing it).
     const v = labelVerdict(ADATA, [good], URLS, LOADED);
-    const r = decide(v, ADATA, { specs: { Brand: 'ADATA', MPN: 'AD4U266628G19-B' } });
+    const r = decide(v, ADATA, { specs: { Brand: 'ADATA', Model: 'AD4U266638G19-B', MPN: 'AD4U266628G19-B' } });
     const f = r.findings[0] || {};
     ok(f.code === 'name-wrong' && f.severity === 3, 'name-wrong, severity 3 — not "garbled"', f.code);
     ok(r.fixable && f.fixable, 'one click');
     ok(r.title === 'ADATA AD4U266638G19-B 8GB (1x8GB) RAM DDR4 2666MHz', 'the suggested title', r.title);
-    ok(/^The title says "AD4U266628G19-B"; it should be "AD4U266638G19-B"\. Look at photo 2: the stick's label reads AD4U266638G19-B\./.test(f.says),
+    // The one-character note (oneCharSwap, 2026-11-19) sits between the
+    // correction and the photo: it is what to look for when you open the photo.
+    ok(/^The title says "AD4U266628G19-B"; it should be "AD4U266638G19-B"\. Only one character changes: the "2" should be "3"\. Look at photo 2: the stick's label reads AD4U266638G19-B\./.test(f.says),
        'says what the photo shows', f.says);
     ok((f.says.match(/label reads/g) || []).length === 1, 'and says it once', f.says);
     ok(/MPN field \("AD4U266628G19-B"\) says otherwise, and approving corrects that field too/.test(f.says),
@@ -177,6 +182,129 @@ console.log('\n== 4. Through the real decision ==');
        'capacity corrected in one click', r.title);
     ok(/Capacity field \("1TB"\) says otherwise, and approving corrects that field too/.test(f.says),
        'and the Capacity field with it', f.says);
+}
+
+// --- 5: what a photo cannot tell (the 2026-11 denials, reviewed 11-16) -------
+console.log('\n== 5. What a photo cannot tell ==');
+{
+    // WSP Corsair (MO02-5426B-E7): one stick carrying the kit's 32GB(2X16GB) label.
+    const T = 'Corsair Vengeance Pro 16GB (1x16GB) RAM DDR4 3600MHz CMH32GX4M2D3600C18';
+    const v = labelVerdict(T, [{ title_text: '16GB (1x16GB)', label_text: '32GB (2x16GB)', photo: 3,
+        seen: 'the module label reads CMH32GX4M2D3600C18 DDR4 32GB(2X16GB) 3600MHz' }], URLS, LOADED);
+    const r = decide(v, T, { specs: { Brand: 'Corsair', MPN: 'CMH32GX4M2D3600C18',
+        'Memory Size': '16GB (1x16GB) RAM' } });
+    ok(!r.findings.length && !r.fixable && r.title === T, 'a kit label adds no sticks', r.findings[0] && r.findings[0].says);
+    const plain = labelVerdict('Corsair 16GB DDR4', [{ title_text: '16GB', label_text: '32GB (2x16GB)', photo: 3,
+        seen: 'the label reads 32GB(2X16GB)' }], URLS, LOADED);
+    ok(!decide(plain, 'Corsair 16GB DDR4', { specs: {} }).findings.length, 'nor from a plain "16GB"');
+    // …but a real per-stick size change still goes through.
+    const T2 = 'Kingston 8GB (1x8GB) RAM DDR4';
+    const real = labelVerdict(T2, [{ title_text: '8GB (1x8GB)', label_text: '16GB (1x16GB)', photo: 1,
+        seen: 'the stick reads 16GB' }], URLS, LOADED);
+    ok(decide(real, T2, { specs: {} }).title === 'Kingston 16GB (1x16GB) RAM DDR4', 'a bigger stick is still a fix');
+}
+{
+    // BAL Oura (MO04-2512A-E7): the side-on stamp is a 6, read as a 9.
+    const T = 'Oura Ring Gen 2 Air Size 6 Silver Stainless Steel Smart Ring JZ90-54217-06';
+    const v = labelVerdict(T, [{ title_text: 'Size 6', label_text: 'Size 9', photo: 2,
+        seen: "the ring's inner band is stamped OURA 9" }], URLS, LOADED);
+    const r = decide(v, T, { specs: { Brand: 'Oura', Size: 'Size 6' } });
+    ok(!r.findings.length && r.title === T, 'a 6/9 swap read off a photo is dropped');
+    // A tiebreak "ours" on a 6/9 is dropped too, even with a field repeating the title.
+    const tb = { verdict: 'wrong', wrong_text: 'A2169', correct_text: 'A2166', why: 'x',
+                 photo: { answer: 'ours', photo: 1, seen: 'the caseback reads A2166', url: URLS[0] } };
+    ok(!decide(tb, 'Apple Watch A2169 44mm', { specs: { Model: 'A2169' } }).findings.length,
+       'from the tiebreak as well');
+    // A digit change that is not only 6<->9 still goes through.
+    const ok69 = labelVerdict('Ring Size 8', [{ title_text: 'Size 8', label_text: 'Size 9', photo: 1,
+        seen: 'stamped 9' }], URLS, LOADED);
+    ok(decide(ok69, 'Ring Size 8', { specs: {} }).title === 'Ring Size 9', '8 -> 9 is still a fix');
+}
+{
+    // BAL HP (MO04-2376A-R4R1): Task Manager's 477 GB is a 512GB drive.
+    const T = 'HP Laptop 15-CS3055WM 15.3" i5-1035G1 1.0GHz 8GB RAM 500GB SSD';
+    const v = labelVerdict(T, [{ title_text: '500GB SSD', label_text: '477GB SSD', photo: 2,
+        seen: 'Task Manager Disk 0 shows capacity 477 GB' }], URLS, LOADED);
+    const r = decide(v, T, { specs: { Brand: 'HP', MPN: '15-CS3055WM', 'Storage 1': '500GB' } });
+    const f = r.findings[0] || {};
+    ok(r.title === 'HP Laptop 15-CS3055WM 15.3" i5-1035G1 1.0GHz 8GB RAM 512GB SSD' && r.fixable,
+       'written as the advertised 512GB', r.title);
+    ok(/the 477GB it shows is a 512GB drive/.test(f.says || ''), 'and says why the photo reads 477', f.says);
+    // A title that already says 512GB is left alone.
+    const T2 = 'HP Laptop 8GB RAM 512GB SSD';
+    const same = labelVerdict(T2, [{ title_text: '512GB', label_text: '477GB', photo: 1,
+        seen: 'Task Manager shows 477 GB' }], URLS, LOADED);
+    ok(!decide(same, T2, { specs: {} }).findings.length, '477 against a 512GB title is no finding');
+    // 931 GB -> 1TB, and an advertised size is never touched.
+    const T3 = 'Dell 500GB HDD';
+    const tb = labelVerdict(T3, [{ title_text: '500GB', label_text: '931GB', photo: 1,
+        seen: 'Disk Management shows 931 GB' }], URLS, LOADED);
+    ok(decide(tb, T3, { specs: {} }).title === 'Dell 1TB HDD', '931GB is written 1TB');
+    const T4 = 'Samsung T7 1TB SSD';
+    const adv = labelVerdict(T4, [{ title_text: '1TB', label_text: '500GB', photo: 1,
+        seen: 'the drive label reads 500GB' }], URLS, LOADED);
+    ok(decide(adv, T4, { specs: {} }).title === 'Samsung T7 500GB SSD', 'an advertised 500GB stays 500GB');
+}
+
+// --- 6: a label read alone never overrules the listing's own part code ------
+// BAL/LEE denials 2026-11-20/21. Each listing's field agreed with its title and
+// the label read was the misread. Disputed, photo attached, nothing written.
+console.log('\n== 6. A label read alone does not overrule an agreeing field ==');
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// These rows cite photos 4, 6 and 7, past section 2's three.
+const URLS8 = [1, 2, 3, 4, 5, 6, 7, 8].map(n => 'https://x/' + n + '.jpg');
+const alone = (what, T, specs, m, wantRight) => {
+    const v = labelVerdict(T, [m], URLS8, URLS8.map(() => true));
+    ok(!!v, what + ': the read itself is accepted');
+    const r = decide(v, T, { specs: specs });
+    const f = r.findings[0] || {};
+    ok(f.code === 'name-disputed' && !f.fixable && !r.fixable && r.title === T,
+       what + ': disputed, not one click', f.code + ' | ' + r.title);
+    ok(f.photo && f.photo.n === m.photo, what + ': the photo rides on it');
+    ok(new RegExp('we recommend "' + esc(wantRight) + '"').test(f.says || '')
+       && /It is not one click because the listing's own/.test(f.says || ''),
+       what + ': says the recommendation and why it is not a button', f.says);
+    ok(/^Zoom in on photo \d/.test(f.warn || ''), what + ': tells them where to look', f.warn);
+    return f;
+};
+{
+    const d = alone('Denon AVR-S760H', 'Denon AVR-S760H 7.2 Home Theater Receiver AVR-S760H',
+        { Brand: 'Denon', Model: 'AVR-S760H', MPN: 'AVR-S760H' },
+        { title_text: 'AVR-S760H', label_text: 'AVR-S720H', photo: 4, seen: 'the rear panel label reads DENON AVR-S720H' },
+        'AVR-S720H');
+    ok(/one character of small print/.test(d.says || ''), 'a one-character code says why it is doubted', d.says);
+    alone('Crucial CT16G56C46S5', 'Crucial CT16G56C46S5.M8G1 16GB (1x16GB) RAM DDR5 5600MHz CT16G56C46S5',
+        { Brand: 'Crucial', Model: 'CT16G56C46S5.M8G1', MPN: 'CT16G56C46S5' },
+        { title_text: 'CT16G56C46S5.M8G1', label_text: 'CT16G66C46S5.M8G1', photo: 1, seen: "the stick's label reads CT16G66C46S5.M8G1" },
+        'CT16G66C46S5.M8G1');
+    alone('Dell U2412MB', 'Dell 24" U2412MB WUXGA LCD IPS LCD Monitor',
+        { Brand: 'Dell', MPN: 'U2412MB' },
+        { title_text: 'U2412MB', label_text: 'U2412Hb', photo: 7, seen: 'label reads MODEL NO. U2412Hb' },
+        'U2412Hb');
+    const a = alone('Anker A2820', 'Anker Prime Docking Station 140W Max TB5 Docking Station A2820 Multi-Colored',
+        { Brand: 'Anker', Model: 'Prime Docking Station', MPN: 'A2820' },
+        { title_text: 'A2820', label_text: 'A2206', photo: 6, seen: "the caseback label reads 'Model: A2206'" },
+        'A2206');
+    ok(!/one character/.test(a.says || ''), 'a multi-character change does not claim one character', a.says);
+}
+{
+    // The ADATA with only the MPN repeating the title and nothing backing 38:
+    // the same shape as the Denon, so the same answer.
+    const v = labelVerdict(ADATA, [good], URLS, LOADED);
+    const r = decide(v, ADATA, { specs: { Brand: 'ADATA', MPN: 'AD4U266628G19-B' } });
+    ok(r.findings[0] && r.findings[0].code === 'name-disputed' && !r.fixable,
+       'ADATA with nothing backing the label is disputed too', r.findings[0] && r.findings[0].code);
+}
+{
+    // Untouched: WD (MO04-2636C-E4, 11-20) was a knowledge verdict the photo
+    // tiebreak confirmed — two readers — and it was right.
+    const T = 'Western Digital WD Black SN850X 1TB M.2 NVMe Gen 4.0 SSD WBBB9G0010BNC';
+    const kv = { verdict: 'wrong', wrong_text: 'WBBB9G0010BNC', correct_text: 'WDBB9G0010BNC',
+                 why: 'Typo in the WD part number: it should start WDB, not WBB',
+                 photo: { answer: 'ours', photo: 3, seen: 'the drive label reads MDL: WDBB9G0D10BNC', url: URLS[2] } };
+    const r = decide(kv, T, { specs: { Brand: 'Western Digital WD', Model: 'Black SN850X', MPN: 'WBBB9G0010BNC' } });
+    ok(r.findings[0] && r.findings[0].code === 'name-wrong' && r.fixable,
+       'WD: knowledge + photo is still one click', r.findings[0] && r.findings[0].code);
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all passed') + '\n');

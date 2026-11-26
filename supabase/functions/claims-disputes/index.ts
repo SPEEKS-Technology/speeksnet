@@ -1079,14 +1079,34 @@ function readEbayDisputeDetail(d: any) {
   const ev = (d.evidence || [])[0] || {};
   const overdue = resp === "SELLER_RESPONSE_OVERDUE";
   const answered = !!resp && !overdue;
+  // SELLER PROTECTION (Ethan, 2026-11-13). eBay's dispute detail has no
+  // "protected" field — OVL 03-15322-48948 ($399.99, AUTHORIZATION_FAILED) came
+  // back with none — but it says it by what it does NOT ask of us: an open
+  // dispute with no sellerResponse, an EMPTY availableChoices and no evidence
+  // requests is one eBay is carrying itself, because we qualified for seller
+  // protection. Nothing we could submit would be accepted, so it is not ours to
+  // chase. Every dispute that does need us lists CONTEST/ACCEPT; an overdue one
+  // carries SELLER_RESPONSE_OVERDUE and an answered one SELLER_*, which is why
+  // those two are excluded before an empty list is read as protection.
+  // THE RULE IS AN INFERENCE, so it never hides anything by itself (Ethan,
+  // 2026-11-13: it goes to him to confirm, and only his confirm takes it off the
+  // list). It is marked outcome 'protected_suspected' and the sweep files a
+  // system resolution for the DM to answer (see the detail pass). If eBay later
+  // offers us a choice, the next sweep clears the mark on its own.
+  const stillOpen = !/CLOSED|RESOLVED/i.test(String(d.paymentDisputeStatus ?? ""));
+  const protectedBySite = stillOpen && !resp
+    && Array.isArray(d.availableChoices) && d.availableChoices.length === 0
+    && !(Array.isArray(d.evidenceRequests) && d.evidenceRequests.length)
+    && !(Array.isArray(d.evidence) && d.evidence.length);
   return {
+    ...(protectedBySite ? { outcome: "protected_suspected" } : stillOpen ? { outcome: null } : {}),
     seller_response: resp || null,
     response_overdue: overdue,
     // Overdue still counts as unanswered: the money is at risk and nobody dealt
     // with it. What changes is that it can no longer be fixed by responding, so
     // the card and the refusal say something different (see stateOf and the POST
     // gate).
-    needs_response: !answered,
+    needs_response: !answered && !protectedBySite,
     responded_at: answered ? dateOf(ev.providedDate) : null,
     respond_by: dateOf(ev.respondByDate) ?? dateOf(d.respondByDate),
     detail_checked_at: new Date().toISOString(),
@@ -1153,7 +1173,16 @@ async function sweepDisputes(sb: any, store: string, ebayRow: any, shopRow: any)
     for (const p of want || []) {
       try {
         const d = await ebayGet(`${host}/sell/fulfillment/v1/payment_dispute/${encodeURIComponent(p.external_id)}`, token);
-        await sb.from("payment_disputes").update(readEbayDisputeDetail(d)).eq("dispute_key", p.dispute_key);
+        // The detail is kept whole in raw.detail: seller protection (2026-11-13)
+        // is read from it, and the summary says nothing about it.
+        const { data: cur } = await sb.from("payment_disputes").select("raw").eq("dispute_key", p.dispute_key).maybeSingle();
+        const rd = readEbayDisputeDetail(d);
+        await sb.from("payment_disputes")
+          .update({ ...rd, raw: { ...(cur?.raw || {}), detail: d } })
+          .eq("dispute_key", p.dispute_key);
+        // A "looks protected" dispute is NOT sent to the DM by the sweep (Ethan,
+        // 2026-11-13). It reaches the DM only when the store's manager resolves
+        // it — factCheckRaw then reads the resolution as unverifiable.
       } catch { bad++; }
     }
     if (bad) {
@@ -1632,6 +1661,12 @@ function factCheck(type: string, it: any, review: any): { ok: boolean; why: stri
 function factCheckRaw(type: string, it: any, review: any): { ok: boolean; why: string; kind?: FactKind } {
   const ok = { ok: true, why: "" };
   if (type === "dispute") {
+    // The sweep's own resolution (outcome protected_suspected) is never taken
+    // on trust: the DM confirms it, and only then does it leave the list.
+    if (it.is_open && it.outcome === "protected_suspected") {
+      return { ok: false, kind: "unverifiable",
+        why: "eBay is asking nothing of us on this dispute, which usually means we qualified for seller protection. Confirm it in Seller Hub, then confirm here" };
+    }
     if (!it.is_open || !it.needs_response) return ok;
     const site = it.source === "ebay" ? "eBay" : "Shopify";
     return { ok: false, why: missedWindow(type, it)
@@ -1719,6 +1754,11 @@ function stateOf(type: string, it: any, review: any, ctx: any): StateOut {
   if (review.dm_status === "denied") {
     // Sent back: as though nobody had resolved it, except it is due TODAY —
     // the DM has just said it isn't done, so no timeframe or check-in hides it.
+    // A "looks protected" dispute the DM says is NOT protected is the store's
+    // again, due today, like any dispute still waiting on us.
+    if (type === "dispute" && it.is_open && it.outcome === "protected_suspected") {
+      return { state: "needs_reply", due_on: ctx.today, note: "protection_denied", dm: dmOf(review, false, fc.why) };
+    }
     const s = baseState(type, it, null, ctx);
     const quiet = ["waiting", "checked", "resolved"].includes(s.state);
     return { ...(quiet ? { state: "due", due_on: ctx.today } : s), note: s.note, quiet_until: undefined,
@@ -1766,6 +1806,56 @@ function hushOf(type: string, it: any, s: StateOut, ctx: any): string | null {
     if (it.respond_by && chicagoDay(it.respond_by) > ctx.today) return "replied";
   }
   return null;
+}
+
+// DUE TODAY, OR JUST OPEN (Ethan, 2026-11-25: "do a better job of organizing
+// what's actually due today and what's just open ... red and amber", and both
+// mails should show "what is truly due today ... instead of a day before or
+// things that are just open"). ONE answer per item, worked out here so the tab,
+// the badges, the morning mail and both 4pm mails cannot disagree:
+//   'today' (red)  its deadline is today or already past, or it has no
+//                  deadline and is ours every day until handled;
+//   'open'  (amber) needs us, but its deadline is a later day;
+//   null           nothing for a person to do (not a NEED state, or hushed).
+// The rules Ethan picked the same day:
+//   - Truly today: the Oct 2 "deadline today OR tomorrow" rule is gone, except
+//     for a card authorization, which usually runs out mid-morning (OVL
+//     #KS01-15083 at 11:04 AM) — that one still turns red the day before.
+//   - Returns go by eBay's own deadline, not "due the moment they appear".
+//   - A refunded INR (claim / call eBay / restock / find it), anything the DM
+//     sent back, and anything marked resolved that isn't done stay due every day.
+//   - A check-in that has come due (mismatches, expired cards, cases with no eBay
+//     date) is today's job: it is the tool's own deadline, and checking it in
+//     takes it off for the timeframe.
+// `due_day` is the date the rule went by, so the mail prints and sorts by it.
+const REFUND_ROUTE_NOTES = ["delivered_after_refund", "returned_to_us", "never_scanned"];
+// eBay deadlines are END OF DAY PACIFIC, stored as 06:59:59Z / 07:00:00Z the next
+// morning. Read in Chicago they land a day late, so eBay's day is the Pacific date
+// one second before (the same thing the card's _holdEbayDay does).
+const ebayDay = (iso: string | null | undefined) => {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return "";
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date(t - 1000));
+};
+function urgencyOf(type: string, it: any, s: StateOut, hush: string | null, ctx: any): { urgency: "today" | "open" | null; due_day: string | null } {
+  if (!NEED_STATES.includes(s.state) || hush) return { urgency: null, due_day: null };
+  // A return waiting on the buyer is 'due' to the server (every open return is,
+  // after day 1) but nobody here can move it — listed, never coloured or counted
+  // (the card's _holdReturnNeedsUs; the mail only counts them).
+  if (type === "ebay_case" && it.kind === "return" && !returnActNow(it)) return { urgency: null, due_day: null };
+  const today = ctx.today;
+  const every = { urgency: "today" as const, due_day: today };
+  if (s.state === "needs_claim" || REFUND_ROUTE_NOTES.includes(s.note || "")) return every;
+  if (s.dm && (s.dm.status === "denied" || s.dm.kind === "not_done")) return every;
+  const by = (day: string, lead = 0) => day
+    ? { urgency: (day <= addDays(today, lead) ? "today" : "open") as "today" | "open", due_day: day }
+    : every;
+  if (type === "payment" && it.capturable) return by(chicagoDay(it.auth_expires_at), 1);
+  if (type === "ebay_case" && it.respond_by) return by(ebayDay(it.respond_by));
+  if (type === "dispute" && it.respond_by) return by(it.source === "ebay" ? ebayDay(it.respond_by) : chicagoDay(it.respond_by));
+  return by(s.due_on && s.due_on > today ? s.due_on : today);
 }
 
 // What the card, the DM list and the emails need to know about the DM's part.
@@ -2140,6 +2230,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     const review = reviewBy[`${type}|${key}`] || (it.return ? reviewBy[`${type}|${it.return.case_key}`] : null)
       || (inq ? reviewBy[`${type}|${inq}`] : null) || null;
     const s = stateOf(type, it, review, ctx);
+    const hush = hushOf(type, it, s, ctx);
     const claim = ctx.claimFor(type, it);
     const history = [...(eventsBy[`${type}|${key}`] || []), ...(inq ? eventsBy[`${type}|${inq}`] || [] : [])]
       .sort((a: any, b: any) => String(b.at).localeCompare(String(a.at)));
@@ -2166,7 +2257,9 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
              // The reply window has shut — nothing anyone presses brings it back.
              missed_window: s.note === "missed_window",
              // Listed, not notified (hushOf).
-             hush: hushOf(type, it, s, ctx),
+             hush,
+             // Due today (red) or just open (amber) — see urgencyOf.
+             ...urgencyOf(type, it, s, hush, ctx),
              // Someone called this resolved and the site still disagrees. The
              // date is when they said so, which is what the escalation counts
              // from — exposed rather than re-derived, so the email and the DM
@@ -2264,8 +2357,16 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       // A manager's own resolution clears their card (Ethan, 2026-10-08) —
       // unless the DM has since sent it back.
       if (x.review?.status === "resolved" && !sentBack && !notDone) continue;
+      // DUE TODAY ONLY (Ethan, 2026-11-25: "it shouldn't be due tomorrow. It
+      // should only be stuff due today. And if there is nothing due today,
+      // nothing should show"). The same urgencyOf answer the tab and mails use;
+      // the 11-06 "today or tomorrow" window is gone. A card authorization is
+      // still 'today' the day before it runs out (urgencyOf).
+      if (x.urgency !== "today") continue;
+      // urgencyOf's day: eBay's own date for an eBay deadline. chicagoDay of
+      // respond_by printed it a day late ("due tomorrow" on eBay's last day).
       const dueAt = type === "payment" ? (x.capturable ? x.auth_expires_at : null) : x.respond_by;
-      const due = dueAt ? chicagoDay(dueAt) : null;
+      const due = x.due_day || (dueAt ? chicagoDay(dueAt) : null);
       dueAlerts.push({
         type, key, store_code: x.store_code, state: x.state, state_note: x.state_note,
         missed_window: x.missed_window, nudged_on: on, due,
@@ -2312,6 +2413,30 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   queueFrom("ebay_case", cases, (x) => x.case_key);
   queueFrom("payment", payments, (x) => x.order_key);
   queueFrom("mismatch", mismatches, (x) => x.issue_key);
+  // RETURNED BUT NOT BACK IN STOCK (Ethan, 2026-11-14: "any resolutions to
+  // confirm on the returns not in stock report also just go in the need confirm
+  // on claims and disputes"). A manager's Never Came Back mark (0179) is the same
+  // shape as a resolution the sites don't back up — Shopify still reads 0 on
+  // hand and no resale, so only the DM can say it's right — so it sits on the
+  // same list. The row itself stays in unrestocked_returns, and the answer goes
+  // back through unrestocked-returns' own nb_confirm / nb_deny (the front end
+  // posts there for this type), so the 7:35 mail and the #restock card keep
+  // reading one record. Read-only here; a failed read just leaves them off.
+  try {
+    const { data: nb } = await sb.from("unrestocked_returns")
+      .select("issue_key,store_code,order_name,channel,kind,title,sku,amount,nb_requested_at,nb_requested_by,nb_reason")
+      .not("nb_requested_at", "is", null).is("resolved_at", null).in("store_code", stores);
+    for (const r of nb || []) {
+      dmQueue.push({
+        type: "unrestocked", key: r.issue_key, review_key: r.issue_key, store_code: r.store_code, state: "dm_review",
+        why: `Shopify still has ${r.sku || "it"} at 0 on hand and it hasn't sold again, so nothing shows whether it ${r.kind === "cancel" ? "was ever shipped" : "came back"}`,
+        resolved_by: r.nb_requested_by, resolved_note: `Never came back — ${r.nb_reason || ""}`, resolved_at: r.nb_requested_at,
+        fact_kind: "unverifiable",
+        amount: r.amount ?? null, order: r.order_name || null, title: r.title || null,
+        channel: r.channel || null, restock_kind: r.kind || null,
+      });
+    }
+  } catch (_) { /* the claims list still stands without them */ }
   dmQueue.sort((a, b) => String(a.resolved_at || "").localeCompare(String(b.resolved_at || "")));
 
   return {

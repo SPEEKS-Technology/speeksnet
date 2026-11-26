@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPEEKS Marketplace Lister</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="top">
+    <img src="logo-white.png" alt="" class="mark">
+    <div class="brand">
+      <span class="eyebrow">SPEEKSNET</span>
+      <span class="title">Marketplace Lister</span>
+    </div>
+    <span id="who" class="who"></span>
+  </header>
+
+  <section id="signin" hidden>
+    <div class="signin-card">
+      <span class="eyebrow dark">Sign In</span>
+      <p>Use your SPEEKSNET PIN.</p>
+      <form id="signinForm" class="row">
+        <input id="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="PIN">
+        <button type="submit" class="primary">Sign In</button>
+      </form>
+      <div class="msg" id="signinMsg"></div>
+    </div>
+  </section>
+
+  <section id="app" hidden>
+    <nav class="seg">
+      <button class="tab on" data-tab="list">List An Item</button>
+      <button class="tab" data-tab="listed">Listed <span id="listedCount" class="cnt"></span></button>
+      <button class="tab" data-tab="groups">Groups</button>
+    </nav>
+
+    <div id="tab-list">
+      <div class="row" id="listBar">
+        <select id="store"></select>
+        <input id="q" type="search" placeholder="Search title or SKU">
+      </div>
+      <div class="msg" id="listMsg"></div>
+      <div id="results" class="list"></div>
+      <div id="refresh" class="refresh"></div>
+      <div id="detail" hidden></div>
+    </div>
+
+    <div id="tab-listed" hidden>
+      <div class="row even">
+        <button id="check">Check What's Sold</button>
+        <button id="markAll" class="primary" hidden><span id="markAllText">Open Sold On Facebook</span><svg class="ext" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="msg" id="listedMsg"></div>
+      <div id="listed" class="list"></div>
+    </div>
+
+    <div id="tab-groups" hidden>
+      <div class="note warn"><span>It can only post in groups <b>you've already joined</b>. Join local ones below.</span></div>
+      <label class="chk"><input type="checkbox" id="gAuto"> <span><b>Post In Groups For Me</b><br>Ticks the local groups that fit the item. You still click Publish.</span></label>
+      <div class="sub">Find Groups To Join</div>
+      <div id="gFind" class="finds"></div>
+    </div>
+
+    <footer><button id="logout">Sign Out</button></footer>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!doctype html>
+<!--
+  The Marketplace Lister popup with a fake chrome.* — for checking its look
+  and flow without installing the extension. Serve the repo (preview
+  "speeksnet", port 8080) and open /scripts/fb-lister-popup-mock.html.
+  Add ?signin to see the sign-in screen. Nothing here touches the network:
+  the catalog and item are canned.
+-->
+<html><head><meta charset="utf-8"><title>Popup mock</title>
+<style>html,body{margin:0;background:#dfe5ea} #frame{margin:24px auto;width:400px;box-shadow:0 10px 30px rgba(0,0,0,.2);border-radius:10px;overflow:hidden;background:#fff}
+iframe{display:block;width:400px;height:620px;border:0}</style></head>
+<body><div id="frame"><iframe id="f"></iframe></div>
+<script>
+const SIGNIN = location.search.includes('signin');
+const BASE = '../tools/fb-lister/extension/';
+const shopPhoto = (seed) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" fill="hsl(${seed},35%,82%)"/><text x="64" y="72" font-size="14" text-anchor="middle" fill="#334155" font-family="sans-serif">photo</text></svg>`)}#`;
+const items = [
+  ['KS01-8423D-E10', 'New Nintendo 3DS XL Handheld Game Console RED-001 Black', 299.99, 'Good', 5],
+  ['KS01-8411A-E4', 'Apple iPhone 13 128GB Midnight Unlocked A2482', 389.99, 'Very Good', 8],
+  ['KS01-8399C-E9', 'Sony PlayStation 5 Slim Digital Edition 1TB CFI-2015', 349.99, 'Like New', 7],
+  ['MO01-B2B197-QTY2-R1R2', 'Apple MacBook Air 13" M1 8GB 256GB Space Gray A2337', 479.99, 'Good', 9],
+  ['KS01-8377D-E10', 'Bose QuietComfort 45 Wireless Headphones Black', 129.99, 'Acceptable', 6],
+].map(([sku, title, price, condition, photos], i) => ({ sku, product_id: 'gid://shopify/Product/' + (1000 + i), title, price, quantity: 1, condition, photos, added: new Date(Date.now() - 36e5 * (i * 7 + 1)).toISOString() }));
+const store = {
+  listed: [
+    { sku: 'KS01-7701A-E1', product_id: '1', title: 'Apple iPad 9th Gen 64GB Space Gray', store: 'OVL', price: 190, at: Date.now() - 864e5 * 3, by: 'Test DM' },
+    { sku: 'KS01-7702A-E1', product_id: '2', title: 'Xbox Series S 512GB White', store: 'OVL', price: 200, at: Date.now() - 864e5 * 5, by: 'Test DM' },
+    { sku: 'KS01-7703A-E1', product_id: '3', title: 'Canon EOS Rebel T7 with 18-55mm Lens', store: 'OVL', price: 310, at: Date.now() - 864e5 * 8, by: 'Test DM' },
+  ],
+  soldStatus: { at: Date.now() - 36e5, results: {
+    'KS01-7701A-E1': { status: 'sold', reason: '0 in stock in Shopify.' },
+    'KS01-7702A-E1': { status: 'instock', reason: '1 in stock in Shopify.' },
+    'KS01-7703A-E1': { status: 'unknown', reason: 'In stock, but the Shopify product isn\'t active.' },
+  } },
+  groupAuto: true,
+};
+const who = { name: 'Test Manager', store: 'OVL', role: 'manager', stores: ['OVL'] };
+const fake = {
+  storage: { local: {
+    get: async (k) => { const o = {}; [].concat(k).forEach(x => o[x] = store[x]); return o; },
+    set: async (o) => Object.assign(store, o),
+  } },
+  tabs: { create: (o) => console.log('would open', o.url) },
+  runtime: { lastError: null, sendMessage(msg, cb) {
+    setTimeout(() => {
+      switch (msg.type) {
+        case 'me': return cb({ ok: true, who: SIGNIN ? null : who });
+        case 'login': return cb({ ok: false, error: 'This is a mock — no sign-in here.' });
+        case 'catalog': return cb({ ok: true, store: 'OVL', count: items.length, items, refreshed: new Date(Date.now() - 52 * 6e4).toISOString(), next_refresh: new Date(Date.now() + 128 * 6e4).toISOString() });
+        case 'item': {
+          const it = items.find(i => i.sku === msg.sku) || items[0];
+          return cb({ ok: true, item: { ...it, store: 'OVL', status: 'ACTIVE' }, warnings: it.condition === 'Acceptable' ? ['Example warning: check the photos show the wear.'] : [],
+            fb: { title: it.title, price: Math.round(it.price), condition: 'Used - Good', photos: [1, 2, 3, 4, 5].map(n => shopPhoto(n * 50)),
+                  description: 'Items included in this sale:\n\nConsole\nStylus\n\nSpecifications:\n\nBrand: Nintendo\nModel: 3DS XL\nColor: Black' } });
+        }
+        // ?gone: Shopify says the 2nd row sold since the catalog refresh.
+        case 'thumbs': return cb({ ok: true, thumbs: Object.fromEntries(msg.product_ids.map((id, n) => [id, shopPhoto(n * 70)])),
+          gone: location.search.includes('gone') ? msg.product_ids.slice(1, 2) : [] });
+        case 'checkSold': return cb({ ok: true, results: store.soldStatus.results });
+        default: return cb({ ok: true });
+      }
+    }, 120);
+  } },
+};
+// popup.js is inlined rather than loaded by src: a document.write()n frame
+// guesses its encoding, and the script's curly quotes and dashes then fail to
+// parse. fetch() always decodes UTF-8.
+Promise.all([fetch(BASE + 'popup.html').then(r => r.text()), fetch(BASE + 'popup.js').then(r => r.text())]).then(([html, js]) => {
+  const doc = $('f').contentDocument;
+  html = html.replace('<head>', `<head><base href="${new URL(BASE, location.href)}">`)
+             .replace('<script src="popup.js"><\/script>', () => `<script>window.chrome = parent.FAKE;\n${js.replace(/<\/script/gi, '<\\/script')}<\/script>`);
+  window.FAKE = fake;
+  doc.open(); doc.write(html); doc.close();
+});
+function $(id) { return document.getElementById(id); }
+</script></body></html>

@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "SPEEKS Marketplace Lister",
+  "version": "1.6.1",
+  "description": "Fills in a Facebook Marketplace listing from a SPEEKS Shopify item. You review it and click Publish.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://ejzaqmyxxrkmxvzbjeuo.supabase.co/*",
+    "https://cdn.shopify.com/*",
+    "https://www.facebook.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SPEEKS Marketplace Lister",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "logo-white.png"
+      ],
+      "matches": [
+        "https://www.facebook.com/*"
+      ]
+    }
+  ]
+}

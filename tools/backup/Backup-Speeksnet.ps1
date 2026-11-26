@@ -55,6 +55,16 @@ $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is 10x slower wit
 # that nothing recorded. From here on, every run keeps a transcript on this PC,
 # and any error nobody caught lands in BACKUP-PROBLEM.txt with its line number.
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+
+# THE CONSOLE MAY NOT BE THERE. Nov 25 8:38: the unlock-trigger run died on its
+# very first Write-Host with "No process is on the other end of the pipe" -
+# conhost --headless had no console to hand it. Everything printed is also in
+# the log and the transcript, so the screen copy is a nicety: never let it kill
+# the run. Use Say, not Write-Host, anywhere in this script.
+function Say([string]$msg) {
+    try { Write-Host $msg } catch { }
+}
+
 $transcriptDir = Join-Path $WorkDir 'run-transcripts'
 try {
     New-Item -ItemType Directory -Force -Path $transcriptDir | Out-Null
@@ -65,16 +75,20 @@ try {
 trap {
     $msg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm')  BACKUP DIED: line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
     try { Add-Content -Path (Join-Path $WorkDir 'BACKUP-PROBLEM.txt') -Value $msg -Encoding UTF8 } catch { }
-    Write-Host $msg
+    Say $msg
     exit 1
 }
 
+# [IO.Path]::Combine, NOT Join-Path, for anything under $Root. In 5.1 Join-Path
+# throws "Cannot find drive" when G: is not mounted at all - and these lines run
+# BEFORE the wait-for-Drive loop below, so from Oct 22 to Nov 18 about 25 runs
+# died here instead of waiting the 15 minutes that loop exists to give Drive.
 $stamp    = Get-Date -Format 'yyyy-MM-dd_HHmm'
 $started  = Get-Date
 $snapName = $stamp
-$snap     = Join-Path $Root ($snapName + '.partial')
-$logDir   = Join-Path $Root '_logs'
-$log      = Join-Path $logDir ($stamp + '.log')
+$snap     = [IO.Path]::Combine($Root, $snapName + '.partial')
+$logDir   = [IO.Path]::Combine($Root, '_logs')
+$log      = [IO.Path]::Combine($logDir, $stamp + '.log')
 $results  = [ordered]@{}
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
@@ -96,7 +110,7 @@ New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 function Stop-Early([string]$why) {
     $msg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm')  BACKUP DID NOT RUN: $why Nothing was written."
     Add-Content -Path (Join-Path $WorkDir 'BACKUP-PROBLEM.txt') -Value $msg -Encoding UTF8
-    Write-Host $msg
+    Say $msg
     exit 1
 }
 $rootParent = Split-Path -Parent $Root
@@ -113,7 +127,7 @@ while (-not (Test-Path -LiteralPath $rootParent)) {
 $today = Get-Date -Format 'yyyy-MM-dd'
 if (Get-ChildItem -LiteralPath $Root -Directory -Filter "${today}_*" -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notlike '*.partial' }) {
-    Write-Host "Already backed up today ($today). Nothing to do."
+    Say "Already backed up today ($today). Nothing to do."
     exit 0
 }
 
@@ -142,7 +156,7 @@ try {
 function Log([string]$msg) {
     $line = '{0}  {1}' -f (Get-Date -Format 'HH:mm:ss'), $msg
     Add-Content -Path $log -Value $line -Encoding UTF8
-    Write-Host $line
+    Say $line
 }
 
 # Runs one part, records ok/failed and the reason, and never throws — so a
@@ -381,10 +395,18 @@ Step 'edge functions' {
     # moved — the list of ~100 functions changes a few a week.
     $prev = Get-ChildItem $Root -Directory | Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}_\d{4}$' } |
         Sort-Object Name -Descending | Select-Object -First 1
+    # SAME CODE = SAME ezbr_sha256, NOT SAME version. From about Nov 19 Supabase
+    # started bumping `version` on every function by itself: all 133 went up ~6
+    # between Nov 19 and Nov 24 while only 12 had a new updated_at or sha. Keyed on
+    # version, every run re-downloaded all ~130 in 40 seconds, the Management API
+    # answered the last dozen with 429 Too Many Requests, and the whole backup was
+    # marked failed - every run, Nov 20-25. The bundle hash only moves when the
+    # deployed code does. version stays as the fallback for an entry with no hash.
+    function FnKey($f) { if ($f.ezbr_sha256) { "sha:$($f.ezbr_sha256)" } else { "v:$($f.version)" } }
     $prevList = @{}
     if ($prev -and (Test-Path (Join-Path $prev.FullName 'functions\_functions.json'))) {
         ToList (Get-Content (Join-Path $prev.FullName 'functions\_functions.json') -Raw | ConvertFrom-Json) |
-            ForEach-Object { $prevList[$_.slug] = $_.version }
+            ForEach-Object { $prevList[$_.slug] = FnKey $_ }
     }
 
     $fetched = 0; $reused = 0; $failed = @()
@@ -396,7 +418,7 @@ Step 'edge functions' {
         # unchanged, so the old 7 MB bundles were copied forward instead.
         $prevUsable = $prevDir -and (Test-Path $prevDir) -and -not (Test-Path (Join-Path $prevDir 'deployed-body.bin')) `
             -and (Get-ChildItem $prevDir -Recurse -File -Filter '*.ts' -ErrorAction SilentlyContinue).Count -gt 0
-        if ($prevUsable -and $prevList.ContainsKey($fn.slug) -and $prevList[$fn.slug] -eq $fn.version) {
+        if ($prevUsable -and $prevList.ContainsKey($fn.slug) -and $prevList[$fn.slug] -eq (FnKey $fn)) {
             Copy-Item $prevDir $dest -Recurse
             $reused++
             continue
@@ -408,9 +430,25 @@ Step 'edge functions' {
             # a function, 319 MB a night for code that is a few KB. With
             # multipart/form-data it hands back the function's OWN files, which is
             # both what a person would read and what a redeploy needs.
-            $resp = Invoke-WebRequest -Uri "$api/functions/$($fn.slug)/body" `
-                -Headers @{ Authorization = "Bearer $pat"; Accept = 'multipart/form-data' } `
-                -UseBasicParsing -TimeoutSec 120
+            # STILL BE GENTLE. A genuine mass redeploy (or the first run after this
+            # change, when the old snapshot has no matching keys) can still mean 130
+            # downloads. Space them and wait out a 429 or 5xx instead of failing the
+            # night on it: the Management API allows roughly 120 calls a minute.
+            $resp = $null
+            for ($try = 1; $try -le 5; $try++) {
+                try {
+                    $resp = Invoke-WebRequest -Uri "$api/functions/$($fn.slug)/body" `
+                        -Headers @{ Authorization = "Bearer $pat"; Accept = 'multipart/form-data' } `
+                        -UseBasicParsing -TimeoutSec 120
+                    break
+                } catch {
+                    $code = 0
+                    try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+                    if ($try -eq 5 -or -not ($code -eq 429 -or $code -ge 500)) { throw }
+                    Start-Sleep -Seconds (15 * $try)
+                }
+            }
+            Start-Sleep -Milliseconds 600
             $ctype = "$($resp.Headers['Content-Type'])"
             $files = @()
             if ($ctype -match 'boundary=(.+)$') {
