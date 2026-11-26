@@ -240,15 +240,15 @@ const parseList = (v: unknown): string => {
 };
 
 type Listing = {
-  id: string; title: string; handle: string; sku: string; price: number; collections: string[]; tags: string[];
+  id: string; title: string; handle: string; sku: string; price: number; collections: string[]; tags: string[]; createdAt?: string;
   condition: string; cosmetic: string; functional: string; included: string; notIncluded: string;
   // mediaId is what productReorderMedia moves; thumb is what the panel draws.
   photos: { url: string; width: number; height: number; src: string; mediaId: string; thumb: string }[];
 };
 
-async function fetchListings(shop: string, token: string, ids: string[]): Promise<Listing[]> {
+async function fetchListings(shop: string, token: string, ids: string[], px = PHOTO_PX): Promise<Listing[]> {
   const q = `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
-      id title handle tags
+      id title handle tags createdAt
       variants(first: 1) { nodes { sku price } }
       collections(first: 12) { nodes { handle } }
       condition: metafield(namespace: "custom", key: "condition") { value }
@@ -258,13 +258,13 @@ async function fetchListings(shop: string, token: string, ids: string[]): Promis
       notIncluded: metafield(namespace: "custom", key: "not_included") { value }
       media(first: 40) { nodes { ... on MediaImage { id image {
         url
-        sized: url(transform: { maxWidth: ${PHOTO_PX}, maxHeight: ${PHOTO_PX} })
+        sized: url(transform: { maxWidth: ${px}, maxHeight: ${px} })
         thumb: url(transform: { maxWidth: 240, maxHeight: 240 })
         width height } } } }
   } } }`;
   const data = await gql(shop, token, q, { ids });
   return (data.nodes || []).filter(Boolean).map((p: any) => ({
-    id: p.id, title: p.title, handle: p.handle || "", sku: p.variants?.nodes?.[0]?.sku || "",
+    id: p.id, title: p.title, handle: p.handle || "", createdAt: p.createdAt || undefined, sku: p.variants?.nodes?.[0]?.sku || "",
     price: Number(p.variants?.nodes?.[0]?.price || 0),
     collections: (p.collections?.nodes || []).map((c: any) => c.handle),
     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
@@ -782,6 +782,13 @@ const pickQuestion = (l: Listing, sheets: Sheet[]) =>
   "SHEETS:\n" + sheets.map(s => `${s.slug} — ${s.name}${s.group ? ` (${s.group})` : ""}`).join("\n") +
   `\n\nLISTING:\nTITLE: ${l.title}\nCOLLECTIONS: ${l.collections.join(", ")}\nCONDITION: ${l.condition}` +
   `\nINCLUDED: ${l.included}\nNOT INCLUDED: ${l.notIncluded}`;
+// ⚠️ THE SHEET PICK RUNS ON HAIKU (Ethan, 2026-11-25). It is a text question —
+// "which Picture Guide sheet is this listing?" — and Haiku 5.5 answered it the
+// same as Opus on all 20 listings of the cost-trim test (?picktest, 11-25) for
+// $0.006 against ~$0.24: ~$35–45 a month at our volume. The LOOK at the photos
+// stays on DEFAULT_MODEL. A smaller photo size was tested the same day and NOT
+// taken (384px changed 2 of 10 missing-shot calls) — keep PHOTO_PX at 512.
+const PICK_MODEL = "claude-haiku-5-5";
 async function pickSheet(client: Anthropic, model: string, l: Listing, sheets: Sheet[]) {
   const res = await client.messages.parse({
     model, max_tokens: 4000, system: PICK_SYSTEM,
@@ -881,9 +888,16 @@ const forRules = (l: Listing, standard: Map<string, number>): ListingR => ({ ...
 
 // --- the stamp ---------------------------------------------------------------
 
+// ⚠️ PHOTOS ONLY, UNDER THE GUIDE-ONLY CHECK (Ethan, 2026-11-24: "only re-grade
+// when photos change"). The stamp decides when a listing is graded AGAIN, and the
+// guide-only question is about the photos against the sheet — so a title fix
+// from the title tool, or an edited condition note, no longer pays for a fresh
+// photo grade (~5–10% of the monthly bill). The full check (PQ_FULL_CHECK=1)
+// reads the notes and title too, so it keeps them in its stamp.
 async function stampFor(l: Listing, sheet: Sheet | null) {
   const basis = JSON.stringify({ RECIPE, sheet: sheet ? [sheet.slug, sheet.updated] : null,
-    photos: l.photos.map(p => p.src.split("?")[0]), c: [l.condition, l.cosmetic, l.included, l.notIncluded, l.title] });
+    photos: l.photos.map(p => p.src.split("?")[0]),
+    ...(GUIDE_ONLY ? {} : { c: [l.condition, l.cosmetic, l.included, l.notIncluded, l.title] }) });
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(basis));
   return RECIPE + ":" + Array.from(new Uint8Array(d)).slice(0, 12).map(b => b.toString(16).padStart(2, "0")).join("");
 }
@@ -941,8 +955,10 @@ async function saveRows(rowsOut: any[]) {
 
 // --- the sweep ----------------------------------------------------------------
 
+// `trim` (?trimtest=1 only): a cheaper sheet-pick model and/or smaller photos,
+// to measure a saving against saved grades before switching it on (2026-11-25).
 async function runReviews(store: string, ids: string[], model: string, effort: string, save: boolean,
-                          withFraming = false) {
+                          withFraming = false, trim: { px?: number; pickModel?: string } = {}) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
   const client = new Anthropic({ apiKey });
@@ -951,20 +967,26 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
     // No store-wide sentence count any more: isStandardSentence (rules.ts) judges
     // a note by what it says, so reading every listing in the store just to
     // count its sentences was pure wait. boilerplateFor stays for reference.
-    fetchListings(shop, token, ids), loadSheets(), Promise.resolve(new Map<string, number>())]);
+    fetchListings(shop, token, ids, trim.px || PHOTO_PX), loadSheets(), Promise.resolve(new Map<string, number>())]);
   const price = PRICES[model] || PRICES[DEFAULT_MODEL];
   let tin = 0, tout = 0, tdisc = 0;
   const out: any[] = [];
+  const rix = listerIndex(await rows("users?select=name,role,store").catch(() => []) || []);
 
   const one = async (l: Listing) => {
-    const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model };
+    const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model,
+                   lister_name: listerFrom(l.tags, rix, store)?.name || null };
     try {
       if (!l.photos.length) {
         return { ...base, verdict: "fix", findings: [{ code: "no_photos", text: "This listing has no photos." }],
                  stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null };
       }
-      const { pick, usage: u1 } = await pickSheet(client, model, l, sheets);
-      tin += u1?.input_tokens || 0; tout += u1?.output_tokens || 0;
+      const pm = trim.pickModel || PICK_MODEL;
+      const { pick, usage: u1 } = await pickSheet(client, pm, l, sheets);
+      // Costed at the pick model's own price, folded into this run's input-token
+      // terms so cost_usd stays one number.
+      const pp = PRICES[pm] || price;
+      tin += (u1?.input_tokens || 0) * pp[0] / price[0] + (u1?.output_tokens || 0) * pp[1] / price[0]; 
       let sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
       sheet = gameSheetFor(l, sheet, sheets);
       if (!sheet) {
@@ -1051,6 +1073,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
 
   if (save) {
     await saveRows(out);
+    await recordFlags(store, out, new Map(listings.map(l => [l.id, l])), rix);
     // Written down so "what did that cost" has an answer that is not an estimate.
     try {
       await sb("ai_usage_log", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
@@ -1156,7 +1179,11 @@ function reviewParams(l: Listing, sheet: Sheet, standard: Map<string, number>, o
 // 2026-10-15: "have the entire box border for these highlighted so I know which
 // ones are new for me to review tomorrow"). Follow-ups carry it ({...p}).
 type Pending = { pid: string; kind: "pick" | "first" | "resheet" | "second"; sheet: string; pick: unknown;
-                 reSheeted: boolean; stamp: string; first?: ReportT; sample?: boolean };
+                 reSheeted: boolean; stamp: string; first?: ReportT; sample?: boolean;
+                 // THE 5-MINUTE CHECK (0206): its follow-ups (a re-sheet, a second
+                 // look) are asked LIVE at collection, not sent as another batch
+                 // round, so the lister hears back in one round.
+                 quick?: boolean };
 const customId = (p: Pending) => `${p.kind[0]}${p.pid.split("/").pop()}`;
 
 async function submitBatch(client: Anthropic, store: string, model: string, effort: string,
@@ -1169,6 +1196,185 @@ async function submitBatch(client: Anthropic, store: string, model: string, effo
     store_code: store, batch_id: batch.id, model, effort,
     items: Object.fromEntries(reqs.map(r => [customId(r.p), r.p])) }) });
   return batch.id as string;
+}
+
+// --- THE 5-MINUTE CHECK (Ethan, 2026-11-24) --------------------------------------
+//
+// "Grade them as they come in … so they can try to fix it in real time." Every
+// 5 minutes, 7am–9pm CT (0206 cron pq-quick), each store's listings are read
+// STRAIGHT FROM SHOPIFY — not ebay_catalog, which refreshes hourly, so a new
+// listing could sit unseen for up to an hour. One is taken when it is:
+//  - live on the online store and IN STOCK (Ethan: "so we don't accidentally
+//    grade something that might have sold very fast"),
+//  - untouched for QUICK.settleMin minutes — the lister has stopped adding or
+//    moving photos, so it is not graded half-done and paid for twice,
+//  - new (QUICK.newDays) or carrying an open photo fix (a lister re-shooting an
+//    older one gets a fresh grade the same way),
+//  - and changed since its last grade (the stamp), so nothing is paid twice.
+// The sheet pick is asked LIVE (about a penny), the look goes into a half-price
+// batch, the poller (every 2 minutes) collects it and asks any second look live.
+// A batch still out after QUICK.lateMin is cancelled and graded live, so nobody
+// waits on a slow queue. Expected: the grade lands ~10–20 minutes after the
+// lister's last change, for about the batched price.
+// ⚠️ OFF until Ethan says go: the cron gets {off:true} until PQ_QUICK_ON=1.
+// &dry=1 lists what WOULD be graded — Shopify reads only, no model, free.
+const QUICK = { settleMin: 5, newDays: 3, perStore: 20, lateMin: 20 };
+
+// ⚠️ EVERY PHOTO FLAG COUNTS, EVEN ONE FIXED IN MINUTES (Ethan, 2026-11-24: "any
+// flag should count as a flag against the lister because it is important we have
+// data on which listers struggle the most"). The morning ledger (listing-review
+// daily) only sees what is STILL open at 6am, so a flag the 5-minute check
+// raised and the lister fixed by lunch never reached it. Written here, the moment
+// the grade is saved: one listing_flags row per (listing, "photos"), the same
+// shape the morning job writes — week = the Monday (CT) of the week it was
+// LISTED, so it lands in the same bucket as its listed count. ignore-duplicates:
+// an existing row keeps the store's dismissal; the morning job still updates it.
+const ctMondayOf = (at: string) => {
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date(at));
+  const d = new Date(day + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+};
+const FLAGGING = new Set(["retake", "fix", "reorder"]);
+async function recordFlags(store: string, saved: any[], listings: Map<string, Listing>, ix: ListerIx) {
+  const out = saved.filter(r => FLAGGING.has(r.verdict)).map(r => {
+    const l = listings.get(r.product_id);
+    if (!l?.createdAt) return null;
+    return { week: ctMondayOf(l.createdAt), store_code: store, product_id: r.product_id, source: "photos",
+             lister_tag: listerFrom(l.tags, ix, store)?.tag || rawListerTag(l.tags) || null };
+  }).filter(Boolean);
+  if (!out.length) return;
+  try {
+    await sb("listing_flags?on_conflict=store_code,product_id,source", { method: "POST",
+      headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(out) });
+  } catch (e) { console.error("listing_flags write failed:", String(e)); }
+}
+const quoteIds = (ids: string[]) => encodeURIComponent(ids.map(i => `"${i}"`).join(","));
+// Midnight Central at the start of PQ_QUICK_FROM (or today), as epoch ms.
+function quickFrom(): number {
+  const ctDayNow = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(Deno.env.get("PQ_QUICK_FROM") || "") ? Deno.env.get("PQ_QUICK_FROM")! : ctDayNow;
+  const noon = new Date(day + "T12:00:00Z");
+  const h = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour12: false, hour: "2-digit" }).format(noon)) % 24;
+  return Date.parse(day + "T00:00:00Z") + (12 - h) * 3600000;
+}
+async function quickCandidates(store: string, shop: string, token: string) {
+  // ⚠️ BY CREATION DATE, NOT "RECENTLY UPDATED" (2026-11-25). The first version
+  // read the 250 most recently UPDATED products; OVL and LEE pass 250 updates in
+  // 48 hours (price and stock syncs count), so on a busy day a new listing could
+  // fall off the end and never be graded. Two reads instead: every listing CREATED
+  // in the window (the work), plus the last 6 hours' updates (re-shoots of a
+  // listing with an open photo fix, older than the 3-day window).
+  const from0 = Math.max(quickFrom(), Date.now() - QUICK.newDays * 86400000);
+  const q = `query($q: String!, $s: ProductSortKeys!) { products(first: 250, query: $q, sortKey: $s, reverse: true) {
+      nodes { id createdAt updatedAt totalInventory onlineStoreUrl variants(first: 1) { nodes { sku } } } } }`;
+  const [made, touched] = await Promise.all([
+    gql(shop, token, q, { q: `created_at:>='${new Date(from0).toISOString()}' status:active`, s: "CREATED_AT" }),
+    gql(shop, token, q, { q: `updated_at:>'${new Date(Date.now() - 6 * 3600000).toISOString()}' status:active`, s: "UPDATED_AT" }),
+  ]);
+  const byId = new Map<string, any>();
+  for (const n of [...(made?.products?.nodes || []), ...(touched?.products?.nodes || [])]) byId.set(String(n.id), n);
+  const nodes: any[] = [...byId.values()];
+  const open = new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
+    + `&verdict=in.(retake,fix,reorder)&select=product_id&limit=1000`)).map((r: any) => String(r.product_id)));
+  const settled = Date.now() - QUICK.settleMin * 60000, fresh = Date.now() - QUICK.newDays * 86400000;
+  // ⚠️ NO BACKLOG (Ethan, 2026-11-25: "we only need to start grading listings made
+  // from the day we start and on … the backlog … will come much later"). Nothing
+  // listed before PQ_QUICK_FROM (a YYYY-MM-DD, Central — set it to the go-live day
+  // with PQ_QUICK_ON) is ever taken, re-shot or not. Unset = start of today (CT),
+  // so a forgotten secret can never sweep up the old catalogue.
+  const from = quickFrom();
+  // ⚠️ LIVE ON THE ONLINE STORE *OR* EBAY, AND IN STOCK (Ethan, 2026-11-25: "both
+  // in stock eBay and Online store listings only") — the title tool's rule (0189).
+  // Online store = Shopify's own onlineStoreUrl, read live. eBay = ebay_live, by
+  // SKU, which the ebay-catalog live sweep refreshes every 6 hours and PayMore's
+  // tool lists about a day late — so an eBay-only listing is graded when it shows
+  // up there, still inside the 3-day window, just not within minutes. Only
+  // ~37% of new in-stock listings were on the online store (11-25 dry run).
+  const onEbay = new Set<string>((await allRows(`ebay_live?store_code=eq.${store}&select=sku&order=sku`))
+    .map((r: any) => String(r.sku || "").trim()).filter(Boolean));
+  const c = { seen: nodes.length, notLive: 0, liveOnEbayOnly: 0, outOfStock: 0, stillEditing: 0, older: 0, beforeStart: 0, from: new Date(from).toISOString(), ids: [] as string[] };
+  for (const n of nodes) {
+    const sku = String(n.variants?.nodes?.[0]?.sku || "").trim();
+    const ebay = !!sku && onEbay.has(sku);
+    if (!n.onlineStoreUrl && !ebay) { c.notLive++; continue; }
+    if (!n.onlineStoreUrl) c.liveOnEbayOnly++;
+    if (!(Number(n.totalInventory) > 0)) { c.outOfStock++; continue; }
+    if (Date.parse(n.createdAt) < from) { c.beforeStart++; continue; }
+    if (Date.parse(n.updatedAt) > settled) { c.stillEditing++; continue; }
+    if (Date.parse(n.createdAt) < fresh && !open.has(String(n.id))) { c.older++; continue; }
+    c.ids.push(String(n.id));
+  }
+  return c;
+}
+async function quickSweep(store: string, dry: boolean) {
+  const { shop, token } = await shopFor(store);
+  const c = await quickCandidates(store, shop, token);
+  const { ids, ...counts } = c;
+  if (!ids.length) return { store, ...counts, toGrade: 0 };
+  const [flying, sheets, seenRows] = await Promise.all([inFlight(store), loadSheets(),
+    rows(`picture_quality_reviews?store_code=eq.${store}&product_id=in.(${quoteIds(ids)})&select=product_id,stamp`)]);
+  const seen = new Map<string, string>(seenRows.map((r: any) => [String(r.product_id), String(r.stamp || "")]));
+  const todo: Listing[] = [];
+  const want = ids.filter(id => !flying.has(id));
+  for (let i = 0; i < want.length && todo.length < QUICK.perStore; i += 25) {
+    for (const l of await fetchListings(shop, token, want.slice(i, i + 25))) {
+      if (todo.length >= QUICK.perStore) break;
+      const was = seen.get(l.id);
+      if (was && was.startsWith(RECIPE + ":")) {
+        const same = await Promise.all(sheets.map(s => stampFor(l, s)));
+        if (same.includes(was) || was === await stampFor(l, null)) continue;
+      }
+      todo.push(l);
+    }
+  }
+  if (dry) return { store, ...counts, inFlight: ids.length - want.length, toGrade: todo.length,
+                    listings: todo.map(l => ({ id: l.id, title: l.title, photos: l.photos.length })) };
+  if (!todo.length) return { store, ...counts, toGrade: 0 };
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
+  const client = new Anthropic({ apiKey });
+  const model = DEFAULT_MODEL, effort = DEFAULT_EFFORT;
+  const price = PRICES[model] || PRICES[DEFAULT_MODEL];
+  const ix = listerIndex(await rows("users?select=name,role,store").catch(() => []) || []);
+  const standard = new Map<string, number>();
+  const reqs: { p: Pending; params: unknown }[] = [], direct: any[] = [];
+  let tin = 0, tout = 0, tdisc = 0, next = 0;
+  const one = async () => {
+    while (next < todo.length) {
+      const l = todo[next++];
+      const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model,
+                     lister_name: listerFrom(l.tags, ix, store)?.name || null };
+      try {
+        if (!l.photos.length) {
+          direct.push({ ...base, verdict: "fix", findings: [{ code: "no_photos", text: "This listing has no photos." }],
+                        stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null });
+          continue;
+        }
+        const { pick, usage } = await pickSheet(client, PICK_MODEL, l, sheets);
+        tin += (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0);
+        tout += usage?.output_tokens || 0; tdisc += cacheDisc(usage);
+        const ps = sheetFromPick(l, pick, sheets);
+        if (!ps) {
+          direct.push({ ...base, verdict: "no_sheet", stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null,
+                        findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }] });
+          continue;
+        }
+        const oth = sheets.filter(x => x.slug !== ps.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+        reqs.push({ p: { pid: l.id, kind: "first", sheet: ps.slug, pick, reSheeted: false, stamp: await stampFor(l, ps), quick: true },
+                    params: reviewParams(l, ps, standard, oth, model, effort) });
+      } catch (e) { console.error("quick pick failed", l.id, String(e)); }   // picked up again next run
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, one));
+  await saveRows(direct);
+  await recordFlags(store, direct, new Map(todo.map(l => [l.id, l])), ix);
+  const batch = await submitBatch(client, store, model, effort, reqs);
+  const pkp = PRICES[PICK_MODEL];
+  const cost = (tin - tdisc) / 1e6 * pkp[0] + tout / 1e6 * pkp[1];
+  if (tin || tout) await logUsage(store, PICK_MODEL, "low", "quick-pick", reqs.length + direct.length, tin, tout, cost);
+  return { store, ...counts, toGrade: todo.length, submitted: reqs.length, savedDirect: direct.length, batch,
+           pickCost: Math.round(cost * 1e4) / 1e4 };
 }
 
 // Listings in flight in a batch not yet collected — never sent twice.
@@ -1242,7 +1448,7 @@ async function batchSweep(store: string, limit: number, days: number, model: str
         continue;
       }
       reqs.push({ p: { pid: l.id, kind: "pick", sheet: "", pick: null, reSheeted: false, stamp: await stampFor(l, null), ...(random ? { sample: true } : {}) },
-                  params: pickParams(l, sheets, model) });
+                  params: pickParams(l, sheets, PICK_MODEL) });
     }
   };
   await Promise.all(Array.from({ length: 8 }, pickOne));
@@ -1270,9 +1476,30 @@ async function pollBatches() {
   const sheets = await loadSheets();
   const standard = new Map<string, number>();
   const report: any[] = [];
+  const ix = listerIndex(await rows("users?select=name,role,store").catch(() => []) || []);
   for (const b of open) {
     const info = await (client as any).messages.batches.retrieve(b.batch_id);
-    if (info.processing_status !== "ended") { report.push({ batch: b.batch_id, status: info.processing_status }); continue; }
+    if (info.processing_status !== "ended") {
+      // THE 5-MINUTE CHECK DOES NOT WAIT ON A SLOW QUEUE (0206): a quick batch
+      // still out after QUICK.lateMin is cancelled and its listings graded live.
+      const its = Object.values((b.items || {}) as Record<string, Pending>);
+      const late = its.length > 0 && its.every(p => p.quick) && Deno.env.get("PQ_QUICK_ON") === "1"
+        && Date.now() - Date.parse(b.submitted_at) > QUICK.lateMin * 60000;
+      if (!late) { report.push({ batch: b.batch_id, status: info.processing_status }); continue; }
+      try { await (client as any).messages.batches.cancel(b.batch_id); } catch (e) { console.error("cancel failed", String(e)); }
+      await sb(`pq_batches?id=eq.${b.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ status: "failed", finished_at: new Date().toISOString(), result: { cancelled: true, late: true } }) });
+      const pids = [...new Set(its.map(p => p.pid))];
+      const live = await runReviews(b.store_code, pids, b.model, b.effort, true);
+      report.push({ batch: b.batch_id, store: b.store_code, late: true, gradedLive: live.reviewed, cost_usd: live.cost_usd });
+      continue;
+    }
+    // ⚠️ ONE COLLECTOR PER BATCH. The poll runs every 2 minutes now (0206); a
+    // collection with live second looks can outlast that, and two collectors
+    // would save twice and pay for the second looks twice. Claim it first.
+    const claim = await (await sb(`pq_batches?id=eq.${b.id}&status=eq.submitted`, { method: "PATCH",
+      headers: { Prefer: "return=representation" }, body: JSON.stringify({ status: "collecting" }) })).json();
+    if (!Array.isArray(claim) || !claim.length) { report.push({ batch: b.batch_id, skipped: "another poll is collecting it" }); continue; }
     const { shop, token } = await shopFor(b.store_code);
     const items: Record<string, Pending> = b.items || {};
     const pids = [...new Set(Object.values(items).map(p => p.pid))];
@@ -1280,7 +1507,16 @@ async function pollBatches() {
     for (let i = 0; i < pids.length; i += 25) for (const l of await fetchListings(shop, token, pids.slice(i, i + 25))) live.set(l.id, l);
     const price = PRICES[b.model] || PRICES[DEFAULT_MODEL];
     let tin = 0, tcache = 0, tout = 0, ok = 0, failed = 0, changed = 0;
+    let lin = 0, lout = 0, ldisc = 0, liveLooks = 0;   // live follow-ups (quick), full price
+    const liveLook = async (l: Listing, sh: Sheet) => {
+      const r = await review(client, b.model, b.effort, l, sh, standard,
+        sheets.filter(x => x.slug !== sh.slug).map(x => `${x.slug} (${x.name})`).join(", "));
+      lin += (r.usage?.input_tokens || 0) + (r.usage?.cache_read_input_tokens || 0) + (r.usage?.cache_creation_input_tokens || 0);
+      lout += r.usage?.output_tokens || 0; ldisc += cacheDisc(r.usage); liveLooks++;
+      return r.report;
+    };
     const save: any[] = [], follow: { p: Pending; params: unknown }[] = [];
+    const quickDone: Promise<void>[] = [];
     for await (const res of await (client as any).messages.batches.results(b.batch_id)) {
       const p = items[res.custom_id];
       if (!p) continue;
@@ -1298,6 +1534,7 @@ async function pollBatches() {
         const ps = sheetFromPick(l, pick, sheets);
         if (!ps) {
           save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model: b.model,
+                      lister_name: listerFrom(l.tags, ix, b.store_code)?.name || null,
                       verdict: "no_sheet", stamp: p.stamp, sheet_slug: null, sheet_name: null,
                       findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }],
                       ...(p.sample ? { report: { sample: new Date().toISOString() } } : {}) });
@@ -1317,6 +1554,24 @@ async function pollBatches() {
       try { parsed = parseReport(JSON.parse(text)); } catch { failed++; continue; }
       ok++;
       const others = (s: Sheet) => sheets.filter(x => x.slug !== s.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+      // The 5-minute check: re-sheet and second look asked live, right now.
+      if (p.quick && p.kind === "first") {
+        quickDone.push((async () => {
+          try {
+            let sh = sheet, first = parsed, reSheeted = p.reSheeted;
+            const better = !first.sheet_fits && first.better_sheet ? sheets.find(s => s.slug === first.better_sheet) : null;
+            if (better && (gameSheetFor(l, better, sheets) === better || caseCall(sheet, better))) {
+              sh = better; reSheeted = true; first = await liveLook(l, better);
+            }
+            const second = secondLookWanted(forRules(l, standard), sh, first) ? await liveLook(l, sh) : null;
+            const row = await finalRow(l, sh, standard, p.pick, reSheeted, first, second);
+            save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length,
+                        model: b.model, lister_name: listerFrom(l.tags, ix, b.store_code)?.name || null,
+                        ...row, report: { ...row.report, batch: b.batch_id, quick: true } });
+          } catch (e) { failed++; console.error("quick follow-up failed", p.pid, String(e)); }
+        })());
+        continue;
+      }
       if (p.kind === "first") {
         // The photos point at a better sheet: one re-grade on it, as live.
         const better = !parsed.sheet_fits && parsed.better_sheet ? sheets.find(s => s.slug === parsed.better_sheet) : null;
@@ -1334,9 +1589,16 @@ async function pollBatches() {
       const second = p.kind === "second" ? parsed : null;
       const row = await finalRow(l, sheet, standard, p.pick, p.reSheeted, first, second);
       save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length,
-                  model: b.model, ...row, report: { ...row.report, batch: b.batch_id, ...(p.sample ? { sample: new Date().toISOString() } : {}) } });
+                  model: b.model, lister_name: listerFrom(l.tags, ix, b.store_code)?.name || null,
+                  ...row, report: { ...row.report, batch: b.batch_id, ...(p.sample ? { sample: new Date().toISOString() } : {}) } });
     }
+    await Promise.all(quickDone);
     await saveRows(save);
+    await recordFlags(b.store_code, save, live, ix);
+    if (liveLooks) {
+      const lc = (lin - ldisc) / 1e6 * price[0] + lout / 1e6 * price[1];
+      await logUsage(b.store_code, b.model, b.effort, "quick-live", liveLooks, lin, lout, lc);
+    }
     // Batch tokens are half price; a cache read is a tenth of input.
     const cost = (tin / 1e6 * price[0] + tcache / 1e6 * price[0] * 0.1 + tout / 1e6 * price[1]) * 0.5;
     const next = await submitBatch(client, b.store_code, b.model, b.effort, follow);
@@ -2490,6 +2752,70 @@ Deno.serve(async (req: Request) => {
     // {off:true}. Turn on:  npx supabase secrets set PQ_TRICKLE_ON=1 --project-ref ejzaqmyxxrkmxvzbjeuo
     // Leave PQ_NIGHTLY_PAUSED=1 when it is on — the trickle replaces the nightly.
     // A hand run: &force=1[&store=LEE].
+    // ?picktest=1&store=X&ids=a,b&pickModel=… — PAID (text only, pennies): ask
+    // the sheet pick again on another model and compare with the saved sheet.
+    // Saves nothing. Ethan's cost-trim test, 2026-11-25.
+    if (url.searchParams.get("picktest") === "1") {
+      const st = (url.searchParams.get("store") || "").toUpperCase();
+      const pm = url.searchParams.get("pickModel") || "claude-haiku-5-5";
+      if (!STORES.includes(st) || !PRICES[pm]) return json({ error: "store and a known pickModel please" }, 400);
+      const ids = (url.searchParams.get("ids") || "").split(",").map(x => x.trim()).filter(Boolean).slice(0, 200);
+      const apiKey = Deno.env.get("ANTHROPIC_API_KEY")!;
+      const client = new Anthropic({ apiKey });
+      const { shop, token } = await shopFor(st);
+      const [ls, sheets, saved] = await Promise.all([
+        (async () => { const o: Listing[] = []; for (let i = 0; i < ids.length; i += 25) o.push(...await fetchListings(shop, token, ids.slice(i, i + 25))); return o; })(),
+        loadSheets(), rows(`picture_quality_reviews?store_code=eq.${st}&product_id=in.(${quoteIds(ids)})&select=product_id,sheet_slug,report`)]);
+      const was = new Map<string, any>(saved.map((r: any) => [String(r.product_id), r]));
+      let tin = 0, tout = 0;
+      const out = await Promise.all(ls.map(async l => {
+        const { pick, usage } = await pickSheet(client, pm, l, sheets);
+        tin += (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0); tout += usage?.output_tokens || 0;
+        const got = sheetFromPick(l, pick, sheets)?.slug || null;
+        const r = was.get(l.id);
+        // The sheet the saved grade was first PICKED on (before any re-sheet by the photos).
+        const firstPick = r?.report?.sheetPick?.slug || null;
+        return { id: l.id, title: l.title, saved: r?.sheet_slug || null, savedPick: firstPick, got, same: got === (r?.sheet_slug || null) || got === firstPick };
+      }));
+      const price = PRICES[pm];
+      const cost = tin / 1e6 * price[0] + tout / 1e6 * price[1];
+      await logUsage(st, pm, "low", "picktest", out.length, tin, tout, cost);
+      return json({ store: st, pickModel: pm, n: out.length, same: out.filter(o => o.same).length, cost_usd: Math.round(cost * 1e4) / 1e4, results: out });
+    }
+    // ?trimtest=1&store=X&ids=a,b&px=384[&pickModel=…] — PAID (~$0.08 a listing,
+    // live): grade these listings again with the trim applied and compare with
+    // their saved grades. Saves nothing.
+    if (url.searchParams.get("trimtest") === "1") {
+      const st = (url.searchParams.get("store") || "").toUpperCase();
+      if (!STORES.includes(st)) return json({ error: "pass ?store=" }, 400);
+      const ids = (url.searchParams.get("ids") || "").split(",").map(x => x.trim()).filter(Boolean).slice(0, MAX_IDS * 2);
+      const px = Math.min(Math.max(Number(url.searchParams.get("px") || PHOTO_PX), 256), 800);
+      const pm = url.searchParams.get("pickModel") || undefined;
+      return streamed(async () => {
+        const saved = await rows(`picture_quality_reviews?store_code=eq.${st}&product_id=in.(${quoteIds(ids)})&select=product_id,verdict,findings,stamp`);
+        const was = new Map<string, any>(saved.map((r: any) => [String(r.product_id), r]));
+        const res: any = await runReviews(st, ids, DEFAULT_MODEL, DEFAULT_EFFORT, false, false, { px, pickModel: pm });
+        await logUsage(st, DEFAULT_MODEL, DEFAULT_EFFORT, `trimtest-${px}`, res.reviewed, res.tokens.input, res.tokens.output, res.cost_usd);
+        const codes = (f: any[]) => (f || []).map((x: any) => x.code === "missing_shot" ? "missing:" + (x.shot || "") : x.code).sort();
+        return { store: st, px, pickModel: pm || DEFAULT_MODEL, cost_usd: res.cost_usd, results: res.results.map((r: any) => {
+          const w = was.get(r.product_id);
+          return { id: r.product_id, title: r.title, was: w?.verdict || null, now: r.verdict, same: w?.verdict === r.verdict,
+                   wasFindings: codes(w?.findings), nowFindings: codes(r.findings), photosChanged: !!w && w.stamp !== r.stamp };
+        }) };
+      });
+    }
+    // ?quick=1 — THE 5-MINUTE CHECK (see quickSweep). &dry=1 is free and runs
+    // even while it is off. &force=1 runs it once while off (a paid test).
+    if (url.searchParams.get("quick") === "1") {
+      const forced = url.searchParams.get("force") === "1", dry = url.searchParams.get("dry") === "1";
+      if (!dry && !forced && Deno.env.get("PQ_QUICK_ON") !== "1") {
+        return json({ off: true, note: "The 5-minute picture check is off (PQ_QUICK_ON is not 1) — nothing submitted." });
+      }
+      const one = (url.searchParams.get("store") || "").toUpperCase();
+      const which = STORES.includes(one) ? [one] : STORES;
+      return streamed(async () => ({ dry, quick: await Promise.all(which.map(st =>
+        quickSweep(st, dry).catch((e: unknown) => ({ store: st, error: String((e as Error)?.message || e) })))) }));
+    }
     if (url.searchParams.get("trickle") === "1") {
       const forced = url.searchParams.get("force") === "1";
       if (Deno.env.get("PQ_TRICKLE_ON") !== "1" && !forced) {

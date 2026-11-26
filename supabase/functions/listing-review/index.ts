@@ -50,6 +50,12 @@ const SHOP_BY_STORE: Record<string, string> = {
 // that says yes while the button says no is a tool reachable by URL nobody sees.
 const FIX_KEY = "ec-view-fix-queue";
 const FIX_ROLES = ["district manager", "ceo", "manager", "owner (manager)", "owner manager", "assistant manager"];
+// ⚠️ ASMs KEEP THE STORE LIST but see only THEIR OWN full listing reviews
+// (Ethan, 2026-11-24: "ASM's can still help with title, category and picture
+// tool, but they should only see full listing reviews that pertain to just
+// them"). A full-review card (Notes Only included) is hidden from an ASM unless
+// it was sent to them; only managers see every one. See fullHidden().
+const OWN_FULL_ONLY = ["assistant manager"];
 const SPOT_KEY = "ec-view-spot-check";
 const SPOT_ROLES = ["district manager", "ceo"];
 // FULL LISTING REVIEW (0197): "let's just start with DM being the only person"
@@ -61,7 +67,7 @@ const FULL_ROLES = ["district manager"];
 // see every card on the store's list. ⚠️ Must match FEATURE_CATALOG's def for
 // ec-view-my-fixes.
 const MINE_KEY = "ec-view-my-fixes";
-const MINE_ROLES = ["employee"];
+const MINE_ROLES = ["employee", "assistant manager"];
 // The parts of a listing a full review can flag, besides its photos.
 const FULL_PARTS = new Set(["Title", "Price", "Condition", "Category", "Cosmetic Notes", "Functionality",
   "What’s Included", "Not Included", "Description & Specs", "Listing Description"]);
@@ -376,7 +382,7 @@ type Line = { kind: "photos" | "title" | "label" | "category" | "ethan"; [k: str
 async function photoLines(store: string): Promise<Map<string, any>> {
   const pq = await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
     + `&verdict=in.(retake,fix,reorder)&stamp=like.${PQ_RECIPE}:*`
-    + `&select=product_id,sku,title,verdict,findings,reorder,deletion,sheet_name,sheet_slug,reviewed_at&limit=1000`);
+    + `&select=product_id,sku,title,verdict,findings,reorder,deletion,sheet_name,sheet_slug,reviewed_at,lister_name&limit=1000`);
   return new Map(pq.map((r: any) => [r.product_id, r]));
 }
 async function titleLines(store: string): Promise<Map<string, any>> {
@@ -408,7 +414,11 @@ const isLabel = (t: any) => (t?.findings || []).some((f: any) => f?.source === "
 function linesFor(pid: string, pq: any, lt: any, cat: any, card: any): Line[] {
   const out: Line[] = [];
   if (pq) out.push({ kind: "photos", verdict: pq.verdict, findings: pq.findings || [], reorder: pq.reorder || null,
-                     deletion: pq.deletion || null, sheet: pq.sheet_name || null, sheetSlug: pq.sheet_slug || null });
+                     deletion: pq.deletion || null, sheet: pq.sheet_name || null, sheetSlug: pq.sheet_slug || null,
+                     // PHOTO FIXES GO TO THE LISTER TOO (Ethan, 2026-11-24: "treated the
+                     // exact same way as the manual listing review") — who, for the
+                     // manager's "Also sent to …" line. Null: the manager's alone.
+                     sentTo: pq.lister_name || null });
   if (lt) out.push({ kind: isLabel(lt) ? "label" : "title", severity: lt.severity, current: lt.current_title,
                      suggested: lt.suggested_title, findings: lt.findings || [], ebayTitle: lt.ebay_title || null });
   if (cat) out.push({ kind: "category", ...cat });
@@ -425,7 +435,7 @@ async function queueView(scope: Scope, asked: string) {
     rows(`${CARDS(scope.test)}?store_code=eq.${store}&status=neq.done&select=*`),
     rows(`listing_no_photos?store_code=eq.${store}&select=product_id,sku,title,price,product_handle,product_created_at&order=product_created_at.desc&limit=200`).catch(() => []),
   ]);
-  const cards = new Map<string, any>(cardsRaw.map((c: any) => [c.product_id, c]));
+  const cards = new Map<string, any>(cardsRaw.filter((c: any) => !fullHidden(scope, c)).map((c: any) => [c.product_id, c]));
   const ids = [...new Set([...pq.keys(), ...lt.keys(), ...cat.keys(), ...cards.keys()])];
   const shop = await minis(store, ids).catch(() => new Map<string, Mini>());
   const ix = await loadListerIx();
@@ -481,7 +491,9 @@ async function queueView(scope: Scope, asked: string) {
       : [],
     noPhotos: noPhotos.map((r: any) => ({ productId: r.product_id, sku: r.sku, title: r.title, price: r.price, handle: r.product_handle })),
     shop: SHOP_BY_STORE[store],
-    regradeOn: Deno.env.get("LR_REGRADE_ON") === "1",
+    // The 5-minute picture check (0206) re-grades a re-shot listing by itself, so
+    // with it on, a card marked fixed is rechecked without the overnight batch.
+    regradeOn: Deno.env.get("LR_REGRADE_ON") === "1" || Deno.env.get("PQ_QUICK_ON") === "1",
   };
 }
 
@@ -491,8 +503,9 @@ async function queueView(scope: Scope, asked: string) {
 async function countsView(scope: Scope) {
   const counts: Record<string, number> = {};
   await Promise.all(scope.stores.map(async st => {
-    const [pq, lt, cat, cards] = await Promise.all([photoLines(st), titleLines(st), categoryLines(st),
-      rows(`${CARDS(scope.test)}?store_code=eq.${st}&status=neq.done&select=product_id,status,ticks`)]);
+    const [pq, lt, cat, cardsAll] = await Promise.all([photoLines(st), titleLines(st), categoryLines(st),
+      rows(`${CARDS(scope.test)}?store_code=eq.${st}&status=neq.done&select=product_id,status,ticks,returned_kind,assigned_to`)]);
+    const cards = cardsAll.filter((c: any) => !fullHidden(scope, c));
     const waiting = new Set(cards.filter((c: any) => c.status !== "open").map((c: any) => c.product_id));
     const ids = new Set([...pq.keys(), ...lt.keys(), ...cat.keys(),
       ...cards.filter((c: any) => c.status === "open" && c.ticks).map((c: any) => c.product_id)]);
@@ -815,15 +828,44 @@ async function addFlag(f: Record<string, unknown>, update = false) {
 // just have him delegate that"), leaves it unassigned: the manager's alone.
 // A test send is assigned to the store's test employee, so Test DM → Test
 // Employee can be tried without reaching a real person.
+// ⚠️ listing_listers only holds listings the daily job has seen (recent ones).
+// An older listing has no row there, yet View Listing shows its lister from the
+// live Shopify tags — so a send-back read only the table and went to the manager
+// while the header said "Rorie" (2026-11-24). Fall back to the same live read.
 async function assigneeFor(store: string, pid: string, test: boolean): Promise<string | null> {
-  if (test) return (await rows(`test_users?store=eq.${store}&role=ilike.employee&select=name&limit=1`))?.[0]?.name || null;
-  const l = (await rows(`listing_listers?store_code=eq.${store}&product_id=eq.${enc(pid)}&select=lister_name&limit=1`))?.[0];
-  if (!l?.lister_name) return null;
-  const u = (await rows(`users?name=ilike.${enc(l.lister_name)}&select=name,store,role&limit=5`))
+  if (test) {
+    const t = await rows(`test_users?store=eq.${store}&select=name,role`);
+    return (t.find((x: any) => /^employee$/i.test(String(x.role || "").trim()))
+      || t.find((x: any) => /^assistant manager$/i.test(String(x.role || "").trim())))?.name || null;
+  }
+  let who = (await rows(`listing_listers?store_code=eq.${store}&product_id=eq.${enc(pid)}&select=lister_name&limit=1`))?.[0]?.lister_name || null;
+  if (!who) {
+    try {
+      const { shop, token } = await shopFor(store);
+      const tags = (await gql(shop, token, `query($id: ID!) { product(id: $id) { tags } }`, { id: pid }))?.product?.tags || [];
+      who = listerFrom(tags, await loadListerIx(), store)?.name || null;
+    } catch { who = null; }
+  }
+  if (!who) return null;
+  const u = (await rows(`users?name=ilike.${enc(who)}&select=name,store,role&limit=5`))
     .find((x: any) => String(x.store || "").toUpperCase() === store && String(x.role || "").toLowerCase().trim() !== "store");
   return u ? String(u.name) : null;
 }
+// A full-review card: kind full/notes, or a later round of one (Fix Not Accepted,
+// a failed recheck) — full-review ticks always carry `parts`, spot ticks never do.
+const isFullCard = (c: any) => !!c && (c.returned_kind === "full" || c.returned_kind === "notes" || Array.isArray(c.ticks?.parts));
+const fullHidden = (scope: Scope, c: any) => OWN_FULL_ONLY.includes(scope.role) && isFullCard(c) && !sameName(c.assigned_to, scope.name);
 const sameName = (a: unknown, b: unknown) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase() && !!String(a || "").trim();
+// THE LISTER'S OWN OPEN PHOTO FIXES (0206): picture_quality_reviews rows the
+// grader saved with this person as lister_name (their Shopify tag matched their
+// account at grading time). Test accounts list nothing, so they get none.
+async function minePhotos(scope: Scope): Promise<any[]> {
+  if (scope.test) return [];
+  const pq = await rows(`picture_quality_reviews?store_code=eq.${scope.stores[0]}&status=eq.open&verdict=in.(retake,fix,reorder)`
+    + `&stamp=like.${PQ_RECIPE}:*&lister_name=ilike.${enc(scope.name)}`
+    + `&select=product_id,sku,title,verdict,findings,reorder,deletion,sheet_name,sheet_slug,reviewed_at,lister_name&limit=200`);
+  return pq.filter((r: any) => sameName(r.lister_name, scope.name));
+}
 async function mineCards(scope: Scope) {
   const all = await rows(`${CARDS(scope.test)}?store_code=eq.${scope.stores[0]}&status=eq.open&assigned_to=not.is.null&select=*&order=returned_at.desc&limit=200`);
   return all.filter((c: any) => sameName(c.assigned_to, scope.name) && c.returned_kind !== "notes");
@@ -831,10 +873,25 @@ async function mineCards(scope: Scope) {
 // MY FIXES: the send-backs on listings this person made, with the photos.
 async function mineView(scope: Scope) {
   const store = scope.stores[0];
-  const cards = await mineCards(scope);
-  const shop = await minis(store, cards.map((c: any) => c.product_id)).catch(() => new Map<string, Mini>());
+  const [cards, photos] = await Promise.all([mineCards(scope), minePhotos(scope)]);
+  const carded = new Set(cards.map((c: any) => String(c.product_id)));
+  const photoOnly = photos.filter((r: any) => !carded.has(String(r.product_id)));
+  const shop = await minis(store, [...cards.map((c: any) => c.product_id), ...photoOnly.map((r: any) => r.product_id)])
+    .catch(() => new Map<string, Mini>());
+  const guides = photoOnly.length ? await sheetGuides() : new Map<string, any>();
   return {
     scope: { name: scope.name, stores: scope.stores }, store, shop: SHOP_BY_STORE[store],
+    // Photo fixes from the picture check: no card, nothing to press — the fix is
+    // re-shooting or reordering in Shopify, and the 5-minute check re-grades it
+    // as soon as the photos change; a pass takes it off both lists by itself.
+    photoItems: photoOnly.map((r: any) => {
+      const m = shop.get(r.product_id);
+      const line: any = linesFor(r.product_id, r, null, null, null)[0];
+      line.guide = guides.get(line.sheetSlug) || guides.get(line.sheet) || [];
+      return { productId: r.product_id, sku: m?.sku || r.sku, title: m?.title || r.title, price: m?.price ?? null,
+               handle: m?.handle || "", createdAt: m?.createdAt || null, photos: m?.photos || [], gradedAt: r.reviewed_at,
+               lines: [line] };
+    }),
     items: cards.map((c: any) => {
       const m = shop.get(c.product_id);
       return { productId: c.product_id, sku: m?.sku || c.sku, title: m?.title || c.title, price: m?.price ?? c.price,
@@ -880,6 +937,7 @@ async function handlePost(req: Request, scope: Scope) {
     const store = String(body.store || "").toUpperCase(), pid = String(body.productId || "");
     if (!scope.stores.includes(store) || !pid) return json({ error: "forbidden" }, 403);
     const card = await cardOf(store, pid, T);
+    if (card && fullHidden(scope, card)) return json({ error: "forbidden" }, 403);
     if (!card || card.status !== "open" || card.returned_kind !== "notes") return json({ error: "conflict", detail: "These notes are already done." }, 409);
     await patchCard(store, pid, { status: "done", confirmed_by: scope.name, confirmed_at: now }, T);
     return json({ ok: true });
@@ -892,7 +950,7 @@ async function handlePost(req: Request, scope: Scope) {
     if (!pid) return json({ error: "productId required" }, 400);
     const card = await cardOf(store, pid, T);
     // A team member without the store's list may fix only what was sent to them.
-    if (!scope.mayFix && !(card && sameName(card.assigned_to, scope.name))) {
+    if ((!scope.mayFix || fullHidden(scope, card)) && !(card && sameName(card.assigned_to, scope.name))) {
       return json({ error: "forbidden", detail: "This listing was not sent to you." }, 403);
     }
     if (action === "undo-fixed") {
@@ -1244,13 +1302,18 @@ async function regrade() {
   return out;
 }
 
-// 4–10am CT: read what the re-grade wrote. A card whose listing has been graded
-// again since it was marked fixed goes to Ethan's Confirm Fixes if nothing on it
-// is open any more, and back to the store if anything is.
+// Every 15 minutes (0207): read what the re-grade wrote. A card whose listing has
+// been graded again since it was marked fixed goes to Ethan's Confirm Fixes if
+// nothing on it is open any more, and back to the store if anything is.
+// ⚠️ 'fixed' AS WELL AS 'regrading' (2026-11-24): with the overnight re-grade off
+// and the 5-minute check on, a card marked fixed never became 'regrading' — the
+// 5-minute check re-graded the re-shot listing, but nothing read that grade back,
+// so the card sat in Tonight's Recheck for good. Any grade newer than fixed_at
+// settles it, whichever job wrote it.
 async function settle(fake?: { result: string; store: string; productId: string }) {
   const cards = fake
     ? [await cardOf(fake.store, fake.productId)].filter(Boolean)
-    : await rows(`listing_review_cards?status=eq.regrading&select=*&limit=1000`);
+    : await rows(`listing_review_cards?status=in.(fixed,regrading)&select=*&limit=1000`);
   const moved = { confirm: 0, back: 0, waiting: 0 };
   for (const c of cards) {
     const st = c.store_code, pid = c.product_id;
@@ -1293,7 +1356,35 @@ Deno.serve(async (req: Request) => {
       const store = (url.searchParams.get("store") || "").toUpperCase();
       // MY FIXES (0204) — the lister's own send-backs, and the feed card's count.
       if (view === "mine") return json(await mineView(scope));
-      if (view === "mine-count") return json({ n: (await mineCards(scope)).length });
+      if (view === "mine-count") {
+        const [cards, photos] = await Promise.all([mineCards(scope), minePhotos(scope)]);
+        const carded = new Set(cards.map((c: any) => String(c.product_id)));
+        return json({ n: cards.length + photos.filter((r: any) => !carded.has(String(r.product_id))).length });
+      }
+      // THE POP-UP FEED (Ethan, 2026-11-24): "they finish a listing, it grades,
+      // they come back and there's just a notification" — every picture grade
+      // of this person's listings since `since` (at most 3 hours back), pass or
+      // not. The browser shows each one once as a desktop notification.
+      if (view === "pq-news") {
+        if (scope.test) return json({ items: [] });
+        const floor = Date.now() - 3 * 3600000;
+        const since = Math.max(floor, Date.parse(url.searchParams.get("since") || "") || floor);
+        const got = await rows(`picture_quality_reviews?store_code=eq.${scope.stores[0]}&lister_name=ilike.${enc(scope.name)}`
+          + `&reviewed_at=gt.${encodeURIComponent(new Date(since).toISOString())}&stamp=like.${PQ_RECIPE}:*`
+          + `&select=product_id,sku,title,verdict,findings,reorder,photo_count,reviewed_at,lister_name&order=reviewed_at.asc&limit=20`);
+        const mine = got.filter((r: any) => sameName(r.lister_name, scope.name));
+        // WHICH LISTING, AT A GLANCE (Ethan, 2026-11-24: "give them an idea on
+        // what listing they did"): its first photo as the pop-up's picture, plus
+        // SKU and price. One Shopify read, and only when there is news.
+        const shop = mine.length ? await minis(scope.stores[0], mine.map((r: any) => r.product_id)).catch(() => new Map<string, Mini>())
+          : new Map<string, Mini>();
+        return json({ items: mine.map((r: any) => ({
+          productId: r.product_id, title: shop.get(r.product_id)?.title || r.title, sku: shop.get(r.product_id)?.sku || r.sku || "",
+          price: shop.get(r.product_id)?.price ?? null, thumb: shop.get(r.product_id)?.photos?.[0]?.thumb || null,
+          verdict: r.verdict, photoCount: r.photo_count, at: r.reviewed_at,
+          missing: (r.findings || []).filter((f: any) => f.code === "missing_shot").map((f: any) => f.shot || f.text),
+          reorder: !!r.reorder, findings: (r.findings || []).map((f: any) => String(f.text || "")).filter(Boolean).slice(0, 4) })) });
+      }
       if (view === "counts") return json(await countsView(scope));
       if (view === "queue") {
         if (!scope.mayFix && !scope.maySpot) return json({ error: "forbidden" }, 403);
@@ -1311,6 +1402,16 @@ Deno.serve(async (req: Request) => {
         const st = scope.stores.includes(store) ? store : scope.stores[0];
         return json(await fullList(st, url.searchParams.get("q") || "", scope.test));
       }
+      // FLAG RATES FOR EVERY ROLE (Ethan, 2026-11-24): the DM sees every store;
+      // a manager or ASM sees their own store (scope.stores is just theirs); a
+      // team member with only My Listing Corrections sees ONLY their own rows.
+      if (view === "flags") {
+        const weeks = Math.min(Math.max(Number(url.searchParams.get("weeks") || 8), 1), 26);
+        const fv: any = await flagsView(scope, weeks);
+        if (scope.maySpot) return json(fv);
+        if (scope.mayFix) return json({ ...fv, checkers: {}, mode: "store" });
+        return json({ ...fv, checkers: {}, mode: "mine", rows: fv.rows.filter((r: any) => sameName(r.lister, scope.name)) });
+      }
       if (!scope.maySpot) return json({ error: "forbidden", detail: "The Spot Check is not switched on for you." }, 403);
       if (view === "today") return json(await todayView(scope));
       if (view === "spot-notes") return json(await spotNotesView(scope));
@@ -1318,7 +1419,6 @@ Deno.serve(async (req: Request) => {
       if (view === "spot-notes-count") return json({ waiting: (await spotNotesWaiting(scope.stores)).length });
       if (view === "spot") return json(await spotView(scope, store));
       if (view === "confirm") return json(await confirmView(scope));
-      if (view === "flags") return json(await flagsView(scope, Math.min(Math.max(Number(url.searchParams.get("weeks") || 8), 1), 26)));
       return json({ error: `unknown view: ${view}` }, 400);
     }
     if (!secretOk(url)) return json({ error: "unauthorized" }, 401);

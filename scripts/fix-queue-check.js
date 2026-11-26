@@ -51,8 +51,12 @@ t('both feature keys are in the catalog with the agreed defaults', function () {
     var fix = FEATURE_CATALOG.find(function (f) { return f.key === 'ec-view-fix-queue'; });
     var spot = FEATURE_CATALOG.find(function (f) { return f.key === 'ec-view-spot-check'; });
     if (!fix || !spot) return 'missing a key';
+    // 2026-11-24: ASMs keep the store list (title, category, photos); the server
+    // hides full listing reviews not sent to them (fullHidden).
     var want = ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'];
     if (want.some(function (r) { return fix.def.indexOf(r) < 0; })) return 'fix-queue def is ' + fix.def.join(',');
+    var mine = FEATURE_CATALOG.find(function (f) { return f.key === 'ec-view-my-fixes'; });
+    if (!mine || mine.def.indexOf('assistant-manager') < 0 || mine.def.indexOf('employee') < 0) return 'my-fixes def is ' + (mine && mine.def.join(','));
     return spot.def.join(',') === 'district-manager,ceo' || 'spot-check def is ' + spot.def.join(',');
 });
 
@@ -61,6 +65,20 @@ t('an ASM gets the list, with no tabs', function () {
     var h = _lhHtml();
     if (h.indexOf('lr-split') < 0) return 'not the list';
     return h.indexOf('lh-tabs') < 0 || 'a tab strip is drawn';
+});
+
+t('My Listing Corrections reads "N Listing Corrections Requested", no Ethan', function () {
+    _mfData = { store: 'OVL', shop: '', items: [] }; _mfErr = null;
+    var h = _mfHtml();
+    return (h.indexOf('0 Listing Corrections Requested') >= 0 && h.indexOf('Ethan') < 0) || 'header wrong';
+});
+
+t('notes are two columns: label cell, note cell, no quotes', function () {
+    var said = _fqTicksSaid({ parts: [{ part: 'Price', note: 'Too low.' }], photos: [{ n: 3, tags: ['Dirty Table'], note: 'Wipe it.' }] });
+    var h = _lrNoteList(said);
+    if (h.indexOf('<b class="lr-nk">Price</b><span class="lr-nv">Too low.</span>') < 0) return 'part not two cells: ' + h;
+    if (h.indexOf('<b class="lr-nk">Photo 3</b>') < 0) return 'photo label not its own cell';
+    return !/[“”]/.test(h) || 'quotes still there';
 });
 
 t('a manager gets the list, with no tabs', function () {
@@ -136,7 +154,7 @@ t('a listing Ethan sent back is marked in the list and says why on top', functio
         { status: 'open', round: 0, returnedKind: 'spot', returnedNote: 'Photo 3 is the back, no port shot', returnedBy: 'Ethan Kushnir' })]);
     var h = _fqHtml(false);
     if (h.indexOf('lr-row-back') < 0) return 'row not marked';
-    if (h.indexOf('Sent Back By Ethan') < 0 || h.indexOf('Photo 3 is the back, no port shot') < 0) return 'no banner or note';
+    if (h.indexOf('Photo Spot Check') < 0 || h.indexOf('Photo 3 is the back, no port shot') < 0) return 'no banner or note';
     if (h.indexOf('Ports Left') < 0) return 'ticks not drawn';
     return h.indexOf('fqMarkFixed(') >= 0 || 'no I Fixed It on Ethan’s fixes';
 });
@@ -152,7 +170,7 @@ t('marked-fixed listings wait behind the footer link, with Undo, and say the rec
     fqAs('Manager');
     fqSetup([], [fqCard(1, 300, [FQ_PHOTO], { status: 'fixed', fixedBy: 'Test ASM', fixedAt: '2026-11-18T20:00:00Z' })]);
     var h = _fqHtml(false);
-    if (h.indexOf('>Tonight’s Recheck<') < 0 || h.indexOf('Waiting On Tonight’s Recheck</button>') >= 0) return 'no Tonight’s Recheck button';
+    if (h.indexOf('>Being Rechecked<') < 0) return 'no Being Rechecked button';
     fqWaiting();
     var w = _fqHtml(false);
     _fqWaitView = false;
@@ -173,7 +191,7 @@ t('Today has the two jobs, a tile per store, the listers and the notes', functio
     fqAs('District Manager'); fqSetup([]); tdSetup();
     var h = _tdHtml();
     if (h.indexOf('1 Listing To Look At') < 0) return 'spot check job wrong';
-    if (h.indexOf('1 Fix Passed The Recheck') < 0) return 'confirm job wrong';
+    if (h.indexOf('1 Fix To Confirm') < 0) return 'confirm job wrong';
     if (h.indexOf("lrOpenStore('WSP')") < 0) return 'no store tile';
     if (h.indexOf('Josiah Dixon') < 0) return 'no listers';
     if (h.indexOf('2 Spot Check Notes') < 0 || h.indexOf('openSpotNotes()') < 0) return 'no Spot Check Notes row';
@@ -510,7 +528,7 @@ t('the store reads a full review as its own ribbon with one line per part', func
     fqSetup([fqCard(1, 139.99, [{ kind: 'ethan', ticks: { missing: [], order: false, parts: [{ part: 'Not Included', note: 'Device Only is not missing' }], photos: [] } }],
         { status: 'open', round: 0, returnedKind: 'full', returnedNote: 'Tidy up the charger lines', returnedBy: 'Ethan Kushnir' })]);
     var h = _fqHtml(false);
-    return (h.indexOf('Full Listing Review') >= 0 && h.indexOf('<b>Not Included</b>') >= 0 && h.indexOf('Device Only is not missing') >= 0) || 'full-review lines not shown';
+    return (h.indexOf('Full Listing Review') >= 0 && h.indexOf('<b class="lr-nk">Not Included</b>') >= 0 && h.indexOf('Device Only is not missing') >= 0) || 'full-review lines not shown';
 });
 
 // View Listing, 2026-11-23: the description replaces the field grid; arrows step the main photo; "No Photos".
@@ -571,7 +589,7 @@ t('notes-only card: Got It, no I Fixed It, blue Notes chip', function () {
     var h = _fqDetailHtml(c, 'OVL', false);
     if (h.indexOf('fqNotesSeen') < 0) return 'no Got It';
     if (h.indexOf('fqMarkFixed') >= 0) return 'I Fixed It shown on notes';
-    if (h.indexOf('Notes From Ethan') < 0) return 'no notes heading';
+    if (h.indexOf('Notes') < 0 || h.indexOf('From Ethan') >= 0) return 'no notes heading';
     if (_fqRowHtml(c).indexOf('lr-c-notes') < 0) return 'row chip is not Notes';
     return true;
 });
@@ -584,6 +602,38 @@ t('send-back and notes-only share one From Ethan card, overall note first', func
     if (a.indexOf('lr-from-fix') < 0 || b.indexOf('lr-from-notes') < 0) return 'no From Ethan card';
     if (a.indexOf('class="lr-back') >= 0 || b.indexOf('class="lr-back') >= 0) return 'old banner still shown';
     if (a.indexOf('Overall') < 0 || a.indexOf('Overall') > a.indexOf('Price')) return 'overall note not first';
-    if (a.indexOf('Send To Ethan') < 0) return 'eye-only card says Recheck Tonight';
+    if (a.indexOf('Send For A Final Check') < 0) return 'eye-only card says Recheck Tonight';
     return true;
+});
+
+// 2026-11-24: the 5-minute picture check's pop-ups, and photo fixes in My Listing Corrections.
+t('pop-up wording: pass, missing, reorder; nothing for no_sheet', function () {
+    var a = _pqPopSay({ verdict: 'pass', title: 'Galaxy S26', photoCount: 12 });
+    if (!a || a.head.indexOf('Great Job') < 0 || a.body.indexOf('All 12 shots') < 0 || a.body.indexOf('Galaxy S26') !== 0) return 'pass wrong: ' + JSON.stringify(a);
+    var b = _pqPopSay({ verdict: 'fix', title: 'Galaxy S26', missing: ['Back', 'Ports'] });
+    if (!b || b.head !== 'Fix Your Photos — 2 Missing' || b.body.indexOf('Add the Back and Ports shots.') < 0) return 'missing wrong: ' + JSON.stringify(b);
+    var c = _pqPopSay({ verdict: 'reorder', title: 'Galaxy S26', reorder: true });
+    if (!c || c.head !== 'Reorder Your Photos') return 'reorder wrong';
+    return _pqPopSay({ verdict: 'no_sheet', title: 'X' }) === null || 'no_sheet should not pop';
+});
+
+t('a photo fix shows in My Listing Corrections without the store buttons', function () {
+    _mfData = { store: 'OVL', shop: 'x', items: [], photoItems: [{ productId: 'gid://shopify/Product/9', title: 'Galaxy S26', sku: 'S1', price: 449,
+        photos: [{ thumb: 't', url: 'u' }], lines: [{ kind: 'photos', verdict: 'reorder', findings: [], reorder: { suggested: [2, 1], current: [1, 2] }, guide: [] }] }] };
+    _mfErr = null; _mfSel = null;
+    var h = _mfHtml();
+    if (h.indexOf('1 Listing Correction Requested') < 0) return 'count wrong';
+    if (h.indexOf('lr-c-ph') < 0) return 'no Photos chip';
+    if (h.indexOf('Fix The Order For Me') >= 0 || h.indexOf('Not Wrong') >= 0) return 'store buttons shown to the lister';
+    return h.indexOf('checked again by themselves') >= 0 || 'no re-check line';
+});
+
+t('the manager’s photo box says who else has it', function () {
+    var h = _fqFixHtml({ productId: 'p1', photos: [] }, { kind: 'photos', verdict: 'fix', findings: [], sentTo: 'Rorie Moore' }, 'OVL');
+    return h.indexOf('Also sent to <b>Rorie Moore</b>') >= 0 || 'no Also sent to';
+});
+
+t('pop-up names the listing: title, then SKU and price', function () {
+    var a = _pqPopSay({ verdict: 'reorder', reorder: true, title: 'Galaxy S26', sku: 'OVL-1', price: 449.99 });
+    return (a && a.body.indexOf('Galaxy S26\nSKU OVL-1 · $449.99\n') === 0) || 'body was: ' + (a && a.body);
 });

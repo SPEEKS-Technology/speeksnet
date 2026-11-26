@@ -10697,6 +10697,8 @@ body.sam-active .hotbar-btn:hover {
 #spotNoteAlertBubble,
 /* Added 2026-11-23 with the My Fixes card (listing-review, 0204). */
 #myFixAlertBubble,
+/* Added 2026-11-24 with the one-time Turn On Pop-Ups card (0206). */
+#pqPopAskBubble,
 /* Added 2026-10-12 — the claims 4pm "due today" card (2026-10-08) shipped
    without this line and floated a red "Card expired … overdue" toast on every
    store manager's screen. scripts/retired-bubble-check.js now fails any
@@ -10707,6 +10709,13 @@ body.sam-active .hotbar-btn:hover {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
+    /* Out of the layout too (2026-11-24). Hidden is not gone: a bubble created
+       by script as a plain div (My Fixes, Spot Check Notes…) sat in the nav's
+       flex row at display:flex and pushed the Tools/icons ~430px left on Test
+       Employee's screen. The feed reads computed display, not position. */
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
 }
 
 /* --- Action Menu with no applicable action items (CEO / MOCD) ------------- */
@@ -26520,8 +26529,7 @@ a.qp-tile.qp-tile-link:hover { box-shadow: inset 0 0 0 1px #9fd8b6; }
     .top-nav.nav-compact .nav-bar a.nav-link { font-size: 13px !important; gap: 7px !important; }
     .top-nav.nav-compact .nav-bar a.nav-link i { width: auto !important; font-size: inherit !important; }
     .top-nav.nav-compact .nav-bar a.nav-link[data-m]::after { content: none !important; }
-    .top-nav .brand-area.qp-home { cursor: pointer; border-radius: 12px; transition: background .12s; }
-    .top-nav .brand-area.qp-home:hover { background: rgba(255,255,255,.08); }
+    /* .qp-home (the logo as a home link) retired 2026-11-24 — see _qpBackBar in speeks.js. */
     .qp-back { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
     .qp-back a { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; color: #146c3c; background: #e8f7ee; border: 1px solid #b9e3c9; border-radius: 999px; padding: 6px 14px 6px 10px; text-decoration: none; transition: background .12s, border-color .12s; }
     .qp-back a:hover { background: #d9f2e3; border-color: #8fd3ab; }
@@ -28221,3 +28229,68 @@ div.lr-part-note { margin-top: 6px; }
 /* My Fixes (0204): who a send-back also went to, on the manager's card. */
 .lr-from-who { font-size: 12.5px; color: var(--cb-muted); }
 .lr-from-who b { color: var(--cb-ink); }
+
+/* NOTES AS TWO COLUMNS (Ethan, 2026-11-24: "align the text better in all areas
+   that have the notes in bullet points"). Label on the left, every note starting
+   on the same line to its right, so wrapped text stays under its own note
+   instead of running back under the label. Built by _lrNote / _lrNoteList. */
+.lr-nlist, .lr-said-list { list-style: none; margin: 0; padding: 0; display: grid;
+    grid-template-columns: max-content minmax(0, 1fr); column-gap: 14px; row-gap: 7px; align-items: baseline; }
+.lr-nlist > li, .lr-said-list > div { display: contents; }
+.lr-nk { font-size: 13px; font-weight: 800; color: var(--cb-ink); white-space: nowrap; }
+.lr-nv { font-size: 13px; line-height: 1.45; color: #3d4652; min-width: 0; overflow-wrap: anywhere; }
+.lr-nv:empty::before { content: '—'; color: var(--cb-muted); }
+.lr-from-list .lr-nk, .lr-from-list .lr-nv { font-size: 13.5px; }
+.lr-nv .lr-said-ph { align-items: flex-start; }
+.lr-nv .lr-said-ph img { width: 44px; height: 44px; }
+@media (max-width: 560px) {
+    .lr-nlist, .lr-said-list { grid-template-columns: minmax(0, 1fr); row-gap: 2px; }
+    .lr-nv { margin-bottom: 6px; }
+}
+
+/* Listers This Week — Most Flagged (2026-11-24): name | store | flagged/listed |
+   bar | rate. Store gets its own column so the codes line up; the numbers are
+   right-aligned in tabular figures so 1/8 and 1/66 sit on the same edge. */
+.lr-lr { grid-template-columns: minmax(0, 190px) 40px 52px minmax(60px, 1fr) 42px; }
+.lr-lr-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lr-lr-st { font-size: 11.5px; font-weight: 700; color: var(--cb-muted); }
+.lr-lr-n, .lr-lr > b:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* YOUR FLAG RATE on My Listing Corrections (2026-11-24): only this person's own
+   numbers, four weeks in a 2×2 grid under the list header. */
+.mf-rate { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; border-bottom: 1px solid var(--cb-line-2); }
+.mf-rate-g { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mf-rate-c { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border: 1px solid var(--cb-line-2); border-radius: 10px; background: #fafbfc; }
+.mf-rate-now { background: #fff; border-color: var(--cb-line); }
+.mf-rate-w { font-size: 11px; font-weight: 700; color: var(--cb-muted); }
+.mf-rate-c .fl-rate { font-size: 18px; font-variant-numeric: tabular-nums; }
+.mf-rate-n { font-size: 11.5px; color: var(--cb-muted); }
+
+/* Tonight's Recheck and Flag Rates: one width, the widest's (Ethan, 2026-11-24 —
+   side-by-side pills are the same size). */
+.lr-list-f-btns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.lr-list-f-btns .lr-wait-btn { width: 100%; justify-content: center; white-space: nowrap; }
+.lr-list-f { flex-wrap: wrap; }
+.lr-list-f > span { white-space: nowrap; }
+
+/* WEEK STEPPER THAT DOES NOT JUMP (Ethan, 2026-11-24). The label and the dates
+   get fixed widths, sized for the longest ("Week Of Nov 30", "Nov 30 – Dec 6"),
+   in tabular figures — so one-digit and two-digit dates sit in the same space
+   and the right arrow never moves. "Through Yesterday" sits outside the arrows
+   and only hides on past weeks, so it pops in without pushing anything. */
+/* Two lines, centred in one fixed-width block between the arrows: the week's
+   name on top, its dates under it. Fixed width so the arrows never move; centred
+   so a short name ("This Week") has no gap trailing after it (2026-11-24). */
+.fl-step-t { flex-direction: column; align-items: center; gap: 1px; width: 9.6em; text-align: center; font-variant-numeric: tabular-nums; }
+.fl-step-t b { line-height: 1.2; }
+.fl-step-t span { font-size: 12px; line-height: 1.2; }
+.fl-thru { font-size: 12.5px; color: var(--cb-muted); white-space: nowrap; }
+.fl-thru-off { visibility: hidden; }
+
+/* Picture check pop-ups switch (2026-11-24), under the list header. */
+.pq-pop { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--cb-line-2); font-size: 12.5px; color: var(--cb-muted); background: #f5f9ff; }
+.pq-pop-on { background: #f1faf4; color: #1f6b3a; }
+.pq-pop-off { background: #fff8f2; color: #8a5a1f; }
+.pq-pop .lr-btn { flex: 0 0 auto; }
+.lr-hint-solo { display: block; max-width: 60ch; }
+.pq-pop { flex-wrap: wrap; }

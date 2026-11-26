@@ -33669,7 +33669,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkClaimsConfirmAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); checkSpotNoteReminders(); checkMyFixReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkClaimsConfirmAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); checkSpotNoteReminders(); checkMyFixReminders(); checkPqPopAsk(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -38320,7 +38320,8 @@ function _holdPaintBadges(ctx) {
     const o = _holdDueCounts(ctx, 'open');
     // 0164: the DM's To Confirm count — only the oversight view has that tab.
     const conf = ctx === 'ov' ? (((_holdData[ctx] || {}).dmQueue) || []).length : 0;
-    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments], ['confirm', conf]].forEach(([t, v]) => {
+    [['mismatch', n.mismatch, o.mismatch], ['returns', n.returns, o.returns], ['cases', n.cases, o.cases],
+     ['payments', n.payments, o.payments], ['confirm', conf, 0]].forEach(([t, v, open]) => {
         const b = document.getElementById(`hold-${ctx}-badge-${t}`);
         if (!b) return;
         const show = v || open;
@@ -38575,7 +38576,7 @@ function _holdSectionHead(t, rows) {
     const bar = hot ? _HOLD_C.red.solid : warm ? _HOLD_C.amber.solid : '#94a3b8';
     const pal = hot ? _HOLD_C.red : warm ? _HOLD_C.amber : { bg: '#e2e8f0', fg: '#475569' };
     const count = list.length
-        ? `<span style="font-size:10.5px; font-weight:900; padding:2px 8px; border-radius:999px; background:${hot ? _HOLD_C.red.bg : '#e2e8f0'}; color:${hot ? _HOLD_C.red.fg : '#475569'};">${list.length}</span>`
+        ? `<span style="font-size:10.5px; font-weight:900; padding:2px 8px; border-radius:999px; background:${pal.bg}; color:${pal.fg};">${list.length}</span>`
         : '';
     return `<div style="display:flex; align-items:center; gap:9px; margin:26px 0 11px; padding-bottom:8px; border-bottom:2px solid #e2e8f0;">
         <span style="width:4px; height:16px; border-radius:2px; background:${bar}; flex:0 0 auto;"></span>
@@ -40288,12 +40289,12 @@ async function checkClaimsDueAlerts() {
         // due today, due tomorrow, or with no date of its own (it was mailed
         // today and is due as of now). Something due Dec 3 stays on the tab and
         // in the morning mail, and reaches this card the day before.
-        const _cdNow = j.today || _kpiCentralToday();
         // DUE TODAY ONLY since 2026-11-25 (Ethan: "it shouldn't be due tomorrow
         // ... if there is nothing due today, nothing should show"). The server
         // now sends only items due today (claims-disputes urgencyOf); this is
         // the same test, for a cached older answer. A card authorization is the
         // one thing allowed a day early — it runs out mid-morning.
+        const _cdNow = j.today || _kpiCentralToday();
         const items = (j.dueAlerts || []).filter(it => it.overdue || !it.due
             || _b2bDayDiff(_cdNow, String(it.due).slice(0, 10)) <= (it.type === 'payment' ? 1 : 0));
         if (!items.length) { hide(); return; }
@@ -44726,14 +44727,14 @@ const FEATURE_CATALOG = [
     // ⚠️ Each def must match its edge function: FIX_ROLES in listing-review,
     // FIX_DEFAULT_ROLES in picture-quality, FIX_ROLES in shopify-recat; SPOT_ROLES
     // in listing-review.
-    { key: 'ec-view-fix-queue',        label: 'SPEEKS Connect · Fix Queue', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'ec-view-fix-queue',        label: 'SPEEKS Connect · Fix Queue', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },  // ASMs: full reviews only their own (server fullHidden, 2026-11-24)
     { key: 'ec-view-spot-check',       label: 'SPEEKS Connect · Spot Check & Flag Rates', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     // FULL LISTING REVIEW (0197): the DM only for now (Ethan, 2026-11-21).
     // ⚠️ Must match FULL_ROLES in listing-review.
     { key: 'ec-view-full-review',      label: 'SPEEKS Connect · Full Listing Review', tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // MY FIXES (0204, Ethan 2026-11-23): a full-review send-back goes to the
     // team member who listed it too. ⚠️ Must match MINE_ROLES in listing-review.
-    { key: 'ec-view-my-fixes',         label: 'SPEEKS Connect · My Fixes', tab: 'widgets', group: 'Operations', def: ['employee'] },
+    { key: 'ec-view-my-fixes',         label: 'SPEEKS Connect · My Listing Corrections', tab: 'widgets', group: 'Operations', def: ['employee', 'assistant-manager'] },
     // { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     // LENDS the corp hat to someone outside the corp roles. DM, CEO and MOCD have
     // corp powers by role whatever this says (_b2bIsCorp), which is why only the
@@ -45781,7 +45782,7 @@ const JUMP_KEYWORDS = {
     'ec-view-fix-queue':         'speeks connect listing health fix queue fix listings mark fixed photos title category',
     'ec-view-spot-check':        'speeks connect listing health spot check confirm fixes flag rate lister grade',
     'ec-view-full-review':       'speeks connect full listing review manual review listing notes send back',
-    'ec-view-my-fixes':          'speeks connect my fixes my listings sent back fix lister',
+    'ec-view-my-fixes':          'speeks connect my listing corrections my fixes my listings sent back fix lister',
     'tool-listing-health':       'listing health title notes denied dismissed rule wrong feedback ask claude copy prompt',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
@@ -55736,12 +55737,12 @@ function _qpClaimsSyncedAt(d) {
 // next six days), Later (after that, or no due date). Red to grey, so how
 // urgent the tab is reads before any line does. Counts only — the lines under
 // it are the overdue and due-today ones.
-function _qpClaimsBuckets(due, today) {
-    const wk = new Date(today + 'T12:00:00'); wk.setDate(wk.getDate() + 6);
-    const week = wk.toLocaleDateString('en-CA');
 // The day an item is due: claims-disputes' due_day (urgencyOf, 2026-11-25 — eBay's
 // own deadline for a return, not the day it appeared), else the old due_on.
 const _qpClaimsDay = x => String(x.due_day || x.due_on || '').slice(0, 10);
+function _qpClaimsBuckets(due, today) {
+    const wk = new Date(today + 'T12:00:00'); wk.setDate(wk.getDate() + 6);
+    const week = wk.toLocaleDateString('en-CA');
     const b = { late: 0, today: 0, week: 0, later: 0 };
     due.forEach(function (e) {
         const d = _qpClaimsDay(e.x);
@@ -59538,12 +59539,9 @@ function _qpNavFit() {
         .forEach(function (l) { if (over()) l.querySelector('span').textContent = l.getAttribute('data-m'); });
 }
 document.addEventListener('DOMContentLoaded', function () {
-    const brand = document.querySelector('.top-nav .brand-area');
-    if (brand) {
-        brand.classList.add('qp-home');
-        brand.title = 'QuickPortal';
-        brand.addEventListener('click', function () { if (/\/(operations|workspace|stats|docs|b2b)\.html/i.test(location.pathname)) location.href = 'index.html'; });
-    }
+    // The SPEEKSNET logo was a link home here until 2026-11-24 (Ethan: "Remove
+    // SPEEKSNET as a button since we have the Quick Portal buttons on each
+    // page"). It is a plain logo now; the QuickPortal back bar is the way home.
     _qpBackBar();
     _qpNavFit(); setTimeout(_qpNavFit, 1500); setTimeout(_qpNavFit, 4000);
     window.addEventListener('resize', _qpNavFit);
@@ -59856,9 +59854,18 @@ function _samReminderCfg() {
     // have 2 listings to fix", the same as every other feed card). Clears when
     // the last one is marked fixed, by them or the manager.
     cfg.push({ key: 'myFixAlert', id: 'myFixAlertBubble', text: 'myFixAlertBubbleText',
-        title: 'My Fixes',
-        urgency: 0, due: 'Action', cls: 'sam-due-amber',
+        title: 'My Listing Corrections',
+        // Red like the other listing tools' cards (Ethan, 2026-11-24: "it feels
+        // weird being yellow") — it is listings to fix, not notes to read.
+        urgency: 1, due: 'Action', cls: 'sam-due-red',
         action: "window.location.href='operations.html#ebay'" });
+    // TURN ON POP-UPS, ONCE (Ethan, 2026-11-24: "as long as them allowing it
+    // once is all that they have to do"). A browser only asks after a tap, so
+    // the card IS the tap: it asks, and once they Allow (or Block) it is gone
+    // for good on that browser. Grey: a setup step, not a fix (one palette).
+    cfg.push({ key: 'pqPopAsk', id: 'pqPopAskBubble', text: 'pqPopAskBubbleText',
+        title: 'Turn On Pop-Ups', urgency: 0, due: 'Setup', cls: 'sam-due-grey',
+        action: "pqPopEnable()" });
     return cfg;
 }
 
@@ -60033,7 +60040,7 @@ function _samTestNotes() {
 // Cards a TEST account sees for real, beside the samples: the ones whose data
 // is the test sandbox's own (My Fixes reads listing_review_cards_test, 0203/0204),
 // so Test DM → Test Employee shows the morning card exactly as a lister gets it.
-const _SAM_TEST_REAL = ['myFixAlert'];
+const _SAM_TEST_REAL = ['myFixAlert', 'pqPopAsk'];
 function _samGatherReminders() {
     const testing = !!window._speeksTestSession;
     const dismissed = _samGetDismissedRem();
@@ -68603,29 +68610,41 @@ const _fqMoney = n => (n == null || n === '' || isNaN(Number(n))) ? ''
 const _fqNumeric = pid => String(pid || '').split('/').pop();
 const _fqDay = iso => { const d = new Date(iso || ''); return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
 // The ticks, in words — what the store reads under "Sent Back By Ethan".
+// ⚠️ Each line is TWO cells — the label, then the note — so a list of them
+// lines up as two columns (Ethan, 2026-11-24: "align the text better in all
+// areas that have the notes in bullet points"). Render through _lrNoteList, or
+// any wrapper whose CSS lays .lr-nk / .lr-nv out as a grid (.lr-said-list).
+const _lrNote = (k, v) => `<b class="lr-nk">${k}</b><span class="lr-nv">${v}</span>`;
+function _lrNoteList(items, extra) {
+    return `<ul class="lr-nlist${extra ? ' ' + extra : ''}">${(items || []).map(x => `<li>${x}</li>`).join('')}</ul>`;
+}
 function _fqTicksSaid(t) {
     if (!t) return [];
     const out = [];
-    if ((t.missing || []).length) out.push(`<b>Missing</b> — ${_ecEsc(t.missing.join(', '))}`);
-    if (t.order) out.push('<b>Wrong Order</b> — put the photos in the guide’s order');
-    if (t.title) out.push('<b>Title Wrong</b>');
-    if ((t.fields || []).length) out.push(`<b>Field Wrong</b> — ${_ecEsc(t.fields.join(', '))}`);
-    if (t.category) out.push('<b>Wrong Category</b>');
+    if ((t.missing || []).length) out.push(_lrNote('Missing', _ecEsc(t.missing.join(', '))));
+    if (t.order) out.push(_lrNote('Wrong Order', 'Put the photos in the guide’s order.'));
+    if (t.title) out.push(_lrNote('Title Wrong', ''));
+    if ((t.fields || []).length) out.push(_lrNote('Field Wrong', _ecEsc(t.fields.join(', '))));
+    if (t.category) out.push(_lrNote('Wrong Category', ''));
     // A full review's parts: the part, then his note on it.
-    for (const pt of (t.parts || [])) out.push(`<b>${_ecEsc(pt.part)}</b> — “${_ecEsc(pt.note || '')}”`);
+    for (const pt of (t.parts || [])) out.push(_lrNote(_ecEsc(pt.part), _ecEsc(pt.note || '')));
     // Per photo, with the photo as Ethan saw it (the number can move once the
     // store reorders; the picture cannot).
     for (const ph of (t.photos || [])) {
-        out.push(`<span class="lr-said-ph">${ph.thumb ? `<img src="${_ecEsc(ph.thumb)}" alt="">` : ''}<span><b>Photo ${_ecEsc(String(ph.n))}</b> — ${_ecEsc((ph.tags || []).join(', ') || 'See note')}${ph.note ? `: “${_ecEsc(ph.note)}”` : ''}</span></span>`);
+        const tags = _ecEsc((ph.tags || []).join(', '));
+        const say = tags && ph.note ? `<b>${tags}:</b> ${_ecEsc(ph.note)}` : tags || _ecEsc(ph.note || 'See note');
+        out.push(_lrNote(`Photo ${_ecEsc(String(ph.n))}`,
+            `<span class="lr-said-ph">${ph.thumb ? `<img src="${_ecEsc(ph.thumb)}" alt="">` : ''}<span>${say}</span></span>`));
     }
     const loose = (t.eye || []).filter(x => !(t.photos || []).some(ph => (ph.tags || []).includes(x)));
-    if (loose.length) out.push(`<b>Check By Eye</b> — ${_ecEsc(loose.join(', '))}`);
+    if (loose.length) out.push(_lrNote('Check By Eye', _ecEsc(loose.join(', '))));
     return out;
 }
-const _FQ_RETURNED = { spot: 'Sent Back By Ethan', confirm: 'Fix Not Accepted', regrade: 'Recheck Still Found A Problem',
-    full: 'Sent Back By Ethan — Full Listing Review',
+// No "By Ethan" (Ethan, 2026-11-24: "it's already implied that it came from me").
+const _FQ_RETURNED = { spot: 'Photo Spot Check', confirm: 'Fix Not Accepted', regrade: 'Recheck Still Found A Problem',
+    full: 'Full Listing Review',
     // Notes Only (0203): something to read, nothing to fix, never a flag.
-    notes: 'Notes From Ethan — Nothing To Fix' };
+    notes: 'Notes — Nothing To Fix' };
 // Test accounts (0203) send and fix on their own cards, which only test accounts see.
 const _LR_TEST_NOTE = '<div class="lr-test">Test Account — what you send here goes only to test accounts. No real store sees it, and nobody is flagged.</div>';
 
@@ -68698,10 +68717,11 @@ function _fqRowHtml(c) {
 
 // One fix box per line. Each says what to do in plain words first, then the
 // button that does it (or where to do it), then "Not Wrong…".
-function _fqFixHtml(c, l, store) {
+function _fqFixHtml(c, l, store, ro) {
     const id = _ecEsc(c.productId), st = _ecEsc(store), busy = _fqBusy.has(c.productId) ? 'disabled' : '';
     const notWrong = fn => `<button type="button" class="lr-btn lr-btn-ghost" ${busy} onclick="${fn}('${st}','${id}'${fn === 'fqDismissPhotos' ? `, ${l.verdict === 'reorder'}` : ''})">Not Wrong…</button>`;
-    const box = (tag, head, body, acts) => `<div class="lr-fix"><div class="lr-fix-h">${tag}<b>${head}</b></div>${body}${acts ? `<div class="lr-acts">${acts}</div>` : ''}</div>`;
+    // `ro` (My Listing Corrections): what to fix, without the store's buttons.
+    const box = (tag, head, body, acts) => `<div class="lr-fix"><div class="lr-fix-h">${tag}<b>${head}</b></div>${body}${acts && !ro ? `<div class="lr-acts">${acts}</div>` : ''}</div>`;
     if (l.kind === 'nophotos') {
         return box('<span class="lr-chip lr-c-bad">No Photos</span>', 'Live On The Online Store With No Photos',
             '<p class="lr-say">Shoppers can see this now. Add the photos in Shopify — it comes off this list by itself.</p>', '');
@@ -68715,8 +68735,10 @@ function _fqFixHtml(c, l, store) {
             : l.verdict === 'reorder' ? 'The Photos Are In The Wrong Order' : 'Fix The Photos';
         const said = miss.length ? `<p class="lr-say">${_ecEsc(miss.join(', '))}. Add ${miss.length === 1 ? 'it' : 'them'} in Shopify, in the guide’s order${l.sheet ? ` (${_ecEsc(l.sheet)})` : ''}.</p>` : '';
         const rest = _pqFindingLines((l.findings || []).filter(f => !['missing_shot', 'retake', 'order'].includes(f.code)));
+        // Not when the person reading it is the one who listed it (2026-11-24).
+        const sentTo = !ro && l.sentTo && !_lrIsMe(l.sentTo) ? `<span class="lr-from-who">Also sent to <b>${_ecEsc(l.sentTo)}</b>, who listed it.</span>` : '';
         return box('<span class="lr-chip lr-c-ph">Photos</span>', head,
-            said + (rest ? `<ul class="lt-why lr-why">${rest}</ul>` : '')
+            sentTo + said + (rest ? `<ul class="lt-why lr-why">${rest}</ul>` : '')
             // THE NEW ORDER, SHOWN (Ethan, 2026-11-20: "should show what the
             // corrected order will be like it used to") — the photos as they
             // will stand, each moved one marked with where it came from.
@@ -68762,9 +68784,9 @@ function _fqFixHtml(c, l, store) {
     if (l.kind === 'ethan') {
         const said = _fqTicksSaid(l.ticks);
         if (c.card && c.card.returnedKind === 'notes') return said.length ? box('<span class="lr-chip lr-c-notes">Notes</span>', 'For You To Read',
-            `<ul class="lt-why lr-why">${said.map(s => `<li>${s}</li>`).join('')}</ul>`, '') : '';
+            _lrNoteList(said), '') : '';
         return said.length ? box('<span class="lr-chip lr-c-bad">Sent Back</span>', 'What To Fix',
-            `<ul class="lt-why lr-why">${said.map(s => `<li>${s}</li>`).join('')}</ul>`, '') : '';
+            _lrNoteList(said), '') : '';
     }
     return '';
 }
@@ -68780,17 +68802,17 @@ function _fqFixHtml(c, l, store) {
 function _fqFromEthanHtml(back, line, mine) {
     const notes = back.returnedKind === 'notes';
     const said = _fqTicksSaid(line && line.ticks);
-    if (back.returnedNote) said.unshift(`<b>Overall</b> — “${_ecEsc(back.returnedNote)}”`);
+    if (back.returnedNote) said.unshift(_lrNote('Overall', _ecEsc(back.returnedNote)));
     const when = back.returnedAt ? _fqDay(back.returnedAt) : '';
     return `<div class="lr-from ${notes ? 'lr-from-notes' : 'lr-from-fix'}">
       <div class="lr-from-h">
         <span class="lr-chip ${notes ? 'lr-c-notes' : 'lr-c-bad'}">${notes ? 'Notes' : 'Sent Back'}</span>
-        <b>${_ecEsc(notes ? 'Notes From Ethan' : _FQ_RETURNED[back.returnedKind] || 'Sent Back By Ethan')}</b>
+        <b>${_ecEsc(notes ? 'Full Listing Review' : _FQ_RETURNED[back.returnedKind] || 'Sent Back')}</b>
         ${when ? `<span class="lr-from-when">${_ecEsc(when)}</span>` : ''}
       </div>
       <span class="lr-from-k">${notes ? 'For You To Read — Nothing To Fix' : 'What To Fix'}</span>
       ${mine ? '' : _mfWhoHtml(back)}
-      <ul class="lt-why lr-why lr-from-list">${said.map(x => `<li>${x}</li>`).join('') || '<li>See the listing.</li>'}</ul>
+      ${said.length ? _lrNoteList(said, 'lr-from-list') : '<span class="lr-say">See the listing.</span>'}
     </div>`;
 }
 function _fqDetailHtml(c, store, allClear) {
@@ -68829,8 +68851,8 @@ function _fqDetailHtml(c, store, allClear) {
           new Set(_fqMissingList(photoLine).map(x => x.toLowerCase())))}` : ''}
       <div class="lr-fixes">${c.lines.filter(l => !(fromCard && l.kind === 'ethan')).map(l => _fqFixHtml(c, l, store)).join('')}</div>
       ${handFix ? `<div class="lr-done">
-          <button type="button" class="lr-btn lr-btn-main" ${busy || (oneClickOpen ? 'disabled' : '')} onclick="fqMarkFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">${toEthan ? 'I Fixed It — Send To Ethan' : 'I Fixed It — Recheck Tonight'}</button>
-          <span class="lr-hint">${oneClickOpen ? 'Use or dismiss the title and category fixes first.' : toEthan ? 'Ethan checks it himself. Opens the next listing.' : 'Opens the next listing.'}</span></div>` : ''}
+          <button type="button" class="lr-btn lr-btn-main" ${busy || (oneClickOpen ? 'disabled' : '')} onclick="fqMarkFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">${toEthan ? 'I Fixed It — Send For A Final Check' : 'I Fixed It — Recheck It'}</button>
+          <span class="lr-hint">${oneClickOpen ? 'Use or dismiss the title and category fixes first.' : toEthan ? 'Checked once more before it closes. Opens the next listing.' : 'Opens the next listing.'}</span></div>` : ''}
       ${notes ? `<div class="lr-done">
           <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="fqNotesSeen('${_ecEsc(store)}','${_ecEsc(c.productId)}')">Got It</button>
           <span class="lr-hint">Nothing to fix — this is not a flag on anyone. Got It takes the notes off your list.</span></div>` : ''}
@@ -68839,11 +68861,11 @@ function _fqDetailHtml(c, store, allClear) {
 
 function _fqWaitingHtml(store) {
     const list = (_fqData?.waiting || []);
-    const said = s => s === 'fixed' ? 'Rechecked Tonight' : s === 'regrading' ? 'Being Rechecked' : 'Passed — Ethan Confirms';
+    const said = s => s === 'fixed' || s === 'regrading' ? 'Being Rechecked' : 'Passed — Ethan Confirms';
     return `<div class="lr-detail-in">
-      <div class="lr-head"><div class="lr-head-t"><h3>Waiting On Tonight’s Recheck</h3>
-        <span class="lr-meta">Marked fixed. The overnight recheck grades them again; anything still wrong comes back to the top of the list.</span></div></div>
-      ${_fqData?.regradeOn ? '' : '<div class="lr-off">The overnight recheck is not switched on yet — these wait here until it is.</div>'}
+      <div class="lr-head"><div class="lr-head-t"><h3>Being Rechecked</h3>
+        <span class="lr-meta">Marked fixed. The photo check grades them again within about 15 minutes of the last change; anything still wrong comes back to the top of the list.</span></div></div>
+      ${_fqData?.regradeOn ? '' : '<div class="lr-off">The photo recheck is not switched on yet — these wait here until it is.</div>'}
       ${list.length ? list.map(c => `<div class="lr-wait">
           <span class="lr-thumb">${c.photos && c.photos[0] ? `<img src="${_ecEsc(c.photos[0].thumb)}" alt="" loading="lazy">` : ''}</span>
           <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(c.title || '')}</span>
@@ -68874,16 +68896,19 @@ function _fqHtml(withBack) {
       <section class="lr-list">
         <div class="lr-list-h">
           <div class="lr-list-title"><h2>To Fix</h2><span class="lr-count">${all.length}</span><span class="lr-sort">${_ecEsc(d.store)} · Sorted By Price, Highest First</span></div>
+          ${_pqPopBarHtml()}
           <div class="lr-filters">${filters}</div>
         </div>
         <div class="lr-rows">${shown.length ? shown.map(_fqRowHtml).join('')
             : `<div class="lh-clear">Nothing To Fix At ${_ecEsc(d.store)}${_fqFilter === 'all' ? '' : ' In This Group'}.</div>`}</div>
         <div class="lr-list-f">
-          <button type="button" class="lr-btn lr-btn-ghost lr-btn-sm lr-wait-btn${_fqWaitView ? ' lr-wait-on' : ''}" onclick="fqWaiting()">Tonight’s Recheck</button>
+          <div class="lr-list-f-btns"><button type="button" class="lr-btn lr-btn-ghost lr-btn-sm lr-wait-btn${_fqWaitView ? ' lr-wait-on' : ''}" onclick="fqWaiting()">Being Rechecked</button>
+          <button type="button" class="lr-btn lr-btn-ghost lr-btn-sm lr-wait-btn${_fqFlagView ? ' lr-wait-on' : ''}" onclick="fqFlagRates()">Flag Rates</button></div>
           <span>${d.fixedToday || 0} Fixed Today</span>
         </div>
       </section>
-      <section class="lr-detail">${_fqWaitView ? _fqWaitingHtml(d.store) : _fqDetailHtml(sel, d.store, !shown.length)}</section>
+      <section class="lr-detail">${_fqFlagView ? `<div class="lr-detail-in">${_flHtml({ embedded: true, store: d.store })}</div>`
+          : _fqWaitView ? _fqWaitingHtml(d.store) : _fqDetailHtml(sel, d.store, !shown.length)}</section>
     </div>`;
 }
 
@@ -68910,11 +68935,30 @@ function _lrScrollTop() {
     const rows = el.querySelector('.lr-rows');
     if (rows && _fqWaitView) rows.scrollTop = 0;
 }
-function fqPick(pid) { _fqSel = pid; _fqWaitView = false; _fqRender(); _lrScrollTop(); }
-function fqFilter(f) { _fqFilter = f; _fqWaitView = false; ecRender(); }
+function fqPick(pid) { _fqSel = pid; _fqWaitView = false; _fqFlagView = false; _fqRender(); _lrScrollTop(); }
+function fqFilter(f) { _fqFilter = f; _fqWaitView = false; _fqFlagView = false; ecRender(); }
+// FLAG RATES OUTSIDE THE DM (Ethan, 2026-11-24): a manager or ASM sees their own
+// store's All Listers card, in the panel beside the list like Tonight's Recheck;
+// a team member sees only their own line, on My Listing Corrections. The server
+// scopes ?view=flags by role, so the same renderer serves all three.
+let _fqFlagView = false, _flOwnErr = null, _flOwnLoading = false;
+async function _flOwnLoad() {
+    if (_flOwnLoading) return;
+    _flOwnLoading = true;
+    try { _flData = await _lrFetch('?view=flags&weeks=4'); _flOwnErr = null; }
+    catch (e) { _flOwnErr = e.message || String(e); }
+    _flOwnLoading = false;
+    ecRender();
+}
+function fqFlagRates() {
+    _fqFlagView = !_fqFlagView; _fqWaitView = false;
+    if (_fqFlagView && !_flData) _flOwnLoad();
+    ecRender(); _lrScrollTop();
+}
+window.fqFlagRates = fqFlagRates;
 // Back up to the top of the list and the panel beside it, so the waiting
 // listings are in view rather than wherever the scroll was (Ethan, 2026-11-20).
-function fqWaiting() { _fqWaitView = !_fqWaitView; ecRender(); _lrScrollTop(); }
+function fqWaiting() { _fqWaitView = !_fqWaitView; _fqFlagView = false; ecRender(); _lrScrollTop(); }
 
 // --- the store's actions -------------------------------------------------------
 const _fqCard = pid => [..._fqItems(), ...(_fqData?.waiting || [])].find(c => c.productId === pid);
@@ -68945,8 +68989,8 @@ async function fqMarkFixed(store, pid) {
     const said = await _ltAsk({ kind: 'ok', eyebrow: 'Listing Fixes', title: 'Mark This Listing Fixed?',
         body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
                <p class="lt-ask-say">${(c?.lines || []).some(l => l.kind === 'photos')
-                 ? 'It is rechecked overnight. If the recheck passes, Ethan confirms it; if it still finds a problem, it comes back to the top of this list with what is wrong.'
-                 : 'It goes to Ethan, who checks it himself. If something is still wrong, it comes back to the top of this list with his note.'}</p>`,
+                 ? 'The photos are checked again within about 15 minutes of your last change. If they pass, Ethan confirms it; if something is still wrong, it comes back to the top of this list with what is wrong.'
+                 : 'It gets one final check. If something is still wrong, it comes back to the top of this list with a note.'}</p>`,
         go: 'I Fixed It', cancel: 'Not Yet' });
     if (!said) return;
     await _fqRun(pid, () => _lrPost({ action: 'mark-fixed', store, productId: pid }), true);
@@ -69077,8 +69121,10 @@ function _tdHtml() {
         </button>`;
     }).join('');
     const bar = r => r >= 50 ? 'lr-bar-bad' : r >= 25 ? 'lr-bar-warn' : 'lr-bar-good';
-    const listers = (t.listers || []).map(r => `<div class="lr-lr"><span><b>${_ecEsc(r.lister)}</b> · ${_ecEsc(r.store)}</span>
-        <span class="lr-dim">${r.checkerFlags + r.ethanSendBacks}/${r.listed}</span>
+    // Name, store, flagged/listed, bar, rate — each its own column so the stores
+    // and the numbers line up down the list (Ethan, 2026-11-24).
+    const listers = (t.listers || []).map(r => `<div class="lr-lr"><b class="lr-lr-name">${_ecEsc(r.lister)}</b><span class="lr-lr-st">${_ecEsc(r.store)}</span>
+        <span class="lr-dim lr-lr-n">${r.checkerFlags + r.ethanSendBacks}/${r.listed}</span>
         <span class="lr-bar"><span class="${bar(r.rate)}" style="width:${Math.min(100, r.rate || 0)}%"></span></span><b>${r.rate}%</b></div>`).join('');
     const ck = t.checkers || {};
     // One grid: the check on the left, its number right-aligned under one
@@ -69093,8 +69139,8 @@ function _tdHtml() {
             <span>${t.spotLeft ? 'Each store’s highest-price listings the photo check passed. Agree, or send it back.' : 'Tomorrow’s Picks Arrive at 6am.'}</span></div>
           <button type="button" class="lr-btn lr-btn-go lr-btn-lg" ${t.spotLeft ? '' : 'disabled'} onclick="lrSetMode('spot')">Start</button></div>
         <div class="lr-job${t.confirm ? '' : ' lr-job-off'}"><div class="lr-job-t"><span class="lr-k">Confirm Fixes</span>
-            <b>${t.confirm} Fix${t.confirm === 1 ? '' : 'es'} Passed The Recheck</b>
-            <span>Stores fixed these and the overnight recheck passed them. Confirm, or send back.</span></div>
+            <b>${t.confirm} Fix${t.confirm === 1 ? '' : 'es'} To Confirm</b>
+            <span>Stores fixed these — some passed the photo recheck, the rest are yours to check by eye. Confirm, or send back.</span></div>
           <button type="button" class="lr-btn lr-btn-ghost lr-btn-lg" ${t.confirm ? '' : 'disabled'} onclick="lrSetMode('confirm')">Review</button></div>
         ${_lrMayFull() ? `<div class="lr-job lr-job-full"><div class="lr-job-t"><span class="lr-k lr-k-full">Full Listing Review</span>
             <b>Review Any Listing</b>
@@ -69279,14 +69325,18 @@ function _cfScreenHtml() {
     const busy = _fqBusy.has('cf' + it.productId) ? 'disabled' : '';
     return head + `<div class="lr-one">
       <section class="lr-one-main">
-        <span class="lr-k lr-k-go">Passed The Overnight Recheck · ${_ecEsc(it.store)}</span>
+        ${it.manualOnly
+            // A by-eye send-back (and every full listing review) skips the paid recheck,
+            // so nothing "passed" — it is simply waiting on Ethan (2026-11-24).
+            ? `<span class="lr-k">Fixed By The Store — Ready For Your Check · ${_ecEsc(it.store)}</span>`
+            : `<span class="lr-k lr-k-go">Passed The Photo Recheck · ${_ecEsc(it.store)}</span>`}
         <div class="lr-head"><div class="lr-head-t"><h3>${_ecEsc(it.title || '')}</h3>
           <span class="lr-meta">${_ecEsc(it.sku || '—')}${it.fixedBy ? ` · Fixed by ${_ecEsc(it.fixedBy)}` : ''}</span>
 </div>
           <div class="lr-head-r"><span class="lr-price">${_fqMoney(it.price)}</span>${_lrLinks(shop, it.productId, it.handle, it.store)}</div></div>
-        ${it.manualOnly ? '<div class="lr-off">Check By Eye — only things the checks don’t look at were sent back, so this skipped the overnight recheck.</div>' : ''}
+        ${it.manualOnly ? '<div class="lr-off">Check By Eye — only things the checks don’t look at were sent back, so this skipped the photo recheck.</div>' : ''}
         ${said.length || it.returnedNote ? `<div class="lr-fix"><div class="lr-fix-h"><span class="lr-chip lr-c-bad">Was Wrong</span></div>
-          <ul class="lt-why lr-why">${said.map(s => `<li>${s}</li>`).join('')}${it.returnedNote ? `<li>“${_ecEsc(it.returnedNote)}”</li>` : ''}</ul></div>` : ''}
+          ${_lrNoteList((it.returnedNote ? [_lrNote('Overall', _ecEsc(it.returnedNote))] : []).concat(said))}</div>` : ''}
         <span class="lr-k">Photos Now</span>${_lrPhotos(it.photos, [], true)}
       </section>
       <aside class="lr-one-side">
@@ -69314,8 +69364,9 @@ function _flMonday(day) {
 function _flAddDays(day, n) { const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 const _flFmt = day => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
-function _flHtml() {
-    if (!_flData) { _spEnsure(); return '<div class="status-message">Loading…</div>'; }
+function _flHtml(o = {}) {
+    if (o.embedded && _flOwnErr && !_flData) return `<div class="lh-unknown"><span class="lh-unknown-t">Could Not Load Flag Rates</span><span class="lh-why">${_ecEsc(_flOwnErr)}</span></div>`;
+    if (!_flData) { if (o.embedded) _flOwnLoad(); else _spEnsure(); return '<div class="status-message">Loading…</div>'; }
     const through = _flData.through || _flAddDays(new Date().toISOString().slice(0, 10), -1);
     const current = _flMonday(through);
     const weeks = Array.from({ length: FL_WEEKS }, (_, k) => _flAddDays(current, -7 * k));
@@ -69325,10 +69376,14 @@ function _flHtml() {
     const stepper = `<div class="fl-step">
         <button type="button" class="fl-arrow" aria-label="Older week" ${idx >= FL_WEEKS - 1 ? 'disabled' : ''} onclick="flSetWeek('${weeks[idx + 1] || wk}')">‹</button>
         <div class="fl-step-t"><b>${wk === current ? 'This Week' : 'Week Of ' + _flFmt(wk)}</b>
-          <span>${_flFmt(wk)} – ${_flFmt(end)}${wk === current ? ' · Through Yesterday' : ''}</span></div>
+          <span>${_flFmt(wk)} – ${_flFmt(end)}</span></div>
         <button type="button" class="fl-arrow" aria-label="Newer week" ${idx <= 0 ? 'disabled' : ''} onclick="flSetWeek('${weeks[idx - 1] || wk}')">›</button>
+        <!-- Outside the arrows and always in the layout, only hidden on past weeks,
+             so stepping weeks never shifts anything (Ethan, 2026-11-24). -->
+        <span class="fl-thru${wk === current ? '' : ' fl-thru-off'}">Through Yesterday</span>
       </div>`;
-    const rows = (_flData.rows || []).filter(r => r.week === wk && r.lister !== 'Unknown');
+    // Embedded beside a store's list: that store only, even for the DM.
+    const rows = (_flData.rows || []).filter(r => r.week === wk && r.lister !== 'Unknown' && (!o.store || r.store === o.store));
     const tone = r => r == null ? '' : r >= 50 ? 'fl-bad' : r >= 25 ? 'fl-warn' : 'fl-good';
     const cards = _LR_STORES.filter(st => rows.some(r => r.store === st)).map(st => {
         const mine = rows.filter(r => r.store === st);
@@ -69350,7 +69405,7 @@ function _flHtml() {
             }).join('')}</tbody></table>
         </section>`;
     }).join('');
-    return `<div class="lr-screen-h">${_LR_BACK}<h2>All Listers</h2>${stepper}</div>`
+    return `<div class="lr-screen-h">${o.embedded ? '' : _LR_BACK}<h2>${o.embedded ? 'Flag Rates' : 'All Listers'}</h2>${stepper}</div>`
         + (cards ? `<div class="fl-cards">${cards}</div>`
             : `<div class="lh-clear">No listings tracked for this week${wk < '2026-11-16' ? ' — lister tracking started Nov 18, 2026' : ''}.</div>`);
 }
@@ -69755,14 +69810,38 @@ const _mfBusy = new Set();
 async function _mfLoad() {
     try { _mfData = await _lrFetch('?view=mine'); _mfErr = null; }
     catch (e) { _mfErr = e.message || String(e); }
+    // Their own flag rate (2026-11-24) — the server returns only their rows.
+    // Best-effort: a failure leaves the strip off, never the list.
+    try { _flData = await _lrFetch('?view=flags&weeks=4'); } catch (_) { /* strip stays off */ }
+}
+// YOUR FLAG RATE: this week (through yesterday) and the three before it, the
+// same numbers the DM's All Listers shows for this person — nobody else's.
+function _mfRateHtml() {
+    const rows = (_flData && _flData.mode === 'mine' && _flData.rows) || [];
+    if (!_flData || _flData.mode !== 'mine') return '';
+    const through = _flData.through || _flAddDays(new Date().toISOString().slice(0, 10), -1);
+    const current = _flMonday(through);
+    const tone = r => r == null ? '' : r >= 50 ? 'fl-bad' : r >= 25 ? 'fl-warn' : 'fl-good';
+    const cells = Array.from({ length: FL_WEEKS }, (_, k) => _flAddDays(current, -7 * k)).map((wk, k) => {
+        const mine = rows.filter(r => r.week === wk);
+        const listed = mine.reduce((n, r) => n + r.listed, 0);
+        const flagged = mine.reduce((n, r) => n + (r.flagged != null ? r.flagged : r.checkerFlags + r.ethanSendBacks), 0);
+        const rate = listed ? Math.round(flagged / listed * 100) : null;
+        return `<div class="mf-rate-c${k ? '' : ' mf-rate-now'}"><span class="mf-rate-w">${k === 0 ? 'This Week' : k === 1 ? 'Last Week' : 'Week Of ' + _flFmt(wk)}</span>
+            <b class="fl-rate ${tone(rate)}">${rate == null ? '—' : rate + '%'}</b>
+            <span class="mf-rate-n">${listed ? `${flagged} Of ${listed} Flagged` : 'Nothing Listed'}</span></div>`;
+    }).join('');
+    return `<div class="mf-rate"><span class="lr-k">Your Flag Rate</span><div class="mf-rate-g">${cells}</div></div>`;
 }
 function _mfTime(at) {
     const d = new Date(at);
     return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 // The manager's line on the From Ethan card.
+const _lrIsMe = n => String(n || '').trim().toLowerCase() === String(sessionStorage.getItem('speeksUserName') || '').trim().toLowerCase();
 function _mfWhoHtml(back) {
     if (!back || back.returnedKind === 'notes') return '';
+    if (back.assignedTo && _lrIsMe(back.assignedTo)) return '<span class="lr-from-who">You listed this one.</span>';
     if (!back.assignedTo) return '<span class="lr-from-who">Not sent to a team member — no lister tag matches anyone at this store.</span>';
     return `<span class="lr-from-who">Also sent to <b>${_ecEsc(back.assignedTo)}</b> · ${back.assigneeSeenAt
         ? 'Seen ' + _ecEsc(_mfTime(back.assigneeSeenAt)) : 'Not opened yet'}</span>`;
@@ -69774,21 +69853,36 @@ function _mfChrome() {
     const sb = document.getElementById('ecStandbyHost'); if (sb) sb.innerHTML = '';
     const sub = document.getElementById('ecSubtitle');
     const n = (_mfData?.items || []).length;
-    if (sub) sub.textContent = `My Fixes · ${n ? n + ' To Fix' : 'All Clear'}`;
+    if (sub) sub.textContent = `My Listing Corrections · ${n ? n + ' To Fix' : 'All Clear'}`;
 }
 function _mfHtml() {
-    if (_mfErr) return `<div class="lh-unknown"><span class="lh-unknown-t">Could Not Load My Fixes</span><span class="lh-why">${_ecEsc(_mfErr)}</span></div>`;
+    if (_mfErr) return `<div class="lh-unknown"><span class="lh-unknown-t">Could Not Load My Listing Corrections</span><span class="lh-why">${_ecEsc(_mfErr)}</span></div>`;
     if (!_mfData) return '<div class="status-message">Loading…</div>';
-    const items = _mfData.items || [];
+    // Send-backs (cards) first, then the picture check's photo fixes (0206).
+    const items = [...(_mfData.items || []), ...(_mfData.photoItems || [])];
     if (!items.some(c => c.productId === _mfSel)) _mfSel = items[0] ? items[0].productId : null;
     const c = items.find(x => x.productId === _mfSel) || null;
-    const rows = items.map(x => `<button type="button" class="lr-row${x.productId === _mfSel ? ' lr-row-on' : ''} lr-row-back" onclick="mfPick('${_ecEsc(x.productId)}')">
+    const rows = items.map(x => `<button type="button" class="lr-row${x.productId === _mfSel ? ' lr-row-on' : ''}${x.card ? ' lr-row-back' : ''}" onclick="mfPick('${_ecEsc(x.productId)}')">
         <span class="lr-thumb">${x.photos && x.photos[0] ? `<img src="${_ecEsc(x.photos[0].thumb)}" alt="" loading="lazy">` : ''}</span>
         <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(x.title || 'Untitled Listing')}</span>
-          <span class="lr-chips"><span class="lr-chip lr-c-bad">${x.card.returnedKind === 'confirm' ? 'Fix Not Accepted' : 'Sent Back'}</span></span></span>
+          <span class="lr-chips">${x.card ? `<span class="lr-chip lr-c-bad">${x.card.returnedKind === 'confirm' ? 'Fix Not Accepted' : 'Sent Back'}</span>`
+            : '<span class="lr-chip lr-c-ph">Photos</span>'}</span></span>
         <span class="lr-row-p">${_fqMoney(x.price)}</span></button>`).join('');
     const busy = c && _mfBusy.has(c.productId) ? 'disabled' : '';
+    const pl = c && !c.card ? c.lines[0] : null;
     const detail = !c ? `<div class="lr-detail-in"><div class="lh-clear">Nothing To Fix — Nice Work.</div></div>`
+        : pl ? `<div class="lr-detail-in">
+            <div class="lr-head">
+              <div class="lr-head-t"><h3>${_ecEsc(c.title || 'Untitled Listing')}</h3>
+                <span class="lr-meta">${_ecEsc(c.sku || '—')}${c.createdAt ? ` · Listed ${_fqDay(c.createdAt)}` : ''}</span></div>
+              <div class="lr-head-r"><span class="lr-price">${_fqMoney(c.price)}</span>${_lrLinks(_mfData.shop, c.productId, c.handle, _mfData.store)}</div>
+            </div>
+            ${_lrPhotos(c.photos, _fqMissingList(pl))}
+            ${(pl.guide || []).length ? `<span class="lr-k">The Guide — Shoot It Like This</span>${_lrGuideStrip(pl.guide, null,
+                new Set(_fqMissingList(pl).map(x => x.toLowerCase())))}` : ''}
+            <div class="lr-fixes">${_fqFixHtml(c, pl, _mfData.store, true)}</div>
+            <div class="lr-done"><span class="lr-hint lr-hint-solo">Fix the photos in Shopify. They are checked again by themselves within about 15 minutes of your last change — when they pass, this comes off your list and your manager’s.</span></div>
+          </div>`
         : `<div class="lr-detail-in">
             ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
             <div class="lr-head">
@@ -69799,18 +69893,163 @@ function _mfHtml() {
             ${_fqFromEthanHtml(c.card, c.lines[0], true)}
             ${(c.photos || []).length ? _lrPhotos(c.photos, []) : ''}
             <div class="lr-done">
-              <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Send To Ethan</button>
-              <span class="lr-hint">Fix it in Shopify first. Ethan checks it, and your manager sees it is done.</span></div>
+              <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Send For A Final Check</button>
+              <span class="lr-hint">Fix it in Shopify first. It gets one final check, and your manager sees it is done.</span></div>
           </div>`;
     return `<div class="lr-split">
       <section class="lr-list">
-        <div class="lr-list-h"><div class="lr-list-title"><h2>My Fixes</h2><span class="lr-count">${items.length}</span>
-          <span class="lr-sort">Listings You Made That Ethan Sent Back</span></div></div>
+        <div class="lr-list-h"><div class="lr-list-title"><h2>${items.length} Listing Correction${items.length === 1 ? '' : 's'} Requested</h2></div></div>
+        ${_mfRateHtml()}
+        ${_pqPopBarHtml()}
         <div class="lr-rows">${rows || '<div class="lh-clear">Nothing To Fix.</div>'}</div>
       </section>
       <section class="lr-detail">${detail}</section>
     </div>`;
 }
+// ============================================================================
+// PICTURE CHECK POP-UPS (Ethan, 2026-11-24)
+// ============================================================================
+// "You know how when … you finish a prompt, there's a big notification in the
+// bottom right … Is there a way that we can get SPEEKSNET to pop that up?" —
+// a Windows notification when one of YOUR listings is graded by the 5-minute
+// picture check (0206): "Great Job" on a pass, what to fix on a flag.
+// He chose "while SPEEKSNET is open": it fires for whoever is signed in, from any
+// open SPEEKSNET tab, even one behind other windows. No push service, nothing
+// to set up per person beyond allowing pop-ups once in that browser — and on a
+// shared store PC it can never reach the wrong person, because the server only
+// returns grades of listings tagged with the signed-in name (view=pq-news).
+// Shown once each: the newest grade time seen is kept per person in
+// localStorage, starting from "now" the first time, so nobody gets a backlog.
+const _PQ_POP_KEY = n => 'pqPopSince:' + String(n || '').toLowerCase();
+let _pqPopTimer = null;
+// ⚠️ NOT ON PHONES (2026-11-24). Phone browsers cannot show these: Android Chrome
+// throws on new Notification() (it wants a service worker), and an iPhone allows
+// them only to a home-screen app. So no card, no switch and no poller there —
+// the grade still reaches the feed and My Listing Corrections.
+function _pqPhone() {
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '') || (typeof _isMobileLayout === 'function' && _isMobileLayout());
+}
+function _pqPopOk() { try { return !_pqPhone() && 'Notification' in window && Notification.permission === 'granted'; } catch (_) { return false; } }
+function _pqPopSay(it) {
+    // The listing first, so they know which one before reading what to do:
+    // its title on its own line, then SKU and price (the picture is its photo).
+    // One line for the title where it fits (Ethan, 2026-11-24: "look a bit better").
+    const t = String(it.title || 'Your listing');
+    const tl = t.length > 52 ? t.slice(0, 50).trimEnd() + '…' : t;
+    const id = [it.sku ? 'SKU ' + it.sku : '', it.price != null ? _fqMoney(it.price) : ''].filter(Boolean).join(' · ');
+    const short = tl + (id ? '\n' + id : '');
+    const miss = (it.missing || []).filter(Boolean);
+    if (it.verdict === 'pass') return { head: 'Great Job — Photos Look Right', body: `${short}\nAll ${it.photoCount || ''} shots, in the guide’s order.`.replace('All  shots', 'Every shot') };
+    if (it.verdict === 'retake') return { head: 'Retake The Photos', body: `${short}\nThey don’t follow the guide.` };
+    const and = a => a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+    if (miss.length) return { head: `Fix Your Photos — ${miss.length} Missing`, body: `${short}\nAdd the ${and(miss)} shot${miss.length === 1 ? '' : 's'}${it.reorder ? ', then put them in the guide’s order' : ''}.` };
+    if (it.verdict === 'reorder' || it.reorder) return { head: 'Reorder Your Photos', body: `${short}\nPut them in the guide’s order.` };
+    if (it.verdict === 'fix') return { head: 'Fix Your Photos', body: `${short}\n${(it.findings || [])[0] || 'Open it to see what to change.'}` };
+    return null;   // no_sheet and the like: nothing for the lister to do
+}
+// THE POP-UP'S PICTURE (2026-11-24). Windows draws the box itself — font,
+// colours, layout are not ours — so the picture is where the design lives. The
+// old white logo vanished on Windows' light panel. Now a tile in the status
+// colour (green passed, red fix, amber order) — see _pqPopIcon. The title,
+// SKU and price in the text say which listing. Colours are the one status palette.
+const _PQ_POP_TONE = { good: ['#146c3c'], bad: ['#c43d3d'], warn: ['#a5660f'] };
+function _pqPopKind(it) {
+    if (it.verdict === 'pass') return 'good';
+    if ((it.missing || []).length || it.verdict === 'retake' || it.verdict === 'fix') return 'bad';
+    return 'warn';
+}
+// ⚠️ THE LOGO STAYS (Ethan, 2026-11-24: "I do want the SPEEKSNET logo to show …
+// the white logo on the light background didn't look good. I do like the red,
+// green, and yellow"). So: the white SPEEKSNET logo, centred on a tile in the
+// status colour — and nothing else. A corner ✓/!/⇅ badge was tried and dropped
+// the same day ("the combination of the logos look odd"): the colour carries the
+// status, the pop-up's title says what it is.
+let _pqLogo = null;
+function _pqLogoImg() {
+    if (!_pqLogo) _pqLogo = new Promise(res => {
+        const im = new Image();
+        im.onload = () => res(im); im.onerror = () => res(null);
+        im.src = 'images/SPEEKS%20Logo%20Short%20White.png';
+    });
+    return _pqLogo;
+}
+async function _pqPopIcon(it) {
+    const [col] = _PQ_POP_TONE[_pqPopKind(it)];
+    const S = 192, c = document.createElement('canvas'); c.width = c.height = S;
+    const g = c.getContext('2d');
+    const round = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r);
+        g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+    round(0, 0, S, S, 40); g.fillStyle = col; g.fill();
+    const logo = await _pqLogoImg();
+    if (logo) {
+        const box = 124, k = Math.min(box / logo.width, box / logo.height);
+        const w = logo.width * k, h = logo.height * k;
+        g.drawImage(logo, (S - w) / 2, (S - h) / 2, w, h);
+    }
+    try { return c.toDataURL('image/png'); } catch (_) { return 'images/speeks_logo.png'; }
+}
+async function _pqPopShow(it) {
+    const say = _pqPopSay(it);
+    if (!say || !_pqPopOk()) return;
+    const icon = await _pqPopIcon(it).catch(() => 'images/speeks_logo.png');
+    try {
+        // EVERY ONE STAYS UNTIL CLOSED (Ethan, 2026-11-24). Windows draws a
+        // stay-until-closed pop-up larger than one that slides away, so a
+        // sliding pass looked smaller than the fix ones beside it. One kind, one look.
+        const n = new Notification(say.head, { body: say.body, tag: 'pq:' + it.productId + ':' + it.at,
+            icon, requireInteraction: true });
+        n.onclick = () => { try { window.focus(); } catch (_) {} location.href = 'operations.html#ebay'; n.close(); };
+    } catch (e) { console.warn('pop-up failed', e); }
+}
+// ⚠️ "NOTHING POPS UP" (2026-11-24, Ethan's own test): the pop-ups were in Win + N
+// all along. Windows shows banners ONLY ON THE MAIN DISPLAY — his laptop screen,
+// while he worked on the monitor. Check that, Do Not Disturb, and Settings →
+// System → Notifications → Google Chrome → banners, before suspecting this code.
+// (The Send A Test button that diagnosed it was removed once the design settled.)
+async function _pqPopCheck() {
+    const me = sessionStorage.getItem('speeksUserName');
+    if (!me || !sessionStorage.getItem('speeksUserPin') || !_pqPopOk()) return;
+    let since = null;
+    try { since = localStorage.getItem(_PQ_POP_KEY(me)); } catch (_) {}
+    if (!since) { since = new Date().toISOString(); try { localStorage.setItem(_PQ_POP_KEY(me), since); } catch (_) {} return; }
+    let d;
+    try { d = await _lrFetch('?view=pq-news&since=' + encodeURIComponent(since)); } catch (_) { return; }
+    // Another open tab may have shown these already — re-read before showing.
+    let now = since;
+    try { now = localStorage.getItem(_PQ_POP_KEY(me)) || since; } catch (_) {}
+    for (const it of (d.items || [])) {
+        if (!(it.at > now)) continue;
+        _pqPopShow(it);
+        now = it.at;
+        try { localStorage.setItem(_PQ_POP_KEY(me), now); } catch (_) {}
+    }
+    // A grade arriving also changes their list and the feed card.
+    if ((d.items || []).length && typeof checkMyFixReminders === 'function') checkMyFixReminders();
+}
+function _pqPopStart() {
+    if (_pqPopTimer || !sessionStorage.getItem('speeksUserPin') || !_pqPopOk()) return;
+    _pqPopCheck();
+    _pqPopTimer = setInterval(_pqPopCheck, 90 * 1000);
+}
+// The switch, on My Listing Corrections and the store's list. A browser only
+// asks after a click, so this is a button, never an automatic prompt.
+function _pqPopBarHtml() {
+    if (!('Notification' in window) || _pqPhone()) return '';
+    const p = Notification.permission;
+    if (p === 'granted') return '<div class="pq-pop pq-pop-on"><span>Pop-Ups Are On — you’ll hear when your listings’ photos are graded.</span></div>';
+    if (p === 'denied') return '<div class="pq-pop pq-pop-off"><span>Pop-Ups Are Blocked In This Browser — allow notifications for SPEEKSNET in the browser’s site settings to turn them on.</span></div>';
+    return `<div class="pq-pop"><span>Get a pop-up when your listings’ photos are graded.</span>
+        <button type="button" class="lr-btn lr-btn-go lr-btn-sm" onclick="pqPopEnable()">Turn On Pop-Ups</button></div>`;
+}
+async function pqPopEnable() {
+    try { await Notification.requestPermission(); } catch (_) {}
+    if (_pqPopOk()) _pqPopStart();
+    if (typeof checkPqPopAsk === 'function') checkPqPopAsk();
+    try { ecRender(); } catch (_) {}   // no-op off the SPEEKS Connect page
+}
+window.pqPopEnable = pqPopEnable;
+document.addEventListener('DOMContentLoaded', () => setTimeout(_pqPopStart, 4000));
+
 function _mfSeen(pid) {
     const c = (_mfData?.items || []).find(x => x.productId === pid);
     if (!c || c.card.assigneeSeenAt) return;
@@ -69820,9 +70059,9 @@ function _mfSeen(pid) {
 function mfPick(pid) { _mfSel = pid; _mfSeen(pid); ecRender(); _lrScrollTop(); }
 async function mfMarkFixed(pid) {
     const c = (_mfData?.items || []).find(x => x.productId === pid);
-    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Fixes', title: 'Mark This Listing Fixed?',
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Listing Corrections', title: 'Mark This Listing Fixed?',
         body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
-               <p class="lt-ask-say">It goes to Ethan, who checks it. If something is still wrong, it comes back here with his note.</p>`,
+               <p class="lt-ask-say">It gets one final check. If something is still wrong, it comes back here with a note.</p>`,
         go: 'I Fixed It', cancel: 'Not Yet' });
     if (!said) return;
     _mfBusy.add(pid); ecRender();
@@ -72108,7 +72347,7 @@ async function checkMyFixReminders() {
     if (!b) return;
     const t = document.getElementById('myFixAlertBubbleText');
     if (t) {
-        t.dataset.summary = 'You have ' + n + ' listing' + (n === 1 ? '' : 's') + ' to fix. Open it to see what Ethan found.';
+        t.dataset.summary = 'You have ' + n + ' listing' + (n === 1 ? '' : 's') + ' to correct. Open it to see what to change.';
         t.dataset.sig = 'myfixes:' + n;
         t.textContent = t.dataset.summary;
     }
@@ -72116,6 +72355,41 @@ async function checkMyFixReminders() {
     if (typeof renderActionFeed === 'function') renderActionFeed();
 }
 window.checkMyFixReminders = checkMyFixReminders;
+
+// The one-time "Turn On Pop-Ups" card (see the pqPopAsk cfg). EVERY signed-in
+// user, every role (Ethan, 2026-11-24: "every user should get this prompt …
+// we want to get ahead of it") — so the browser already allows SPEEKSNET when
+// a tool starts using pop-ups. Shown only while this browser has not been asked.
+function _pqAskBubbleEl() {
+    let b = document.getElementById('pqPopAskBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'pqPopAskBubble';
+    b.style.cssText = 'display:none;';
+    b.innerHTML = '<span id="pqPopAskBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function checkPqPopAsk() {
+    if (!document.getElementById('samFeed')) return;
+    const want = 'Notification' in window && Notification.permission === 'default' && !_pqPhone()
+        && !!sessionStorage.getItem('speeksUserPin');
+    const b = want ? _pqAskBubbleEl() : document.getElementById('pqPopAskBubble');
+    if (!b) return;
+    if (want) {
+        const t = document.getElementById('pqPopAskBubbleText');
+        if (t) {
+            t.dataset.summary = 'Let SPEEKSNET send you pop-ups — like when your listings’ photos are graded. Tap once and Allow; this browser remembers it.';
+            t.dataset.sig = 'pqpopask';
+            t.textContent = t.dataset.summary;
+        }
+    }
+    b.style.display = want ? 'flex' : 'none';
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+window.checkPqPopAsk = checkPqPopAsk;
 
 // --- Listings live on the online store with no picture ----------------------
 //
