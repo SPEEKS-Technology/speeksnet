@@ -13,3 +13,6 @@ node_modules/
 # one run, not repo content — every harness rewrites its own on the next pass.
 *.png
 !docs/**/*.png
+# Home-screen app icons (2026-11-21): *.png above silently dropped them from
+# the Alerts Hub phase 1 commit, so the iPhone drew its gray "S" fallback.
+!icons/*.png

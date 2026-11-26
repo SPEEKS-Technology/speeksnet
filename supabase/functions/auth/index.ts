@@ -81,12 +81,13 @@ Deno.serve(async (req: Request) => {
     const today = centralToday();
     const { data: existing } = await supabase
       .from("users")
-      .select("pin, onboarded_at, employment_type, can_float, hire_date, weekly_hours, days_per_week");
+      .select("id, pin, onboarded_at, employment_type, can_float, hire_date, weekly_hours, days_per_week");
 
     const prev = new Map<string, any>();
     (existing || []).forEach((u: any) => prev.set(String(u.pin), u));
 
     const nowIso = new Date().toISOString();
+    const usedIds = new Set<string>();
     const rows = users.map((u: any) => {
       const pin = String(u.pin);
       const was = prev.get(pin);
@@ -132,7 +133,23 @@ Deno.serve(async (req: Request) => {
       // users keep theirs, a new PIN starts caught up.
       const onboarded_at = was ? was.onboarded_at : nowIso;
 
+      // THE ID SURVIVES THE SAVE (2026-11-17). Until now every save handed every
+      // person a fresh users.id, which was harmless only because nothing stored
+      // one. Projects does (migration 0186: who asked, who is involved), so a
+      // person keeps their id for as long as they keep their PIN — matched the
+      // same way as everything above. Always sent, never left to the column
+      // default: a batch insert names every column any row carries, and a row
+      // without the key would be sent a null id rather than a generated one.
+      //
+      // Each old id is handed out ONCE: two people posted with the same PIN
+      // would otherwise both get it, the insert would fail on the primary key —
+      // and the delete below runs before that insert, so the failure would leave
+      // an empty roster.
+      const id = (was?.id && !usedIds.has(was.id)) ? was.id : crypto.randomUUID();
+      usedIds.add(id);
+
       return {
+        id,
         name: u.name,
         pin: u.pin,
         store: u.store,
