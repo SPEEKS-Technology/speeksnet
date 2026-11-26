@@ -72,17 +72,18 @@ alter table public.m365_mail_seen  enable row level security;
 alter table public.m365_mail_state enable row level security;
 
 -- Seed: Paul (address and name), PayMore, the store managers.
--- Labels read "<name> from <where>" (Ethan, 2026-11-21: "Scott from PayMore,
--- Doug from Cross"). A rule with no label lets the AI work it out from the
+-- Labels read "<name> · <where>" (Ethan, 2026-11-21: "Scott from PayMore,
+-- Doug from Cross", then a middle dot so it doesn't stack on iPhone's own
+-- "from SPEEKSNET" line). A rule with no label lets the AI work it out from the
 -- sender's signature and domain.
 insert into public.m365_mail_rules (match, tier, label, note)
-select lower(p.email), 'top', split_part(u.name, ' ', 1) || ' from SPEEKS', 'CEO — from user_notify_prefs'
+select lower(p.email), 'top', split_part(u.name, ' ', 1) || ' · SPEEKS', 'CEO — from user_notify_prefs'
 from public.users u join public.user_notify_prefs p on lower(p.user_name) = lower(u.name)
 where u.role ilike 'ceo' and coalesce(p.email, '') <> ''
 on conflict (match) do nothing;
 
 insert into public.m365_mail_rules (match, tier, label, note)
-select 'name:' || lower(u.name), 'top', split_part(u.name, ' ', 1) || ' from SPEEKS', 'CEO by display name (any address he writes from)'
+select 'name:' || lower(u.name), 'top', split_part(u.name, ' ', 1) || ' · SPEEKS', 'CEO by display name (any address he writes from)'
 from public.users u where u.role ilike 'ceo'
 on conflict (match) do nothing;
 
@@ -91,7 +92,7 @@ values ('@paymore.com', 'top', null, 'Any PayMore sender (corporate and the mo0X
 on conflict (match) do nothing;
 
 insert into public.m365_mail_rules (match, tier, label, note)
-select lower(p.email), 'top', split_part(u.name, ' ', 1) || ' from ' || u.store, 'Store manager — from user_notify_prefs'
+select lower(p.email), 'top', split_part(u.name, ' ', 1) || ' · ' || u.store, 'Store manager — from user_notify_prefs'
 from public.users u join public.user_notify_prefs p on lower(p.user_name) = lower(u.name)
 where u.role ilike 'manager' and coalesce(p.email, '') <> ''
 on conflict (match) do nothing;
