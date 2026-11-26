@@ -523,6 +523,21 @@ const bucketCounts = (list: Row[]) => {
   return n;
 };
 
+// RETURNS AT 4PM GO BY EBAY'S DATE (Ethan, 2026-11-21: "for anything returns, I
+// don't need send the label to show up on the 4pm one and I only need returns to
+// show up on the actual day they are due by eBay not by our due date which is
+// the moment they can do it"). An act-now return is "due" in our sense from the
+// moment it can be handled, which keeps it on every morning mail — right for the
+// morning, too noisy for the 4pm alert. So at 4pm:
+//   - "send the label" returns never appear;
+//   - a delivered return (refund the buyer) appears only on eBay's own deadline
+//     day (respondBy, the Pacific date — see pacificDay), not a day early.
+// Everything else keeps dueSoon. The morning mail is unchanged.
+const dueAt4pm = (r: Row, today: string) => {
+  if (r.actNow) return r.note === "return_delivered" && !!r.respondBy && r.respondBy === today;
+  return dueSoon(r, today);
+};
+
 // Soonest deadline first, then oldest, then biggest. A thing closing tonight
 // belongs above a thing closing in three weeks whatever type it is — Ethan's
 // "deadline order, not type order".

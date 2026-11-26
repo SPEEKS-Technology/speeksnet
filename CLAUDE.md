@@ -32,14 +32,19 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 3. **Ship a JS/CSS change → bump the cache-buster in every HTML page.** Assets
    are served raw with a hand-maintained query string, e.g.
-   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The seven pages
-   that carry it: `index.html`, `operations.html`, `b2b.html`, `workspace.html`, `stats.html`, `arcade.html`,
+   `<script src="speeks.js?v=20260903k" defer>` (`index.html:28`). The six pages
+   that carry it: `index.html`, `operations.html`, `b2b.html`, `workspace.html`, `stats.html`,
    `docs.html`. Forget this and users keep the old file.
+   `grep -ho "speeks.js?v=[0-9a-z]*" *.html | sort | uniq -c` should print one line.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
    numbered from the same base, so there are two each of `0004`–`0009` and
-   `0044`–`0054`. **The current max is `0162`** (2026-11-02) — new migrations
-   start at `0163`.
+   `0044`–`0054`. **The current max is `0186`** (2026-11-17, `0186_projects.sql`,
+   applied). It shows the trap below twice over: that day pre-release's highest
+   file was `0180`, `0181`–`0184` existed only on `Main-December-Update-2---Ethan`,
+   and the database held a `0185` (`ebay_deletion_notices_retention`) that no
+   branch here had at all — the Projects file was written as 0185 and caught
+   only by `list_migrations`.
    **The checkout is not the authority any more — the database is.** Unmerged
    branches apply migrations too: on 2026-10-16 pre-release's highest file was
    `0140` while Ethan's `Main-November-Update-2` had already applied `0141`–`0147`,
@@ -61,10 +66,9 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 | `index.html` | Dashboard / home. Every other page bounces here without a session. |
 | `operations.html` | Sub-tab shell for operational tools (SPEEKS Connect, Margin Guide, Picture Guide, Call Backs). |
 | `b2b.html` | **B2B lives here** since 2026-10: its own nav tab, full screen. The pane keeps id `#ops-pane-b2b`; `operations.html#b2b` forwards here. |
-| `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance. |
+| `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance, Claims, and **Projects** (`#projects`, 2026-11): approval and tracking for work *next to* SPEEKSNET — Claude-built tools, extensions, scripts; nothing starts until the DM approves it. `speeks.js` "24b. MODULE: PROJECTS", the `projects` edge function, migration `0186`. Three Feature Access keys (`nav-projects`, `projects-request`, `projects-approve`) whose defaults live in **both** `FEATURE_CATALOG` and the function's `DEFAULTS`. The DM, CEO and MOCD always see every project — by role (`SEES_ALL_ROLES` in the function), deliberately *not* a Feature Access switch — as does anyone holding `projects-approve`; everyone else is sent just the ones they asked for or are listed on. Filtered in the function, not the browser. Plan for what comes next: `docs/plans/projects-and-dev-tracker.md`. |
 | `stats.html` | Stats/reporting page. |
 | `docs.html` | *Not* developer docs — the in-app Processes & Policies library (CMS-driven). |
-| `arcade.html` | The Listing XP arcade (2026-11-17): no nav bar, reached from the QuickPortal launcher through a portal animation. Front end only on sample numbers (`ARC_SAMPLE`, section LISTING XP ARCADE at the end of `speeks.js`); gated by `widget-arcade`, DM only for now. |
 | `tv.html` | Retired. A redirect stub to `index.html`, kept only for the five wall TVs still bookmarked to it. The shop-floor board is now the Command Center card on the QuickPortal — see `STORE_BOARD_FEATURES`. |
 | `speeks.js` | The entire front end. See `docs/modules/README.md`. |
 | `styles.css` | ~970 KB, same monolithic story. |
@@ -96,12 +100,22 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 ## Identity — important limitation
 
-There is **no `user_id` or FK anywhere** in the app schema. Attribution is a
-free-text display name read from the browser: `_b2bUser()` (`speeks.js:15783`)
-returns `sessionStorage.getItem('speeksUserName') || 'Unknown'`, passed in the
-request body. So all "who did this" data is spoofable by editing sessionStorage
-and breaks on a name change. Any feature that needs trustworthy per-person
-attribution (scorecards, variance-by-employee) needs real identity first.
+There is **no FK to `users` anywhere** in the app schema, and almost everything
+attributes by a free-text display name read from the browser: `_b2bUser()`
+(`speeks.js:15783`) returns `sessionStorage.getItem('speeksUserName') || 'Unknown'`,
+passed in the request body. So most "who did this" data is spoofable by editing
+sessionStorage and breaks on a name change.
+
+**The first step past that (2026-11-17):** `users.id` is now *stable*. The Manage
+Users save (`auth` function) deletes and re-inserts every row, which used to hand
+everyone a new id on every save; it now carries each person's id across, matched
+by PIN. Projects (migration `0186`) is the first thing to store it — the
+requester and the people involved are `users.id` values, resolved server-side
+from the PIN / checked against the roster. Still **no FK**, deliberately: the
+delete-all save would either be blocked by one or cascade everything away. An id
+changes only when a person's PIN does. Any feature that needs trustworthy
+per-person attribution should follow the Projects pattern: resolve the person
+from `x-user-pin` on the server and store their `users.id`.
 
 ## Verifying a change
 
@@ -112,6 +126,17 @@ powershell -File scripts/browser-check.ps1 b2b-check.js         # behaviour
 powershell -File scripts/browser-check.ps1 b2b-layout-check.js  # rendering
 powershell -File scripts/browser-check.ps1 b2b-header-check.js -Html b2b.html
 ```
+
+Projects has the same three (`projects-check.js`, `projects-layout-check.js`,
+`projects-page-check.js -Html workspace.html`). Run its layout suite twice — once
+plain, once with `-WindowSize 1440,900`: anything driven by a media query reads
+the *window*, not the stage a check builds, so a 1440px stage in headless
+Chrome's ~800px window is measured with phone CSS.
+
+A `-Html` check that changes `sessionStorage` must put it back before the file
+ends: the page's own init runs after the check script, and a page gate reading a
+role the check left behind will redirect the harness away and lose the report
+("Could not read the harness result").
 
 Three suites, because they catch different things. `b2b-check.js` asserts about
 the HTML a renderer returns — it cannot see a row overflowing its grid or a

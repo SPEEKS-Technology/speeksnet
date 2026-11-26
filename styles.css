@@ -13448,6 +13448,9 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-btn-secondary:hover:not(:disabled) { border-color: var(--sage-professional); color: var(--sage-deep); }
 .b2b-btn-danger { background: #fcecec; color: #d1443b; border-color: #f7dada; margin-right: auto; }
 .b2b-btn-danger:hover:not(:disabled) { background: #d1443b; color: #fff; border-color: #d1443b; }
+/* Armed write-off / destructive confirm on the right side of a modal footer (no margin-right: auto). */
+.b2b-btn-confirm-danger { background: #b91c1c; color: #fff; border-color: #b91c1c; }
+.b2b-btn-confirm-danger:hover:not(:disabled) { background: #991b1b; border-color: #991b1b; }
 .b2b-btn:disabled { opacity: .45; cursor: not-allowed; }
 .b2b-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(31,157,87,.16); }
 .b2b-add { margin-top: 12px; width: 100%; }
@@ -18073,10 +18076,39 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .settings-menu .manage-footer .btn-primary { flex: 0 0 auto; }
 .ns-save-note.is-ok  { color: #1f9d57; }
 .ns-save-note.is-err { color: #d64545; }
+/* ---- Phone alerts block (Alerts Hub phase 1, 2026-11-20) ----
+   Sits above the email settings and acts on the spot (no Save). Side-by-side
+   buttons are one width, the widest's, on an equal-column grid (Ethan's pill
+   rule, 11-08). */
+.ns-push { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid #e9eef2; }
+.ns-push-steps { line-height: 1.8; }
+.ns-push-state { font-size: 13.5px; font-weight: 750; color: #1f9d57; margin-top: 2px; }
+.ns-push-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.ns-push-btns.is-one { grid-template-columns: 1fr; }
+.ns-push-btns button { width: 100%; }
+.ns-push-btns button:disabled { opacity: .55; cursor: default; transform: none; }
+.ns-push-note { font-size: 12px; font-weight: 700; color: #8a97a4; margin-top: 8px; min-height: 1em; }
+.ns-push-note:empty { display: none; }
+.ns-push-note.is-ok  { color: #1f9d57; }
+.ns-push-note.is-err { color: #d64545; }
 
 @media (max-width: 600px) {
     .settings-menu { width: calc(100% - 24px); }
     .settings-menu .manage-content { max-height: 62vh; }
+}
+/* PHONE SETTINGS SHEET (2026-11-21, when the cog came back to phones for Phone
+   Alerts). Two fixes, both scoped to Settings only:
+   1. .manage-footer sets display:flex, which beats the [hidden] attribute that
+      settingsGo() puts on the footer of the index page, so a Save Changes button
+      showed with nothing to save. [hidden] has to win.
+   2. Under 640px it is the same full-height sheet as every other tool (Ethan,
+      2026-11-21: a short sheet on the bottom half "looks weird" next to the
+      others, so do NOT size it to its content). Its body has to fill that
+      sheet instead of stopping at the desktop 70vh/62vh caps, so the Save bar
+      sits at the bottom edge rather than floating halfway down. */
+.settings-menu .manage-footer[hidden] { display: none; }
+@media (max-width: 640px) {
+    .modal-menu.settings-menu > .manage-content { flex: 1 1 auto; max-height: none; min-height: 0; }
 }
 
 /* Email-alert status badge in the User Permissions rows (read-only — each
@@ -24421,9 +24453,10 @@ select.dd-native {
     color: #fff;
 }
 @media (max-width: 620px) {
-    .b2b-splitrow { flex-wrap: wrap; }
+    .b2b-splitrow, .b2b-moverow { flex-wrap: wrap; }
     .b2b-splitrow-m b { max-width: 100%; white-space: normal; }
     .b2b-splitrow-s { width: 100%; }
+    .b2b-moverow .b2b-movenow { width: 100%; padding-left: 30px; }
 }
 
 /* Move Lines. A tick list rather than chips: here the destination is picked once
@@ -28496,3 +28529,237 @@ div.lr-part-note { margin-top: 6px; }
 .pq-pop .lr-btn { flex: 0 0 auto; }
 .lr-hint-solo { display: block; max-width: 60ch; }
 .pq-pop { flex-wrap: wrap; }
+
+
+/* =========================================================================
+   PROJECTS (2026-11) -- the Projects tab of workspace.html
+   =========================================================================
+   speeks.js "24b. MODULE: PROJECTS". Dressed in Workspace's own pieces, on
+   purpose (Nick: "make all of the UI consistent with how the UI looks on the
+   rest of the website"): the .ws-head card, the Variance Replies segmented
+   filter (same sizes and blue), a .cb-table list, the site's tool popups and
+   buttons. The one-day kanban board and its custom chrome are gone. */
+
+/* Flows with the page like Variance Replies — a list grows the page instead of
+   hiding behind an inner scrollbar. */
+.ws-panel-projects { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-projects .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-projects {
+    /* .cb-table reads these from .cb-panel, which this card is not. */
+    --cb-line: #e3e8ee; --cb-line-2: #eef1f5; --cb-panel-2: #f6f8fa;
+    --cb-muted: #647082; --cb-faint: #8a94a3; --cb-sage-tint: #eef6e9;
+}
+
+/* Status filter: Variance Replies' "Needs replies · 11 / Whole store" buttons,
+   as classes rather than inline styles. */
+.prj-seg { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Off the head's bottom rule (Ethan, 2026-11-21): the buttons sat flush against
+   the line under the header, which stretches the width of the card. */
+#prjBody > .prj-seg { margin-top: 16px; }
+.prj-seg-btn {
+    font: inherit; font-size: 11.5px; font-weight: 800; padding: 6px 13px; border-radius: 8px;
+    cursor: pointer; min-width: 150px; text-align: center; flex: 0 0 auto;
+    border: 1.5px solid #e2e8f0; background: #fff; color: #64748b;
+}
+.prj-seg-btn:hover { border-color: #cbd5e1; color: #334155; }
+.prj-seg-btn.on { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.prj-seg-btn:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }
+.prj-seg-note { font-size: 11.5px; font-weight: 600; color: #94a3b8; }
+/* All Projects / Mine (2026-11-21): a small two-way switch pushed to the right
+   end of the status row — a different kind of filter, so a different look from
+   the status tabs. Both halves one width (side-by-side pills are one size). */
+.prj-scope {
+    margin-left: auto; display: inline-grid; grid-template-columns: 1fr 1fr;
+    padding: 3px; border-radius: 10px; background: #f1f5f9; gap: 2px;
+}
+.prj-scope-btn {
+    font: inherit; font-size: 11.5px; font-weight: 800; padding: 6px 14px; border-radius: 8px;
+    border: 0; background: transparent; color: #64748b; cursor: pointer; white-space: nowrap;
+}
+.prj-scope-btn:hover { color: #334155; }
+.prj-scope-btn.on { background: #fff; color: #0f172a; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+.prj-scope-btn:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 1px; }
+/* The request form's Cancel and submit: one size and shape (Ethan, 2026-11-21). */
+#prjFormModal .prj-form-btn { min-width: 190px; padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: 700; white-space: nowrap; }
+
+.prj-table-wrap { border: 1px solid var(--cb-line); border-radius: 12px; overflow-x: auto; }
+/* Five fixed-width columns (500px + 24%) left Project — the one that matters —
+   with whatever was over: at ~800px it was one letter a line ("SPEE / KS /
+   Listin / g"). A floor on the table keeps Project readable; narrower than
+   that the table scrolls inside its wrapper, as it already does on a phone. */
+.prj-table { min-width: 960px; }
+.prj-table .prj-col-id     { width: 84px; }
+.prj-table .prj-col-people { width: 24%; }
+.prj-table .prj-col-by     { width: 150px; }
+.prj-table .prj-col-status { width: 250px; }   /* fits "Completed · Ready for SPEEKSNET" */
+.prj-table .prj-col-date   { width: 96px; }
+/* CENTERED (Ethan, 2026-11-21): the four short columns — Who's Involved,
+   Requested By, Status, Updated — sit centred under their headers, header and
+   cell alike; # and Project stay left. The people chips are a flex row, so they
+   centre with justify-content rather than text-align. Has to outrank the
+   shared .cb-table th / td rules, hence the table class twice over. */
+.prj-table.cb-table th.prj-col-people, .prj-table.cb-table td.prj-col-people,
+.prj-table.cb-table th.prj-col-by,     .prj-table.cb-table td.prj-col-by,
+.prj-table.cb-table th.prj-col-status, .prj-table.cb-table td.prj-col-status,
+.prj-table.cb-table th.prj-col-date,   .prj-table.cb-table td.prj-col-date { text-align: center; }
+.prj-table td.prj-col-people .prj-tags { justify-content: center; }
+.prj-table td { color: var(--slate-charcoal); }
+/* Yours, on All Projects (2026-11-21): Call Backs' .cb-row-hasit look, the same
+   sage tint and left bar, so "this one is mine" reads the same across the site. */
+.prj-table .prj-row-mine { background: var(--cb-sage-tint); }
+.prj-table .prj-row-mine > td:first-child { box-shadow: inset 3px 0 0 var(--cb-sage); }
+.prj-table .prj-row-mine:hover { background: #ddf1e5; }
+.prj-table td.prj-col-by, .prj-table td.prj-col-date { color: var(--cb-muted); font-weight: 600; }
+.prj-row:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
+.prj-row-title { display: block; font-weight: 800; overflow-wrap: anywhere; }
+.prj-row-desc {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+    margin-top: 2px; font-size: 12px; color: var(--cb-muted); line-height: 1.4; overflow-wrap: anywhere;
+    /* Always two lines tall, even for a one-line description (Ethan, 2026-11-21):
+       rows of mixed height made the list jump about when switching tabs. Two
+       lines is also the clamp above, so every row is the same height. */
+    min-height: 2.8em;
+}
+.prj-id { font-size: 11.5px; font-weight: 700; color: #8a94a3; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.prj-empty { padding: 28px 0; }
+.prj-link { background: none; border: 0; padding: 0; font: inherit; color: var(--sage-professional); font-weight: 700; cursor: pointer; text-decoration: underline; }
+
+.prj-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.prj-tag { display: inline-block; font-size: 11.5px; font-weight: 700; color: #475467; background: #f1f5f9; border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+
+.prj-chip { display: inline-block; font-size: 11px; font-weight: 800; border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+/* _prjEqualPills sets one width per column from the widest pill's measured box:
+   border-box so that width includes the padding, centred so a short label sits
+   in the middle of its wider pill. */
+.prj-table .prj-chip, .prj-table .prj-tag { box-sizing: border-box; text-align: center; }
+.prj-tone-wait  { background: #fef3e2; color: #b54708; }
+.prj-tone-warn  { background: #fef3e2; color: #b54708; }
+.prj-tone-go    { background: #e8f7ee; color: #1f6f43; }
+.prj-tone-done  { background: #eff6ff; color: #1d4ed8; }
+.prj-tone-no    { background: #fdecec; color: #b42318; }
+.prj-tone-muted { background: #f1f5f9; color: #475467; }
+
+/* ---- detail popup ----
+   Sized to its content: a project is a title, a description and a short
+   history, and at the shared 84vh it sat in a card that was mostly empty space
+   above the footer (the same fix .settings-menu makes). */
+.modal-menu.prj-detail-modal { width: 760px; height: auto; max-height: 88vh; }
+.prj-detail-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.modal-menu.prj-detail-modal > .prj-detail-body { flex: 0 1 auto; height: auto; max-height: none; gap: 14px; }
+.prj-callout { border-radius: 10px; padding: 10px 12px; font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.prj-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin: 0; }
+.prj-facts > div { min-width: 0; }
+.prj-facts dt { font-size: 11.5px; font-weight: 800; color: #8a94a3; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 3px; }
+.prj-facts dd { margin: 0; font-size: 13.5px; font-weight: 600; color: #1a1c1e; display: flex; flex-wrap: wrap; gap: 4px; overflow-wrap: anywhere; }
+.prj-sec .form-label-caps { margin-bottom: 4px; }
+.prj-sec-text { font-size: 14px; line-height: 1.5; color: #1a1c1e; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prj-timeline { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid #e6ebf1; display: flex; flex-direction: column; gap: 10px; }
+.prj-ev { position: relative; font-size: 13px; color: #344054; }
+.prj-ev::before { content: ""; position: absolute; left: -20px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: #d0d5dd; box-shadow: 0 0 0 2px #f9fafb; }
+.prj-ev-approved::before, .prj-ev-completed::before, .prj-ev-resumed::before { background: #1f9d57; }
+.prj-ev-declined::before { background: #d92d20; }
+.prj-ev-changes_requested::before { background: #f79009; }
+.prj-ev-line { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
+.prj-ev-when { color: #8a94a3; font-size: 12px; font-weight: 600; }
+.prj-ev-note { display: block; margin-top: 3px; color: #475467; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.prj-detail-foot { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+.prj-foot-rows { display: flex; flex-direction: column; gap: 8px; }
+.prj-foot-rows:empty { display: none; }
+.prj-note { margin-top: 0; font-size: 14px; resize: vertical; font-family: inherit; line-height: 1.45; }
+.prj-outcome-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prj-outcome-row .form-label-caps { margin: 0; }
+.prj-foot-btns { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.prj-foot-btns .btn-primary, .prj-foot-btns .btn-secondary { padding: 10px 16px; }
+/* Has to outrank `.modal-menu.manage-menu .btn-secondary` (0,3,0), which sets
+   every secondary button in a tool popup to slate. */
+.modal-menu.prj-detail-modal .prj-foot-btns .prj-danger { color: #b42318; }
+/* Armed by the first press of a can't-undo action (_prjArmed): solid red so the
+   second press is plainly a different, final thing. */
+.modal-menu.prj-detail-modal .prj-foot-btns .prj-armed { background: #b42318; border-color: #b42318; color: #fff; }
+/* Whose move it is, when the bar has nothing for you to press. */
+.prj-foot-wait { font-size: 13px; font-weight: 600; color: #64748b; margin-right: 6px; }
+#prjFormSub:empty { display: none; }
+
+/* The ⋯ menu in the popup header — Edit / Withdraw / Delete (2026-11-21).
+   B2B's deal-screen menu (.b2b-ws-more / .b2b-ws-menu), restated here because
+   those rules lean on B2B's own colour variables. */
+.prj-head-actions { position: relative; }
+.prj-more {
+    width: 32px; height: 32px; border-radius: 9px; border: 0; cursor: pointer;
+    background: #f1f5f9; color: #64748b; display: inline-flex; align-items: center; justify-content: center;
+}
+.prj-more svg { width: 16px; height: 16px; }
+.prj-more:hover, .prj-more[aria-expanded="true"] { background: #e6ebf1; color: #0f172a; }
+.prj-more-menu {
+    position: absolute; top: 38px; right: 40px; z-index: 30; min-width: 190px; padding: 4px;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, .16);
+}
+.prj-more-menu[hidden] { display: none; }
+.prj-more-menu button {
+    display: block; width: 100%; text-align: left; border: 0; background: none; cursor: pointer;
+    padding: 9px 11px; border-radius: 7px; font: inherit; font-size: 13px; font-weight: 600; color: #0f172a;
+}
+.prj-more-menu button:hover { background: #f8fafc; }
+.prj-more-menu button.danger { color: #d1443b; }
+.prj-more-menu button.danger:hover { background: #fcecec; }
+.prj-more-menu button.prj-armed { background: #b42318; color: #fff; }
+.prj-msg { margin-right: auto; font-size: 13px; font-weight: 600; color: #475467; }
+.prj-msg-bad { color: #b42318; }
+.prj-act:disabled { opacity: .6; cursor: default; transform: none; }
+
+/* ---- request form ----
+   Three fields: size to them. The shared .modal-menu rule pins every popup at
+   84vh, which left this short form floating at the top of a half-empty card. */
+.modal-menu.prj-form-modal { width: 640px; height: auto; max-height: 88vh; }
+.modal-menu.prj-form-modal > .prj-form { flex: 0 1 auto; height: auto; max-height: none; }
+.prj-form { gap: 4px; }
+/* .manage-content is a flex column, so without this its children SHRINK to fit
+   instead of the body scrolling — every textarea squashed to one line. */
+.prj-form > * { flex-shrink: 0; }
+.prj-form .form-label-caps { margin-top: 10px; margin-bottom: 0; }
+.prj-form .form-label-caps:first-child { margin-top: 0; }
+.prj-form textarea { resize: vertical; font-family: inherit; line-height: 1.45; }
+
+/* The people picker: chips for who's chosen + a search box, dressed as a
+   .form-input-lg so it reads as the third field of the same form. Matches are
+   listed IN THE FLOW under it (not a floating dropdown the scrolling popup body
+   could clip), in the Variance buyer-picker's blue. */
+.prj-people {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin-top: 6px; padding: 7px 9px; min-height: 48px; box-sizing: border-box;
+    border: 2px solid #e2e8f0; border-radius: 8px; background: #fff; cursor: text; transition: .2s;
+}
+.prj-people:focus-within { border-color: var(--sage-professional); }
+.prj-people-chips { display: contents; }
+.prj-chip-pick {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px;
+    border-radius: 8px; background: #eff6ff; border: 1.5px solid #93c5fd;
+    font-size: 12.5px; font-weight: 800; color: #1d4ed8; white-space: nowrap;
+}
+.prj-chip-pick i { font-style: normal; font-size: 10.5px; font-weight: 700; color: #60a5fa; }
+.prj-chip-pick button {
+    border: 0; background: transparent; color: #1d4ed8; cursor: pointer; font-size: 15px; line-height: 1;
+    width: 20px; height: 20px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;
+}
+.prj-chip-pick button:hover { background: #dbeafe; }
+.prj-people-input { flex: 1 1 140px; min-width: 120px; border: 0; outline: none; font: inherit; font-size: 15px; padding: 4px 2px; background: transparent; }
+.prj-people-menu { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.prj-people-menu[hidden] { display: none; }
+.prj-people-opt {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%;
+    padding: 8px 11px; border-radius: 8px; border: 1.5px solid #e2e8f0; background: #fff;
+    font: inherit; font-size: 13px; font-weight: 800; color: var(--slate-charcoal); text-align: left; cursor: pointer;
+}
+.prj-people-opt i { font-style: normal; font-size: 11px; font-weight: 600; color: #94a3b8; white-space: nowrap; }
+.prj-people-opt:hover, .prj-people-opt.on { background: #eff6ff; border-color: #93c5fd; }
+.prj-people-none { font-size: 12.5px; font-weight: 600; color: #94a3b8; padding: 6px 2px; }
+
+@media (max-width: 900px) {
+    .prj-seg-btn { min-width: 0; flex: 1 1 auto; }
+    .prj-foot-btns > button { flex: 1 1 auto; }
+    .prj-msg { flex-basis: 100%; }
+    /* Two 190px buttons don't fit a phone: share the row, still one size. */
+    #prjFormModal .prj-form-btn { min-width: 0; flex: 1 1 0; }
+}
