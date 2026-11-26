@@ -2166,7 +2166,87 @@ function toggleIdeaModal() {
         const u = sessionStorage.getItem('speeksUserName');
         if (u && u.trim()) nameEl.value = u.trim();
     }
+    _ideaFillTools();
     toggleModal('ideaModal');
+}
+
+// --- Submit an Idea: "Tool Based" ideas name their tool (2026-11-25) ---
+// An idea about the Picture Guide arrived from MPL with nothing to say so.
+// Category now has "Tool Based"; picking it un-grays "Which Tool?", which is
+// required while it's live. Any other category leaves the picker grayed and
+// DISABLED, so FormData doesn't send it and the email has no Tool line.
+//
+// WHICH TOOLS: only what this person's ROLE has access to (Ethan: "if a role
+// doesn't have access to the picture guide, they shouldn't have anything to
+// comment on it"). So every entry is resolved with _featureEffectiveVisible --
+// the Feature Access rules themselves -- NOT with whether it happens to be on
+// screen: a QuickPortal panel someone hid from their own layout is still a
+// tool they have, and the Tools panel can still be filling in on a first open.
+// The names come from JUMP_PLACES and the SPEEKS Tools panel (the jump search's
+// sources), so a new tool shows up here without a hand-kept list. "Inside a
+// tool" sub-tabs and plain page links are left out: an idea is about the
+// Claims tool, not about its Returns tab or "Workspace". Rebuilt on every open.
+const IDEA_TOOL_CATEGORY = 'Tool Based';
+function _ideaHas(feature) {
+    const role = _jumpRoleClass();
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    const one = k => { try { return _featureEffectiveVisible(k, role, name); } catch (e) { return false; } };
+    return Array.isArray(feature) ? feature.some(one) : one(feature);
+}
+function _ideaToolNames() {
+    const names = [];
+    const keepPages = { 'page-b2b': 'widget-ops-b2b', 'page-docs': null, 'page-stats': null };
+    (typeof JUMP_PLACES !== 'undefined' ? JUMP_PLACES : []).forEach(p => {
+        if (p.kind === 'tab' || p.kind === 'panel') {
+            if (p.feature && _ideaHas(p.feature)) names.push(p.label);
+        } else if (p.kind === 'page' && p.id in keepPages) {
+            // B2B has a feature key; Processes & Policies and Stats have only their
+            // nav link, which applyRoleBasedUI gates by role (never by layout).
+            if (keepPages[p.id]) { if (_ideaHas(keepPages[p.id])) names.push(p.label); return; }
+            const link = document.querySelector('.nav-bar a.nav-link[href="' + p.page + '"]');
+            if (!link || link.style.display !== 'none') names.push(p.label);
+        }
+    });
+    document.querySelectorAll('#toolsSidePanel .tools-item').forEach(a => {
+        const key = a.getAttribute('data-feature');
+        if (key ? !_ideaHas(key) : a.style.display === 'none') return;
+        names.push((a.querySelector('.pl-tool-label') || a).textContent);
+    });
+    const seen = {};
+    return names
+        .map(l => String(l || '').replace(/\s+/g, ' ').trim())
+        .filter(l => l && !seen[l.toLowerCase()] && (seen[l.toLowerCase()] = 1))
+        .sort((a, b) => a.localeCompare(b));
+}
+function _ideaFillTools() {
+    const sel = document.getElementById('ideaTool');
+    if (!sel) return;
+    const keep = sel.value;
+    const names = _ideaToolNames();
+    sel.innerHTML = '<option value="">Pick A Tool</option>' +
+        names.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+    // Reopening after a failed send keeps what they picked.
+    if (keep && names.includes(keep)) sel.value = keep;
+    // Nobody is left with "Tool Based" and an empty list to choose from.
+    const catOpt = document.querySelector('#ideaCategory option[value="' + IDEA_TOOL_CATEGORY + '"]');
+    if (catOpt) catOpt.hidden = catOpt.disabled = !names.length;
+    _ideaToolGate();
+}
+// Grays the picker out unless Category is "Tool Based". The custom dropdown's
+// face is a separate button that only re-reads `disabled` on a sync, so it is
+// synced here rather than left showing a live chevron over a dead control.
+function _ideaToolGate() {
+    const cat = document.getElementById('ideaCategory');
+    const sel = document.getElementById('ideaTool');
+    if (!cat || !sel) return;
+    const on = cat.value === IDEA_TOOL_CATEGORY;
+    sel.disabled = !on;
+    sel.required = on;
+    if (!on) sel.value = '';
+    const wrap = document.getElementById('ideaToolWrap');
+    if (wrap) wrap.classList.toggle('idea-field-off', !on);
+    const host = sel.closest('.dd-host');
+    if (host && typeof _ddSync === 'function') _ddSync(host);
 }
 
 function switchAnnTab(tab) {
@@ -12597,11 +12677,18 @@ function injectIdeaModal() {
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Category</label>
-                        <select id="ideaCategory" name="Category" class="idea-input">
+                        <select id="ideaCategory" name="Category" class="idea-input" onchange="_ideaToolGate()">
                             <option value="New Feature">New Feature</option>
+                            <option value="Tool Based">Tool Based</option>
                             <option value="Process Improvement">Process Improvement</option>
                             <option value="Bug Fix / Issue">Bug Fix / Issue</option>
                             <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div id="ideaToolWrap" class="idea-field-off" style="margin-bottom: 15px;">
+                        <label class="idea-label" for="ideaTool">Which Tool?</label>
+                        <select id="ideaTool" name="Tool" class="idea-input" disabled>
+                            <option value="">Pick A Tool</option>
                         </select>
                     </div>
                     <div style="margin-bottom: 15px;">
@@ -12622,7 +12709,7 @@ function injectIdeaModal() {
                     <div style="font-size: 40px; margin-bottom: 10px;">🎉</div>
                     <h3 style="color: var(--sage-professional); margin-bottom: 10px; font-weight: 800;">Idea Submitted!</h3>
                     <p style="color: #666; font-size: 14px; margin-bottom: 20px; font-weight: 500;">Thanks for helping us improve SPEEKS.</p>
-                    <button class="btn-primary" onclick="closeAllModals(); setTimeout(() => { document.getElementById('ideaForm').style.display='block'; document.getElementById('ideaSuccess').style.display='none'; document.getElementById('ideaForm').reset(); }, 500);">Close</button>
+                    <button class="btn-primary" onclick="closeAllModals(); setTimeout(() => { document.getElementById('ideaForm').style.display='block'; document.getElementById('ideaSuccess').style.display='none'; document.getElementById('ideaForm').reset(); _ideaToolGate(); }, 500);">Close</button>
                 </div>
             </div>
         </div>`;

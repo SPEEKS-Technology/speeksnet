@@ -10492,6 +10492,12 @@ body.sam-active .hotbar-btn:hover {
     box-shadow: 0 0 0 3px rgba(90,141,59,.14);
 }
 #ideaModal select.idea-input { cursor: pointer; }
+/* "Which Tool?" stays grayed out until Category is "Tool Based" (2026-11-25).
+   The whole field dims, label included, so it reads as not-yet rather than as
+   a dropdown that's broken; the face itself is disabled by _ideaToolGate. */
+#ideaModal .idea-field-off { opacity: .45; transition: opacity .15s; }
+#ideaModal .idea-field-off .dd-btn,
+#ideaModal .idea-field-off select { cursor: not-allowed; }
 #ideaModal .btn-primary,
 #ideaModal .btn-secondary {
     padding: 11px 20px; border-radius: 10px; font-size: 12.5px; font-weight: 800;
