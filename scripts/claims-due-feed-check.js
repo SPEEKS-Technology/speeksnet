@@ -44,7 +44,7 @@ t('manager: shows, stays through Snooze and Mark-all-read, clears when resolved'
         if (!c) return 'card not in the feed';
         if (c.title !== 'Claims & Disputes Due Today') return 'title: ' + c.title;
         if (!/Chargeback \$199\.99 \(#MO05-1\) — due today/.test(c.snippet)) return 'snippet: ' + c.snippet;
-        if (!/due tomorrow/.test(c.snippet)) return 'second item not named as tomorrow: ' + c.snippet;
+        if (!/card runs out tomorrow/.test(c.snippet)) return 'card auth not named as running out tomorrow: ' + c.snippet;
         if (c.action !== "openClaimsTool('cases')") return 'action: ' + c.action;
         // The render path: no Snooze button on the card itself.
         if (c.noSnooze !== true) return 'gathered without noSnooze';
@@ -97,9 +97,18 @@ t('manager: shows, stays through Snooze and Mark-all-read, clears when resolved'
                                                       Object.assign({}, chargeback, { due: '2026-10-10', overdue: false })];
                                 return checkClaimsDueAlerts().then(function () {
                                     var f = card();
-                                    if (!f) return 'a due-tomorrow item is not shown';
+                                    if (!f) return 'a card running out tomorrow is not shown';
                                     if (/Chargeback/.test(f.snippet)) return 'the two-days-out item is listed: ' + f.snippet;
-                                    return /due tomorrow/.test(f.snippet) || 'tomorrow not named: ' + f.snippet;
+                                    if (!/card runs out tomorrow/.test(f.snippet)) return 'not named: ' + f.snippet;
+                                    // The card itself still reads Due Today, red.
+                                    if (f.title !== 'Claims & Disputes Due Today') return 'title with only a card auth: ' + f.title;
+                                    // DUE TODAY ONLY (2026-11-25): anything else due
+                                    // tomorrow stays off, and with nothing due today
+                                    // the card is gone.
+                                    _cdReply.dueAlerts = [Object.assign({}, chargeback, { due: '2026-10-09', overdue: false })];
+                                    return checkClaimsDueAlerts().then(function () {
+                                        return !card() || 'a dispute due tomorrow is on the card';
+                                    });
                                 });
                             });
                         });

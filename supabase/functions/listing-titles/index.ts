@@ -619,6 +619,11 @@ const PRODUCT_NOUNS = [
   // MPL's Milwaukee 3624-20 "M12 Green Laser- Cross Line & 4- Points", denied
   // 2026-10-05 "it's fine": a cross-line laser that says Laser, accused anyway.
   "laser",
+  // LEE's "Phonak D-Dry+ Hearing Aid Dryer Dehumidifier UV Sanitizer", denied
+  // 2026-11-19 "the item does specify what it is": three product words, none on
+  // this list, and a Type ("Electrical Hygiene Station") sharing none of them.
+  // The appliance family it belongs to came in with it.
+  "dryer", "dehumidifier", "humidifier", "sanitizer", "purifier", "cleaner",
 ];
 
 // ⚠️ PLURALS. The list is singular and the match used to be exact, so "Bargain
@@ -1677,6 +1682,106 @@ function isM2Misnomer(wrong: string, right: string): boolean {
     === right.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+// ⚠️ TWO THINGS A PHOTO CANNOT TELL, from the 2026-11 denials (Ethan reviewed
+// them 11-16). Both were a clean, confident read of something real — and both
+// answered a question the photo does not answer:
+//
+//   WSP Corsair Vengeance Pro (MO02-5426B-E7, denied 11-14 "Its only one stick
+//     and not two"): the label reads CMH32GX4M2D3600C18 DDR4 32GB(2X16GB), and
+//     we turned "16GB (1x16GB)" into "32GB (2x16GB)". Kit makers print the KIT's
+//     label on every stick (M2 = a two-module kit), so one stick carries it too.
+//     A label can say how big a stick is; it cannot say how many are for sale.
+//     Our own sentence even said "only one stick is shown".
+//   BAL Oura Ring Gen 2 Air (MO04-2512A-E7, denied 11-10 "it shows a 6"): the
+//     size is stamped inside the band, side-on in photo 2. With OURA upright it
+//     is a 6; we read it upside down as a 9. A lone 6/9 has no "up".
+//
+// So a photo-only correction that does nothing but add sticks of the same size,
+// or nothing but swap 6s and 9s, is not settled by the photo. analyse drops it.
+function photoCannotSee(wrong: string, right: string): boolean {
+  if (wrong.length === right.length && wrong !== right) {
+    let diff = 0, flips = 0;
+    for (let i = 0; i < wrong.length; i++) {
+      if (wrong[i] === right[i]) continue;
+      diff++;
+      if (wrong[i] + right[i] === "69" || wrong[i] + right[i] === "96") flips++;
+    }
+    if (diff === flips) return true;
+  }
+  const kit = (s: string) => {
+    const m = /(\d+)\s*GB\s*\(\s*(\d+)\s*x\s*(\d+)\s*GB\s*\)/i.exec(s);
+    return m ? { n: Number(m[2]), per: Number(m[3]) } : null;
+  };
+  const to = kit(right);
+  if (to && to.n > 1) {
+    const from = kit(wrong);
+    if (from && from.per === to.per && from.n < to.n) return true;
+    const plain = /(\d+)\s*GB/i.exec(wrong);
+    if (!from && plain && Number(plain[1]) === to.per) return true;
+  }
+  return false;
+}
+
+// ⚠️ WINDOWS COUNTS A DRIVE IN BINARY UNITS. BAL's HP 15-CS3055WM (MO04-2376A-R4R1,
+// denied 11-11 "500GB is correct"): photo 5 is Task Manager showing Disk 0 at
+// 477 GB, and we offered "477GB SSD". Windows' "GB" is 2^30 bytes, so 477 GB is
+// a 512GB drive — the store's 500GB was wrong too, and the reviewer was right to
+// refuse ours. A title says the size on the box, so a figure that is exactly
+// Windows' reading of an advertised size is written as that size. Sizes that
+// are themselves advertised (120, 250, 500…) are never touched.
+const ADVERTISED_GB = [16, 32, 64, 120, 128, 240, 250, 256, 480, 500, 512, 960, 1000, 2000, 4000];
+const ADVERTISED_TB = [1, 2, 4, 8, 16];
+function advertisedSize(text: string): string {
+  return text.replace(/\b(\d+(?:\.\d+)?)(\s?)(GB|TB)\b/gi, (all: string, num: string, sp: string, unit: string) => {
+    const n = Number(num), tb = unit.toUpperCase() === "TB";
+    if ((tb ? ADVERTISED_TB : ADVERTISED_GB).includes(n)) return all;
+    const real = n * (tb ? 1.099511627776 : 1.073741824);
+    const hit = (tb ? ADVERTISED_TB : ADVERTISED_GB).find(s => Math.abs(real - s) / s < 0.01);
+    if (!hit) return all;
+    return !tb && hit >= 1000 ? `${hit / 1000}${sp}TB` : `${hit}${sp}${tb ? "TB" : "GB"}`;
+  });
+}
+
+// ⚠️ HP'S "#ABA" IS A REGION CODE, NOT PART OF THE PART NUMBER. LEE's ProDesk
+// 600 G5 Mini (MO01-6285UV-QTY2-R3R4, denied 11-17 "#ABA is not needed for model
+// number"): photo 6's base label reads "Product No. 8TM81UC#ABA" and we offered
+// that whole string. The reviewer was right about the suffix — #ABA (US), #ABL
+// (Canada), #ABU (UK) is HP's localisation option, nobody types it, and it costs
+// 4 of 80 characters — and because it was the visible difference, the REAL fix
+// (85M→8TM, a T misread as a 5) was refused along with it. So a correction drops
+// the suffix unless the title already wrote one.
+function dropRegionSuffix(wrong: string, right: string): string {
+  if (/#[A-Z0-9]{3}\b/i.test(wrong)) return right;
+  return right.replace(/\b([A-Z0-9]{5,})#[A-Z0-9]{3}\b/gi, "$1");
+}
+
+// ⚠️ "WIFI ONLY" ON CELLULAR HARDWARE IS A SALES DECISION, NOT A MISTAKE. LEE's
+// iPad Pro 11" M5 (MO01-6239A-F1R1, denied 11-19 "Tablet is purposely being sold
+// as Wifi only"): photo 2 really does show an IMEI and a Cellular Data Number.
+// Ethan: a cellular tablet with a bad IMEI is sold as WiFi only, on purpose. A
+// photo can prove the modem is there; it can never prove the IMEI is clean, so
+// nothing we can see settles that the title is wrong. NAME_SYSTEM already tells
+// the name check not to report "WiFi Only" — this holds the photo and label
+// paths to the same rule, which never read that line.
+function soldWifiOnly(wrong: string): boolean {
+  return /\bwi-?\s?fi\s*only\b/i.test(wrong);
+}
+
+// ⚠️ SAY WHICH CHARACTER. A part number corrected by one character reads as two
+// unrelated codes side by side ("85M81UC" → "8TM81UC"), and the reviewer either
+// hunts for the difference or does not. Naming it is what makes it checkable
+// against the label in a glance.
+function oneCharSwap(wrong: string, right: string): string {
+  if (wrong.length !== right.length || wrong.length < 5 || !/\d/.test(wrong)) return "";
+  let diffs = 0, at = -1;
+  for (let i = 0; i < wrong.length; i++) {
+    if (wrong[i].toLowerCase() !== right[i].toLowerCase()) { diffs++; at = i; }
+  }
+  return diffs === 1
+    ? ` Only one character changes: the "${wrong[at]}" should be "${right[at]}".`
+    : "";
+}
+
 function identityFields(specs: Record<string, string> | undefined) {
   const out: Record<string, string> = {};
   for (const k of IDENTITY_FIELDS) if (specs && specs[k]) out[k] = specs[k];
@@ -1956,6 +2061,16 @@ label, a settings or About screen), or a physical feature that on its own tells
 the variants apart. Do not use the listing's words, and do not use a stock or
 manufacturer image — it is not this unit.
 
+Three readings that look clear and are not:
+  - A RAM kit's label ("32GB (2x16GB)") is printed on EVERY stick of the kit,
+    so it says how big one stick is, never how many are being sold. Count the
+    sticks in the photos.
+  - Windows (Task Manager, File Explorer, Disk Management) shows drive sizes in
+    binary units: 477 GB is a 512GB drive, 931 GB is a 1TB drive. Answer with
+    the drive's advertised size, never the number on the screen.
+  - A lone 6 or 9 stamped on a ring, a dial or anything round has no "up". Read
+    it only with the text beside it upright; if you cannot, "cannot_tell".
+
 In "seen", write exactly what you read or saw and where, in a few words a store
 manager can check: "the caseback reads SM-R930", "the barrel reads 1:4-5.6".
 In "photo", give that photo's number. If you cannot point at it, answer
@@ -2095,6 +2210,14 @@ Never report:
   - a label on an accessory, a charger, or a different item in the photo
   - anything, if the photos show several different units or a stock /
     manufacturer image rather than this unit
+  - a stick count from a RAM label: a kit's label ("32GB (2x16GB)") is printed
+    on every stick of the kit, so one stick for sale still carries it. Count
+    the sticks in the photos instead.
+  - the size Windows shows for a drive (Task Manager, File Explorer, Disk
+    Management) as if it were the drive's size: Windows counts in binary units,
+    so 477 GB is a 512GB drive and 931 GB a 1TB drive. Report the advertised
+    size.
+  - a lone 6 or 9 you cannot read with the text beside it upright
 
 For each mismatch:
   title_text — the title's words for it, copied EXACTLY as they appear in the
@@ -2529,7 +2652,11 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // same reason "…GeForce RTX" was never acceptable.
   if (nameVerdict && nameVerdict.verdict !== "ok") {
     const wrong = String(nameVerdict.wrong_text || "");
-    const right = String(nameVerdict.correct_text || "").trim();
+    // A raw Windows figure becomes the advertised size here, once, so every
+    // branch below — disputed, fix, the "already correct" drop — sees the real
+    // one. See advertisedSize: 477GB is a 512GB drive.
+    const rawRight = String(nameVerdict.correct_text || "").trim();
+    const right = dropRegionSuffix(wrong, advertisedSize(rawRight));
     const at = wrong ? title.indexOf(wrong) : -1;
     // ⚠️ A CORRECTION CAN BE A PLACEHOLDER, AND THE QUOTE CHECK CANNOT SEE IT.
     // WSP's truncated `"v (Neo Geo MVS,"` came back with the replacement
@@ -2604,6 +2731,29 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
                              nameVerdict.evidence_field)
       : null;
+    // ⚠️ A LABEL READ IS ONE READER AGAINST THE LISTING, NOT A TIEBREAK. BAL and
+    // LEE, denied 2026-11-20/21 — four in two days, every one a part code:
+    //   Denon AVR-S760H → "S720H"   (photo 4 reads S760H, plainly)
+    //   Crucial CT16G56C46S5 → "66" (the same label says DDR5-5600)
+    //   Dell U2412MB → "U2412Hb"    (a blurry label; the store is retaking it)
+    //   Anker A2820 → "A2206"       (unreadable at 800px — invented)
+    // labelVerdict hands its own read back as the photo answer ("ours"), so
+    // photoSaysOurs called each of them settled, made it one click, and would
+    // have rewritten the listing's correct Model / MPN field to match. The 11-05
+    // rule sends a one-character dispute "to the photos" — and a one-character
+    // misread of small print is exactly what a photo read gets wrong.
+    // So when the listing's own field says what the title says, a label read of
+    // a PART CODE settles it only if another of the listing's fields backs the
+    // label (BAL's ADATA: MPN 28, Model 38, label 38 — two sources against one).
+    // On its own it is a recommendation with the photo beside it, never a button.
+    // Sizes and capacities are not codes and keep their one click (the T7's 2TB);
+    // a knowledge verdict the tiebreak confirmed (WD's WDBB, also 11-20) is two
+    // readers and is untouched.
+    const labelBacked = fromLabel && saidBy && right && !placeholder
+      ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
+                             nameVerdict.evidence_field)
+      : null;
+    const labelAlone = fromLabel && !!saidBy && !labelBacked && hasPartCode(wrong, undefined);
     // A label verdict's photo counts with or without a field repeating the title:
     // it is the only evidence there is, and the reviewer must be sent to it.
     const photo = (saidBy && !backedBy) || (fromLabel && !backedBy)
@@ -2614,13 +2764,28 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // contradiction in the title itself — if the photos show a plain Watch6, it
     // is "Classic" that has to go, not "Aluminum". The photo's wording replaces
     // the same quoted span and goes through every guard the model's does.
-    const should = String(photo?.should_say || "").trim();
+    const rawShould = String(photo?.should_say || "").trim();
+    const should = dropRegionSuffix(wrong, advertisedSize(rawShould));
     const photoFix = !!seen && photo?.answer === "other" && !!should && should !== wrong
       && !/[\[\]<>{}]|\b(actual|correct|real|proper|insert|unknown|tbd|xxx+)\b/i.test(should)
       ? should : "";
     const photoSaysOurs = !!seen && photo?.answer === "ours";
     const settled = !!backedBy || photoSaysOurs || !!photoFix;
     const fixTo = photoFix || right;
+    // ⚠️ A PHOTO READ OF SOMETHING A PHOTO CANNOT SHOW SETTLES NOTHING — a 6/9
+    // swap, or more sticks of the same size (photoCannotSee). Dropped outright,
+    // not downgraded to disputed: the photo was the only reason to doubt the
+    // listing, and a "we recommend Size 9" left on the row is the same wrong
+    // answer with the button taken off. The sweep counts it as unverified.
+    const photoBlind = (photoSaysOurs || !!photoFix) && photoCannotSee(wrong, fixTo);
+    // Said when we rewrote Windows' figure, or the reviewer sees "477 GB" in the
+    // photo, "512GB" in the fix, and reasonably thinks we misread it.
+    const sizesIn = (s = "") => s.match(/\d+(?:\.\d+)?\s?[GT]B/gi) || [];
+    const shown = sizesIn(photoFix ? rawShould : rawRight), real = sizesIn(fixTo);
+    const resized = shown.findIndex((s, i) => real[i] && s !== real[i]);
+    const fromWindows = resized >= 0
+      ? ` Windows counts drive sizes in binary units, so the ${shown[resized]} it shows is a ${real[resized]} drive.`
+      : "";
     // ⚠️ SAY WHY THE WRONG VALUE LOOKS RIGHT. LEE, 2026-10-08 to 10-19: the
     // PSP's "PCH-1001" and the Canon's "f/1.5-4.9" were both denied by a
     // reviewer who believed them, and both were real markings — a PS Vita model
@@ -2635,10 +2800,31 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // panel can put the picture beside the sentence.
     const evidence = (photoSaysOurs || photoFix) && photo?.photo
       ? { n: photo.photo, url: photo.url || null } : null;
-    if (saidBy && seen && photo?.answer === "listing") {
+    if (photoBlind || soldWifiOnly(wrong)) {
+      // See photoBlind and soldWifiOnly. Nothing to report.
+    } else if (saidBy && seen && photo?.answer === "listing") {
       // The photos show what the listing says, so the listing was right and our
       // knowledge was not. Nothing to report — counted by the sweep instead, so
       // how often this happens stays visible.
+    } else if (labelAlone && saidBy && !placeholder && at >= 0 && right && right !== wrong) {
+      // See labelAlone. Said in full, photo attached, nothing written.
+      const own = saidBy;
+      const recommended = (title.slice(0, at) + right + title.slice(at + wrong.length))
+        .replace(/\s+/g, " ").trim();
+      findings.push({
+        code: "name-disputed",
+        severity: 1,
+        fixable: false,
+        says: `In ${shot.toLowerCase()}, ${seen || "the label"} — so we recommend "${right}" in place of "${wrong}".`
+          + oneCharSwap(wrong, right)
+          + (recommended.length <= EBAY_TITLE_MAX ? ` Recommended title: "${recommended}".` : "")
+          + ` It is not one click because the listing's own ${own.field} says "${own.value}",`
+          + ` the same as the title, and nothing else in the listing backs the photo`
+          + (oneCharCode ? ` — one character of small print is easy to misread.` : `.`),
+        warn: `Zoom in on ${shot.toLowerCase()}. If it clearly reads "${right}", change the title and the`
+          + ` ${own.field} field in Shopify. If it reads "${wrong}", or you cannot tell, dismiss this.`,
+        ...(photo?.photo ? { photo: { n: photo.photo, url: photo.url || null } } : {}),
+      });
     } else if (!placeholder && at >= 0 && right && right !== wrong && saidBy && !settled) {
       const recommended = (title.slice(0, at) + right + title.slice(at + wrong.length))
         .replace(/\s+/g, " ").trim();
@@ -2703,6 +2889,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
           : `"${wrong}" is not a real product name — it looks like "${right}" typed wrong`
             + (tidyWhy ? `. ${tidyWhy}.` : `, so nobody searching for it will find this listing.`))
           + (mixup ? ` ${mixup}.` : "")
+          + oneCharSwap(wrong, right)
           // Say so, or the reviewer sees the same typo in the Type field and
           // reads it as the listing disagreeing with us.
           + (respelling && echoed
@@ -2721,6 +2908,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
                 : photoSaysOurs && fromLabel
                   ? ` Look at ${shot.toLowerCase()}: ${seen}.`
                   : "")
+          + fromWindows
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
         // finding on this page is read off the title and the spec table, and
@@ -2983,8 +3171,18 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // non-existent set, on a PSA 10 graded card. Caught in a dry run, never shipped.
   const dupRaw = original.match(/\b(\S+\s+\S+(?:\s+\S+)?)\s+\1\b/i)
     || original.match(/^(\S{2,})\s+\1\b/i);
+  // ⚠️ AND A REPEAT THE LISTING'S OWN FIELDS ALSO SAY IS THE NAME. LEE's "Dance
+  // Dance Revolution Max (Sony PlayStation 2 PS2, 2002)", denied 2026-11-19 "the
+  // dance always appears twice in each game in this series": a doubled first word
+  // is exactly the brand-typed-twice shape, and its Game Name field said "Dance
+  // Dance Revolution Max" all along. Tsum Tsum, Duran Duran and Bora Bora are the
+  // same — a field spelling the repeat out is the listing telling us it is real.
+  const saidInSpecs = (run: string) => Object.values(extra?.specs || {}).some(v =>
+    new RegExp(`\\b${run.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\b`, "i")
+      .test(String(v || "")));
   const dup = dupRaw && !/^['’]/.test(
-    original.slice((dupRaw.index || 0) + dupRaw[0].length)) ? dupRaw : null;
+    original.slice((dupRaw.index || 0) + dupRaw[0].length))
+    && !saidInSpecs(dupRaw[0]) ? dupRaw : null;
   if (dup) {
     findings.push({
       code: "repeated-phrase",
@@ -4240,6 +4438,10 @@ type FbRow = {
   note: string; by: string | null; at: string | null;
   codes: string[]; said: string[]; was: string; now: string; takenAt?: string | null;
   photos?: { n: number; url: string }[];
+  // The findings exactly as stored on the row when it was denied — the same
+  // objects the store's panel drew (says, warn, photo). The DM view renders
+  // them through the store's own _ltWhy so the two can never drift apart.
+  findings?: { code: string; says: string; warn?: string; photo?: { n: number; url: string | null } }[];
   specs: Record<string, string>;
   saysItself: { field: string; value: string } | null;
 };
@@ -4455,6 +4657,14 @@ async function feedbackFor(stores: string[], days: number) {
         said: (r.findings || []).map((f: any) => String(f?.says || "")).filter(Boolean),
         photos: (r.findings || []).filter((f: any) => f?.photo?.url)
           .map((f: any) => ({ n: Number(f.photo.n), url: String(f.photo.url) })),
+        // ⚠️ WHAT THE STORE SAW, NOT A SUMMARY OF IT. Ethan, 2026-11-19: "so I
+        // can see exactly what you show them." `said` flattens away the caution
+        // line and the photo; these are the objects the panel drew.
+        findings: (r.findings || []).filter((f: any) => f && f.says).map((f: any) => ({
+          code: String(f.code || ""), says: String(f.says),
+          ...(f.warn ? { warn: String(f.warn) } : {}),
+          ...(f.photo && f.photo.n ? { photo: { n: Number(f.photo.n), url: f.photo.url ? String(f.photo.url) : null } } : {}),
+        })),
         was: run.was, now: run.now,
         specs: keep,
         saysItself: listingSaysItself(run.was, specs),

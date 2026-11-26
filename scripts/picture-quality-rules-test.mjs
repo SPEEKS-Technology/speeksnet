@@ -92,12 +92,12 @@ t("anything besides item + backdrop: automatic flag, with the Shopify AI backgro
 t("missing plain views: the first is free (and listed), then −8 each", () => {
   const one = run({}, PHONE, { missing_shots: ["Back of Phone"] });
   const two = run({}, PHONE, { missing_shots: ["Back of Phone", "Top Side of Phone"] });
-  return (one.pictureScore === 100 && one.findings.some(f => f.tier === "view_free") && two.pictureScore === 92 && two.verdict === "pass")
+  return (one.pictureScore === 100 && one.findings.some(f => f.tier === "view_free") && two.pictureScore === 92 && one.verdict === "fix" && two.verdict === "fix")
     || `${say(one)} | ${say(two)}`; });
 t("a missing FIRST photo of the guide is an automatic flag (the Crucial tick is gone)", () => {
   const d = run({}, PHONE, { missing_shots: ["Home/Lock Screen"] });
   const side = run({}, PHONE, { missing_shots: ["Side of Phone"] });
-  return (flagged(d) && side.verdict === "pass") || `${say(d)} | ${say(side)}`; });
+  return (flagged(d) && side.verdict === "fix" && side.pictureScore === 100) || `${say(d)} | ${say(side)}`; });
 t("a missing view the notes put a flaw on is crucial too", () => {
   const d = run({}, PHONE, { missing_shots: ["Back of Phone"], flaw_views: ["Back of Phone"] }); return flagged(d) || say(d); });
 
@@ -112,7 +112,7 @@ t("flat retail packaging on New In Box: only front, back and label are asked for
   const miss = ["Top of Box", "Bottom of Box", "Side of Box", "Opposite Side of Box"];
   const flat = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: true, serial: "shown" });
   const box = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: false, serial: "shown" });
-  return (flat.verdict === "pass" && box.verdict === "retake") || `${say(flat)} | ${say(box)}`; });
+  return (flat.verdict !== "retake" && box.verdict === "retake") || `${say(flat)} | ${say(box)}`; });
 t("different spot: the FIRST (stand) group wins a mix, and closeups are never odd (WSP AirPods, OVL Loupedeck)", () => {
   const ps = report().photos; ps[7] = photo(8, { whole_item: false });
   const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 4], [3, 5, 6, 7, 8, 9, 10]] });
@@ -175,7 +175,7 @@ t("Core info: −15 ONCE however many are missing, each one listed", () => {
   const core = d.findings.filter(f => f.tier === "core").length;
   return (d.pictureScore === 85 && core === 2 && flagged(d)) || say(d); });
 t("other settings screens: −3 each", () => {
-  const d = run({}, PHONE, { missing_shots: ["Software Information"] }); return (d.pictureScore === 97 && d.verdict === "pass") || say(d); });
+  const d = run({}, PHONE, { missing_shots: ["Software Information"] }); return (d.pictureScore === 97 && d.verdict === "fix") || say(d); });
 t("serial on a screen device: not shown anywhere is Core", () => {
   const d = run({}, PHONE, { serial: "not_shown" }); return (d.pictureScore === 85 && d.findings.some(f => f.tier === "core")) || say(d); });
 t("serial on a no-screen item: −3, under a battery cover too", () => {
@@ -396,10 +396,10 @@ t("the guide's first shot leads: a back-first iPhone gets a reorder (OVL iPhone 
   const ps = report().photos; ps[0] = photo(1, { shots: ["Back of Phone"] }); ps[1] = photo(2, { shots: ["Home/Lock Screen"] });
   const d = run({}, PHONE, { photos: ps });
   return (d.verdict === "reorder" && d.reorder.suggested[0] === 2) || say(d); });
-t("a pass with nothing to approve stays a pass and keeps its notes (Ethan, 10-15, WSP SanDisk)", () => {
+t("a missing guide shot never passes, even a free one; a clean listing passes (Ethan, 11-18, LEE MixAmp; was 10-15 WSP SanDisk)", () => {
   const free = run({}, PHONE, { missing_shots: ["Back of Phone"] });
   const clean = run({}, PHONE, {});
-  return (free.verdict === "pass" && free.findings.length > 0 && free.pictureScore === 100 && clean.verdict === "pass") || say(free) + " | " + say(clean); });
+  return (free.verdict === "fix" && free.findings.length > 0 && free.pictureScore === 100 && clean.verdict === "pass") || say(free) + " | " + say(clean); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });
@@ -562,6 +562,22 @@ for (const r of fx.results) {
 }
 console.log(`\nCosmetic sentences read as about THE UNIT (not PayMore's wording) — ${unitNotes.length}:`);
 for (const x of unitNotes) console.log("  " + x);
+// --- 2026-11-18, the guide-only LEE test -----------------------------------------
+t("a closeup of a shot the lead only also covers takes that slot (LEE Happrun projector)", () => {
+  const PROJ = { slug: "projectors", shots: [
+    { label: "Front of Projector", cond: null }, { label: "Everything Included", cond: "Everything Included" },
+    { label: "Front of Projector (Lens Open)", cond: "lens cover" }, { label: "Front of Projector (Lens Closed)", cond: "lens cover" },
+    { label: "Lamp Hours", cond: "lamp" }, { label: "Back of Projector", cond: null }, { label: "Side of Projector", cond: null },
+    { label: "Opposite Side of Projector", cond: null }, { label: "Closeup of Ports", cond: null }, { label: "Top of Projector", cond: null },
+    { label: "Bottom of Projector", cond: null }] };
+  const ps = [photo(1, { shots: ["Front of Projector", "Front of Projector (Lens Open)"] }),
+    photo(2, { shots: ["Extra", "Front of Projector (Lens Open)"], whole_item: false }),
+    photo(3, { shots: ["Back of Projector"] }), photo(4, { shots: ["Side of Projector"] }), photo(5, { shots: ["Opposite Side of Projector"] }),
+    photo(6, { shots: ["Closeup of Ports"], whole_item: false }), photo(7, { shots: ["Top of Projector"] }),
+    photo(8, { shots: ["Bottom of Projector"] }), photo(9, { shots: ["Everything Included"] })];
+  const d = decide(listing({ n: 9 }), PROJ, report({ n: 9, photos: ps }));
+  return d.reorder?.suggested.join() === "1,9,2,3,4,5,6,7,8" || say(d) + " " + d.reorder?.suggested; });
 console.log(`
 replay: ${agreeN}/${scored} agree with Ethan · second look on ${seconds} of ${notPass} not-pass (was all ${notPass}) · card: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
