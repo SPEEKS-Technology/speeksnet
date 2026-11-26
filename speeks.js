@@ -66497,6 +66497,25 @@ function _pushEnv() {
     return { ios, android: /Android/.test(ua), standalone, supported };
 }
 
+// Phone Alerts is for PHONES only (Ethan, 2026-11-25): not drawn at all on a
+// tablet or a computer — not greyed, not a hint, nothing. Decided by the device,
+// not the window width, so a narrow desktop window or an iPad in split view
+// doesn't qualify. iPad: its own UA, or iPadOS's desktop UA (MacIntel + touch).
+// Android tablets drop "Mobile" from the UA, which is the documented way to
+// tell them from Android phones. Anything else (other phone browsers) has to be
+// touch-first AND phone-sized — short side of the screen under 600 CSS px.
+function _pushIsPhone() {
+    try {
+        const ua = navigator.userAgent || '';
+        if (/iPad/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return false;
+        if (/iPhone|iPod/.test(ua)) return true;
+        if (/Android/.test(ua)) return /Mobile/.test(ua);
+        const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        const shortSide = Math.min(screen.width || 0, screen.height || 0);
+        return coarse && shortSide > 0 && shortSide < 600;
+    } catch (_) { return false; }
+}
+
 function _pushDeviceName() {
     const e = _pushEnv();
     return e.ios ? 'iPhone' : e.android ? 'Android Phone' : 'This Computer';
@@ -66525,7 +66544,12 @@ async function _pushRender() {
     const box = document.getElementById('nsPush');
     if (!box) return;
     // Feature Access gate (notify-phone-alerts, DM-only default). Not drawn at
-    // all for anyone else: an empty block, not a greyed one.
+    // all for anyone else: an empty block, not a greyed one. Same for anything
+    // that isn't a phone (_pushIsPhone) — tablets and computers never see it.
+    if (!_pushIsPhone()) {
+        box.innerHTML = '';
+        return;
+    }
     if (_featureEffectiveVisible('notify-phone-alerts', _jumpRoleClass(), sessionStorage.getItem('speeksUserName') || '') !== true) {
         box.innerHTML = '';
         return;
