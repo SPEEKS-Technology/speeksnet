@@ -74392,11 +74392,25 @@ const ARC_SAMPLE = {
     last: { day: 'MON NOV 16', lines: [['18 items listed', 180], ['2 titles sent back (missing storage size)', -12], ['Team beat the boss', 25]] },
     boss: { goal: 40, yesterday: 44, wins: 9, week: [['Mon', 44], ['Tue', 41], ['Wed', 31], ['Thu', 43], ['Fri', 38], ['Sat', 40], ['Sun', null]] },
     combo: 3,
-    trophies: [['10', 'First 10', 1], ['100', '100 Club', 1], ['500', '500 Club', 1], ['0', 'Clean Month', 1], ['x10', 'Boss Slayer', 1], ['5', 'Spotless Week', 0], ['1K', '1,000 Club', 0], ['#1', 'Top of the Store', 0]],
+    // Lifetime count per achievement id (ARC_ACH), and which DAILY ones were earned
+    // yesterday (the Play shelf shows yesterday: Day End lands the next morning).
+    ach: { 'clean-sweep': 14, 'boss-slayer': 22, 'day-mvp': 6, 'personal-best': 3, 'above-average': 11, 'high-roller': 4, 'carry': 2,
+           'spotless-week': 2, 'boss-rush': 3, 'steady-hand': 5, 'week-mvp': 1, 'big-game': 2, 'comeback': 1,
+           'clean-month': 1, 'sell-through': 1, 'boss-season': 1, 'iron-lister': 2, 'level-up': 3,
+           'boss-hunter': 1,   // a sample year-end medal, so the yearly shape shows in colour
+           l10: 1, l100: 1, l500: 1, lv2: 1, lv3: 1, lv4: 1, 'first-blood': 1 },
+    // What was earned in the period that just closed, per cadence. The shelf shows
+    // dailies every day, plus last week's on a Monday, last month's on the 1st
+    // and last year's on Jan 1 (Ethan, 11-18).
+    achLast: { d: ['boss-slayer', 'above-average', 'high-roller'], w: ['boss-rush', 'steady-hand'],
+               m: ['boss-season', 'iron-lister', 'level-up'], y: ['boss-hunter'] },
     // [name, sub, points, isYou]. The "you" row takes the signed-in first name.
-    board: [['JORDAN', 'Level 6 · 9 days', 1620], ['YOU', 'Level 4 · you', 1240, 1], ['SAM', 'Level 3 · 8 days', 1010], ['CASEY', 'Level 5 · part-time', 590], ['RILEY', 'Level 1 · new', 205]],
-    district: [['BAL', '6 players', 182], ['WSP', '5 players', 176], ['LEE', '7 players', 161], ['OVL', '8 players', 149], ['MPL', '8 players', 133]],
-    champ: ['Jordan', 'October', 3935],
+    // Player leaderboard is COMPANY-WIDE (all five stores); store leaderboard is
+    // each store's total points this month (Ethan, 11-18). [name, store, points, isYou]
+    board: [['JORDAN', 'WSP', 1620], ['MARCUS', 'OVL', 1485], ['YOU', 'WSP', 1240, 1], ['SAM', 'LEE', 1010], ['ALEX', 'OVL', 960], ['TAYLOR', 'BAL', 905], ['CASEY', 'LEE', 590], ['MORGAN', 'MPL', 540], ['RILEY', 'BAL', 205]],
+    district: [['OVL', 7840], ['LEE', 6920], ['BAL', 5460], ['WSP', 4665], ['MPL', 4210]],
+    champ: ['Jordan', 'WSP', 'October', 3935],
+    champStore: ['OVL', 'October', 31260],
     prizes: [
         { n: '$10 coffee card', c: 200, lv: 1, col: 'var(--arc-teal)', g: '$10' },
         { n: '$25 Amazon card', c: 1000, lv: 1, col: 'var(--arc-brand)', g: '$25' },
@@ -74418,6 +74432,131 @@ const ARC_SAMPLE = {
     reqs: [{ w: 'Jordan', p: 'Long lunch', c: 400, ok: true }, { w: 'Alex', p: '$50 Visa card', c: 2000, ok: false, why: 'Level 5 prize, Alex is Level 4' }],
     budget: [185, 300],
 };
+// ---- achievements -------------------------------------------------------------
+// The catalog Ethan approved on 2026-11-18 ("I like all of those"): 7 daily,
+// 6 weekly, 9 monthly, 8 yearly, 18 milestones. Rules and data sources:
+// docs/listing-xp-design.md. What an achievement is WORTH in points waits for
+// the formula (memory: listing-xp-revisit-list).
+//
+// Each has a shape by cadence and an icon of its own, so a shelf of them reads
+// at a glance: daily = coin, weekly = shield, monthly = octagon crest, yearly =
+// medal on ribbons, milestone = dark diamond. ic is a 24x24 stroke path, or
+// t: short text drawn in the pixel face (the milestone numbers).
+const ARC_CAD = {
+    d: { label: 'Daily', note: 'Reset every day', col: '#1F9D57' },
+    w: { label: 'Weekly', note: 'Monday to Sunday', col: '#1F8A9C' },
+    m: { label: 'Monthly', note: 'Awarded on the 1st', col: '#D9A52E' },
+    y: { label: 'Yearly', note: 'Once a year · Hall of Fame', col: '#C8457A' },
+    l: { label: 'Milestones', note: 'Once ever', col: '#0E1211' },
+};
+const _ARC_IC = {
+    sparkle: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z',
+    sword: 'M14.5 3.5L20 3l-.5 5.5L9 19l-4-4zM7 13l4 4M4 20l3-3',
+    star: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z',
+    best: 'M12 20V6M6 12l6-6 6 6M5 21h14',
+    trend: 'M3 17l6-6 4 4 7-7M14 8h6v6',
+    gem: 'M6 4h12l3 5-9 12L3 9zM3 9h18M9 4l3 5 3-5',
+    team: 'M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 2-5 5-5s5 2 5 5M11 20c0-3 2-5 5-5s5 2 5 5',
+    check: 'M5 12l4 4 10-10',
+    bolt: 'M13 2L4 14h7l-1 8 9-12h-7z',
+    pulse: 'M3 12h4l2-5 3 10 2-5h7',
+    crown: 'M3 8l4 4 5-7 5 7 4-4-2 11H5z',
+    target: 'M12 6a6 6 0 1 0 .01 0M12 2v5M12 17v5M2 12h5M17 12h5',
+    comeback: 'M4 12a8 8 0 1 0 3-6.2M4 4v5h5',
+    drop: 'M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z',
+    tag: 'M3 12V4h8l10 10-8 8zM7.5 7.5h.01',
+    cup: 'M7 4h10v4a5 5 0 0 1-10 0zM7 5H4v2a3 3 0 0 0 3.5 3M17 5h3v2a3 3 0 0 1-3.5 3M12 13v4M8 21h8M10 17h4',
+    pin: 'M12 21s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11zM12 10h.01',
+    flag: 'M5 21V4h12l-2.5 4.5L17 13H5',
+    dollar: 'M12 3v18M16 7.5C16 5.6 14.2 4.5 12 4.5S8 5.6 8 7.5c0 4 8 2.5 8 6.5 0 2-1.8 3-4 3s-4-1-4-3',
+    calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4M8 14h3v3H8z',
+    levelup: 'M6 13l6-6 6 6M6 19l6-6 6 6',
+    crown3: 'M3 9l4 4 5-7 5 7 4-4-2 11H5zM7 3h.01M12 2h.01M17 3h.01',
+    clock: 'M12 7v5l3 2M12 3a9 9 0 1 0 .01 0',
+    swords: 'M4 4l9 9M20 4l-9 9M4 4h3M4 4v3M20 4h-3M20 4v3M8 16l-4 4M16 16l4 4M7 13l4 4M17 13l-4 4',
+    hat: 'M7 4h10v10H7zM3 14h18v3H3zM7 10h10',
+    rocket: 'M12 2c4 3 5 8 3 13H9C7 10 8 5 12 2zM9 15l-3 4 4-1M15 15l3 4-4-1M12 8h.01',
+};
+const ARC_ACH = [
+    { id: 'clean-sweep', c: 'd', n: 'Clean Sweep', how: 'List 5+ items and every title passes', ic: 'sparkle' },
+    { id: 'boss-slayer', c: 'd', n: 'Boss Slayer', how: 'Your store beats the boss and you listed 5+', ic: 'sword' },
+    { id: 'day-mvp', c: 'd', n: 'Day MVP', how: 'Most listed in your store, no more than 1 title sent back', ic: 'star' },
+    { id: 'personal-best', c: 'd', n: 'Personal Best', how: 'Beat your own best day, no more than 1 title sent back', ic: 'best' },
+    { id: 'above-average', c: 'd', n: 'Above Average', how: 'List 25% more than your own 30-day average', ic: 'trend' },
+    { id: 'high-roller', c: 'd', n: 'High Roller', how: 'List $2,000+ of value in a day', ic: 'gem' },
+    { id: 'carry', c: 'd', n: 'Carry the Team', how: '40%+ of your store\'s listings on a day it beats the boss', ic: 'team' },
+    { id: 'spotless-week', c: 'w', n: 'Spotless Week', how: '5 work days in a row with every title passing', ic: 'check' },
+    { id: 'boss-rush', c: 'w', n: 'Boss Rush', how: 'Store beats the boss 5+ days and you listed on each', ic: 'bolt' },
+    { id: 'steady-hand', c: 'w', n: 'Steady Hand', how: 'At or above your average every day you worked (3+ days)', ic: 'pulse' },
+    { id: 'week-mvp', c: 'w', n: 'Week MVP', how: 'Top score in your store for the week', ic: 'crown' },
+    { id: 'big-game', c: 'w', n: 'Big Game Hunter', how: 'Highest listed value in your store for the week', ic: 'target' },
+    { id: 'comeback', c: 'w', n: 'Comeback Kid', how: 'Store loses the boss, then wins the next 3, and you listed on each', ic: 'comeback' },
+    { id: 'clean-month', c: 'm', n: 'Clean Month', how: 'Nothing you listed came back, 50+ listed', ic: 'drop' },
+    { id: 'sell-through', c: 'm', n: 'Sell-Through', how: 'Your sold % beats your store\'s', ic: 'tag' },
+    { id: 'top-store', c: 'm', n: 'Top of the Store', how: '#1 score in your store', ic: 'cup' },
+    { id: 'district-champ', c: 'm', n: 'District Champ', how: '#1 in the district, per day worked', ic: 'pin' },
+    { id: 'boss-season', c: 'm', n: 'Boss Season', how: 'Store beats the boss 15+ days and you listed on 10+', ic: 'flag' },
+    { id: 'margin-keeper', c: 'm', n: 'Margin Keeper', how: 'Your listed value vs cost at or above your store\'s', ic: 'dollar' },
+    { id: 'iron-lister', c: 'm', n: 'Iron Lister', how: 'Listed on every day you worked', ic: 'calendar' },
+    { id: 'level-up', c: 'm', n: 'Level Up', how: 'Gained a level this month', ic: 'levelup' },
+    { id: 'triple-crown', c: 'm', n: 'Triple Crown', how: 'Sell-Through + Clean Month + top 3 in your store, same month', ic: 'crown3' },
+    { id: 'player-year', c: 'y', n: 'Player of the Year', how: 'Highest score per day worked in the district', ic: 'star' },
+    { id: 'store-mvp-year', c: 'y', n: 'Store MVP of the Year', how: 'Highest score per day worked in your store', ic: 'cup' },
+    { id: 'marathon', c: 'y', n: 'Marathon', how: 'Listed on 200+ days', ic: 'clock' },
+    { id: 'boss-hunter', c: 'y', n: 'Boss Hunter', how: 'Part of 100+ boss wins', ic: 'swords' },
+    { id: 'hat-trick', c: 'y', n: 'Hat Trick', how: 'Top of the Store in 3+ months', ic: 'hat' },
+    { id: 'most-improved', c: 'y', n: 'Most Improved', how: 'Biggest jump in score per day, first half of the year vs second', ic: 'rocket' },
+    { id: 'year-clean', c: 'y', n: 'Year of Clean', how: '6+ Clean Months', ic: 'drop' },
+    { id: 'sell-streak', c: 'y', n: 'Sell-Through Streak', how: 'Beat your store\'s sold % in 9+ months', ic: 'tag' },
+    { id: 'l10', c: 'l', n: 'First 10', how: '10 lifetime listings', t: '10' },
+    { id: 'l100', c: 'l', n: '100 Club', how: '100 lifetime listings', t: '100' },
+    { id: 'l500', c: 'l', n: '500 Club', how: '500 lifetime listings', t: '500' },
+    { id: 'l1k', c: 'l', n: '1,000 Club', how: '1,000 lifetime listings', t: '1K' },
+    { id: 'l5k', c: 'l', n: '5,000 Club', how: '5,000 lifetime listings', t: '5K' },
+    { id: 'l10k', c: 'l', n: '10,000 Club', how: '10,000 lifetime listings', t: '10K' },
+].concat(ARC_LEVELS.slice(1).map((name, i) => ({ id: 'lv' + (i + 2), c: 'l', n: name, how: 'Reach Level ' + (i + 2), t: 'L' + (i + 2) })))
+ .concat([
+    { id: 'first-blood', c: 'l', n: 'First Blood', how: 'Your first boss win', ic: 'sword' },
+    { id: 'boss-legend', c: 'l', n: 'Boss Legend', how: '50 boss wins', ic: 'swords' },
+    { id: 'year-one', c: 'l', n: 'Year One', how: 'A full year in the game', t: '1Y' },
+]);
+
+// One badge as SVG: the cadence's frame, then the icon. Locked = grey.
+function _arcBadge(a, on) {
+    const cad = ARC_CAD[a.c];
+    const fill = on ? cad.col : '#E3E8EE', ink = on ? '#FFFFFF' : '#A9B6B0';
+    const ring = on ? 'rgba(255,255,255,.38)' : '#CDD5DC';
+    let frame = '', cy = 32;
+    if (a.c === 'd') {
+        frame = '<circle cx="32" cy="32" r="28" fill="' + fill + '"/><circle cx="32" cy="32" r="22.5" fill="none" stroke="' + ring + '" stroke-width="2" stroke-dasharray="3 3"/>';
+    } else if (a.c === 'w') {
+        frame = '<path d="M32 3 56 11v19c0 16-11 26-24 31C19 56 8 46 8 30V11z" fill="' + fill + '"/><path d="M32 9 50 15v15c0 12-8 20-18 24-10-4-18-12-18-24V15z" fill="none" stroke="' + ring + '" stroke-width="2"/>';
+    } else if (a.c === 'm') {
+        frame = '<path d="M21 3h22l18 18v22L43 61H21L3 43V21z" fill="' + fill + '"/><path d="M23.5 9h17L55 23.5v17L40.5 55h-17L9 40.5v-17z" fill="none" stroke="' + ring + '" stroke-width="2"/>';
+    } else if (a.c === 'y') {
+        cy = 27;
+        const tail = on ? '#9C2F5C' : '#CDD5DC';
+        frame = '<path d="M20 38 13 61l9-4 5 7 5-21z" fill="' + tail + '"/><path d="M44 38l7 23-9-4-5 7-5-21z" fill="' + tail + '"/>'
+            + '<circle cx="32" cy="27" r="23" fill="' + fill + '"/><circle cx="32" cy="27" r="18" fill="none" stroke="' + ring + '" stroke-width="2"/>';
+    } else {
+        const edge = on ? '#4CC585' : '#CDD5DC';
+        frame = '<path d="M32 2 62 32 32 62 2 32z" fill="' + (on ? '#0E1211' : '#E3E8EE') + '" stroke="' + edge + '" stroke-width="2.5"/><path d="M32 10 54 32 32 54 10 32z" fill="none" stroke="' + (on ? 'rgba(76,197,133,.45)' : '#CDD5DC') + '" stroke-width="1.5"/>';
+    }
+    const mark = a.t
+        ? '<text x="32" y="' + (cy + 4.5) + '" text-anchor="middle" font-family="\'Press Start 2P\',monospace" font-size="' + (a.t.length > 2 ? 9 : 11) + '" fill="' + (a.c === 'l' && on ? '#4CC585' : ink) + '">' + escapeHtml(a.t) + '</text>'
+        : '<path d="' + _ARC_IC[a.ic] + '" transform="translate(' + (32 - 11) + ',' + (cy - 11) + ') scale(.92)" fill="none" stroke="' + (a.c === 'l' && on ? '#4CC585' : ink) + '" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>';
+    return '<svg viewBox="0 0 64 64" aria-hidden="true">' + frame + mark + '</svg>';
+}
+// A badge with its count bubble: how many times it has ever been earned.
+function _arcBadgeWrap(a, count, opts) {
+    opts = opts || {};
+    const on = opts.lit != null ? opts.lit : count > 0;
+    return '<span class="arc-badge' + (on ? '' : ' arc-locked') + (opts.dim ? ' arc-dimmed' : '') + '" title="' + escapeHtml(a.n + ' · ' + a.how) + '">'
+        + _arcBadge(a, on || (opts.dim && count > 0))
+        + (count > 0 && !opts.noCount ? '<span class="arc-badge-n">' + (count > 1 ? '×' + _arcFmt(count) : '1') + '</span>' : '')
+        + '</span>';
+}
+
 let _arc = null;   // this tab's working copy of the sample (the buttons change it)
 
 function _arcRoleClass() {
@@ -74463,70 +74602,156 @@ async function initArcadePage() {
     document.getElementById('arcOpKey').hidden = !_arcSees(ARC_OP_FEATURE);
     _arcRenderAll();
     const h = (location.hash || '').slice(1);
-    arcGo(['play', 'scores', 'prizes', 'how', 'op'].indexOf(h) >= 0 && (h !== 'op' || _arcSees(ARC_OP_FEATURE)) ? h : 'play');
+    arcGo(h || 'play');   // arcGo sorts out unknown, old (#prizes, #how) and gated hashes
 }
 
+// Text into an element that may not be there: the layout has changed shape
+// more than once (2026-11-18 folded two tabs into Play), and a renderer that
+// throws on one missing id blanks every piece after it.
+function _arcSet(id, text, html) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    if (html) el.innerHTML = text; else el.textContent = text;
+    return el;
+}
 function _arcRenderAll() {
     const a = _arc, esc = escapeHtml;
-    document.getElementById('arcName').textContent = _arcFirst();
-    document.getElementById('arcLv').textContent = a.level;
-    document.getElementById('arcRank').textContent = ARC_LEVELS[a.level - 1];
-    document.getElementById('arcNext').textContent = _arcFmt(a.toNext) + ' to Level ' + (a.level + 1) + ' · ' + (ARC_LEVELS[a.level] || '');
-    document.getElementById('arcScore').textContent = _arcFmt(a.score);
+    // The score bar.
+    _arcSet('arcName', _arcFirst());
+    _arcSet('arcLv', a.level);
+    _arcSet('arcRank', ARC_LEVELS[a.level - 1]);
+    _arcSet('arcNext', _arcFmt(a.toNext) + ' to Level ' + (a.level + 1) + ' · ' + (ARC_LEVELS[a.level] || ''));
+    _arcSet('arcScore', _arcFmt(a.score));
+    const top = a.board[0];
+    _arcSet('arcHi', _arcFmt(top[2]));
+    _arcSet('arcHiName', top[3] ? 'That\'s you. Hold it.' : 'Company leader · ' + (top[0].charAt(0) + top[0].slice(1).toLowerCase()));
+    _arcSet('arcComboN', a.combo + (a.combo === 1 ? ' day' : ' days') + ' every title passed · 5 earns Spotless Week');
+    const fl = _arcSet('arcFlames', [0, 1, 2, 3, 4].map(i => '<span' + (i < a.combo ? '' : ' class="arc-off"') + '></span>').join(''), true);
+    if (fl) fl.setAttribute('aria-label', a.combo + ' of 5');
 
+    // The game screen: today's boss. The bar is 20 segments of the boss's
+    // health; the listings yesterday knocked segments out.
+    const b = a.boss, beat = b.yesterday >= b.goal;
+    _arcSet('arcBossGoal', b.goal + ' LISTINGS');
+    const left = Math.max(0, Math.round((1 - b.yesterday / b.goal) * 20));
+    _arcSet('arcHpSegs', Array.from({ length: 20 }, (_, i) => '<span data-i="' + i + '"' + (i < left ? '' : ' class="arc-gone"') + '></span>').join(''), true);
+    const big = _arcSet('arcBossBig', beat ? 'BOSS DOWN!' : 'BOSS ESCAPED');
+    if (big) big.classList.toggle('arc-lost', !beat);
+    _arcSet('arcBossLine', 'Yesterday ' + a.where + ' listed ' + b.yesterday + ' of ' + b.goal + '.' + (beat ? ' +25 to everyone who listed.' : ' Get it today.'));
+    _arcSet('arcWeek', b.week.map(d => '<div class="arc-round ' + (d[1] == null ? 'arc-n' : (d[1] >= b.goal ? 'arc-w' : 'arc-l')) + '">' + d[0] + '<b>' + (d[1] == null ? '–' : d[1]) + '</b></div>').join(''), true);
+    _arcSet('arcBossWins', b.wins + ' WINS THIS MONTH');
+
+    // Last round, as a paper ticket.
     const total = a.last.lines.reduce((s, l) => s + l[1], 0);
-    document.getElementById('arcLast').innerHTML =
-        '<div class="arc-row"><span class="arc-h">LAST ROUND · ' + esc(a.last.day) + '</span><b class="arc-px arc-plus" style="font-size:16px">' + _arcSgn(total) + '</b></div>'
+    _arcSet('arcLast',
+        '<div class="arc-stub-top"><span class="arc-px">SPEEKSNET ARCADE · LAST ROUND</span><span class="arc-tiny">' + esc(a.last.day) + '</span></div>'
+        + '<div class="arc-stub-big">' + _arcSgn(total) + '</div>'
         + a.last.lines.map(l => '<div class="arc-rl"><span>' + esc(l[0]) + '</span><b class="' + (l[1] < 0 ? 'arc-minus' : 'arc-plus') + '">' + _arcSgn(l[1]) + '</b></div>').join('')
         + '<div class="arc-rl arc-total"><span>Added to your score</span><b class="arc-plus">' + _arcSgn(total) + '</b></div>'
-        + '<p class="arc-tiny" style="margin-top:auto">From your store\'s Day End report, your POS login.</p>';
+        + '<p class="arc-stub-foot">From your store\'s Day End report, your POS login.</p>', true);
 
-    const b = a.boss, beat = b.yesterday >= b.goal;
-    document.getElementById('arcBossGoal').textContent = b.goal + ' listings';
-    document.getElementById('arcBossLine').textContent = 'Yesterday ' + a.where + ' listed ' + b.yesterday + '. ' + (beat ? 'Boss down.' : 'The boss got away.') + ' ' + b.wins + ' wins this month.';
-    document.getElementById('arcBossWin').textContent = beat ? 'WIN' : '';
-    document.getElementById('arcWeek').innerHTML = b.week.map(d => '<div class="' + (d[1] == null ? '' : (d[1] >= b.goal ? 'arc-w' : 'arc-l')) + '">' + d[0] + '<br>' + (d[1] == null ? '–' : d[1]) + '</div>').join('');
+    // The trophy shelf: what was earned in the period that just closed. Dailies
+    // every day (yesterday's: Day End lands the next morning). On a Monday, last
+    // week's weeklies join them; on the 1st, last month's; on Jan 1, last year's
+    // (Ethan, 11-18). Rarer rows sit on top. Earned = lit; earned before = faded;
+    // never = grey; the bubble is the lifetime count. No lifetime totals here:
+    // they live on the Achievements screen. ?arcday=YYYY-MM-DD previews a date.
+    let today = new Date();
+    try { const q = new URLSearchParams(location.search).get('arcday'); if (q && /^\d{4}-\d{2}-\d{2}$/.test(q)) today = new Date(q + 'T12:00:00'); } catch (_) {}
+    const shelves = [];
+    if (today.getMonth() === 0 && today.getDate() === 1) shelves.push(['y', 'Last Year']);
+    if (today.getDate() === 1) shelves.push(['m', 'Last Month']);
+    if (today.getDay() === 1) shelves.push(['w', 'Last Week']);
+    shelves.push(['d', 'Yesterday']);
+    const shelfLine = s => {
+        const list = ARC_ACH.filter(x => x.c === s[0]), got = (a.achLast[s[0]] || []).filter(id => list.some(x => x.id === id)).length;
+        return s[1] + ' · ' + got + ' of ' + list.length + ' Earned';
+    };
+    _arcSet('arcTroHead', shelves.length > 1 ? 'NEW TROPHIES' : 'YESTERDAY\'S TROPHIES');
+    _arcSet('arcTrophies', shelves.map((s, i) => {
+        const list = ARC_ACH.filter(x => x.c === s[0]), won = a.achLast[s[0]] || [];
+        return '<div class="arc-trogroup"><div class="arc-badgerow" style="grid-template-columns:repeat(' + Math.max(7, list.length) + ',minmax(0,1fr))">' + list.map(x => {
+            const n = a.ach[x.id] || 0, got = won.indexOf(x.id) >= 0;
+            return '<div class="arc-badgecell' + (got ? ' arc-got' : '') + '">' + _arcBadgeWrap(x, n, { lit: got, dim: !got }) + '<span>' + esc(x.n) + '</span></div>';
+        }).join('') + '</div>'
+            // The last row's line sits bottom-left of the shelf, beside the button.
+            + (i < shelves.length - 1 ? '<span class="arc-tiny arc-troline">' + esc(shelfLine(s)) + '</span>' : '') + '</div>';
+    }).join(''), true);
+    _arcSet('arcTroLife', shelfLine(shelves[shelves.length - 1]));
+    _arcRenderAch();
 
-    const got = a.trophies.filter(t => t[2]).length;
-    document.getElementById('arcTroHead').textContent = 'TROPHIES · ' + got + ' OF 12';
-    document.getElementById('arcTrophies').innerHTML = a.trophies.map(t => '<div class="arc-tro' + (t[2] ? '' : ' arc-off') + '"><div class="arc-t">' + esc(t[0]) + '</div>' + esc(t[1]) + '</div>').join('');
-
-    document.getElementById('arcComboN').textContent = a.combo + (a.combo === 1 ? ' day' : ' days');
-    document.getElementById('arcFlames').innerHTML = [0, 1, 2, 3, 4].map(i => '<span' + (i < a.combo ? '' : ' class="arc-off"') + '></span>').join('');
-    document.getElementById('arcFlames').setAttribute('aria-label', a.combo + ' of 5');
-
-    const ord = ['1ST', '2ND', '3RD', '4TH', '5TH', '6TH', '7TH', '8TH'];
-    const rows = (list, mini) => list.map((r, i) => '<div class="arc-hsr' + (r[3] ? ' arc-me' : '') + (mini ? ' arc-mini' : '') + '"><span class="arc-p">' + ord[i] + '</span><span><span class="arc-nm">' + esc(r[0]) + '</span>'
-        + (mini ? '' : '<span class="arc-lvl">' + esc(r[1]) + '</span>') + '</span><span class="arc-p arc-num">' + _arcFmt(r[2]) + '</span></div>').join('');
-    document.getElementById('arcMiniHead').textContent = a.where + ' HIGH SCORES';
-    document.getElementById('arcStoreHead').textContent = a.where + ' HIGH SCORES';
-    document.getElementById('arcMonthLine').textContent = a.month + ' · resets on the 1st';
-    document.getElementById('arcMini').innerHTML = rows(a.board, true);
-    document.getElementById('arcHsStore').innerHTML = rows(a.board);
-    document.getElementById('arcHsDistrict').innerHTML = rows(a.district);
-    document.getElementById('arcChamp').innerHTML = '<b style="font-size:18px">' + esc(a.champ[0]) + '</b> <span class="arc-tiny">· ' + esc(a.where) + ' · ' + esc(a.champ[1]) + ' · ' + _arcFmt(a.champ[2]) + ' points</span>';
+    // High Scores.
+    // Leaderboards (11-18 restyle): the top three get a gold / silver / bronze
+    // coin and a tinted row; every player shows their store; only your row says
+    // You. The store board draws each store's total as a bar against the leader.
+    const ord = ['1ST', '2ND', '3RD', '4TH', '5TH', '6TH', '7TH', '8TH', '9TH', '10TH', '11TH', '12TH'];
+    const rank = i => i < 3 ? '<span class="arc-medal arc-medal-' + (i + 1) + '">' + (i + 1) + '</span>' : '<span class="arc-lb-ord">' + ord[i] + '</span>';
+    const rowCls = (i, me) => 'arc-lb-row' + (i < 3 ? ' arc-lb-top arc-lb-' + (i + 1) : '') + (me ? ' arc-me' : '');
+    _arcSet('arcMonthLine', a.month + ' · Resets on the 1st');
+    _arcSet('arcHsStore', a.board.map((r, i) => '<div class="' + rowCls(i, r[3]) + '">' + rank(i)
+        + '<span class="arc-lb-who"><span class="arc-nm">' + esc(r[0]) + '</span><span class="arc-lb-store">' + esc(r[1]) + '</span>'
+        + (r[3] ? '<span class="arc-lb-you">You</span>' : '') + '</span>'
+        + '<span class="arc-lb-pts">' + _arcFmt(r[2]) + '</span></div>').join(''), true);
+    const lead = Math.max.apply(null, a.district.map(r => r[1])) || 1;
+    _arcSet('arcHsDistrict', a.district.map((r, i) => '<div class="' + rowCls(i, r[0] === a.where) + ' arc-lb-storerow">' + rank(i)
+        + '<span class="arc-lb-who arc-lb-stack"><span class="arc-nm">' + esc(r[0]) + (r[0] === a.where ? ' <span class="arc-lb-you">Your Store</span>' : '') + '</span>'
+        + '<span class="arc-lb-bar"><i style="width:' + Math.max(4, Math.round(r[1] / lead * 100)) + '%"></i></span></span>'
+        + '<span class="arc-lb-pts">' + _arcFmt(r[1]) + '</span></div>').join(''), true);
+    const chips = list => '<div class="arc-champ-chips">' + list.map(c => '<span>' + c + '</span>').join('') + '</div>';
+    _arcSet('arcChamp', '<b class="arc-champ-name">' + esc(a.champ[0].toUpperCase()) + '</b>'
+        + chips([esc(a.champ[1]), esc(a.champ[2]), _arcFmt(a.champ[3]) + ' Points']), true);
+    _arcSet('arcChampStore', '<b class="arc-champ-name">' + esc(a.champStore[0]) + '</b>'
+        + chips([esc(a.champStore[1]), _arcFmt(a.champStore[2]) + ' Points']), true);
 
     _arcRenderTickets();
     _arcRenderOp();
 }
 
+// The Achievements screen: totals and every badge with its count, grouped by
+// cadence. No filter (Ethan, 11-18: take it off).
+function _arcRenderAch() {
+    const a = _arc, esc = escapeHtml;
+    const count = id => a.ach[id] || 0;
+    const life = ARC_ACH.reduce((s, x) => s + count(x.id), 0);
+    const unlocked = ARC_ACH.filter(x => count(x.id) > 0).length;
+    const per = c => ARC_ACH.filter(x => x.c === c).reduce((s, x) => s + count(x.id), 0);
+    _arcSet('arcAchStats',
+        '<div><b class="arc-px">' + _arcFmt(life) + '</b><span>Trophies Earned</span></div>'
+        + '<div><b class="arc-px">' + unlocked + '<small>/' + ARC_ACH.length + '</small></b><span>Unlocked</span></div>'
+        + Object.keys(ARC_CAD).map(c => '<div><b class="arc-px" style="color:' + (c === 'l' ? 'var(--arc-brand-deep)' : ARC_CAD[c].col) + '">' + per(c) + '</b><span>' + ARC_CAD[c].label + '</span></div>').join(''), true);
+    const groups = Object.keys(ARC_CAD);
+    _arcSet('arcAchGrid', groups.map(c => {
+        const list = ARC_ACH.filter(x => x.c === c);
+        const got = list.filter(x => count(x.id) > 0).length;
+        return '<div class="arc-achgroup"><div class="arc-row"><span class="arc-px arc-dim">' + ARC_CAD[c].label.toUpperCase() + '</span>'
+            + '<span class="arc-tiny">' + got + ' of ' + list.length + ' Unlocked</span></div>'
+            + '<div class="arc-achcards">' + list.map(x => {
+                const n = count(x.id);
+                // Milestones are once ever: no count bubble and no "Earned once"
+                // (Ethan, 11-18); a locked one still says Not yet.
+                const once = c === 'l';
+                return '<div class="arc-achcard' + (n ? '' : ' arc-locked') + '">' + _arcBadgeWrap(x, n, { noCount: once })
+                    + '<div><b>' + esc(x.n) + '</b><p>' + esc(x.how) + '</p>'
+                    + (once && n ? '' : '<span class="arc-achtimes">' + (n ? (n === 1 ? 'Earned once' : 'Earned ' + _arcFmt(n) + ' times') : 'Not yet') + '</span>') + '</div></div>';
+            }).join('') + '</div></div>';
+    }).join(''), true);
+}
+
 function _arcRenderTickets() {
     const a = _arc, esc = escapeHtml;
-    document.getElementById('arcTix').textContent = _arcFmt(a.tickets);
-    document.getElementById('arcTixBig').textContent = _arcFmt(a.tickets) + ' TICKETS';
+    _arcSet('arcTix', _arcFmt(a.tickets));
+    _arcSet('arcTixBig', _arcFmt(a.tickets) + ' TICKETS');
     const save = a.prizes[a.saving];
-    document.getElementById('arcSaveName').innerHTML = '<b>' + esc(save.n) + '</b><br><span class="arc-tiny">' + _arcFmt(save.c) + ' tickets · Level ' + save.lv + '</span>';
-    document.getElementById('arcSaveFill').style.width = Math.max(2, Math.min(100, a.tickets / save.c * 100)) + '%';
-    const cheapest = a.prizes.filter(p => p.lv <= a.level && p.c > a.tickets).sort((x, y) => x.c - y.c)[0];
-    document.getElementById('arcDoorLine').textContent = _arcFmt(a.tickets) + ' tickets.' + (cheapest ? ' ' + _arcFmt(cheapest.c - a.tickets) + ' away from ' + cheapest.n + '.' : '');
-    document.getElementById('arcDoorSave').textContent = 'Saving up for ' + save.n + ': ' + Math.round(a.tickets / save.c * 100) + '% there.';
-    document.getElementById('arcShelf').innerHTML = a.prizes.map((p, i) => {
+    _arcSet('arcSaveName', '<b>' + esc(save.n) + '</b> <span class="arc-tiny">· ' + _arcFmt(save.c) + ' tickets · Level ' + save.lv + ' · ' + Math.round(a.tickets / save.c * 100) + '% there</span>', true);
+    const sf = document.getElementById('arcSaveFill');
+    if (sf) sf.style.width = Math.max(2, Math.min(100, a.tickets / save.c * 100)) + '%';
+    _arcSet('arcShelf', a.prizes.map((p, i) => {
         const locked = p.lv > a.level, poor = p.c > a.tickets;
-        const label = locked ? 'Unlocks at Level ' + p.lv : (poor ? _arcFmt(p.c - a.tickets) + ' more tickets' : 'Get it');
+        const label = locked ? 'Level ' + p.lv : (poor ? _arcFmt(p.c - a.tickets) + ' more' : 'Get it');
         return '<div class="arc-prize"><div class="arc-pic" style="background:' + p.col + '">' + esc(p.g) + '</div><b>' + esc(p.n) + '</b><span class="arc-cost">' + _arcFmt(p.c) + ' TIX</span>'
             + '<span class="arc-tiny">' + (p.lv > 1 ? 'Level ' + p.lv + '+' : 'Any level') + '</span>'
             + '<button class="arc-grab" type="button" onclick="arcGrab(' + i + ')"' + (locked || poor ? ' disabled' : '') + '>' + label + '</button></div>';
-    }).join('');
+    }).join(''), true);
 }
 
 function _arcRenderOp() {
@@ -74547,28 +74772,38 @@ function _arcRenderOp() {
     document.getElementById('arcBudgetFill').style.width = Math.round(a.budget[0] / a.budget[1] * 100) + '%';
 }
 
+// Two tabs since 2026-11-18: Play and High Scores (plus Operator behind its
+// key). The Prize Counter and How To Play are sections of Play now, so an old
+// #prizes / #how link lands on Play scrolled to its section.
+const ARC_SECTIONS = { prizes: 'arcCounter', how: 'arcHow' };
 function arcGo(v) {
     if (!_arc) return;
+    const section = ARC_SECTIONS[v];
+    if (section) v = 'play';
+    if (['play', 'scores', 'trophies', 'op'].indexOf(v) < 0) v = 'play';
     if (v === 'op' && !_arcSees(ARC_OP_FEATURE)) v = 'play';
     document.querySelectorAll('[data-arc-v]').forEach(s => { s.hidden = s.getAttribute('data-arc-v') !== v; });
-    document.querySelectorAll('[data-arc-go]').forEach(b => b.setAttribute('aria-current', b.getAttribute('data-arc-go') === v ? 'true' : 'false'));
+    document.querySelectorAll('[data-arc-go]').forEach(b => b.setAttribute('aria-current', b.getAttribute('data-arc-go') === (v === 'trophies' ? 'play' : v) ? 'true' : 'false'));
     const op = v === 'op';
-    document.body.classList.toggle('arc-inroom', v === 'prizes');
     document.getElementById('arcTabs').hidden = op;
     const key = document.getElementById('arcOpKey');
     key.setAttribute('aria-pressed', op ? 'true' : 'false');
     key.textContent = op ? 'Exit operator' : 'Operator';
     document.getElementById('arcLogo').textContent = op ? 'OPERATOR MODE' : 'SPEEKSNET ARCADE';
     try { history.replaceState(null, '', '#' + v); } catch (_) { /* the hash just stays */ }
-    window.scrollTo(0, 0);
+    const target = section && document.getElementById(section);
+    if (target) target.scrollIntoView({ block: 'start' }); else window.scrollTo(0, 0);
     if (v === 'play') {
-        // The bars fill on arrival: the one moment of motion on the page.
-        const fill = document.getElementById('arcXpFill'), hp = document.getElementById('arcHp');
-        fill.style.width = '0%'; hp.style.width = '100%';
-        setTimeout(() => {
-            fill.style.width = _arc.level ? _arc.levelPct + '%' : '0%';
-            hp.style.width = Math.max(0, Math.round((1 - _arc.boss.yesterday / _arc.boss.goal) * 100)) + '%';
-        }, 120);
+        // The one moment of motion on arrival: the XP bar fills, and the boss
+        // loses its health one segment at a time, the way a game shows a hit.
+        const fill = document.getElementById('arcXpFill');
+        if (fill) { fill.style.width = '0%'; setTimeout(() => { fill.style.width = (_arc.levelPct || 0) + '%'; }, 120); }
+        const segs = Array.from(document.querySelectorAll('#arcHpSegs span'));
+        const left = Math.max(0, Math.round((1 - _arc.boss.yesterday / _arc.boss.goal) * segs.length));
+        segs.forEach(s => s.classList.remove('arc-gone'));
+        const knock = segs.slice(left).reverse();
+        if (_arcStill()) knock.forEach(s => s.classList.add('arc-gone'));
+        else knock.forEach((s, i) => setTimeout(() => s.classList.add('arc-gone'), 350 + i * 45));
     }
 }
 function arcOperator() {
