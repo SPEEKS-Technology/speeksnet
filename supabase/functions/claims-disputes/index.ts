@@ -1808,6 +1808,56 @@ function hushOf(type: string, it: any, s: StateOut, ctx: any): string | null {
   return null;
 }
 
+// DUE TODAY, OR JUST OPEN (Ethan, 2026-11-25: "do a better job of organizing
+// what's actually due today and what's just open ... red and amber", and both
+// mails should show "what is truly due today ... instead of a day before or
+// things that are just open"). ONE answer per item, worked out here so the tab,
+// the badges, the morning mail and both 4pm mails cannot disagree:
+//   'today' (red)  its deadline is today or already past, or it has no
+//                  deadline and is ours every day until handled;
+//   'open'  (amber) needs us, but its deadline is a later day;
+//   null           nothing for a person to do (not a NEED state, or hushed).
+// The rules Ethan picked the same day:
+//   - Truly today: the Oct 2 "deadline today OR tomorrow" rule is gone, except
+//     for a card authorization, which usually runs out mid-morning (OVL
+//     #KS01-15083 at 11:04 AM) — that one still turns red the day before.
+//   - Returns go by eBay's own deadline, not "due the moment they appear".
+//   - A refunded INR (claim / call eBay / restock / find it), anything the DM
+//     sent back, and anything marked resolved that isn't done stay due every day.
+//   - A check-in that has come due (mismatches, expired cards, cases with no eBay
+//     date) is today's job: it is the tool's own deadline, and checking it in
+//     takes it off for the timeframe.
+// `due_day` is the date the rule went by, so the mail prints and sorts by it.
+const REFUND_ROUTE_NOTES = ["delivered_after_refund", "returned_to_us", "never_scanned"];
+// eBay deadlines are END OF DAY PACIFIC, stored as 06:59:59Z / 07:00:00Z the next
+// morning. Read in Chicago they land a day late, so eBay's day is the Pacific date
+// one second before (the same thing the card's _holdEbayDay does).
+const ebayDay = (iso: string | null | undefined) => {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return "";
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date(t - 1000));
+};
+function urgencyOf(type: string, it: any, s: StateOut, hush: string | null, ctx: any): { urgency: "today" | "open" | null; due_day: string | null } {
+  if (!NEED_STATES.includes(s.state) || hush) return { urgency: null, due_day: null };
+  // A return waiting on the buyer is 'due' to the server (every open return is,
+  // after day 1) but nobody here can move it — listed, never coloured or counted
+  // (the card's _holdReturnNeedsUs; the mail only counts them).
+  if (type === "ebay_case" && it.kind === "return" && !returnActNow(it)) return { urgency: null, due_day: null };
+  const today = ctx.today;
+  const every = { urgency: "today" as const, due_day: today };
+  if (s.state === "needs_claim" || REFUND_ROUTE_NOTES.includes(s.note || "")) return every;
+  if (s.dm && (s.dm.status === "denied" || s.dm.kind === "not_done")) return every;
+  const by = (day: string, lead = 0) => day
+    ? { urgency: (day <= addDays(today, lead) ? "today" : "open") as "today" | "open", due_day: day }
+    : every;
+  if (type === "payment" && it.capturable) return by(chicagoDay(it.auth_expires_at), 1);
+  if (type === "ebay_case" && it.respond_by) return by(ebayDay(it.respond_by));
+  if (type === "dispute" && it.respond_by) return by(it.source === "ebay" ? ebayDay(it.respond_by) : chicagoDay(it.respond_by));
+  return by(s.due_on && s.due_on > today ? s.due_on : today);
+}
+
 // What the card, the DM list and the emails need to know about the DM's part.
 function dmOf(review: any, pending: boolean, why: string, kind: FactKind | null = null) {
   return {
@@ -2180,6 +2230,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     const review = reviewBy[`${type}|${key}`] || (it.return ? reviewBy[`${type}|${it.return.case_key}`] : null)
       || (inq ? reviewBy[`${type}|${inq}`] : null) || null;
     const s = stateOf(type, it, review, ctx);
+    const hush = hushOf(type, it, s, ctx);
     const claim = ctx.claimFor(type, it);
     const history = [...(eventsBy[`${type}|${key}`] || []), ...(inq ? eventsBy[`${type}|${inq}`] || [] : [])]
       .sort((a: any, b: any) => String(b.at).localeCompare(String(a.at)));
@@ -2206,7 +2257,9 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
              // The reply window has shut — nothing anyone presses brings it back.
              missed_window: s.note === "missed_window",
              // Listed, not notified (hushOf).
-             hush: hushOf(type, it, s, ctx),
+             hush,
+             // Due today (red) or just open (amber) — see urgencyOf.
+             ...urgencyOf(type, it, s, hush, ctx),
              // Someone called this resolved and the site still disagrees. The
              // date is when they said so, which is what the escalation counts
              // from — exposed rather than re-derived, so the email and the DM
@@ -2304,8 +2357,16 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       // A manager's own resolution clears their card (Ethan, 2026-10-08) —
       // unless the DM has since sent it back.
       if (x.review?.status === "resolved" && !sentBack && !notDone) continue;
+      // DUE TODAY ONLY (Ethan, 2026-11-25: "it shouldn't be due tomorrow. It
+      // should only be stuff due today. And if there is nothing due today,
+      // nothing should show"). The same urgencyOf answer the tab and mails use;
+      // the 11-06 "today or tomorrow" window is gone. A card authorization is
+      // still 'today' the day before it runs out (urgencyOf).
+      if (x.urgency !== "today") continue;
+      // urgencyOf's day: eBay's own date for an eBay deadline. chicagoDay of
+      // respond_by printed it a day late ("due tomorrow" on eBay's last day).
       const dueAt = type === "payment" ? (x.capturable ? x.auth_expires_at : null) : x.respond_by;
-      const due = dueAt ? chicagoDay(dueAt) : null;
+      const due = x.due_day || (dueAt ? chicagoDay(dueAt) : null);
       dueAlerts.push({
         type, key, store_code: x.store_code, state: x.state, state_note: x.state_note,
         missed_window: x.missed_window, nudged_on: on, due,

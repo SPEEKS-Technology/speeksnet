@@ -3,8 +3,9 @@
 // FOUR SENDS, ONE FUNCTION, ?kind= picks which. Since 0119 every one of them
 // carries Payments too — Shopify orders we have not been paid for — and a card
 // on its last chargeable day is "due today" for both 4pm mails, the same as a
-// dispute (Ethan, 2026-09-28). Since 2026-10-02 "due today" means the deadline
-// is today OR TOMORROW — see dueSoon.
+// dispute (Ethan, 2026-09-28). Since 2026-11-25 "due today" is claims-disputes'
+// own `urgency` field (urgencyOf there) — truly today, card authorizations a day
+// early — see DUE TODAY below.
 //
 //   manager_daily   08:35 CT  to each store's manager. Everything of theirs that
 //                             needs a person, soonest deadline first.
@@ -64,7 +65,7 @@ const SHOP_HANDLE: Record<string, string> = {
 // --- the house look ---------------------------------------------------------
 // Lifted from refund-mismatch, which this replaces. Every SPEEKS report looks
 // like this; a mail that invents its own palette reads as somebody else's.
-const C = { ink: "#12241c", faint: "#5b7166", line: "#dde7e1", bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1" };
+const C = { ink: "#12241c", faint: "#5b7166", line: "#dde7e1", bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1", amberEdge: "#d99a1e" };
 const FONT = "-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
 const esc = (s: unknown) =>
@@ -156,6 +157,9 @@ type Row = {
   // 2026-11-07: a return that is back with us or waiting on our label — today's
   // job, itemised (claims-disputes returnActNow).
   actNow?: boolean;
+  // 2026-11-25: claims-disputes urgencyOf — 'today' (red), 'open' (amber), or
+  // null. The mail never works this out for itself.
+  urgency?: "today" | "open" | null;
 };
 
 // The states that mean a person still has to do something. Identical to the
@@ -442,6 +446,10 @@ function allRows(d: any): Row[] {
   const today = d.today || chicagoDay(new Date());
   const tag = (fn: (x: any) => Row) => (x: any): Row => {
     const r = fn(x);
+    r.urgency = x.urgency ?? null;
+    // The date urgencyOf went by — eBay's own day for an eBay deadline (the
+    // old chicagoDay printed it a day late), eBay's date for a return.
+    if (x.due_day) r.due = x.due_day;
     if (x.dm?.status === "denied" && NEED.includes(r.state)) {
       r.sentBack = { by: x.dm.by || null, note: x.dm.note || null };
       if (!r.due || r.due > addDaysIso(today, 1)) r.due = today;
@@ -469,34 +477,22 @@ function allRows(d: any): Row[] {
 // to be called due.
 const mailable = (r: Row, today: string) => NEED.includes(r.state) && !r.hush && !(r.quiet && r.quiet > addDaysIso(today, 1));
 
-// DUE TODAY MEANS BY TOMORROW (Ethan, 2026-10-02: "something due tomorrow we
-// would get alerted as due today today, so keep everything the same just move it
-// a day forward"). What prompted it: OVL #KS01-15083's card ran out at 11:04 AM
-// on Oct 1. It was "due today" on the 8:20 mails, but by 4pm it was already
-// missed, so neither 4pm alert said a word about it. The next morning it turned
-// up as "worth a conversation", which looked like a different list from the one
-// the 4pm alert had been about. Card deadlines fall at whatever time the order
-// was placed, so most are gone before 4pm on their own day. Calling them due
-// the day BEFORE gives each one a full day of morning mail and a 4pm alert while
-// it can still be charged. An item stays "due today" on its real day as well,
-// until it is dealt with or missed. The real date is still printed on the item.
-const dueSoon = (r: Row, today: string) =>
-  !!r.due && !r.missed && r.due >= today && r.due <= addDaysIso(today, 1);
-
-// RETURNS AT 4PM GO BY EBAY'S DATE (Ethan, 2026-11-21: "for anything returns, I
-// don't need send the label to show up on the 4pm one and I only need returns to
-// show up on the actual day they are due by eBay not by our due date which is
-// the moment they can do it"). An act-now return is "due" in our sense from the
-// moment it can be handled, which keeps it on every morning mail — right for the
-// morning, too noisy for the 4pm alert. So at 4pm:
-//   - "send the label" returns never appear;
-//   - a delivered return (refund the buyer) appears only on eBay's own deadline
-//     day (respondBy, the Pacific date — see pacificDay), not a day early.
-// Everything else keeps dueSoon. The morning mail is unchanged.
-const dueAt4pm = (r: Row, today: string) => {
-  if (r.actNow) return r.note === "return_delivered" && !!r.respondBy && r.respondBy === today;
-  return dueSoon(r, today);
-};
+// DUE TODAY (Ethan, 2026-11-25: both mails should show "what is truly due today
+// ... instead of a day before or things that are just open", and returns go "as
+// when they're due"). claims-disputes decides it (urgencyOf → `urgency`), so the
+// tab's red section, its badges and these mails are one list:
+//   - the morning mail splits into DUE TODAY (red) and OPEN (amber, with dates);
+//   - both 4pm mails carry only 'today' items that were on that morning's mail.
+// What it replaced, so nobody puts it back by accident:
+//   - dueSoon, "deadline today OR tomorrow" (2026-10-02). Kept for card
+//     authorizations only — they run out mid-morning (OVL #KS01-15083 at
+//     11:04 AM, gone before that day's 4pm) — inside urgencyOf, not here.
+//   - dueAt4pm's return rule (2026-11-21): a return is no longer due from the
+//     moment it appears, so the 4pm needed a special case to hold it back to
+//     eBay's day. Now its due day IS eBay's day, morning and 4pm alike — and
+//     that includes "send the label" returns on their eBay deadline (Ethan's
+//     11-25 answer covered both mails; the 11-21 rule had left labels off 4pm).
+const dueToday = (r: Row) => r.urgency === "today";
 
 // ONE BUCKET PER ROW (Ethan, 2026-11-20: "add returns and anything related to
 // returns as one column so the math on the emails to me and manager make
@@ -574,27 +570,35 @@ const sectionRow = (label: string, color = C.faint) =>
      <div style="font-size:11px;color:${color};letter-spacing:.04em;text-transform:uppercase;font-weight:700;">${esc(label)}</div>
    </td></tr>`;
 
-function itemRow(r: Row, today: string) {
+function itemRow(r: Row, today: string, isNew = false) {
   const late = r.due && r.due < today;
   const todayDue = r.due && r.due === today;
-  // Due a day early (dueSoon), but the real deadline is still what is printed.
+  // A card authorization is red the day before it runs out (urgencyOf), but the
+  // real date is still what is printed.
   const tomorrowDue = r.due && r.due === addDaysIso(today, 1);
   // A refunded INR, or anything the DM sent back, is due EVERY day until it is
   // dealt with — there is no deadline closing, so "closes today" would lie.
-  const everyDay = r.state === "needs_claim" || REFUNDED_INR_NOTES.includes(r.note || "") || !!r.sentBack || !!r.notDone || !!r.actNow;
+  const everyDay = r.state === "needs_claim" || REFUNDED_INR_NOTES.includes(r.note || "") || !!r.sentBack || !!r.notDone;
+  const red = (t: string) => `<span style="color:${C.bad};font-weight:700;"> · ${t}</span>`;
+  const verb = r.dueVerb || (r.note === "return_delivered" ? "refund by" : r.note === "return_label" ? "send the label by" : "due");
   const dueTxt = everyDay && !r.missed
-    ? `<span style="color:${C.bad};font-weight:700;"> · due today${r.sentBack ? " — sent back by the DM" : r.notDone ? " — marked resolved, not done" : ""}</span>`
+    ? red(`due today${r.sentBack ? " — sent back by the DM" : r.notDone ? " — marked resolved, not done" : ""}`)
     : r.missed
-    ?(r.missedText === "" ? "" : `<span style="color:${C.bad};font-weight:700;"> · ${esc(r.missedText || "reply window shut")}</span>`)
-    : todayDue ? `<span style="color:${C.bad};font-weight:700;"> · closes today</span>`
-    : tomorrowDue ? `<span style="color:${C.bad};font-weight:700;"> · due today — closes tomorrow</span>`
-    : late ? `<span style="color:${C.bad};font-weight:700;"> · was due ${esc(prettyDay(r.due))}</span>`
-    : r.due ? `<span style="color:${C.warn};font-weight:700;"> · ${esc(r.dueVerb || "answer by")} ${esc(prettyDay(r.due))}</span>` : "";
+    ?(r.missedText === "" ? "" : red(esc(r.missedText || "reply window shut")))
+    : !r.due ? (dueToday(r) ? red("due today") : "")
+    : todayDue ? red("due today")
+    : late ? red(`overdue — was due ${esc(prettyDay(r.due))}`)
+    : dueToday(r) && tomorrowDue ? red(`due today — the card runs out tomorrow`)
+    : `<span style="color:${C.warn};font-weight:700;"> · ${esc(verb)} ${esc(prettyDay(r.due))}</span>`;
   const facts = r.facts.map(esc).join(" &nbsp;·&nbsp; ");
   const note = noteLine(r);
   const amt = r.amount == null ? "" : `<b>${money(r.amount)}</b>`;
-  return `<tr><td style="padding:14px;border-top:1px solid ${C.line};">
-    <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">${esc(r.kindLabel)}${dueTxt}</div>
+  // Red edge = due today, amber = open with a later date (Ethan, 2026-11-25).
+  // A border, not a tint, so it survives Outlook's dark-mode inversion (see shell).
+  const edge = dueToday(r) ? C.bad : C.amberEdge;
+  const fresh = isNew ? `<span style="color:#1c6b47;font-weight:800;">New · </span>` : "";
+  return `<tr><td style="padding:14px;border-top:1px solid ${C.line};border-left:4px solid ${edge};">
+    <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">${fresh}${esc(r.kindLabel)}${dueTxt}</div>
     <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(r.title)}</div>
     <div style="font-size:13px;color:${C.ink};line-height:1.6;">${[amt, facts].filter(Boolean).join(" &nbsp;·&nbsp; ")}
       ${note ? `<br><span style="color:${C.faint};">${esc(note)}</span>` : ""}
@@ -623,9 +627,9 @@ function noteBase(r: Row): string {
     return "Fulfil the order to charge the card, or cancel it if it isn't going.";
   }
   if (r.note === "return_delivered")
-    return `The return is back with us. Check it over and issue the refund today${r.respondBy ? ` — eBay's deadline is ${prettyDay(r.respondBy)}, but don't wait for it` : ""}.`;
+    return `The return is back with us. Check it over and issue the refund${r.due ? ` by ${prettyDay(r.due)}, eBay's deadline` : ""}.`;
   if (r.note === "return_label")
-    return `The buyer can't send it back until we provide a label. Send it today${r.respondBy ? ` — eBay's deadline is ${prettyDay(r.respondBy)}` : ""}.`;
+    return `The buyer can't send it back until we provide a label. Send it${r.due ? ` by ${prettyDay(r.due)}, eBay's deadline` : ""}.`;
   if (r.note === "delivered_after_refund")
     return `It turned up after we refunded the buyer. The carrier does not owe this one — call eBay, then record what they did.${r.paybackBy ? ` eBay pays it back only until ${prettyDay(r.paybackBy)}.` : ""}`;
   if (r.note === "returned_to_us")
@@ -645,16 +649,19 @@ function noteBase(r: Row): string {
 // 1. Manager daily
 // ---------------------------------------------------------------------------
 function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { returns: number; claims: number; quiet: number; waiting?: number }, today: string) {
+  // DUE TODAY, THEN OPEN (Ethan, 2026-11-25). Two lists, not "new" vs "still
+  // waiting": what has to be done today is the question a manager opens this
+  // with. New-since-yesterday is a tag on the item instead of its own section.
   const list = rows.slice().sort(bySoonest);
-  const fresh = list.filter((r) => !seen.has(`${r.type}|${r.key}`));
-  const rest = list.filter((r) => seen.has(`${r.type}|${r.key}`));
-  const closing = list.filter((r) => dueSoon(r, today)).length;
+  const isNew = (r: Row) => !seen.has(`${r.type}|${r.key}`);
+  const now = list.filter(dueToday);
+  const later = list.filter((r) => !dueToday(r));
   const total = list.reduce((s, r) => s + (r.amount || 0), 0);
 
   let body = `<tr><td style="padding:12px 14px;border-top:1px solid ${C.line};">
     <table role="presentation" width="100%"><tr>
-      <td style="font-size:12px;color:${C.faint};"><b style="color:${C.ink};font-size:19px;">${list.length}</b><br>need you</td>
-      <td style="font-size:12px;color:${C.faint};"><b style="color:${closing ? C.bad : C.ink};font-size:19px;">${closing}</b><br>due today</td>
+      <td style="font-size:12px;color:${C.faint};"><b style="color:${now.length ? C.bad : C.ink};font-size:19px;">${now.length}</b><br>due today</td>
+      <td style="font-size:12px;color:${C.faint};"><b style="color:${later.length ? C.warn : C.ink};font-size:19px;">${later.length}</b><br>open, due later</td>
       <td style="font-size:12px;color:${C.faint};text-align:right;"><b style="color:${C.ink};font-size:19px;">${money(total)}</b><br>at stake</td>
     </tr></table></td></tr>`;
   // What the "need you" number is made of — the same buckets as the DM's table,
@@ -662,16 +669,18 @@ function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { r
   if (list.length) {
     const n = bucketCounts(list);
     const parts = BUCKETS.filter((b) => n[b]).map((b) => `${n[b]} ${BUCKET_WORD[b][n[b] === 1 ? 0 : 1]}`);
-    body += `<tr><td style="padding:0 14px 12px;font-size:12.5px;color:${C.faint};line-height:1.6;">${esc(parts.join(" · "))}</td></tr>`;
+    body += `<tr><td style="padding:0 14px 12px;font-size:12.5px;color:${C.faint};line-height:1.6;">${list.length} in all: ${esc(parts.join(" · "))}</td></tr>`;
   }
 
-  if (fresh.length) {
-    body += sectionRow("New since yesterday");
-    body += fresh.map((r) => itemRow(r, today)).join("");
+  if (now.length) {
+    body += sectionRow(`Due today — ${now.length}`, C.bad);
+    body += now.map((r) => itemRow(r, today, isNew(r))).join("");
+  } else if (list.length) {
+    body += `<tr><td style="padding:12px 14px;border-top:1px solid ${C.line};font-size:13px;color:${C.ink};">Nothing is due today.</td></tr>`;
   }
-  if (rest.length) {
-    body += sectionRow("Still waiting on you — soonest first", C.bad);
-    body += rest.map((r) => itemRow(r, today)).join("");
+  if (later.length) {
+    body += sectionRow(`Open — due later, soonest first — ${later.length}`, C.warn);
+    body += later.map((r) => itemRow(r, today, isNew(r))).join("");
   }
 
   const quiet: string[] = [];
@@ -691,7 +700,7 @@ function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { r
 
   return shell(
     `${STORE_NAME[store] || store} — money we're still holding`,
-    `Everything eBay or Shopify is still waiting on us for, soonest deadline first. Each one stays on this email every morning until the site itself shows it is dealt with.`,
+    `What is due today first, in red, then everything else still open, in amber, with the day it is due. Each one stays on this email every morning until the site itself shows it is dealt with.`,
     body,
     `Open the Claims &amp; Disputes tool at <a href="${TOOL_URL}" style="color:#1c6b47;">speeksnet.com</a>.<br>Marking something resolved is checked against eBay and Shopify — if they don't back it up, it goes to the DM to confirm.`,
   );
@@ -709,7 +718,7 @@ function managerNudge(store: string, rows: Row[], today: string) {
     // card that runs out today lands here too, and there is no reply to it.
     `${esc(STORE_NAME[store] || store)}. ${rows.length === 1 ? "This was" : "These were"} on your email this morning and ${rows.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when something closes today or tomorrow and nothing has changed since the morning email. Returns are only listed on eBay's own deadline day.<br>Answer it — or charge or cancel the order — and this stops. The next read of the site clears it by itself.`,
+    `Sent at 4:00 PM only when something is due today and nothing has changed since the morning email. Returns are listed on eBay's own deadline day; a card authorization the day before it runs out.<br>Answer it — or charge or cancel the order — and this stops. The next read of the site clears it by itself.`,
     true,
   );
 }
@@ -843,7 +852,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
     "What is still sitting with the managers",
     "Counts are items still needing a person to do something. Anything already answered or settled is left out.",
     body,
-    `Disp = disputes · INR = item not received · Case = eBay cases · Ret = returns to handle today (back with us, needs our label, or sent back by the carrier) · Mism = refund mismatches · Pay = unpaid orders · Claims = claims over 7 days · Due = deadline today or tomorrow.<br>Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
+    `Disp = disputes · INR = item not received · Case = eBay cases · Ret = returns that need us (back with us, needs our label, or sent back by the carrier) · Mism = refund mismatches · Pay = unpaid orders · Claims = claims over 7 days · Due = due today (a card authorization the day before it runs out).<br>Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
   );
 }
 
@@ -860,10 +869,10 @@ function dmDueToday(byStore: Record<string, Row[]>, today: string) {
   }
   return shell(
     `${money(total)} due today and still unanswered`,
-    `${stores.length === 1 ? "One store has" : `${stores.length} stores have`} something whose deadline is today or tomorrow. ${
+    `${stores.length === 1 ? "One store has" : `${stores.length} stores have`} something due today. ${
       stores.length === 1 ? "It was" : "They were"} on this morning's email and ${stores.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when a deadline falls today or tomorrow and the store has not dealt with it. Returns are only listed on eBay's own deadline day, and label requests are left off.<br>Nothing here can be cleared from this email — the store has to answer it, or charge or cancel the order, on the site.`,
+    `Sent at 4:00 PM only when something is due today and the store has not dealt with it. Returns are listed on eBay's own deadline day; a card authorization the day before it runs out.<br>Nothing here can be cleared from this email — the store has to answer it, or charge or cancel the order, on the site.`,
     true,
   );
 }
@@ -1109,7 +1118,8 @@ Deno.serve(async (req: Request) => {
         };
         const html = withWarning(managerDaily(s, list, seen, extras, today), storeWarn(s));
         previews.push(html);
-        const subject = `Claims & Disputes — ${STORE_NAME[s] || s}: ${list.length} need${list.length === 1 ? "s" : ""} you`;
+        const nDue = list.filter(dueToday).length;
+        const subject = `Claims & Disputes — ${STORE_NAME[s] || s}: ${nDue} due today, ${list.length - nDue} open`;
         const to = await listFor(`claims_disputes_${s}`);
         if (!to.length) { sent.push({ store: s, skipped: "no recipients" }); continue; }
         if (dry) { sent.push({ store: s, to, subject, items: list.length, bytes: html.length }); continue; }
@@ -1128,7 +1138,7 @@ Deno.serve(async (req: Request) => {
     if (kind === "manager_nudge" || kind === "dm_due_today") {
       const dueNow: Record<string, Row[]> = {};
       for (const s of STORES) {
-        dueNow[s] = byStore[s].filter((r) => dueAt4pm(r, today) && mailedToday.has(`${r.type}|${r.key}`));
+        dueNow[s] = byStore[s].filter((r) => dueToday(r) && mailedToday.has(`${r.type}|${r.key}`));
       }
       if (kind === "manager_nudge") {
         for (const s of STORES) {
@@ -1187,7 +1197,7 @@ Deno.serve(async (req: Request) => {
         counts[s] = {
           ...bucketCounts(list),
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
-          dueToday: list.filter((r) => dueSoon(r, today)).length,
+          dueToday: list.filter(dueToday).length,
         };
       }
       // SHOWN ONCE, AND ONLY ONCE. There is nothing for the DM to clear on a

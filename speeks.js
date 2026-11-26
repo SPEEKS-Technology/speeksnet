@@ -38031,7 +38031,7 @@ function _holdState(type, it) { return it.state || 'due'; }
 // (--mg-red-*, --mg-amber-*), with --win-* for informational blue.
 const _HOLD_C = {
     red:   { bg: '#fcecec', fg: '#b23636', line: '#edc9c9', solid: 'var(--red-alert)' },
-    amber: { bg: '#fdf3e1', fg: '#b45309', line: '#f0d9a8' },
+    amber: { bg: '#fdf3e1', fg: '#b45309', line: '#f0d9a8', solid: '#d97706' },
     green: { bg: '#eef5e8', fg: '#4a7530', line: '#cfe0c0' },
     blue:  { bg: '#e1f0fe', fg: '#0078d4', line: '#cce5ff' },
     grey:  { bg: '#f1f5f9', fg: '#475569', line: '#e2e8f0' },
@@ -38163,6 +38163,11 @@ const _HOLD_KINDS = [
 ];
 
 const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
+// 'today' | 'open' | null — claims-disputes urgencyOf (2026-11-25). An answer
+// from a server older than that has no field: treat anything needing us as
+// today, which is how the tab read before.
+const _holdUrgency = it => it.urgency !== undefined ? it.urgency
+    : (_HOLD_VIEWS.due.states.includes(it.state) && !it.hush ? 'today' : null);
 // A refunded INR that is NOT a carrier claim, by what the carrier says (2026-11-03).
 const _HOLD_REFUND_NOTES = ['delivered_after_refund', 'returned_to_us', 'never_scanned'];
 // EBAY PAYS A DELIVERED REFUND BACK FOR 30 DAYS AFTER THE CASE CLOSES (Ethan,
@@ -38288,12 +38293,17 @@ function _holdNotLive(ctx) {
     });
 }
 
-// Items needing someone today, for the tab badges. A hushed item (replied to,
-// or past a reply window eBay won't reopen — claims-disputes hushOf, Ethan
-// 2026-11-07) stays listed but is not counted: it waits on eBay, not on us.
-function _holdDueCounts(ctx) {
+// Items needing someone, for the tab badges. A hushed item (replied to, or past
+// a reply window eBay won't reopen — claims-disputes hushOf, Ethan 2026-11-07)
+// stays listed but is not counted: it waits on eBay, not on us.
+// RED = DUE TODAY, AMBER = OPEN (Ethan, 2026-11-25). The server decides which
+// (claims-disputes urgencyOf → it.urgency), the same answer the emails use. A
+// badge counts what is due today in red; a tab with nothing due today but
+// something open shows that count in amber instead, so it never reads as empty.
+function _holdDueCounts(ctx, want) {
     const d = _holdData[ctx];
-    const need = x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush;
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush
+        && (!want || _holdUrgency(x) === want);
     if (!d) return { mismatch: 0, returns: 0, cases: 0, payments: 0 };
     const due = (d.cases || []).filter(need);
     return {
@@ -38306,14 +38316,18 @@ function _holdDueCounts(ctx) {
     };
 }
 function _holdPaintBadges(ctx) {
-    const n = _holdDueCounts(ctx);
+    const n = _holdDueCounts(ctx, 'today');
+    const o = _holdDueCounts(ctx, 'open');
     // 0164: the DM's To Confirm count — only the oversight view has that tab.
     const conf = ctx === 'ov' ? (((_holdData[ctx] || {}).dmQueue) || []).length : 0;
     [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments], ['confirm', conf]].forEach(([t, v]) => {
         const b = document.getElementById(`hold-${ctx}-badge-${t}`);
         if (!b) return;
-        b.textContent = v ? String(v) : '';
-        b.style.display = v ? 'inline-block' : 'none';
+        const show = v || open;
+        b.textContent = show ? String(show) : '';
+        b.style.display = show ? 'inline-block' : 'none';
+        b.style.background = v ? 'var(--red-alert)' : _HOLD_C.amber.solid;
+        b.title = v ? `${v} due today${open ? ` · ${open} open` : ''}` : open ? `Nothing due today · ${open} open` : '';
     });
 }
 
@@ -38555,8 +38569,11 @@ function _holdInView(ctx, items) {
 // from the top of a long tab.
 function _holdSectionHead(t, rows) {
     const list = rows || [];
-    const hot = list.some(x => _HOLD_VIEWS.due.states.includes(x.state) && !x.hush);
-    const bar = hot ? _HOLD_C.red.solid : '#94a3b8';
+    // Red when something in the group is due today, amber when only open (2026-11-25).
+    const hot = list.some(x => _holdUrgency(x) === 'today');
+    const warm = !hot && list.some(x => _holdUrgency(x) === 'open');
+    const bar = hot ? _HOLD_C.red.solid : warm ? _HOLD_C.amber.solid : '#94a3b8';
+    const pal = hot ? _HOLD_C.red : warm ? _HOLD_C.amber : { bg: '#e2e8f0', fg: '#475569' };
     const count = list.length
         ? `<span style="font-size:10.5px; font-weight:900; padding:2px 8px; border-radius:999px; background:${hot ? _HOLD_C.red.bg : '#e2e8f0'}; color:${hot ? _HOLD_C.red.fg : '#475569'};">${list.length}</span>`
         : '';
@@ -38726,7 +38743,23 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
             <summary style="cursor:pointer; font-size:12.5px; font-weight:800; color:#64748b; background:#f1f5f9; border-radius:8px; padding:9px 12px;">Resolved (${done.length})</summary>
             <div style="margin-top:10px;">${cards(done)}</div></details>`;
     }
-    return cards(rows);
+    // DUE TODAY, THEN OPEN (Ethan, 2026-11-25: "a better job of organizing what's
+    // actually due today and what's just open ... red and amber"). Same split as
+    // the morning email (claims-disputes urgencyOf). Open runs soonest due first.
+    // Hushed items and returns waiting on the buyer have no urgency and follow,
+    // in the order above, under a plain heading.
+    const today = rows.filter(it => _holdUrgency(it) === 'today');
+    const open = rows.filter(it => _holdUrgency(it) === 'open')
+        .sort((a, b) => String(a.due_day || '9999').localeCompare(String(b.due_day || '9999')));
+    const rest = rows.filter(it => !_holdUrgency(it));
+    if (!open.length && !rest.length) return cards(today);
+    const sub = (label, n, c) => `<div class="hold-urg-head" style="display:flex; align-items:center; gap:8px; margin:14px 0 8px; font-size:11.5px; font-weight:900; letter-spacing:.5px; text-transform:uppercase; color:${c.fg};">
+        <span style="width:9px; height:9px; border-radius:50%; background:${c.solid || c.fg}; flex:0 0 auto;"></span>${label}
+        <span style="font-size:10.5px; padding:1px 7px; border-radius:999px; background:${c.bg}; color:${c.fg};">${n}</span></div>`;
+    return (today.length ? sub('Due Today', today.length, _HOLD_C.red) + cards(today)
+            : `<div style="padding:8px 2px; font-size:12px; font-weight:700; color:#64748b;">Nothing due today.</div>`)
+        + (open.length ? sub('Open — Due Later', open.length, _HOLD_C.amber) + cards(open) : '')
+        + (rest.length ? sub(returns ? 'Waiting On The Buyer' : 'Waiting On eBay', rest.length, _HOLD_C.grey) + cards(rest) : '');
 }
 
 const _holdPretty = s => String(s || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
@@ -39167,7 +39200,10 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         formHtml = _holdClaimForm(ctx, idx, it);
     }
 
-    const edge = !it.hush && (st === 'due' || st === 'needs_claim' || st === 'needs_reply') ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};` : '';
+    // Red edge = due today, amber = open with a later date (2026-11-25, _holdUrgency).
+    const urg = _holdUrgency(it);
+    const edge = urg === 'today' ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};`
+        : urg === 'open' ? `box-shadow:inset 3px 0 0 ${_HOLD_C.amber.solid};` : '';
     return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; ${edge}">
         <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
             <div style="min-width:0; flex:1 1 240px;">
@@ -40253,8 +40289,13 @@ async function checkClaimsDueAlerts() {
         // today and is due as of now). Something due Dec 3 stays on the tab and
         // in the morning mail, and reaches this card the day before.
         const _cdNow = j.today || _kpiCentralToday();
+        // DUE TODAY ONLY since 2026-11-25 (Ethan: "it shouldn't be due tomorrow
+        // ... if there is nothing due today, nothing should show"). The server
+        // now sends only items due today (claims-disputes urgencyOf); this is
+        // the same test, for a cached older answer. A card authorization is the
+        // one thing allowed a day early — it runs out mid-morning.
         const items = (j.dueAlerts || []).filter(it => it.overdue || !it.due
-            || _b2bDayDiff(_cdNow, String(it.due).slice(0, 10)) <= 1);
+            || _b2bDayDiff(_cdNow, String(it.due).slice(0, 10)) <= (it.type === 'payment' ? 1 : 0));
         if (!items.length) { hide(); return; }
         const b = _claimsDueBubbleEl();
         const t = document.getElementById('claimsDueAlertBubbleText');
@@ -40269,7 +40310,7 @@ async function checkClaimsDueAlerts() {
             // said "due tomorrow" under a "Due Dec 3" badge.
             const left = it.due && today ? _b2bDayDiff(today, String(it.due).slice(0, 10)) : null;
             const when = it.overdue ? 'overdue' : !it.due ? ''
-                : left <= 0 ? 'due today' : left === 1 ? 'due tomorrow'
+                : left <= 0 ? 'due today' : left === 1 ? 'due today — card runs out tomorrow'
                 : 'due ' + new Date(String(it.due).slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
             return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
         };
@@ -40279,7 +40320,10 @@ async function checkClaimsDueAlerts() {
         t.dataset.overdue = overdue ? '1' : '';
         // The earliest due date on the card (YYYY-MM-DD) — the feed's date badge
         // and its Overdue / Today / This Week groups (_samDueInfo).
-        const dueOn = items.map(it => String(it.due || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
+        // Never later than today: everything on this card is due today (a card
+        // authorization a day early), so the badge must not read "Due Tomorrow".
+        let dueOn = items.map(it => String(it.due || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
+        if (dueOn && dueOn > _cdNow) dueOn = _cdNow;
         if (dueOn) t.dataset.dueOn = dueOn; else delete t.dataset.dueOn;
         // The tab the first (most urgent) item lives on.
         const first = items[0].type;
@@ -55695,9 +55739,12 @@ function _qpClaimsSyncedAt(d) {
 function _qpClaimsBuckets(due, today) {
     const wk = new Date(today + 'T12:00:00'); wk.setDate(wk.getDate() + 6);
     const week = wk.toLocaleDateString('en-CA');
+// The day an item is due: claims-disputes' due_day (urgencyOf, 2026-11-25 — eBay's
+// own deadline for a return, not the day it appeared), else the old due_on.
+const _qpClaimsDay = x => String(x.due_day || x.due_on || '').slice(0, 10);
     const b = { late: 0, today: 0, week: 0, later: 0 };
     due.forEach(function (e) {
-        const d = String(e.x.due_on || '').slice(0, 10);
+        const d = _qpClaimsDay(e.x);
         if (!d) b.later++;
         else if (d < today) b.late++;
         else if (d === today) b.today++;
@@ -55727,7 +55774,7 @@ function _qpClaimsSplit(d) {
     const out = {};
     Object.keys(by).forEach(function (t) {
         out[t] = {
-            due: by[t].filter(e => need(e.x)).sort((a, b) => String(a.x.due_on || '9').localeCompare(String(b.x.due_on || '9'))),
+            due: by[t].filter(e => need(e.x)).sort((a, b) => (_qpClaimsDay(a.x) || '9').localeCompare(_qpClaimsDay(b.x) || '9')),
             waiting: by[t].filter(e => wait(e.x)).length,
         };
     });
@@ -55743,7 +55790,7 @@ function _qpClaimsLabel(e) {
 function _qpClaimsLine(e, today) {
     const x = e.x;
     const amt = Number(x.amount || x.outstanding || x.total) || 0;
-    return _qpWLine(_qpWDue(x.due_on, today), _qpClaimsLabel(e), amt ? _qpHLK(amt) : '');
+    return _qpWLine(_qpWDue(_qpClaimsDay(x), today), _qpClaimsLabel(e), amt ? _qpHLK(amt) : '');
 }
 // THE WIDE CLAIMS CARD (Ethan, 2026-11-07: option C of the Action Items &
 // Claims designs). On the tabs page Claims & Disputes has a tab of its own, so
@@ -55754,7 +55801,7 @@ function _qpClaimsLine(e, today) {
 function _qpClaimsCounts(due, today) {
     const c = { late: 0, now: 0, open: due.length, sum: 0 };
     due.forEach(function (e) {
-        const d = String(e.x.due_on || '').slice(0, 10);
+        const d = _qpClaimsDay(e.x);
         if (d && d < today) c.late++; else if (d && d === today) c.now++;
         c.sum += Number(e.x.amount || e.x.outstanding || e.x.total) || 0;
     });
