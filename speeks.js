@@ -39326,7 +39326,68 @@ function _holdPaintBadges(ctx) {
     });
 }
 
+// WHAT YOU'RE TYPING SURVIVES A REDRAW (Ethan, 2026-11-27: "when typing, it'll
+// sometimes just get rid of what I'm typing" — resolving, sending back, any
+// note). The list is rebuilt wholesale with innerHTML, and it is rebuilt
+// without anyone pressing anything: opening the tool draws it, then asks eBay
+// for a fresh read, and when that read changes something (seconds later) it
+// draws again — over a note half written in the first drawing. Tab switches
+// and the filters redraw too. So every redraw lifts what is in the note boxes
+// and claim fields first and puts it back after, cursor included. Matched by
+// the ITEM'S KEY, never the position in the id: a redraw can add or drop a
+// card above, and a position would hand the note to its neighbour. A box whose
+// card is gone (eBay closed it in the meantime) has nowhere to go and is let go.
+function _holdKeepTyped(ctx) {
+    const kept = [];
+    const act = document.activeElement;
+    ['mismatch', 'returns', 'cases', 'payments', 'confirm'].forEach(t => {
+        const w = _holdWrap(ctx, t);
+        if (!w) return;
+        w.querySelectorAll('textarea[id], input[id], select[id]').forEach(el => {
+            let m = el.id.match(/^hold-(note|cl)-[a-z]+-(\d+)(.*)$/), key = null, pre = '', suf = '';
+            if (m) {
+                const e = (_holdIndex[ctx] || [])[+m[2]];
+                if (e) { key = 'i:' + _holdKeyOf(e); pre = m[1]; suf = m[3]; }
+            } else if ((m = el.id.match(/^hold-dm-note-(\d+)$/))) {
+                const x = _holdDmIndex[+m[1]];
+                if (x) { key = 'd:' + x.type + '|' + x.key; pre = 'dm'; }
+            }
+            if (!key) return;
+            const untouched = el.tagName === 'SELECT'
+                ? el.selectedIndex === Math.max(0, [...el.options].findIndex(o => o.defaultSelected))
+                : el.value === el.defaultValue;
+            if (untouched && el !== act) return;
+            let s = null, e2 = null;
+            try { s = el.selectionStart; e2 = el.selectionEnd; } catch (_) {}
+            kept.push({ key, pre, suf, value: el.value, focus: el === act, s, e: e2 });
+        });
+    });
+    return kept;
+}
+function _holdPutTyped(ctx, kept) {
+    if (!kept.length) return;
+    const pos = {};
+    (_holdIndex[ctx] || []).forEach((e, i) => { pos['i:' + _holdKeyOf(e)] = i; });
+    if (ctx === 'ov') _holdDmIndex.forEach((x, i) => { pos['d:' + x.type + '|' + x.key] = i; });
+    kept.forEach(k => {
+        const i = pos[k.key];
+        if (i === undefined) return;
+        const id = k.pre === 'dm' ? `hold-dm-note-${i}` : `hold-${k.pre}-${ctx}-${i}${k.suf}`;
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = k.value;
+        if (k.focus) {
+            el.focus();
+            try { if (k.s != null) el.setSelectionRange(k.s, k.e); } catch (_) {}
+        }
+    });
+}
 function renderHoldItems(ctx) {
+    const kept = _holdKeepTyped(ctx);
+    _holdDrawItems(ctx);
+    _holdPutTyped(ctx, kept);
+}
+function _holdDrawItems(ctx) {
     _holdIndex[ctx] = [];
     const d = _holdData[ctx];
     if (!d) return;
