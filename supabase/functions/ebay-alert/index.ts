@@ -292,8 +292,23 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
   // forever, indistinguishably from a healthy system. A read that fails is now
   // itself a critical alert, and the row counts are returned so a dry run can
   // show the watchdog is actually seeing data rather than an empty table.
+  //
+  // ONE RETRY, AND ONLY FOR A TIMEOUT (2026-11-27). On Black Friday the whole
+  // database stalled for seconds at a time (Micro compute, Disk IO budget): even
+  // a five-row read hit PostgREST's 8s statement_timeout, and this mailed
+  // "partly blind" three times for a view that runs in 84 ms when the box is
+  // idle. A timeout is load, not a broken check, so it gets one more try after a
+  // pause. Every other error — permission denied, a missing column, a bad filter
+  // — is a real fault and still alerts on the first failure; and a read that
+  // times out twice in a row still alerts, because ten-plus seconds of stall is
+  // worth knowing about. Re-awaiting `qb` is the retry: a supabase-js builder
+  // sends a fresh request on every await, it does not cache the first result.
   const read = async (name: string, qb: any): Promise<any[]> => {
-    const { data, error } = await qb;
+    let { data, error } = await qb;
+    if (error && /statement timeout/i.test(error.message || "")) {
+      await new Promise((r) => setTimeout(r, 3000));
+      ({ data, error } = await qb);
+    }
     if (error) {
       push({
         key: `watchdog_read:${name}`, store: null, severity: "critical",
