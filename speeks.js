@@ -70146,7 +70146,15 @@ async function _fqRun(pid, work, advance) {
     let res;
     try { res = await work(); } catch (e) { res = { ok: false, body: { detail: String(e && e.message || e) } }; }
     _fqBusy.delete(pid);
-    if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.');
+    // ⚠️ THERE IS NO CHECK AGAIN ON THIS LIST (2026-11-27). The photo tool's
+    // "photos changed" answer says to press it, and stores who had just fixed
+    // the photos themselves read that as their fix being wrong. Here the next
+    // step is I Fixed It, which has the new photos checked again.
+    const changed = !res.ok && res.body && res.body.code === 'photos-changed';
+    if (changed) await _ltTell('The Photos Were Changed',
+        'The photos were changed in Shopify after they were checked, so this fix no longer fits them. If you have fixed the photos, press I Fixed It — they are checked again within about 15 minutes.',
+        'warn', 'Listing Fixes');
+    else if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.', null, 'Listing Fixes');
     else if (advance && next) _fqSel = next;
     await _fqReload();
     // I Fixed It opens the next listing — at the top, like a click on it would.
@@ -72613,8 +72621,8 @@ function _ltAskFill(bodyHtml, goLabel) {
 
 // Something went wrong, or something landed half-done. One button, and it is
 // never called for anything the person can act on inside the dialog.
-function _ltTell(title, say, kind) {
-    return _ltAsk({ kind: kind || 'bad', eyebrow: 'Listing Titles', title,
+function _ltTell(title, say, kind, eyebrow) {
+    return _ltAsk({ kind: kind || 'bad', eyebrow: eyebrow || 'Listing Titles', title,
                     body: `<p class="lt-ask-say">${_ecEsc(say)}</p>`,
                     cancel: null, go: 'Got It' });
 }
