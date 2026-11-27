@@ -70006,6 +70006,10 @@ function _fqDetailHtml(c, store, allClear) {
     // A card with only his lines on it skips the overnight recheck (eye-only)
     // and goes straight to his Confirm Fixes — so the button says that.
     const toEthan = !photoLine;
+    // IT SOLD (Ethan, 2026-11-27): a flagged listing that sold has nothing left to
+    // fix — this takes it off the list. It still counts as a flag on the lister.
+    const soldable = !notes && (photoLine || ethanLine);
+    const soldBtn = soldable ? `<button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${busy} onclick="fqMarkSold('${_ecEsc(store)}','${_ecEsc(c.productId)}')">It Sold</button>` : '';
     return `<div class="lr-detail-in">
       ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
       ${back && !fromCard ? `<div class="lr-back"><b>⟲ ${_FQ_RETURNED[back.returnedKind] || 'Sent Back'}</b>
@@ -70023,7 +70027,9 @@ function _fqDetailHtml(c, store, allClear) {
       <div class="lr-fixes">${c.lines.filter(l => !(fromCard && l.kind === 'ethan')).map(l => _fqFixHtml(c, l, store)).join('')}</div>
       ${handFix ? `<div class="lr-done">
           <button type="button" class="lr-btn lr-btn-main" ${busy || (oneClickOpen ? 'disabled' : '')} onclick="fqMarkFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">${toEthan ? 'I Fixed It — Send For A Final Check' : 'I Fixed It — Recheck It'}</button>
-          <span class="lr-hint">${oneClickOpen ? 'Use or dismiss the title and category fixes first.' : toEthan ? 'Checked once more before it closes. Opens the next listing.' : 'Opens the next listing.'}</span></div>` : ''}
+          ${soldBtn}
+          <span class="lr-hint">${oneClickOpen ? 'Use or dismiss the title and category fixes first.' : toEthan ? 'Checked once more before it closes. Opens the next listing.' : 'Moves it to Being Rechecked and opens the next listing.'}</span></div>`
+        : soldBtn ? `<div class="lr-done">${soldBtn}<span class="lr-hint">Sold before it was fixed? This takes it off the list.</span></div>` : ''}
       ${notes ? `<div class="lr-done">
           <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="fqNotesSeen('${_ecEsc(store)}','${_ecEsc(c.productId)}')">Got It</button>
           <span class="lr-hint">Nothing to fix — this is not a flag on anyone. Got It takes the notes off your list.</span></div>` : ''}
@@ -70043,6 +70049,8 @@ function _fqWaitingHtml(store) {
             <span class="lr-meta">${said(c.card.status)}${c.card.fixedBy ? ` · ${_ecEsc(c.card.fixedBy)}` : ''}</span></span>
           ${c.card.status === 'fixed' ? `<button type="button" class="lr-btn lr-btn-ghost" ${_fqBusy.has(c.productId) ? 'disabled' : ''}
               onclick="fqUndoFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">Undo</button>` : ''}
+          ${c.card.status === 'fixed' || c.card.status === 'regrading' ? `<button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${_fqBusy.has(c.productId) ? 'disabled' : ''}
+              onclick="fqMarkSold('${_ecEsc(store)}','${_ecEsc(c.productId)}')">It Sold</button>` : ''}
         </div>`).join('') : '<div class="lr-empty">Nothing Waiting.</div>'}
     </div>`;
 }
@@ -70174,6 +70182,19 @@ async function fqMarkFixed(store, pid) {
     if (!said) return;
     await _fqRun(pid, () => _lrPost({ action: 'mark-fixed', store, productId: pid }), true);
 }
+// ⚠️ IT SOLD (Ethan, 2026-11-27). Off the list, still a flag on the lister. The
+// server refuses while Shopify shows stock. If it comes back (a return), the
+// picture check grades it again by itself — and never flags it a second time.
+const _LR_SOLD_SAY = 'It comes off the list. It still counts as a flag for whoever listed it. If it is ever back in stock (a return), the photos are checked again — without a new flag.';
+async function fqMarkSold(store, pid) {
+    const c = _fqCard(pid);
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'Listing Fixes', title: 'Mark This Listing Sold?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p><p class="lt-ask-say">${_LR_SOLD_SAY}</p>`,
+        go: 'It Sold', cancel: 'Cancel' });
+    if (!said) return;
+    await _fqRun(pid, () => _lrPost({ action: 'mark-sold', store, productId: pid }), !_fqWaitView);
+}
+window.fqMarkSold = fqMarkSold;
 async function fqNotesSeen(store, pid) {
     await _fqRun(pid, () => _lrPost({ action: 'notes-seen', store, productId: pid }), true);
 }
@@ -70984,10 +71005,79 @@ const _lrMayFull = () => typeof _jumpFeatureVisible === 'function' && _jumpFeatu
 // for pictures).
 const _lrMayMine = () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-my-fixes');
 const _lrMineOnly = () => _lrMayMine() && !_lrMayFix() && !_lrMaySpot() && !_lrMayFull();
-let _mfData = null, _mfErr = null, _mfSel = null;
+let _mfData = null, _mfErr = null, _mfSel = null, _mfWaitView = false;
 const _mfBusy = new Set();
+// ⚠️ SAMPLE LISTINGS FOR TEST ACCOUNTS (Ethan, 2026-11-27: "show me some dummy
+// data on test employee so I can see the changes"). The server never gives a
+// test account photo flags (test accounts list nothing), so a test session gets
+// these three, drawn here and never written anywhere: a photo flag with missing
+// shots, a wrong-order one, and one already in Being Rechecked. Their buttons
+// act on this page only (_mfSampleAct) — a real mark-sold from a test PIN is
+// refused by the server anyway. Real test cards still show beside them.
+const _MF_PG = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/storage/v1/object/public/picture-guide/';
+const _mfPg = (label, path) => ({ label, cond: null, img: _MF_PG + encodeURIComponent(path) });
+const _MF_IPHONE = [_mfPg('Lock Screen', '1795638342717_752421_IMG_9546.jpeg'), _mfPg('Settings About Page', '1795638366105_108495_IMG_9553.jpeg'),
+    _mfPg('Battery Health', '1795638372718_343883_IMG_9552.jpeg'), _mfPg('Screen Off', '1795638382316_526300_IMG_9554.jpeg'),
+    _mfPg('Back of Phone', '1795638386550_373633_IMG_9547.jpeg'), _mfPg('Top Side of Phone', '1795638389775_563937_IMG_9550.jpeg'),
+    _mfPg('Bottom Side of Phone', '1795638392269_468853_IMG_9551.jpeg'), _mfPg('Side of Phone', '1795638395166_343291_IMG_9548.jpeg'),
+    _mfPg('Opposite Side of Phone', '1795638398557_167888_IMG_9549.jpeg')];
+const _MF_CONSOLE = [_mfPg('Front of Console (Console Only)', '1795627832327_380574_IMG_9501.jpeg'), _mfPg('Back of Console', '1795627835458_158902_IMG_9503.jpeg'),
+    _mfPg('Side of Console', 'game-console-05-side-of-console.jpg'), _mfPg('Opposite Side of Console', 'game-console-06-opposite-side-of-console.jpg'),
+    _mfPg('Top of Console', '1795627839090_328042_IMG_9502.jpeg'), _mfPg('Bottom of Console', '1795627842549_780426_IMG_9504.jpeg')];
+const _mfPh = g => g.map(x => ({ thumb: x.img, url: x.img }));
+function _mfSamples() {
+    const iphonePhotos = _mfPh(_MF_IPHONE.filter(g => g.label !== 'Settings About Page' && g.label !== 'Battery Health'));
+    // The console shot back first: the order the guide wants puts the front first.
+    const con = _mfPh(_MF_CONSOLE), conPhotos = [con[1], con[0], con[2], con[3], con[4], con[5]];
+    return {
+        photoItems: [
+            { productId: 'sample-iphone', sample: true, title: 'Apple iPhone 14 Pro 128GB Unlocked Deep Purple (Sample)', sku: 'OVL-SAMPLE-1',
+              price: 549.99, createdAt: new Date(Date.now() - 3 * 3600000).toISOString(), photos: iphonePhotos,
+              lines: [{ kind: 'photos', verdict: 'fix', sheet: 'Apple iPhones', guide: _MF_IPHONE, reorder: null,
+                findings: [{ code: 'missing_shot', shot: 'Settings About Page', text: 'Missing: Settings About Page.' },
+                           { code: 'missing_shot', shot: 'Battery Health', text: 'Missing: Battery Health.' }] }] },
+            { productId: 'sample-console', sample: true, title: 'Sony PlayStation 5 Slim Disc 1TB Console (Sample)', sku: 'OVL-SAMPLE-2',
+              price: 379.99, createdAt: new Date(Date.now() - 26 * 3600000).toISOString(), photos: conPhotos,
+              lines: [{ kind: 'photos', verdict: 'reorder', sheet: 'Game Console', guide: _MF_CONSOLE,
+                reorder: { suggested: [2, 1, 3, 4, 5, 6], current: [1, 2, 3, 4, 5, 6] },
+                findings: [{ code: 'order', text: 'The back of the console is first — the guide starts with the front.' }] }] },
+        ],
+        waiting: [{ productId: 'sample-android', sample: true, title: 'Samsung Galaxy S23 128GB Unlocked Phantom Black (Sample)',
+            photos: [{ thumb: _MF_PG + '1795641360088_372836_IMG_9577.jpeg' }], status: 'fixed',
+            fixedBy: sessionStorage.getItem('speeksUserName') || 'Test Employee', fixedAt: new Date(Date.now() - 20 * 60000).toISOString() }],
+    };
+}
+let _mfSampleState = null;   // the samples as this page has moved them
+function _mfAddSamples() {
+    if (!window._speeksTestSession || !_mfData) return;
+    if (!_mfSampleState) _mfSampleState = _mfSamples();
+    _mfData.photoItems = [...(_mfData.photoItems || []).filter(x => !x.sample), ..._mfSampleState.photoItems];
+    _mfData.waiting = [...(_mfData.waiting || []).filter(x => !x.sample), ..._mfSampleState.waiting];
+}
+// What the real buttons would do, on the samples only.
+async function _mfSampleAct(pid, act) {
+    const st = _mfSampleState; if (!st) return;
+    const i = st.photoItems.findIndex(x => x.productId === pid), w = st.waiting.findIndex(x => x.productId === pid);
+    if (act === 'fixed' && i >= 0) {
+        const it = st.photoItems.splice(i, 1)[0];
+        st.waiting.unshift({ productId: it.productId, sample: true, title: it.title, photos: (it.photos || []).slice(0, 1), status: 'fixed',
+            fixedBy: sessionStorage.getItem('speeksUserName') || 'Test Employee', fixedAt: new Date().toISOString() });
+    } else if (act === 'sold' && i >= 0) st.photoItems.splice(i, 1);
+    else if (act === 'undo' && w >= 0) {
+        const it = st.waiting.splice(w, 1)[0];
+        const fresh = _mfSamples().photoItems.find(x => x.productId === pid)
+            || { productId: it.productId, sample: true, title: it.title, sku: 'OVL-SAMPLE-3', price: 429.99, photos: it.photos,
+                 lines: [{ kind: 'photos', verdict: 'fix', guide: [], findings: [{ code: 'missing_shot', shot: 'Storage Information', text: 'Missing: Storage Information.' }] }] };
+        st.photoItems.push(fresh);
+    }
+    _mfSel = null;
+    _mfAddSamples(); ecRender();
+    await _ltTell('Sample Listing', act === 'sold' ? 'On a real listing this takes it off your list and your manager’s. It still counts as a flag.'
+        : act === 'fixed' ? 'On a real listing this moves it to Being Rechecked until the photo check grades the new photos.'
+        : 'On a real listing this puts it back on your list.', null, 'My Listing Corrections');
+}
 async function _mfLoad() {
-    try { _mfData = await _lrFetch('?view=mine'); _mfErr = null; }
+    try { _mfData = await _lrFetch('?view=mine'); _mfErr = null; _mfAddSamples(); }
     catch (e) { _mfErr = e.message || String(e); }
     // Their own flag rate (2026-11-24) — the server returns only their rows.
     // Best-effort: a failure leaves the strip off, never the list.
@@ -71031,7 +71121,7 @@ function _mfChrome() {
     const host = document.getElementById('ecStoreFilter')?.closest('.dd-host'); if (host) host.style.display = 'none';
     const sb = document.getElementById('ecStandbyHost'); if (sb) sb.innerHTML = '';
     const sub = document.getElementById('ecSubtitle');
-    const n = (_mfData?.items || []).length;
+    const n = (_mfData?.items || []).length + (_mfData?.photoItems || []).length;
     if (sub) sub.textContent = `My Listing Corrections · ${n ? n + ' To Fix' : 'All Clear'}`;
 }
 function _mfHtml() {
@@ -71060,7 +71150,10 @@ function _mfHtml() {
             ${(pl.guide || []).length ? `<span class="lr-k">The Guide — Shoot It Like This</span>${_lrGuideStrip(pl.guide, null,
                 new Set(_fqMissingList(pl).map(x => x.toLowerCase())))}` : ''}
             <div class="lr-fixes">${_fqFixHtml(c, pl, _mfData.store, true)}</div>
-            <div class="lr-done"><span class="lr-hint lr-hint-solo">Fix the photos in Shopify. They are checked again by themselves within about 15 minutes of your last change — when they pass, this comes off your list and your manager’s.</span></div>
+            <div class="lr-done">
+              <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Recheck It</button>
+              <button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${busy} onclick="mfMarkSold('${_ecEsc(c.productId)}')">It Sold</button>
+              <span class="lr-hint">Fix the photos in Shopify first. I Fixed It moves it to Being Rechecked — the photos are checked again within about 15 minutes of your last change.</span></div>
           </div>`
         : `<div class="lr-detail-in">
             ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
@@ -71073,16 +71166,31 @@ function _mfHtml() {
             ${(c.photos || []).length ? _lrPhotos(c.photos, []) : ''}
             <div class="lr-done">
               <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Send For A Final Check</button>
+              <button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${busy} onclick="mfMarkSold('${_ecEsc(c.productId)}')">It Sold</button>
               <span class="lr-hint">Fix it in Shopify first. It gets one final check, and your manager sees it is done.</span></div>
           </div>`;
+    // BEING RECHECKED (2026-11-27): what was marked fixed and waits on the photo
+    // check — off the list above, here until the new grade lands.
+    const waiting = _mfData.waiting || [];
+    const waitHtml = `<div class="lr-detail-in">
+      <div class="lr-head"><div class="lr-head-t"><h3>Being Rechecked</h3>
+        <span class="lr-meta">Marked fixed. The photo check grades them again within about 15 minutes of the last change; anything still wrong comes back to your list.</span></div></div>
+      ${waiting.length ? waiting.map(w => `<div class="lr-wait">
+          <span class="lr-thumb">${w.photos && w.photos[0] ? `<img src="${_ecEsc(w.photos[0].thumb)}" alt="" loading="lazy">` : ''}</span>
+          <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(w.title || '')}</span>
+            <span class="lr-meta">Being Rechecked${w.fixedBy ? ` · ${_ecEsc(w.fixedBy)}` : ''}</span></span>
+          ${w.status === 'fixed' ? `<button type="button" class="lr-btn lr-btn-ghost" ${_mfBusy.has(w.productId) ? 'disabled' : ''} onclick="mfUndoFixed('${_ecEsc(w.productId)}')">Undo</button>` : ''}
+        </div>`).join('') : '<div class="lr-empty">Nothing Waiting.</div>'}
+    </div>`;
     return `<div class="lr-split">
       <section class="lr-list">
         <div class="lr-list-h"><div class="lr-list-title"><h2>${items.length} Listing Correction${items.length === 1 ? '' : 's'} Requested</h2></div></div>
         ${_mfRateHtml()}
         ${_pqPopBarHtml()}
         <div class="lr-rows">${rows || '<div class="lh-clear">Nothing To Fix.</div>'}</div>
+        <div class="lr-list-f"><div class="lr-list-f-btns"><button type="button" class="lr-btn lr-btn-ghost lr-btn-sm lr-wait-btn${_mfWaitView ? ' lr-wait-on' : ''}" onclick="mfWaiting()">Being Rechecked${waiting.length ? ` ${waiting.length}` : ''}</button></div></div>
       </section>
-      <section class="lr-detail">${detail}</section>
+      <section class="lr-detail">${_mfWaitView ? waitHtml : detail}</section>
     </div>`;
 }
 // ============================================================================
@@ -71235,23 +71343,44 @@ function _mfSeen(pid) {
     c.card.assigneeSeenAt = new Date().toISOString();
     _lrPost({ action: 'mine-seen', productId: pid }).catch(() => {});
 }
-function mfPick(pid) { _mfSel = pid; _mfSeen(pid); ecRender(); _lrScrollTop(); }
-async function mfMarkFixed(pid) {
-    const c = (_mfData?.items || []).find(x => x.productId === pid);
-    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Listing Corrections', title: 'Mark This Listing Fixed?',
-        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
-               <p class="lt-ask-say">It gets one final check. If something is still wrong, it comes back here with a note.</p>`,
-        go: 'I Fixed It', cancel: 'Not Yet' });
-    if (!said) return;
+function mfPick(pid) { _mfSel = pid; _mfWaitView = false; _mfSeen(pid); ecRender(); _lrScrollTop(); }
+function mfWaiting() { _mfWaitView = !_mfWaitView; ecRender(); _lrScrollTop(); }
+const _mfItem = pid => [...(_mfData?.items || []), ...(_mfData?.photoItems || [])].find(x => x.productId === pid);
+async function _mfRun(pid, payload) {
     _mfBusy.add(pid); ecRender();
-    const res = await _lrPost({ action: 'mark-fixed', store: _mfData.store, productId: pid }).catch(e => ({ ok: false, body: { detail: String(e) } }));
+    const res = await _lrPost({ ...payload, store: _mfData.store, productId: pid }).catch(e => ({ ok: false, body: { detail: String(e) } }));
     _mfBusy.delete(pid);
     if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.');
     _mfSel = null;
     await _mfLoad(); ecRender();
     if (typeof checkMyFixReminders === 'function') checkMyFixReminders();
 }
-Object.assign(window, { mfPick, mfMarkFixed });
+async function mfMarkFixed(pid) {
+    const c = _mfItem(pid);
+    const photo = c && !c.card;
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Listing Corrections', title: 'Mark This Listing Fixed?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
+               <p class="lt-ask-say">${photo ? 'It moves to Being Rechecked. The photos are checked again within about 15 minutes of your last change; if something is still wrong, it comes back here.'
+                 : 'It gets one final check. If something is still wrong, it comes back here with a note.'}</p>`,
+        go: 'I Fixed It', cancel: 'Not Yet' });
+    if (!said) return;
+    if (c && c.sample) return _mfSampleAct(pid, 'fixed');
+    await _mfRun(pid, { action: 'mark-fixed' });
+}
+async function mfMarkSold(pid) {
+    const c = _mfItem(pid);
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Listing Corrections', title: 'Mark This Listing Sold?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p><p class="lt-ask-say">${_LR_SOLD_SAY}</p>`,
+        go: 'It Sold', cancel: 'Cancel' });
+    if (!said) return;
+    if (c && c.sample) return _mfSampleAct(pid, 'sold');
+    await _mfRun(pid, { action: 'mark-sold' });
+}
+async function mfUndoFixed(pid) {
+    if (String(pid).startsWith('sample-')) return _mfSampleAct(pid, 'undo');
+    await _mfRun(pid, { action: 'undo-fixed' });
+}
+Object.assign(window, { mfPick, mfMarkFixed, mfMarkSold, mfUndoFixed, mfWaiting });
 
 async function _frLoadList() {
     _frList = null; _frListErr = null;

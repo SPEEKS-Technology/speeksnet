@@ -1225,6 +1225,10 @@ async function submitBatch(client: Anthropic, store: string, model: string, effo
 // ⚠️ OFF until Ethan says go: the cron gets {off:true} until PQ_QUICK_ON=1.
 // &dry=1 lists what WOULD be graded — Shopify reads only, no model, free.
 const QUICK = { settleMin: 5, newDays: 3, perStore: 20, lateMin: 20 };
+// How long a listing marked sold is watched for a return (Ethan, 2026-11-27:
+// "we have a 30 day return period so we really only need to check for 60 days
+// for now to be safe"). A restock after this is not regraded by the quick check.
+const SOLD_WATCH_DAYS = 60;
 
 // ⚠️ EVERY PHOTO FLAG COUNTS, EVEN ONE FIXED IN MINUTES (Ethan, 2026-11-24: "any
 // flag should count as a flag against the lister because it is important we have
@@ -1295,12 +1299,12 @@ async function quickCandidates(store: string, shop: string, token: string) {
   const open = new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
     + `&verdict=in.(retake,fix,reorder)&select=product_id&limit=1000`)).map((r: any) => String(r.product_id)));
   // ⚠️ BACK IN STOCK AFTER IT SOLD (Ethan, 2026-11-27 — a return). A row the
-  // store marked sold (listing-review mark-sold, 0213) is read back BY ID every
+  // store marked sold in the last SOLD_WATCH_DAYS (listing-review mark-sold, 0213) is read back BY ID every
   // run, so a restock is seen whatever the listing's age or when Shopify last
   // touched it, and it is graded again even though its photos have not changed
   // (quickSweep skips the stamp test for these). recordFlags never flags it again.
   const sold = new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.sold`
-    + `&sold_at=gte.${new Date(Date.now() - 120 * 86400000).toISOString()}&select=product_id&order=sold_at.desc&limit=250`))
+    + `&sold_at=gte.${new Date(Date.now() - SOLD_WATCH_DAYS * 86400000).toISOString()}&select=product_id&order=sold_at.desc&limit=250`))
     .map((r: any) => String(r.product_id)));
   const missing = [...sold].filter(id => !byId.has(id));
   for (let i = 0; i < missing.length; i += 100) {
