@@ -624,8 +624,44 @@ t('a photo fix shows in My Listing Corrections without the store buttons', funct
     var h = _mfHtml();
     if (h.indexOf('1 Listing Correction Requested') < 0) return 'count wrong';
     if (h.indexOf('lr-c-ph') < 0) return 'no Photos chip';
-    if (h.indexOf('Fix The Order For Me') >= 0 || h.indexOf('Not Wrong') >= 0) return 'store buttons shown to the lister';
-    return h.indexOf('checked again by themselves') >= 0 || 'no re-check line';
+    if (h.indexOf('Fix The Order For Me') >= 0 || h.indexOf('fqDismissPhotos') >= 0) return 'store buttons shown to the lister';
+    // 2026-11-27: the lister marks it fixed (→ Being Rechecked) or sold —
+    // or says Not Wrong with a note, through their own action (mine-dismiss).
+    if (h.indexOf("mfMarkFixed('gid://shopify/Product/9')") < 0) return 'no I Fixed It for the lister';
+    if (h.indexOf("mfNotWrong('gid://shopify/Product/9')") < 0) return 'no Not Wrong for the lister';
+    return h.indexOf("mfMarkSold('gid://shopify/Product/9')") >= 0 || 'no It Sold for the lister';
+});
+
+t('My Listing Corrections: Being Rechecked lists what was marked fixed', function () {
+    _mfData = { store: 'OVL', shop: 'x', items: [], photoItems: [],
+        waiting: [{ productId: 'p7', title: 'Xbox Series X', photos: [], status: 'fixed', fixedBy: 'Rorie Moore' }] };
+    _mfErr = null; _mfSel = null; _mfWaitView = false;
+    var h = _mfHtml();
+    if (h.indexOf('Being Rechecked 1') < 0) return 'no Being Rechecked button with its count';
+    if (h.indexOf('Xbox Series X') >= 0) return 'a waiting listing is on the open list';
+    _mfWaitView = true;
+    h = _mfHtml(); _mfWaitView = false;
+    if (h.indexOf('Xbox Series X') < 0) return 'waiting listing missing from Being Rechecked';
+    return h.indexOf("mfUndoFixed('p7')") >= 0 || 'no Undo while it waits';
+});
+
+t('store list: It Sold on a photo flag, including a reorder-only one', function () {
+    var saved = _fqData;
+    _fqData = { store: 'OVL', shop: 'x', open: [], waiting: [] };
+    try {
+        var reorder = { productId: 'p8', title: 'Switch', photos: [], card: null,
+            lines: [{ kind: 'photos', verdict: 'reorder', findings: [], reorder: { suggested: [2, 1] } }] };
+        var h = _fqDetailHtml(reorder, 'OVL');
+        if (h.indexOf("fqMarkSold('OVL','p8')") < 0) return 'no It Sold on a reorder-only flag';
+        var fix = { productId: 'p9', title: 'PS5', photos: [], card: null, lines: [{ kind: 'photos', verdict: 'fix', findings: [] }] };
+        h = _fqDetailHtml(fix, 'OVL');
+        if (h.indexOf("fqMarkFixed('OVL','p9')") < 0) return 'no I Fixed It';
+        if (h.indexOf("fqMarkSold('OVL','p9')") < 0) return 'no It Sold beside I Fixed It';
+        var notes = { productId: 'p10', title: 'TV', photos: [], card: { status: 'open', returnedKind: 'notes' },
+            lines: [{ kind: 'ethan', ticks: { note: 'x' } }] };
+        h = _fqDetailHtml(notes, 'OVL');
+        return h.indexOf('fqMarkSold') < 0 || 'It Sold shown on a notes-only card';
+    } finally { _fqData = saved; }
 });
 
 t('the manager’s photo box says who else has it', function () {
