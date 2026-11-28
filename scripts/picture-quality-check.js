@@ -196,7 +196,11 @@ t('listing health notes: picture notes render with their own copy and clear', fu
 // --- Listing Health as tabs (2026-09-30) ----------------------------------
 function withAllHalves(fn) {
     var real = window._jumpFeatureVisible;
-    window._jumpFeatureVisible = function () { return true; };
+    // Every tool EXCEPT the Fix Queue ones: since the Fix Queue (2026-11-23),
+    // _lhHtml sends whoever holds it to the queue's own screen, and the three
+    // tabs are what a person WITHOUT it sees. All-true drew the DM page and
+    // every tab check failed with "0 tabs" (fixed 2026-11-27).
+    window._jumpFeatureVisible = function (k) { return !/^ec-view-(fix-queue|spot-check|full-review|my-fixes)$/.test(k); };
     _lhScope = { mayPhotos: true, mayCats: true };
     try { return fn(); }
     finally { window._jumpFeatureVisible = real; _lhScope = { mayPhotos: false, mayCats: false }; _lhPhotos = null; _lhTab = null; }
