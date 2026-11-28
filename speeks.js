@@ -41,7 +41,9 @@
 // at the point of display.
 // 3.13.0 (2026-11-25): Listing Review — Full Listing Review, Listing Corrections,
 // the 5-minute photo check and lister pop-ups — plus the December fixes.
-const APP_VERSION = '3.13.0';
+// 3.14.0 (2026-11-27): photo flags — It Sold, Not Wrong for listers, Fix The Order
+// For Me after a by-hand fix — and Claims notes that survive a redraw.
+const APP_VERSION = '3.14.0';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
