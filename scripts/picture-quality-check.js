@@ -123,7 +123,7 @@ t('picture quality: guide slots say Missing, If Needed, or No Example Photo', fu
     if (d.querySelector('details .pq-guide')) return 'the guide is in a drawer — it should always show';
     if (!d.querySelector('.pq-cmp .pq-guide')) return 'no guide strip under the photos';
     if (d.querySelector('.lh-alarm')) return 'the retake tab still has the red alarm bar';
-    if (d.textContent.indexOf("They're Fine") >= 0 || !/Dismiss/.test(d.querySelector('.pq-acts').textContent)) return 'the button is not called Dismiss';
+    if (d.textContent.indexOf("They're Fine") >= 0 || !/Not Wrong/.test(d.querySelector('.pq-acts').textContent)) return 'the button is not called Not Wrong';
     var miss = d.querySelectorAll('.pq-gph-miss');
     if (miss.length !== 1 || miss[0].textContent.indexOf('Back') < 0) return 'Back is not marked missing';
     if (d.querySelectorAll('.pq-tag-miss').length !== 1) return 'no Missing tag in the box';
@@ -196,7 +196,11 @@ t('listing health notes: picture notes render with their own copy and clear', fu
 // --- Listing Health as tabs (2026-09-30) ----------------------------------
 function withAllHalves(fn) {
     var real = window._jumpFeatureVisible;
-    window._jumpFeatureVisible = function () { return true; };
+    // Every tool EXCEPT the Fix Queue ones: since the Fix Queue (2026-11-23),
+    // _lhHtml sends whoever holds it to the queue's own screen, and the three
+    // tabs are what a person WITHOUT it sees. All-true drew the DM page and
+    // every tab check failed with "0 tabs" (fixed 2026-11-27).
+    window._jumpFeatureVisible = function (k) { return !/^ec-view-(fix-queue|spot-check|full-review|my-fixes)$/.test(k); };
     _lhScope = { mayPhotos: true, mayCats: true };
     try { return fn(); }
     finally { window._jumpFeatureVisible = real; _lhScope = { mayPhotos: false, mayCats: false }; _lhPhotos = null; _lhTab = null; }

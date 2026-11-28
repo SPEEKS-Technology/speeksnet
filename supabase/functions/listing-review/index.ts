@@ -22,6 +22,8 @@
 //     GET  ?view=confirm                re-graded and passed           (spot key)
 //     GET  ?view=flags&weeks=8          lister flag rate                (spot key)
 //     POST {action:"mark-fixed"|"undo-fixed", store, productId}
+//     POST {action:"mark-sold", store, productId}   it sold before it was fixed (0213)
+//     POST {action:"mine-dismiss", store, productId, reason}   a lister's Not Wrong on their photo flag
 //     POST {action:"spot-agree"|"spot-grade", id, ticks?, note?}       (spot key)
 //     POST {action:"confirm"|"send-back", store, productId, note?}     (spot key)
 //   SCHEDULE, ?secret= :
@@ -870,20 +872,38 @@ async function mineCards(scope: Scope) {
   const all = await rows(`${CARDS(scope.test)}?store_code=eq.${scope.stores[0]}&status=eq.open&assigned_to=not.is.null&select=*&order=returned_at.desc&limit=200`);
   return all.filter((c: any) => sameName(c.assigned_to, scope.name) && c.returned_kind !== "notes");
 }
+// May this person mark this listing fixed or sold as its lister? (2026-11-27)
+async function ownPhotoRow(scope: Scope, store: string, pid: string): Promise<boolean> {
+  if (scope.test || store !== scope.stores[0]) return false;
+  const r = (await rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${enc(pid)}&status=eq.open`
+    + `&verdict=in.(retake,fix,reorder)&select=lister_name&limit=1`))?.[0];
+  return !!r && sameName(r.lister_name, scope.name);
+}
+// MY FIXES — the open list, plus what is waiting on the recheck. A photo fix the
+// lister (or the manager) marked fixed leaves the open list at once and waits
+// under Being Rechecked until the picture check grades the new photos (Ethan,
+// 2026-11-27). Both readers below share this split, so the count matches.
+async function mineSplit(scope: Scope) {
+  const [cards, photos, waitingAll] = await Promise.all([mineCards(scope), minePhotos(scope),
+    rows(`${CARDS(scope.test)}?store_code=eq.${scope.stores[0]}&status=in.(fixed,regrading)&select=*&order=fixed_at.desc&limit=200`)]);
+  const myPhoto = new Set(photos.map((r: any) => String(r.product_id)));
+  const waiting = waitingAll.filter((c: any) => sameName(c.assigned_to, scope.name) || myPhoto.has(String(c.product_id)));
+  const skip = new Set([...cards, ...waiting].map((c: any) => String(c.product_id)));
+  return { cards, waiting, photoOnly: photos.filter((r: any) => !skip.has(String(r.product_id))) };
+}
 // MY FIXES: the send-backs on listings this person made, with the photos.
 async function mineView(scope: Scope) {
   const store = scope.stores[0];
-  const [cards, photos] = await Promise.all([mineCards(scope), minePhotos(scope)]);
-  const carded = new Set(cards.map((c: any) => String(c.product_id)));
-  const photoOnly = photos.filter((r: any) => !carded.has(String(r.product_id)));
-  const shop = await minis(store, [...cards.map((c: any) => c.product_id), ...photoOnly.map((r: any) => r.product_id)])
+  const { cards, waiting, photoOnly } = await mineSplit(scope);
+  const shop = await minis(store, [...cards, ...waiting].map((c: any) => c.product_id).concat(photoOnly.map((r: any) => r.product_id)))
     .catch(() => new Map<string, Mini>());
   const guides = photoOnly.length ? await sheetGuides() : new Map<string, any>();
   return {
     scope: { name: scope.name, stores: scope.stores }, store, shop: SHOP_BY_STORE[store],
-    // Photo fixes from the picture check: no card, nothing to press — the fix is
-    // re-shooting or reordering in Shopify, and the 5-minute check re-grades it
-    // as soon as the photos change; a pass takes it off both lists by itself.
+    // Photo fixes from the picture check. The fix is re-shooting or reordering in
+    // Shopify; I Fixed It moves it to Being Rechecked (2026-11-27), and the
+    // 5-minute check re-grades it as soon as the photos change. It Sold takes a
+    // sold one off (it still counts).
     photoItems: photoOnly.map((r: any) => {
       const m = shop.get(r.product_id);
       const line: any = linesFor(r.product_id, r, null, null, null)[0];
@@ -899,6 +919,11 @@ async function mineView(scope: Scope) {
                lines: [{ kind: "ethan", ticks: c.ticks }],
                card: { status: c.status, round: c.round, returnedKind: c.returned_kind, returnedNote: c.returned_note,
                        returnedBy: c.returned_by, returnedAt: c.returned_at, assignedTo: c.assigned_to, assigneeSeenAt: c.assignee_seen_at } };
+    }),
+    waiting: waiting.map((c: any) => {
+      const m = shop.get(c.product_id);
+      return { productId: c.product_id, sku: m?.sku || c.sku, title: m?.title || c.title, photos: (m?.photos || []).slice(0, 1),
+               status: c.status, fixedBy: c.fixed_by, fixedAt: c.fixed_at };
     }),
   };
 }
@@ -950,7 +975,11 @@ async function handlePost(req: Request, scope: Scope) {
     if (!pid) return json({ error: "productId required" }, 400);
     const card = await cardOf(store, pid, T);
     // A team member without the store's list may fix only what was sent to them.
-    if ((!scope.mayFix || fullHidden(scope, card)) && !(card && sameName(card.assigned_to, scope.name))) {
+    // A LISTER MAY FIX THEIR OWN PHOTO FLAG (Ethan, 2026-11-27: "when photos get
+    // selected as fixed it should remove from the list and put in the getting
+    // rechecked" thing) — the picture check's row names them as its lister.
+    const minePhoto = !scope.mayFix && scope.mayMine && await ownPhotoRow(scope, store, pid);
+    if ((!scope.mayFix || fullHidden(scope, card)) && !(card && sameName(card.assigned_to, scope.name)) && !minePhoto) {
       return json({ error: "forbidden", detail: "This listing was not sent to you." }, 403);
     }
     if (action === "undo-fixed") {
@@ -989,6 +1018,87 @@ async function handlePost(req: Request, scope: Scope) {
       fixed_by: scope.name, fixed_at: now, ...(card ? {} : { round: 0 }),
       ...(eyeOnly ? { status: "confirm", regrade: { manualOnly: true }, regraded_at: now } : { status: "fixed" }) });
     return json({ ok: true, status: eyeOnly ? "confirm" : "fixed" });
+  }
+
+  // ⚠️ IT SOLD (Ethan, 2026-11-27: "give an option for users to mark sold if the
+  // pictures got flagged but the item has sold. This should still count against
+  // the lister, but should be able to be removed from the list"). A flagged
+  // listing that sells is no longer graded (the 5-minute check takes in-stock
+  // listings only), so its open row sat on the list for good with nothing anyone
+  // could fix. Mark Sold:
+  //  - takes the photo row off every list (status 'sold', 0213) and closes any
+  //    card on it (a send-back, or one waiting in Being Rechecked);
+  //  - KEEPS THE FLAG: the listing_flags row is written here if the grade never
+  //    wrote one, and the morning ledger counts a 'sold' row like an open one;
+  //  - is refused while Shopify still shows stock, so it cannot be used to skip
+  //    a fix on something still for sale.
+  // BACK IN STOCK (a return): picture-quality's 5-minute check grades a sold row
+  // again when the listing is in stock, whatever its age or stamp — and never
+  // flags it a second time (sold_at stays on the row; recordFlags skips it).
+  if (action === "mark-sold") {
+    if (!scope.mayFix && !scope.mayMine) return json({ error: "forbidden", detail: "The Fix Queue is not switched on for you." }, 403);
+    const store = String(body.store || "").toUpperCase(), pid = String(body.productId || "");
+    if (!scope.stores.includes(store) || !pid) return json({ error: "forbidden" }, 403);
+    const [card, pqRow] = await Promise.all([cardOf(store, pid),
+      rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${enc(pid)}&select=status,verdict,lister_name,sku,title&limit=1`).then((r: any) => r?.[0] || null)]);
+    const photoOpen = pqRow?.status === "open" && ["retake", "fix", "reorder"].includes(pqRow.verdict);
+    const cardOpen = card && ["open", "fixed", "regrading"].includes(card.status) && card.returned_kind !== "notes";
+    if (!photoOpen && !cardOpen) return json({ error: "conflict", detail: "Nothing on this listing is waiting on a fix any more." }, 409);
+    const mayThis = (scope.mayFix && !fullHidden(scope, card))
+      || (card && sameName(card.assigned_to, scope.name)) || (photoOpen && sameName(pqRow.lister_name, scope.name));
+    if (!mayThis) return json({ error: "forbidden", detail: "This listing was not sent to you." }, 403);
+    let stock: number | null = null;
+    try {
+      const { shop, token } = await shopFor(store);
+      const p = (await gql(shop, token, `query($id: ID!) { product(id: $id) { totalInventory status } }`, { id: pid }))?.product;
+      stock = p ? Number(p.totalInventory) : 0;   // gone from Shopify = sold
+    } catch (e) {
+      return json({ error: "shopify", detail: `Could not check the stock in Shopify: ${String((e as Error).message || e)}` }, 502);
+    }
+    if (stock !== null && stock > 0) {
+      return json({ error: "conflict", code: "in-stock",
+        detail: `Shopify still shows ${stock} in stock. Mark it sold once the sale has gone through — or fix the photos if it is still for sale.` }, 409);
+    }
+    if (photoOpen) {
+      await sb(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${enc(pid)}&status=eq.open`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ status: "sold", decided_by: scope.name, decided_at: now, decided_note: "Sold before it was fixed",
+                               sold_at: now, sold_by: scope.name }) });
+      // Still a flag: the grade normally wrote it; this covers one that did not.
+      const lw = await listingWeek(store, pid);
+      await addFlag({ week: lw.week, store_code: store, product_id: pid, source: "photos", lister_tag: lw.lister || null });
+    }
+    if (cardOpen) await patchCard(store, pid, { status: "done", confirmed_by: `${scope.name} (Sold)`, confirmed_at: now });
+    return json({ ok: true, status: "sold" });
+  }
+
+  // NOT WRONG, FROM MY LISTING CORRECTIONS (Ethan, 2026-11-27: "all roles can
+  // dismiss photo stuff as well to leave a note like titles and categories, so I
+  // can take those notes and feed it to you so we can continue to improve the
+  // rules"). The Fix Queue's Not Wrong calls picture-quality, which a lister
+  // cannot reach — so the lister's own answer lands here, and writes exactly
+  // what picture-quality's dismiss writes ("dismissed: why" / "reorder denied:
+  // why"). That is the row Listing Health Notes reads, so the note reaches the
+  // same pile as a manager's. Their own photo flag only, like Mark Fixed; the
+  // note is required, as it is everywhere a rule can be called wrong.
+  // ⚠️ Like a manager's dismissal, it takes the line off the flag count (a
+  // dismissed photo row is not a flag in the morning ledger). The note is the
+  // check on that — every one reaches Ethan.
+  if (action === "mine-dismiss") {
+    if (!scope.mayFix && !scope.mayMine) return json({ error: "forbidden", detail: "The Fix Queue is not switched on for you." }, 403);
+    const store = String(body.store || "").toUpperCase(), pid = String(body.productId || "");
+    if (!scope.stores.includes(store) || !pid) return json({ error: "forbidden" }, 403);
+    const note = String(body.reason || "").trim().slice(0, 300);
+    if (!note) return json({ error: "reason required", detail: "Say why the photos are fine — that note is how a wrong rule gets fixed." }, 400);
+    const r = (await rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${enc(pid)}&status=eq.open`
+      + `&verdict=in.(retake,fix,reorder)&select=verdict,lister_name&limit=1`))?.[0];
+    if (!r) return json({ error: "conflict", detail: "Nothing on this listing's photos is waiting on a fix any more." }, 409);
+    if (!scope.mayFix && !sameName(r.lister_name, scope.name)) return json({ error: "forbidden", detail: "This listing was not sent to you." }, 403);
+    await sb(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${enc(pid)}&status=eq.open`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ status: "dismissed", decided_by: scope.name, decided_at: now,
+        decided_note: `${r.verdict === "reorder" ? "reorder denied" : "dismissed"}: ${note}` }) });
+    return json({ ok: true, dismissed: pid });
   }
 
   if (action === "full-review") {
@@ -1357,9 +1467,8 @@ Deno.serve(async (req: Request) => {
       // MY FIXES (0204) — the lister's own send-backs, and the feed card's count.
       if (view === "mine") return json(await mineView(scope));
       if (view === "mine-count") {
-        const [cards, photos] = await Promise.all([mineCards(scope), minePhotos(scope)]);
-        const carded = new Set(cards.map((c: any) => String(c.product_id)));
-        return json({ n: cards.length + photos.filter((r: any) => !carded.has(String(r.product_id))).length });
+        const { cards, photoOnly } = await mineSplit(scope);
+        return json({ n: cards.length + photoOnly.length });
       }
       // THE POP-UP FEED (Ethan, 2026-11-24): "they finish a listing, it grades,
       // they come back and there's just a notification" — every picture grade
@@ -1371,6 +1480,9 @@ Deno.serve(async (req: Request) => {
         const since = Math.max(floor, Date.parse(url.searchParams.get("since") || "") || floor);
         const got = await rows(`picture_quality_reviews?store_code=eq.${scope.stores[0]}&lister_name=ilike.${enc(scope.name)}`
           + `&reviewed_at=gt.${encodeURIComponent(new Date(since).toISOString())}&stamp=like.${PQ_RECIPE}:*`
+          // A listing that sold and came back (a return) is graded again but never
+          // re-flagged (0213) — so no pop-up for it either: nobody did anything new.
+          + `&sold_at=is.null`
           + `&select=product_id,sku,title,verdict,findings,reorder,photo_count,reviewed_at,lister_name&order=reviewed_at.asc&limit=20`);
         const mine = got.filter((r: any) => sameName(r.lister_name, scope.name));
         // WHICH LISTING, AT A GLANCE (Ethan, 2026-11-24: "give them an idea on

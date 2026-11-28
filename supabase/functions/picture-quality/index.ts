@@ -373,16 +373,20 @@ function listerFrom(tags: string[], ix: ListerIx, store: string): { tag: string;
 // --- the guide ----------------------------------------------------------------
 
 type Shot = { label: string; cond: string | null; repeatable: boolean; note: string | null; img: string | null; crucial: boolean };
-type Sheet = { slug: string; name: string; group: string | null; updated: string; shots: Shot[] };
+// `versions`: every edit time on the sheet (its own and each shot's), newest
+// last. `updated` is the newest; the older ones are how photosAsChecked finds
+// the stamp a row was given before somebody edited the sheet.
+type Sheet = { slug: string; name: string; group: string | null; updated: string; versions: string[]; shots: Shot[] };
 
 async function loadSheets(): Promise<Sheet[]> {
   const cats = await rows(`pg_categories?active=eq.true&select=id,slug,name,group_name,updated_at`);
   const shots = await rows(`pg_shots?select=category_id,label,cond_label,repeatable,note,image_path,crucial,sort_order,updated_at&order=sort_order`);
   return cats.map((c: any) => {
     const mine = shots.filter((s: any) => s.category_id === c.id);
-    const newest = [c.updated_at, ...mine.map((s: any) => s.updated_at)].sort().pop();
+    const versions = [...new Set([c.updated_at, ...mine.map((s: any) => s.updated_at)].filter(Boolean).map(String))].sort();
+    const newest = versions[versions.length - 1];
     return {
-      slug: c.slug, name: c.name, group: c.group_name, updated: String(newest || ""),
+      slug: c.slug, name: c.name, group: c.group_name, updated: String(newest || ""), versions,
       shots: mine.map((s: any) => ({ label: s.label, cond: s.cond_label, repeatable: !!s.repeatable,
                                      note: s.note, img: s.image_path, crucial: !!s.crucial })),
     };
@@ -936,6 +940,8 @@ async function finalRow(l: Listing, sheet: Sheet, standard: Map<string, number>,
            stamp: await stampFor(l, sheet),
            report: { ...report, orderScore: d.orderScore, pictureScore: d.pictureScore, costs: d.costs,
              sheetPick: pick, reSheeted, looks: second ? 2 : 1, firstLook, secondLook, guideOnly: GUIDE_ONLY,
+             // The photos this was worked out on — see photosAsChecked.
+             checkedPhotos: l.photos.map(srcOf),
              notesAsSent: sentences(l.cosmetic).map(s => (isStandardSentence(s, standard.get(norm(s)) || 0) ? "[standard] " : "[unit] ") + s) } };
 }
 
@@ -1219,6 +1225,10 @@ async function submitBatch(client: Anthropic, store: string, model: string, effo
 // ⚠️ OFF until Ethan says go: the cron gets {off:true} until PQ_QUICK_ON=1.
 // &dry=1 lists what WOULD be graded — Shopify reads only, no model, free.
 const QUICK = { settleMin: 5, newDays: 3, perStore: 20, lateMin: 20 };
+// How long a listing marked sold is watched for a return (Ethan, 2026-11-27:
+// "we have a 30 day return period so we really only need to check for 60 days
+// for now to be safe"). A restock after this is not regraded by the quick check.
+const SOLD_WATCH_DAYS = 60;
 
 // ⚠️ EVERY PHOTO FLAG COUNTS, EVEN ONE FIXED IN MINUTES (Ethan, 2026-11-24: "any
 // flag should count as a flag against the lister because it is important we have
@@ -1236,8 +1246,19 @@ const ctMondayOf = (at: string) => {
   return d.toISOString().slice(0, 10);
 };
 const FLAGGING = new Set(["retake", "fix", "reorder"]);
+// ⚠️ NEVER FLAGGED TWICE AFTER IT SOLD (Ethan, 2026-11-27: a sold listing that
+// comes back in stock "should get regraded just not re-flagged"). A row the
+// store marked sold keeps sold_at for good (saveRows never sends the column), so
+// a grade after a return skips it here. Its first flag is still in the ledger.
 async function recordFlags(store: string, saved: any[], listings: Map<string, Listing>, ix: ListerIx) {
-  const out = saved.filter(r => FLAGGING.has(r.verdict)).map(r => {
+  const flagging = saved.filter(r => FLAGGING.has(r.verdict));
+  if (!flagging.length) return;
+  let wasSold = new Set<string>();
+  try {
+    wasSold = new Set((await rows(`picture_quality_reviews?store_code=eq.${store}&sold_at=not.is.null`
+      + `&product_id=in.(${quoteIds(flagging.map(r => String(r.product_id)))})&select=product_id`)).map((r: any) => String(r.product_id)));
+  } catch (e) { console.error("sold read failed:", String(e)); }
+  const out = flagging.filter(r => !wasSold.has(String(r.product_id))).map(r => {
     const l = listings.get(r.product_id);
     if (!l?.createdAt) return null;
     return { week: ctMondayOf(l.createdAt), store_code: store, product_id: r.product_id, source: "photos",
@@ -1277,6 +1298,20 @@ async function quickCandidates(store: string, shop: string, token: string) {
   const nodes: any[] = [...byId.values()];
   const open = new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
     + `&verdict=in.(retake,fix,reorder)&select=product_id&limit=1000`)).map((r: any) => String(r.product_id)));
+  // ⚠️ BACK IN STOCK AFTER IT SOLD (Ethan, 2026-11-27 — a return). A row the
+  // store marked sold in the last SOLD_WATCH_DAYS (listing-review mark-sold, 0213) is read back BY ID every
+  // run, so a restock is seen whatever the listing's age or when Shopify last
+  // touched it, and it is graded again even though its photos have not changed
+  // (quickSweep skips the stamp test for these). recordFlags never flags it again.
+  const sold = new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.sold`
+    + `&sold_at=gte.${new Date(Date.now() - SOLD_WATCH_DAYS * 86400000).toISOString()}&select=product_id&order=sold_at.desc&limit=250`))
+    .map((r: any) => String(r.product_id)));
+  const missing = [...sold].filter(id => !byId.has(id));
+  for (let i = 0; i < missing.length; i += 100) {
+    const got = await gql(shop, token, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
+        id createdAt updatedAt totalInventory onlineStoreUrl status variants(first: 1) { nodes { sku } } } } }`, { ids: missing.slice(i, i + 100) });
+    for (const n of got?.nodes || []) if (n?.id && n.status === "ACTIVE") { byId.set(String(n.id), n); nodes.push(n); }
+  }
   const settled = Date.now() - QUICK.settleMin * 60000, fresh = Date.now() - QUICK.newDays * 86400000;
   // ⚠️ NO BACKLOG (Ethan, 2026-11-25: "we only need to start grading listings made
   // from the day we start and on … the backlog … will come much later"). Nothing
@@ -1293,7 +1328,8 @@ async function quickCandidates(store: string, shop: string, token: string) {
   // ~37% of new in-stock listings were on the online store (11-25 dry run).
   const onEbay = new Set<string>((await allRows(`ebay_live?store_code=eq.${store}&select=sku&order=sku`))
     .map((r: any) => String(r.sku || "").trim()).filter(Boolean));
-  const c = { seen: nodes.length, notLive: 0, liveOnEbayOnly: 0, outOfStock: 0, stillEditing: 0, older: 0, beforeStart: 0, from: new Date(from).toISOString(), ids: [] as string[] };
+  const c = { seen: nodes.length, notLive: 0, liveOnEbayOnly: 0, outOfStock: 0, stillEditing: 0, older: 0, beforeStart: 0, from: new Date(from).toISOString(),
+              ids: [] as string[], restocked: [] as string[] };
   for (const n of nodes) {
     const sku = String(n.variants?.nodes?.[0]?.sku || "").trim();
     const ebay = !!sku && onEbay.has(sku);
@@ -1302,6 +1338,7 @@ async function quickCandidates(store: string, shop: string, token: string) {
     if (!(Number(n.totalInventory) > 0)) { c.outOfStock++; continue; }
     if (Date.parse(n.createdAt) < from) { c.beforeStart++; continue; }
     if (Date.parse(n.updatedAt) > settled) { c.stillEditing++; continue; }
+    if (sold.has(String(n.id))) { c.restocked.push(String(n.id)); c.ids.push(String(n.id)); continue; }
     if (Date.parse(n.createdAt) < fresh && !open.has(String(n.id))) { c.older++; continue; }
     c.ids.push(String(n.id));
   }
@@ -1310,7 +1347,8 @@ async function quickCandidates(store: string, shop: string, token: string) {
 async function quickSweep(store: string, dry: boolean) {
   const { shop, token } = await shopFor(store);
   const c = await quickCandidates(store, shop, token);
-  const { ids, ...counts } = c;
+  const { ids, restocked, ...counts } = c;
+  const back = new Set(restocked);
   if (!ids.length) return { store, ...counts, toGrade: 0 };
   const [flying, sheets, seenRows] = await Promise.all([inFlight(store), loadSheets(),
     rows(`picture_quality_reviews?store_code=eq.${store}&product_id=in.(${quoteIds(ids)})&select=product_id,stamp`)]);
@@ -1321,14 +1359,14 @@ async function quickSweep(store: string, dry: boolean) {
     for (const l of await fetchListings(shop, token, want.slice(i, i + 25))) {
       if (todo.length >= QUICK.perStore) break;
       const was = seen.get(l.id);
-      if (was && was.startsWith(RECIPE + ":")) {
+      if (was && was.startsWith(RECIPE + ":") && !back.has(l.id)) {
         const same = await Promise.all(sheets.map(s => stampFor(l, s)));
         if (same.includes(was) || was === await stampFor(l, null)) continue;
       }
       todo.push(l);
     }
   }
-  if (dry) return { store, ...counts, inFlight: ids.length - want.length, toGrade: todo.length,
+  if (dry) return { store, ...counts, restocked: restocked.length, inFlight: ids.length - want.length, toGrade: todo.length,
                     listings: todo.map(l => ({ id: l.id, title: l.title, photos: l.photos.length })) };
   if (!todo.length) return { store, ...counts, toGrade: 0 };
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
@@ -2405,6 +2443,42 @@ async function feedbackView(scope: Scope, days: number) {
   };
 }
 
+// ⚠️ ARE THESE STILL THE PHOTOS THAT WERE CHECKED? (2026-11-27) Approve Order
+// and Approve Deletion used to ask the stamp, and the stamp also moves when
+// the GUIDE SHEET is edited — so an edit to a sheet refused every open fix on
+// it although nobody had touched a photo. Now the photos themselves are asked:
+//   "same"      — the live photos are the checked ones, in the checked order;
+//   "reordered" — they are the checked ones already in `order` (the store moved
+//                 them by hand, then pressed the button);
+//   null        — anything else: added, removed, re-shot or moved some other way.
+// Rows graded from 2026-11-27 keep their photos (report.checkedPhotos). Older
+// rows have only the stamp, so it is tried against the sheet as it stands and
+// as it stood at each earlier edit time it still carries. That finds most old
+// rows; one whose earlier time was overwritten by the edit stays refused —
+// safe, because the refusal sends them to I Fixed It / Check Again.
+const srcOf = (p: { src: string }) => p.src.split("?")[0];
+async function photosAsChecked(r: any, l: Listing, sheet: Sheet | null, order: number[] | null): Promise<"same" | "reordered" | null> {
+  let back: Listing["photos"] | null = null;
+  if (order && order.length === l.photos.length) {
+    const b: Listing["photos"] = new Array(l.photos.length);
+    order.forEach((n, i) => { b[n - 1] = l.photos[i]; });
+    if (b.every(Boolean)) back = b;
+  }
+  const saved: string[] | null = Array.isArray(r.report?.checkedPhotos) ? r.report.checkedPhotos : null;
+  if (saved) {
+    const is = (ps: Listing["photos"]) => ps.length === saved.length && ps.every((p, i) => srcOf(p) === saved[i]);
+    return is(l.photos) ? "same" : back && is(back) ? "reordered" : null;
+  }
+  const at = String(r.reviewed_at || "");
+  const tries: (Sheet | null)[] = !sheet ? [null] : [sheet, ...sheet.versions
+    .filter(v => v !== sheet.updated && (!at || v <= at)).reverse().map(v => ({ ...sheet, updated: v }))];
+  for (const s of tries) {
+    if (r.stamp === await stampFor(l, s)) return "same";
+    if (back && r.stamp === await stampFor({ ...l, photos: back }, s)) return "reordered";
+  }
+  return null;
+}
+
 // ⚠️ A REORDER IS APPLIED ONLY TO THE PHOTOS IT WAS WORKED OUT FOR. The
 // suggestion is a list of photo NUMBERS; if a photo was added, removed or moved
 // since the check, those numbers point at different photos and applying them
@@ -2415,28 +2489,42 @@ async function feedbackView(scope: Scope, days: number) {
 // Ethan wants the overnight test re-run near launch, and the first approve is it).
 async function applyReorder(scope: Scope, store: string, productId: string) {
   const r = (await rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
-    + `&select=verdict,status,reorder,deletion,findings,report,stamp,sheet_slug&limit=1`))?.[0];
+    + `&select=verdict,status,reorder,deletion,findings,report,stamp,sheet_slug,reviewed_at&limit=1`))?.[0];
   if (!r || r.status !== "open" || !r.reorder?.suggested) return json({ error: "no open reorder for this listing" }, 409);
   const { shop, token } = await shopFor(store);
   const l = (await fetchListings(shop, token, [productId]))[0];
   if (!l) return json({ error: "listing not found in Shopify" }, 404);
   const sheet = (await loadSheets()).find(s => s.slug === r.sheet_slug) || null;
-  if (r.stamp !== await stampFor(l, sheet)) {
-    return json({ error: "photos changed", detail: "The photos changed after this was checked, so the suggested order no longer fits. Press Check Again." }, 409);
-  }
   const order: number[] = r.reorder.suggested;
-  if (order.length !== l.photos.length || order.some(n => !l.photos[n - 1]?.mediaId)) {
-    return json({ error: "the suggested order does not match this listing's photos" }, 409);
+  let reordered: Listing;
+  // ⚠️ ALREADY PUT IN THAT ORDER BY HAND (2026-11-27). Stores were told the
+  // photos were out of order, fixed it themselves in Shopify, then pressed
+  // Fix The Order For Me — and got "the photos changed", which read as their
+  // fix being wrong. A listing already standing in the suggested order is
+  // recorded done, and nothing in Shopify is touched.
+  const as = await photosAsChecked(r, l, sheet, order);
+  if (!as) {
+    // `code` lets each screen word it for its own buttons: the Picture
+    // Quality queue has Check Again, the store's Fix Queue has I Fixed It.
+    return json({ error: "photos changed", code: "photos-changed",
+      detail: "The photos changed after this was checked, so the suggested order no longer fits. Press Check Again." }, 409);
   }
-  const moves = order.map((n, i) => ({ id: l.photos[n - 1].mediaId, newPosition: String(i) }));
-  const res = await gql(shop, token, `mutation($id: ID!, $moves: [MoveInput!]!) {
-      productReorderMedia(id: $id, moves: $moves) { job { id } mediaUserErrors { field message } } }`,
-    { id: productId, moves });
-  const errs = res?.productReorderMedia?.mediaUserErrors || [];
-  if (errs.length) return json({ error: "shopify refused the reorder", detail: errs.map((e: any) => e.message).join("; ") }, 422);
-  // The stamp moves to the NEW order, so the sweep does not pay to re-grade a
-  // listing whose only change is the one we just made.
-  const reordered = { ...l, photos: order.map(n => l.photos[n - 1]) };
+  if (as === "reordered") {
+    reordered = l;
+  } else {
+    if (order.length !== l.photos.length || order.some(n => !l.photos[n - 1]?.mediaId)) {
+      return json({ error: "the suggested order does not match this listing's photos" }, 409);
+    }
+    const moves = order.map((n, i) => ({ id: l.photos[n - 1].mediaId, newPosition: String(i) }));
+    const res = await gql(shop, token, `mutation($id: ID!, $moves: [MoveInput!]!) {
+        productReorderMedia(id: $id, moves: $moves) { job { id } mediaUserErrors { field message } } }`,
+      { id: productId, moves });
+    const errs = res?.productReorderMedia?.mediaUserErrors || [];
+    if (errs.length) return json({ error: "shopify refused the reorder", detail: errs.map((e: any) => e.message).join("; ") }, 422);
+    // The stamp moves to the NEW order, so the sweep does not pay to re-grade a
+    // listing whose only change is the one we just made.
+    reordered = { ...l, photos: order.map(n => l.photos[n - 1]) };
+  }
   // Done only when nothing else is waiting: a Fix row keeps its real problems,
   // and a Quick Fix with a deletion still to approve keeps that (renumbered).
   const moved = renumberRow({ ...r, reorder: null }, n => { const i = order.indexOf(n); return i < 0 ? null : i + 1; });
@@ -2444,7 +2532,8 @@ async function applyReorder(scope: Scope, store: string, productId: string) {
   const done = r.verdict === "reorder" && !moved.deletion;
   await sb(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
     method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ reorder: null, deletion: moved.deletion, findings, report: moved.report, stamp: await stampFor(reordered, sheet),
+    body: JSON.stringify({ reorder: null, deletion: moved.deletion, findings, stamp: await stampFor(reordered, sheet),
+      report: moved.report && { ...moved.report, checkedPhotos: reordered.photos.map(srcOf) },
       ...(done ? { status: "applied", decided_by: scope.name, decided_at: new Date().toISOString(), decided_note: "reorder approved" } : {}) }),
   });
   return json({ ok: true, applied: productId, order });
@@ -2527,14 +2616,16 @@ function renumberRow(r: any, to: (n: number) => number | null) {
 
 async function applyDeletion(scope: Scope, store: string, productId: string) {
   const r = (await rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
-    + `&select=verdict,status,deletion,reorder,findings,report,stamp,sheet_slug&limit=1`))?.[0];
+    + `&select=verdict,status,deletion,reorder,findings,report,stamp,sheet_slug,reviewed_at&limit=1`))?.[0];
   if (!r || r.status !== "open" || !r.deletion?.photos?.length) return json({ error: "no open deletion for this listing" }, 409);
   const { shop, token } = await shopFor(store);
   const l = (await fetchListings(shop, token, [productId]))[0];
   if (!l) return json({ error: "listing not found in Shopify" }, 404);
   const sheet = (await loadSheets()).find(s => s.slug === r.sheet_slug) || null;
-  if (r.stamp !== await stampFor(l, sheet)) {
-    return json({ error: "photos changed", detail: "The photos changed after this was checked, so the photo to delete may have moved. Press Recheck." }, 409);
+  // The photos, not the stamp — a guide sheet edit must not block it (photosAsChecked).
+  if (await photosAsChecked(r, l, sheet, null) !== "same") {
+    return json({ error: "photos changed", code: "photos-changed",
+      detail: "The photos changed after this was checked, so the photo to delete may have moved. Press Recheck." }, 409);
   }
   const nums: number[] = r.deletion.photos;
   const ids = nums.map(n => l.photos[n - 1]?.mediaId).filter(Boolean);
@@ -2572,7 +2663,8 @@ async function applyDeletion(scope: Scope, store: string, productId: string) {
   const done = r.verdict === "reorder" && !moved.reorder;
   await sb(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
     method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ deletion: null, reorder: moved.reorder, findings, report: moved.report, stamp: await stampFor(kept, sheet),
+    body: JSON.stringify({ deletion: null, reorder: moved.reorder, findings, stamp: await stampFor(kept, sheet),
+      report: moved.report && { ...moved.report, checkedPhotos: kept.photos.map(srcOf) },
       ...(done ? { status: "applied", decided_by: scope.name, decided_at: new Date().toISOString(),
                    decided_note: `deletion approved: photo ${nums.join(", ")}` } : {}) }),
   });

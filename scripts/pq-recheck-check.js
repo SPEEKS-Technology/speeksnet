@@ -29,7 +29,7 @@ t('while checking, only the buttons change: Checking… and Dismiss, both disabl
         var d = document.createElement('div'); d.innerHTML = h;
         var btns = [].slice.call(d.querySelectorAll('.pq-acts button'));
         var chk = btns.find(function (b) { return b.textContent.trim() === 'Checking…'; });
-        var dis = btns.find(function (b) { return b.textContent.trim() === 'Dismiss'; });
+        var dis = btns.find(function (b) { return b.textContent.trim() === 'Not Wrong'; });
         if (!chk || !chk.disabled || !dis || !dis.disabled) bad.push(v + ': buttons');
         if (/pq-row-checking|pq-reviewing|Reviewing The Photos/.test(h)) bad.push(v + ': greyed row is back');
     });

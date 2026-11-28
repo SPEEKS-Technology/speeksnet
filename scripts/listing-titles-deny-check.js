@@ -280,7 +280,7 @@ const DATA = {
     ok(!!ask && ask.note, 'Deny asks in a box with a note field');
     ok(ask && /rule is wrong/.test(ask.hint),
        'and says what the note is for — it is the only signal a rule is misfiring');
-    ok(ask && ask.go === 'Dismiss It', 'the button names the action', ask && ask.go);
+    ok(ask && ask.go === 'Not Wrong', 'the button names the action', ask && ask.go);
     await page.evaluate(() => {
         document.getElementById('ltAskNote').value = 'because I checked it';
         document.querySelector('.lt-ask-go').click();

@@ -39326,7 +39326,68 @@ function _holdPaintBadges(ctx) {
     });
 }
 
+// WHAT YOU'RE TYPING SURVIVES A REDRAW (Ethan, 2026-11-27: "when typing, it'll
+// sometimes just get rid of what I'm typing" — resolving, sending back, any
+// note). The list is rebuilt wholesale with innerHTML, and it is rebuilt
+// without anyone pressing anything: opening the tool draws it, then asks eBay
+// for a fresh read, and when that read changes something (seconds later) it
+// draws again — over a note half written in the first drawing. Tab switches
+// and the filters redraw too. So every redraw lifts what is in the note boxes
+// and claim fields first and puts it back after, cursor included. Matched by
+// the ITEM'S KEY, never the position in the id: a redraw can add or drop a
+// card above, and a position would hand the note to its neighbour. A box whose
+// card is gone (eBay closed it in the meantime) has nowhere to go and is let go.
+function _holdKeepTyped(ctx) {
+    const kept = [];
+    const act = document.activeElement;
+    ['mismatch', 'returns', 'cases', 'payments', 'confirm'].forEach(t => {
+        const w = _holdWrap(ctx, t);
+        if (!w) return;
+        w.querySelectorAll('textarea[id], input[id], select[id]').forEach(el => {
+            let m = el.id.match(/^hold-(note|cl)-[a-z]+-(\d+)(.*)$/), key = null, pre = '', suf = '';
+            if (m) {
+                const e = (_holdIndex[ctx] || [])[+m[2]];
+                if (e) { key = 'i:' + _holdKeyOf(e); pre = m[1]; suf = m[3]; }
+            } else if ((m = el.id.match(/^hold-dm-note-(\d+)$/))) {
+                const x = _holdDmIndex[+m[1]];
+                if (x) { key = 'd:' + x.type + '|' + x.key; pre = 'dm'; }
+            }
+            if (!key) return;
+            const untouched = el.tagName === 'SELECT'
+                ? el.selectedIndex === Math.max(0, [...el.options].findIndex(o => o.defaultSelected))
+                : el.value === el.defaultValue;
+            if (untouched && el !== act) return;
+            let s = null, e2 = null;
+            try { s = el.selectionStart; e2 = el.selectionEnd; } catch (_) {}
+            kept.push({ key, pre, suf, value: el.value, focus: el === act, s, e: e2 });
+        });
+    });
+    return kept;
+}
+function _holdPutTyped(ctx, kept) {
+    if (!kept.length) return;
+    const pos = {};
+    (_holdIndex[ctx] || []).forEach((e, i) => { pos['i:' + _holdKeyOf(e)] = i; });
+    if (ctx === 'ov') _holdDmIndex.forEach((x, i) => { pos['d:' + x.type + '|' + x.key] = i; });
+    kept.forEach(k => {
+        const i = pos[k.key];
+        if (i === undefined) return;
+        const id = k.pre === 'dm' ? `hold-dm-note-${i}` : `hold-${k.pre}-${ctx}-${i}${k.suf}`;
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = k.value;
+        if (k.focus) {
+            el.focus();
+            try { if (k.s != null) el.setSelectionRange(k.s, k.e); } catch (_) {}
+        }
+    });
+}
 function renderHoldItems(ctx) {
+    const kept = _holdKeepTyped(ctx);
+    _holdDrawItems(ctx);
+    _holdPutTyped(ctx, kept);
+}
+function _holdDrawItems(ctx) {
     _holdIndex[ctx] = [];
     const d = _holdData[ctx];
     if (!d) return;
@@ -69492,15 +69553,15 @@ function _pqRow(r, done, rc) {
             : isReorder && !r.stale
             ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Order'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
-                  title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+                  title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Not Wrong</button>`
             : oneClick && del
             ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Deletion'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
-                  title="Keep the photo. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+                  title="Keep the photo. Say why, and the note comes to Listing Health Notes.">Not Wrong</button>`
             : `<button class="lt-ok" onclick="pqRecheck('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
                   title="After the photos are retaken in Shopify, this grades them again now instead of waiting for the next sweep. About a minute.">${checking ? 'Checking…' : 'Recheck'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
-                  title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Dismiss</button>`}
+                  title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Not Wrong</button>`}
         </div>
         <!-- A duplicate to delete beside a reorder, or on a flagged row: its own
              line, so the row's main pair keeps its one job. -->
@@ -69532,7 +69593,7 @@ async function pqDismiss(pid, isReorder) {
         note: { label: isReorder ? 'Why Keep This Order?' : 'Why Are They Fine?', required: true,
                 placeholder: isReorder ? 'e.g. the box shot first is deliberate here' : 'e.g. the serial is under the battery cover',
                 hint: 'Required — this note is how we find out a rule is wrong. Nothing on the listing changes.' },
-        go: 'Dismiss It', cancel: 'Cancel' });
+        go: 'Not Wrong', cancel: 'Cancel' });
     if (!said) return;
     _pqBusy.add(pid); ecRender();
     const res = await _pqPost({ action: isReorder ? 'deny-reorder' : 'dismiss', store: _ecStore,
@@ -70006,6 +70067,10 @@ function _fqDetailHtml(c, store, allClear) {
     // A card with only his lines on it skips the overnight recheck (eye-only)
     // and goes straight to his Confirm Fixes — so the button says that.
     const toEthan = !photoLine;
+    // IT SOLD (Ethan, 2026-11-27): a flagged listing that sold has nothing left to
+    // fix — this takes it off the list. It still counts as a flag on the lister.
+    const soldable = !notes && (photoLine || ethanLine);
+    const soldBtn = soldable ? `<button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${busy} onclick="fqMarkSold('${_ecEsc(store)}','${_ecEsc(c.productId)}')">It Sold</button>` : '';
     return `<div class="lr-detail-in">
       ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
       ${back && !fromCard ? `<div class="lr-back"><b>⟲ ${_FQ_RETURNED[back.returnedKind] || 'Sent Back'}</b>
@@ -70023,7 +70088,9 @@ function _fqDetailHtml(c, store, allClear) {
       <div class="lr-fixes">${c.lines.filter(l => !(fromCard && l.kind === 'ethan')).map(l => _fqFixHtml(c, l, store)).join('')}</div>
       ${handFix ? `<div class="lr-done">
           <button type="button" class="lr-btn lr-btn-main" ${busy || (oneClickOpen ? 'disabled' : '')} onclick="fqMarkFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">${toEthan ? 'I Fixed It — Send For A Final Check' : 'I Fixed It — Recheck It'}</button>
-          <span class="lr-hint">${oneClickOpen ? 'Use or dismiss the title and category fixes first.' : toEthan ? 'Checked once more before it closes. Opens the next listing.' : 'Opens the next listing.'}</span></div>` : ''}
+          ${soldBtn}
+          <span class="lr-hint">${oneClickOpen ? 'Use or dismiss the title and category fixes first.' : toEthan ? 'Checked once more before it closes. Opens the next listing.' : 'Moves it to Being Rechecked and opens the next listing.'}</span></div>`
+        : soldBtn ? `<div class="lr-done">${soldBtn}<span class="lr-hint">Sold before it was fixed? This takes it off the list.</span></div>` : ''}
       ${notes ? `<div class="lr-done">
           <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="fqNotesSeen('${_ecEsc(store)}','${_ecEsc(c.productId)}')">Got It</button>
           <span class="lr-hint">Nothing to fix — this is not a flag on anyone. Got It takes the notes off your list.</span></div>` : ''}
@@ -70043,6 +70110,8 @@ function _fqWaitingHtml(store) {
             <span class="lr-meta">${said(c.card.status)}${c.card.fixedBy ? ` · ${_ecEsc(c.card.fixedBy)}` : ''}</span></span>
           ${c.card.status === 'fixed' ? `<button type="button" class="lr-btn lr-btn-ghost" ${_fqBusy.has(c.productId) ? 'disabled' : ''}
               onclick="fqUndoFixed('${_ecEsc(store)}','${_ecEsc(c.productId)}')">Undo</button>` : ''}
+          ${c.card.status === 'fixed' || c.card.status === 'regrading' ? `<button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${_fqBusy.has(c.productId) ? 'disabled' : ''}
+              onclick="fqMarkSold('${_ecEsc(store)}','${_ecEsc(c.productId)}')">It Sold</button>` : ''}
         </div>`).join('') : '<div class="lr-empty">Nothing Waiting.</div>'}
     </div>`;
 }
@@ -70146,7 +70215,15 @@ async function _fqRun(pid, work, advance) {
     let res;
     try { res = await work(); } catch (e) { res = { ok: false, body: { detail: String(e && e.message || e) } }; }
     _fqBusy.delete(pid);
-    if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.');
+    // ⚠️ THERE IS NO CHECK AGAIN ON THIS LIST (2026-11-27). The photo tool's
+    // "photos changed" answer says to press it, and stores who had just fixed
+    // the photos themselves read that as their fix being wrong. Here the next
+    // step is I Fixed It, which has the new photos checked again.
+    const changed = !res.ok && res.body && res.body.code === 'photos-changed';
+    if (changed) await _ltTell('The Photos Were Changed',
+        'The photos were changed in Shopify after they were checked, so this fix no longer fits them. If you have fixed the photos, press I Fixed It — they are checked again within about 15 minutes.',
+        'warn', 'Listing Fixes');
+    else if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.', null, 'Listing Fixes');
     else if (advance && next) _fqSel = next;
     await _fqReload();
     // I Fixed It opens the next listing — at the top, like a click on it would.
@@ -70166,6 +70243,19 @@ async function fqMarkFixed(store, pid) {
     if (!said) return;
     await _fqRun(pid, () => _lrPost({ action: 'mark-fixed', store, productId: pid }), true);
 }
+// ⚠️ IT SOLD (Ethan, 2026-11-27). Off the list, still a flag on the lister. The
+// server refuses while Shopify shows stock. If it comes back (a return), the
+// picture check grades it again by itself — and never flags it a second time.
+const _LR_SOLD_SAY = 'It comes off the list. It still counts as a flag for whoever listed it. If it is ever back in stock (a return), the photos are checked again — without a new flag.';
+async function fqMarkSold(store, pid) {
+    const c = _fqCard(pid);
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'Listing Fixes', title: 'Mark This Listing Sold?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p><p class="lt-ask-say">${_LR_SOLD_SAY}</p>`,
+        go: 'It Sold', cancel: 'Cancel' });
+    if (!said) return;
+    await _fqRun(pid, () => _lrPost({ action: 'mark-sold', store, productId: pid }), !_fqWaitView);
+}
+window.fqMarkSold = fqMarkSold;
 async function fqNotesSeen(store, pid) {
     await _fqRun(pid, () => _lrPost({ action: 'notes-seen', store, productId: pid }), true);
 }
@@ -70976,10 +71066,80 @@ const _lrMayFull = () => typeof _jumpFeatureVisible === 'function' && _jumpFeatu
 // for pictures).
 const _lrMayMine = () => typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-my-fixes');
 const _lrMineOnly = () => _lrMayMine() && !_lrMayFix() && !_lrMaySpot() && !_lrMayFull();
-let _mfData = null, _mfErr = null, _mfSel = null;
+let _mfData = null, _mfErr = null, _mfSel = null, _mfWaitView = false;
 const _mfBusy = new Set();
+// ⚠️ SAMPLE LISTINGS FOR TEST ACCOUNTS (Ethan, 2026-11-27: "show me some dummy
+// data on test employee so I can see the changes"). The server never gives a
+// test account photo flags (test accounts list nothing), so a test session gets
+// these three, drawn here and never written anywhere: a photo flag with missing
+// shots, a wrong-order one, and one already in Being Rechecked. Their buttons
+// act on this page only (_mfSampleAct) — a real mark-sold from a test PIN is
+// refused by the server anyway. Real test cards still show beside them.
+const _MF_PG = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/storage/v1/object/public/picture-guide/';
+const _mfPg = (label, path) => ({ label, cond: null, img: _MF_PG + encodeURIComponent(path) });
+const _MF_IPHONE = [_mfPg('Lock Screen', '1795638342717_752421_IMG_9546.jpeg'), _mfPg('Settings About Page', '1795638366105_108495_IMG_9553.jpeg'),
+    _mfPg('Battery Health', '1795638372718_343883_IMG_9552.jpeg'), _mfPg('Screen Off', '1795638382316_526300_IMG_9554.jpeg'),
+    _mfPg('Back of Phone', '1795638386550_373633_IMG_9547.jpeg'), _mfPg('Top Side of Phone', '1795638389775_563937_IMG_9550.jpeg'),
+    _mfPg('Bottom Side of Phone', '1795638392269_468853_IMG_9551.jpeg'), _mfPg('Side of Phone', '1795638395166_343291_IMG_9548.jpeg'),
+    _mfPg('Opposite Side of Phone', '1795638398557_167888_IMG_9549.jpeg')];
+const _MF_CONSOLE = [_mfPg('Front of Console (Console Only)', '1795627832327_380574_IMG_9501.jpeg'), _mfPg('Back of Console', '1795627835458_158902_IMG_9503.jpeg'),
+    _mfPg('Side of Console', 'game-console-05-side-of-console.jpg'), _mfPg('Opposite Side of Console', 'game-console-06-opposite-side-of-console.jpg'),
+    _mfPg('Top of Console', '1795627839090_328042_IMG_9502.jpeg'), _mfPg('Bottom of Console', '1795627842549_780426_IMG_9504.jpeg')];
+const _mfPh = g => g.map(x => ({ thumb: x.img, url: x.img }));
+function _mfSamples() {
+    const iphonePhotos = _mfPh(_MF_IPHONE.filter(g => g.label !== 'Settings About Page' && g.label !== 'Battery Health'));
+    // The console shot back first: the order the guide wants puts the front first.
+    const con = _mfPh(_MF_CONSOLE), conPhotos = [con[1], con[0], con[2], con[3], con[4], con[5]];
+    return {
+        photoItems: [
+            { productId: 'sample-iphone', sample: true, title: 'Apple iPhone 14 Pro 128GB Unlocked Deep Purple (Sample)', sku: 'OVL-SAMPLE-1',
+              price: 549.99, createdAt: new Date(Date.now() - 3 * 3600000).toISOString(), photos: iphonePhotos,
+              lines: [{ kind: 'photos', verdict: 'fix', sheet: 'Apple iPhones', guide: _MF_IPHONE, reorder: null,
+                findings: [{ code: 'missing_shot', shot: 'Settings About Page', text: 'Missing: Settings About Page.' },
+                           { code: 'missing_shot', shot: 'Battery Health', text: 'Missing: Battery Health.' }] }] },
+            { productId: 'sample-console', sample: true, title: 'Sony PlayStation 5 Slim Disc 1TB Console (Sample)', sku: 'OVL-SAMPLE-2',
+              price: 379.99, createdAt: new Date(Date.now() - 26 * 3600000).toISOString(), photos: conPhotos,
+              lines: [{ kind: 'photos', verdict: 'reorder', sheet: 'Game Console', guide: _MF_CONSOLE,
+                reorder: { suggested: [2, 1, 3, 4, 5, 6], current: [1, 2, 3, 4, 5, 6] },
+                findings: [{ code: 'order', text: 'The back of the console is first — the guide starts with the front.' }] }] },
+        ],
+        waiting: [{ productId: 'sample-android', sample: true, title: 'Samsung Galaxy S23 128GB Unlocked Phantom Black (Sample)',
+            photos: [{ thumb: _MF_PG + '1795641360088_372836_IMG_9577.jpeg' }], status: 'fixed',
+            fixedBy: sessionStorage.getItem('speeksUserName') || 'Test Employee', fixedAt: new Date(Date.now() - 20 * 60000).toISOString() }],
+    };
+}
+let _mfSampleState = null;   // the samples as this page has moved them
+function _mfAddSamples() {
+    if (!window._speeksTestSession || !_mfData) return;
+    if (!_mfSampleState) _mfSampleState = _mfSamples();
+    _mfData.photoItems = [...(_mfData.photoItems || []).filter(x => !x.sample), ..._mfSampleState.photoItems];
+    _mfData.waiting = [...(_mfData.waiting || []).filter(x => !x.sample), ..._mfSampleState.waiting];
+}
+// What the real buttons would do, on the samples only.
+async function _mfSampleAct(pid, act) {
+    const st = _mfSampleState; if (!st) return;
+    const i = st.photoItems.findIndex(x => x.productId === pid), w = st.waiting.findIndex(x => x.productId === pid);
+    if (act === 'fixed' && i >= 0) {
+        const it = st.photoItems.splice(i, 1)[0];
+        st.waiting.unshift({ productId: it.productId, sample: true, title: it.title, photos: (it.photos || []).slice(0, 1), status: 'fixed',
+            fixedBy: sessionStorage.getItem('speeksUserName') || 'Test Employee', fixedAt: new Date().toISOString() });
+    } else if ((act === 'sold' || act === 'dismiss') && i >= 0) st.photoItems.splice(i, 1);
+    else if (act === 'undo' && w >= 0) {
+        const it = st.waiting.splice(w, 1)[0];
+        const fresh = _mfSamples().photoItems.find(x => x.productId === pid)
+            || { productId: it.productId, sample: true, title: it.title, sku: 'OVL-SAMPLE-3', price: 429.99, photos: it.photos,
+                 lines: [{ kind: 'photos', verdict: 'fix', guide: [], findings: [{ code: 'missing_shot', shot: 'Storage Information', text: 'Missing: Storage Information.' }] }] };
+        st.photoItems.push(fresh);
+    }
+    _mfSel = null;
+    _mfAddSamples(); ecRender();
+    await _ltTell('Sample Listing', act === 'dismiss' ? 'On a real listing this takes it off your list, and your note goes to Ethan’s rule notes.'
+        : act === 'sold' ? 'On a real listing this takes it off your list and your manager’s. It still counts as a flag.'
+        : act === 'fixed' ? 'On a real listing this moves it to Being Rechecked until the photo check grades the new photos.'
+        : 'On a real listing this puts it back on your list.', null, 'My Listing Corrections');
+}
 async function _mfLoad() {
-    try { _mfData = await _lrFetch('?view=mine'); _mfErr = null; }
+    try { _mfData = await _lrFetch('?view=mine'); _mfErr = null; _mfAddSamples(); }
     catch (e) { _mfErr = e.message || String(e); }
     // Their own flag rate (2026-11-24) — the server returns only their rows.
     // Best-effort: a failure leaves the strip off, never the list.
@@ -71023,7 +71183,7 @@ function _mfChrome() {
     const host = document.getElementById('ecStoreFilter')?.closest('.dd-host'); if (host) host.style.display = 'none';
     const sb = document.getElementById('ecStandbyHost'); if (sb) sb.innerHTML = '';
     const sub = document.getElementById('ecSubtitle');
-    const n = (_mfData?.items || []).length;
+    const n = (_mfData?.items || []).length + (_mfData?.photoItems || []).length;
     if (sub) sub.textContent = `My Listing Corrections · ${n ? n + ' To Fix' : 'All Clear'}`;
 }
 function _mfHtml() {
@@ -71052,7 +71212,11 @@ function _mfHtml() {
             ${(pl.guide || []).length ? `<span class="lr-k">The Guide — Shoot It Like This</span>${_lrGuideStrip(pl.guide, null,
                 new Set(_fqMissingList(pl).map(x => x.toLowerCase())))}` : ''}
             <div class="lr-fixes">${_fqFixHtml(c, pl, _mfData.store, true)}</div>
-            <div class="lr-done"><span class="lr-hint lr-hint-solo">Fix the photos in Shopify. They are checked again by themselves within about 15 minutes of your last change — when they pass, this comes off your list and your manager’s.</span></div>
+            <div class="lr-done">
+              <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Recheck It</button>
+              <button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${busy} onclick="mfMarkSold('${_ecEsc(c.productId)}')">It Sold</button>
+              <button type="button" class="lr-btn lr-btn-ghost" ${busy} onclick="mfNotWrong('${_ecEsc(c.productId)}')">Not Wrong…</button>
+              <span class="lr-hint">Fix the photos in Shopify first. I Fixed It moves it to Being Rechecked — the photos are checked again within about 15 minutes of your last change.</span></div>
           </div>`
         : `<div class="lr-detail-in">
             ${window._speeksTestSession ? _LR_TEST_NOTE : ''}
@@ -71065,16 +71229,31 @@ function _mfHtml() {
             ${(c.photos || []).length ? _lrPhotos(c.photos, []) : ''}
             <div class="lr-done">
               <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Send For A Final Check</button>
+              <button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${busy} onclick="mfMarkSold('${_ecEsc(c.productId)}')">It Sold</button>
               <span class="lr-hint">Fix it in Shopify first. It gets one final check, and your manager sees it is done.</span></div>
           </div>`;
+    // BEING RECHECKED (2026-11-27): what was marked fixed and waits on the photo
+    // check — off the list above, here until the new grade lands.
+    const waiting = _mfData.waiting || [];
+    const waitHtml = `<div class="lr-detail-in">
+      <div class="lr-head"><div class="lr-head-t"><h3>Being Rechecked</h3>
+        <span class="lr-meta">Marked fixed. The photo check grades them again within about 15 minutes of the last change; anything still wrong comes back to your list.</span></div></div>
+      ${waiting.length ? waiting.map(w => `<div class="lr-wait">
+          <span class="lr-thumb">${w.photos && w.photos[0] ? `<img src="${_ecEsc(w.photos[0].thumb)}" alt="" loading="lazy">` : ''}</span>
+          <span class="lr-row-mid"><span class="lr-row-t">${_ecEsc(w.title || '')}</span>
+            <span class="lr-meta">Being Rechecked${w.fixedBy ? ` · ${_ecEsc(w.fixedBy)}` : ''}</span></span>
+          ${w.status === 'fixed' ? `<button type="button" class="lr-btn lr-btn-ghost" ${_mfBusy.has(w.productId) ? 'disabled' : ''} onclick="mfUndoFixed('${_ecEsc(w.productId)}')">Undo</button>` : ''}
+        </div>`).join('') : '<div class="lr-empty">Nothing Waiting.</div>'}
+    </div>`;
     return `<div class="lr-split">
       <section class="lr-list">
         <div class="lr-list-h"><div class="lr-list-title"><h2>${items.length} Listing Correction${items.length === 1 ? '' : 's'} Requested</h2></div></div>
         ${_mfRateHtml()}
         ${_pqPopBarHtml()}
         <div class="lr-rows">${rows || '<div class="lh-clear">Nothing To Fix.</div>'}</div>
+        <div class="lr-list-f"><div class="lr-list-f-btns"><button type="button" class="lr-btn lr-btn-ghost lr-btn-sm lr-wait-btn${_mfWaitView ? ' lr-wait-on' : ''}" onclick="mfWaiting()">Being Rechecked${waiting.length ? ` ${waiting.length}` : ''}</button></div></div>
       </section>
-      <section class="lr-detail">${detail}</section>
+      <section class="lr-detail">${_mfWaitView ? waitHtml : detail}</section>
     </div>`;
 }
 // ============================================================================
@@ -71227,23 +71406,63 @@ function _mfSeen(pid) {
     c.card.assigneeSeenAt = new Date().toISOString();
     _lrPost({ action: 'mine-seen', productId: pid }).catch(() => {});
 }
-function mfPick(pid) { _mfSel = pid; _mfSeen(pid); ecRender(); _lrScrollTop(); }
-async function mfMarkFixed(pid) {
-    const c = (_mfData?.items || []).find(x => x.productId === pid);
-    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Listing Corrections', title: 'Mark This Listing Fixed?',
-        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
-               <p class="lt-ask-say">It gets one final check. If something is still wrong, it comes back here with a note.</p>`,
-        go: 'I Fixed It', cancel: 'Not Yet' });
-    if (!said) return;
+function mfPick(pid) { _mfSel = pid; _mfWaitView = false; _mfSeen(pid); ecRender(); _lrScrollTop(); }
+function mfWaiting() { _mfWaitView = !_mfWaitView; ecRender(); _lrScrollTop(); }
+const _mfItem = pid => [...(_mfData?.items || []), ...(_mfData?.photoItems || [])].find(x => x.productId === pid);
+async function _mfRun(pid, payload) {
     _mfBusy.add(pid); ecRender();
-    const res = await _lrPost({ action: 'mark-fixed', store: _mfData.store, productId: pid }).catch(e => ({ ok: false, body: { detail: String(e) } }));
+    const res = await _lrPost({ ...payload, store: _mfData.store, productId: pid }).catch(e => ({ ok: false, body: { detail: String(e) } }));
     _mfBusy.delete(pid);
     if (!res.ok) await _ltTell('That Was Not Saved', (res.body && (res.body.detail || res.body.error)) || 'The request failed.');
     _mfSel = null;
     await _mfLoad(); ecRender();
     if (typeof checkMyFixReminders === 'function') checkMyFixReminders();
 }
-Object.assign(window, { mfPick, mfMarkFixed });
+async function mfMarkFixed(pid) {
+    const c = _mfItem(pid);
+    const photo = c && !c.card;
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Listing Corrections', title: 'Mark This Listing Fixed?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>
+               <p class="lt-ask-say">${photo ? 'It moves to Being Rechecked. The photos are checked again within about 15 minutes of your last change; if something is still wrong, it comes back here.'
+                 : 'It gets one final check. If something is still wrong, it comes back here with a note.'}</p>`,
+        go: 'I Fixed It', cancel: 'Not Yet' });
+    if (!said) return;
+    if (c && c.sample) return _mfSampleAct(pid, 'fixed');
+    await _mfRun(pid, { action: 'mark-fixed' });
+}
+async function mfMarkSold(pid) {
+    const c = _mfItem(pid);
+    const said = await _ltAsk({ kind: 'ok', eyebrow: 'My Listing Corrections', title: 'Mark This Listing Sold?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p><p class="lt-ask-say">${_LR_SOLD_SAY}</p>`,
+        go: 'It Sold', cancel: 'Cancel' });
+    if (!said) return;
+    if (c && c.sample) return _mfSampleAct(pid, 'sold');
+    await _mfRun(pid, { action: 'mark-sold' });
+}
+// NOT WRONG on the lister's own photo flag (Ethan, 2026-11-27) — the same ask,
+// the same required note, as the Fix Queue's fqDismissPhotos. It goes through
+// listing-review (mine-dismiss), since a lister cannot reach picture-quality,
+// and lands in Listing Health Notes beside the managers' notes.
+async function mfNotWrong(pid) {
+    const c = _mfItem(pid);
+    const l = c && c.lines && c.lines[0];
+    const isReorder = !!(l && l.verdict === 'reorder');
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'My Listing Corrections',
+        title: isReorder ? 'Keep The Current Photo Order?' : 'Are These Photos Fine As They Are?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>`,
+        note: { label: isReorder ? 'Why Keep This Order?' : 'Why Are They Fine?', required: true,
+                placeholder: 'e.g. the serial is under the battery cover',
+                hint: 'Required — it goes to Ethan’s rule notes, and it is how a wrong rule gets fixed.' },
+        go: 'Not Wrong', cancel: 'Cancel' });
+    if (!said || !said.note) return;
+    if (c && c.sample) return _mfSampleAct(pid, 'dismiss');
+    await _mfRun(pid, { action: 'mine-dismiss', reason: said.note });
+}
+async function mfUndoFixed(pid) {
+    if (String(pid).startsWith('sample-')) return _mfSampleAct(pid, 'undo');
+    await _mfRun(pid, { action: 'undo-fixed' });
+}
+Object.assign(window, { mfPick, mfMarkFixed, mfMarkSold, mfNotWrong, mfUndoFixed, mfWaiting });
 
 async function _frLoadList() {
     _frList = null; _frListErr = null;
@@ -72453,8 +72672,8 @@ function _ltDenyKind(r) {
         ? { as: 'ebay-stale', label: 'Ours Is Fine',
             hint: 'Our Shopify title is right as it is — it is the eBay copy that needs correcting, and Marketplace Connect owns that. Clears the row without recording this as a bad rule.',
             ask: 'Confirm our Shopify title here is the right one?\n\nThis clears the row and records that the EBAY listing is the copy that needs correcting. Nothing is changed on either listing.' }
-        // "Dismiss", the word all three tools use (2026-09-30). It was Deny.
-        : { as: 'not-a-problem', label: 'Dismiss',
+        // "Not Wrong", the word all three tools use (Ethan, 2026-11-27: "I like Not Wrong better than Dismiss"). It was Dismiss, and before that Deny.
+        : { as: 'not-a-problem', label: 'Not Wrong',
             hint: 'This title is fine as it is — the finding was wrong.',
             ask: 'Why is this title fine as it is?' };
 }
@@ -72613,8 +72832,8 @@ function _ltAskFill(bodyHtml, goLabel) {
 
 // Something went wrong, or something landed half-done. One button, and it is
 // never called for anything the person can act on inside the dialog.
-function _ltTell(title, say, kind) {
-    return _ltAsk({ kind: kind || 'bad', eyebrow: 'Listing Titles', title,
+function _ltTell(title, say, kind, eyebrow) {
+    return _ltAsk({ kind: kind || 'bad', eyebrow: eyebrow || 'Listing Titles', title,
                     body: `<p class="lt-ask-say">${_ecEsc(say)}</p>`,
                     cancel: null, go: 'Got It' });
 }
@@ -72773,7 +72992,7 @@ async function ltDeny(pid) {
                     against the rule that raised it.</p>`,
             go: 'Ours Is Fine', cancel: 'Cancel' })
         : await _ltAsk({
-            kind: 'warn', eyebrow: 'Dismiss This Finding',
+            kind: 'warn', eyebrow: 'Not Wrong',
             title: 'Is This Title Fine As It Is?',
             body: `<div class="lt-ask-pair"><div class="lt-now">
                      <span class="lt-lab">Title</span>
@@ -72781,8 +73000,8 @@ async function ltDeny(pid) {
             note: { label: 'Why Is It Fine?', required: true,
                     placeholder: 'e.g. the model name really does repeat on the box',
                     hint: 'Required — shown in Confirmed Correct on this tab, and it is how we find'
-                        + ' out a rule is wrong. Four dismissals of one rule is a rule to go and fix.' },
-            go: 'Dismiss It', cancel: 'Cancel' });
+                        + ' out a rule is wrong. Four of these on one rule is a rule to go and fix.' },
+            go: 'Not Wrong', cancel: 'Cancel' });
     if (!said) return;
     const reason = said.note || '';
     _ltBusy.add(pid); ecRender();
@@ -73063,7 +73282,7 @@ function _rcHtml() {
                     onclick="rcFileOne(this.dataset.id, this)">Submit</button>
             <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
                     title="${_rcMode === 'misfiled' ? 'Leave it on the shelf it is on and stop offering it' : 'Leave it in Other and stop offering it'}"
-                    onclick="rcSkip(this.dataset.id, this)">Dismiss</button>
+                    onclick="rcSkip(this.dataset.id, this)">Not Wrong</button>
           </td>
         </tr>`;
     }).join('');
@@ -73265,10 +73484,10 @@ async function rcFileSelected() {
 window.rcFileSelected = rcFileSelected;
 
 async function rcSkip(id, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = 'Dismissing…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     const res = await _rcPost({ action: 'skip', store: _ecStore, productId: id });
     if (!res.ok) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Dismiss'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Not Wrong'; }
         alert(res.body?.detail || res.body?.error || 'Could not skip that.');
         return;
     }
