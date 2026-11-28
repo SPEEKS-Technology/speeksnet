@@ -69553,15 +69553,15 @@ function _pqRow(r, done, rc) {
             : isReorder && !r.stale
             ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Order'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
-                  title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+                  title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Not Wrong</button>`
             : oneClick && del
             ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Deletion'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
-                  title="Keep the photo. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+                  title="Keep the photo. Say why, and the note comes to Listing Health Notes.">Not Wrong</button>`
             : `<button class="lt-ok" onclick="pqRecheck('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
                   title="After the photos are retaken in Shopify, this grades them again now instead of waiting for the next sweep. About a minute.">${checking ? 'Checking…' : 'Recheck'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
-                  title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Dismiss</button>`}
+                  title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Not Wrong</button>`}
         </div>
         <!-- A duplicate to delete beside a reorder, or on a flagged row: its own
              line, so the row's main pair keeps its one job. -->
@@ -69593,7 +69593,7 @@ async function pqDismiss(pid, isReorder) {
         note: { label: isReorder ? 'Why Keep This Order?' : 'Why Are They Fine?', required: true,
                 placeholder: isReorder ? 'e.g. the box shot first is deliberate here' : 'e.g. the serial is under the battery cover',
                 hint: 'Required — this note is how we find out a rule is wrong. Nothing on the listing changes.' },
-        go: 'Dismiss It', cancel: 'Cancel' });
+        go: 'Not Wrong', cancel: 'Cancel' });
     if (!said) return;
     _pqBusy.add(pid); ecRender();
     const res = await _pqPost({ action: isReorder ? 'deny-reorder' : 'dismiss', store: _ecStore,
@@ -71123,7 +71123,7 @@ async function _mfSampleAct(pid, act) {
         const it = st.photoItems.splice(i, 1)[0];
         st.waiting.unshift({ productId: it.productId, sample: true, title: it.title, photos: (it.photos || []).slice(0, 1), status: 'fixed',
             fixedBy: sessionStorage.getItem('speeksUserName') || 'Test Employee', fixedAt: new Date().toISOString() });
-    } else if (act === 'sold' && i >= 0) st.photoItems.splice(i, 1);
+    } else if ((act === 'sold' || act === 'dismiss') && i >= 0) st.photoItems.splice(i, 1);
     else if (act === 'undo' && w >= 0) {
         const it = st.waiting.splice(w, 1)[0];
         const fresh = _mfSamples().photoItems.find(x => x.productId === pid)
@@ -71133,7 +71133,8 @@ async function _mfSampleAct(pid, act) {
     }
     _mfSel = null;
     _mfAddSamples(); ecRender();
-    await _ltTell('Sample Listing', act === 'sold' ? 'On a real listing this takes it off your list and your manager’s. It still counts as a flag.'
+    await _ltTell('Sample Listing', act === 'dismiss' ? 'On a real listing this takes it off your list, and your note goes to Ethan’s rule notes.'
+        : act === 'sold' ? 'On a real listing this takes it off your list and your manager’s. It still counts as a flag.'
         : act === 'fixed' ? 'On a real listing this moves it to Being Rechecked until the photo check grades the new photos.'
         : 'On a real listing this puts it back on your list.', null, 'My Listing Corrections');
 }
@@ -71214,6 +71215,7 @@ function _mfHtml() {
             <div class="lr-done">
               <button type="button" class="lr-btn lr-btn-main" ${busy} onclick="mfMarkFixed('${_ecEsc(c.productId)}')">I Fixed It — Recheck It</button>
               <button type="button" class="lr-btn lr-btn-ghost lr-btn-green" ${busy} onclick="mfMarkSold('${_ecEsc(c.productId)}')">It Sold</button>
+              <button type="button" class="lr-btn lr-btn-ghost" ${busy} onclick="mfNotWrong('${_ecEsc(c.productId)}')">Not Wrong…</button>
               <span class="lr-hint">Fix the photos in Shopify first. I Fixed It moves it to Being Rechecked — the photos are checked again within about 15 minutes of your last change.</span></div>
           </div>`
         : `<div class="lr-detail-in">
@@ -71437,11 +71439,30 @@ async function mfMarkSold(pid) {
     if (c && c.sample) return _mfSampleAct(pid, 'sold');
     await _mfRun(pid, { action: 'mark-sold' });
 }
+// NOT WRONG on the lister's own photo flag (Ethan, 2026-11-27) — the same ask,
+// the same required note, as the Fix Queue's fqDismissPhotos. It goes through
+// listing-review (mine-dismiss), since a lister cannot reach picture-quality,
+// and lands in Listing Health Notes beside the managers' notes.
+async function mfNotWrong(pid) {
+    const c = _mfItem(pid);
+    const l = c && c.lines && c.lines[0];
+    const isReorder = !!(l && l.verdict === 'reorder');
+    const said = await _ltAsk({ kind: 'warn', eyebrow: 'My Listing Corrections',
+        title: isReorder ? 'Keep The Current Photo Order?' : 'Are These Photos Fine As They Are?',
+        body: `<p class="lt-ask-say">${_ecEsc(c?.title || '')}</p>`,
+        note: { label: isReorder ? 'Why Keep This Order?' : 'Why Are They Fine?', required: true,
+                placeholder: 'e.g. the serial is under the battery cover',
+                hint: 'Required — it goes to Ethan’s rule notes, and it is how a wrong rule gets fixed.' },
+        go: 'Not Wrong', cancel: 'Cancel' });
+    if (!said || !said.note) return;
+    if (c && c.sample) return _mfSampleAct(pid, 'dismiss');
+    await _mfRun(pid, { action: 'mine-dismiss', reason: said.note });
+}
 async function mfUndoFixed(pid) {
     if (String(pid).startsWith('sample-')) return _mfSampleAct(pid, 'undo');
     await _mfRun(pid, { action: 'undo-fixed' });
 }
-Object.assign(window, { mfPick, mfMarkFixed, mfMarkSold, mfUndoFixed, mfWaiting });
+Object.assign(window, { mfPick, mfMarkFixed, mfMarkSold, mfNotWrong, mfUndoFixed, mfWaiting });
 
 async function _frLoadList() {
     _frList = null; _frListErr = null;
@@ -72651,8 +72672,8 @@ function _ltDenyKind(r) {
         ? { as: 'ebay-stale', label: 'Ours Is Fine',
             hint: 'Our Shopify title is right as it is — it is the eBay copy that needs correcting, and Marketplace Connect owns that. Clears the row without recording this as a bad rule.',
             ask: 'Confirm our Shopify title here is the right one?\n\nThis clears the row and records that the EBAY listing is the copy that needs correcting. Nothing is changed on either listing.' }
-        // "Dismiss", the word all three tools use (2026-09-30). It was Deny.
-        : { as: 'not-a-problem', label: 'Dismiss',
+        // "Not Wrong", the word all three tools use (Ethan, 2026-11-27: "I like Not Wrong better than Dismiss"). It was Dismiss, and before that Deny.
+        : { as: 'not-a-problem', label: 'Not Wrong',
             hint: 'This title is fine as it is — the finding was wrong.',
             ask: 'Why is this title fine as it is?' };
 }
@@ -72971,7 +72992,7 @@ async function ltDeny(pid) {
                     against the rule that raised it.</p>`,
             go: 'Ours Is Fine', cancel: 'Cancel' })
         : await _ltAsk({
-            kind: 'warn', eyebrow: 'Dismiss This Finding',
+            kind: 'warn', eyebrow: 'Not Wrong',
             title: 'Is This Title Fine As It Is?',
             body: `<div class="lt-ask-pair"><div class="lt-now">
                      <span class="lt-lab">Title</span>
@@ -72979,8 +73000,8 @@ async function ltDeny(pid) {
             note: { label: 'Why Is It Fine?', required: true,
                     placeholder: 'e.g. the model name really does repeat on the box',
                     hint: 'Required — shown in Confirmed Correct on this tab, and it is how we find'
-                        + ' out a rule is wrong. Four dismissals of one rule is a rule to go and fix.' },
-            go: 'Dismiss It', cancel: 'Cancel' });
+                        + ' out a rule is wrong. Four of these on one rule is a rule to go and fix.' },
+            go: 'Not Wrong', cancel: 'Cancel' });
     if (!said) return;
     const reason = said.note || '';
     _ltBusy.add(pid); ecRender();
@@ -73261,7 +73282,7 @@ function _rcHtml() {
                     onclick="rcFileOne(this.dataset.id, this)">Submit</button>
             <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
                     title="${_rcMode === 'misfiled' ? 'Leave it on the shelf it is on and stop offering it' : 'Leave it in Other and stop offering it'}"
-                    onclick="rcSkip(this.dataset.id, this)">Dismiss</button>
+                    onclick="rcSkip(this.dataset.id, this)">Not Wrong</button>
           </td>
         </tr>`;
     }).join('');
@@ -73463,10 +73484,10 @@ async function rcFileSelected() {
 window.rcFileSelected = rcFileSelected;
 
 async function rcSkip(id, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = 'Dismissing…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     const res = await _rcPost({ action: 'skip', store: _ecStore, productId: id });
     if (!res.ok) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Dismiss'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Not Wrong'; }
         alert(res.body?.detail || res.body?.error || 'Could not skip that.');
         return;
     }

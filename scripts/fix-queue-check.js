@@ -624,9 +624,11 @@ t('a photo fix shows in My Listing Corrections without the store buttons', funct
     var h = _mfHtml();
     if (h.indexOf('1 Listing Correction Requested') < 0) return 'count wrong';
     if (h.indexOf('lr-c-ph') < 0) return 'no Photos chip';
-    if (h.indexOf('Fix The Order For Me') >= 0 || h.indexOf('Not Wrong') >= 0) return 'store buttons shown to the lister';
-    // 2026-11-27: the lister marks it fixed (→ Being Rechecked) or sold.
+    if (h.indexOf('Fix The Order For Me') >= 0 || h.indexOf('fqDismissPhotos') >= 0) return 'store buttons shown to the lister';
+    // 2026-11-27: the lister marks it fixed (→ Being Rechecked) or sold —
+    // or says Not Wrong with a note, through their own action (mine-dismiss).
     if (h.indexOf("mfMarkFixed('gid://shopify/Product/9')") < 0) return 'no I Fixed It for the lister';
+    if (h.indexOf("mfNotWrong('gid://shopify/Product/9')") < 0) return 'no Not Wrong for the lister';
     return h.indexOf("mfMarkSold('gid://shopify/Product/9')") >= 0 || 'no It Sold for the lister';
 });
 

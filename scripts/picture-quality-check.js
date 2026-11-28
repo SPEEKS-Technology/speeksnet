@@ -123,7 +123,7 @@ t('picture quality: guide slots say Missing, If Needed, or No Example Photo', fu
     if (d.querySelector('details .pq-guide')) return 'the guide is in a drawer — it should always show';
     if (!d.querySelector('.pq-cmp .pq-guide')) return 'no guide strip under the photos';
     if (d.querySelector('.lh-alarm')) return 'the retake tab still has the red alarm bar';
-    if (d.textContent.indexOf("They're Fine") >= 0 || !/Dismiss/.test(d.querySelector('.pq-acts').textContent)) return 'the button is not called Dismiss';
+    if (d.textContent.indexOf("They're Fine") >= 0 || !/Not Wrong/.test(d.querySelector('.pq-acts').textContent)) return 'the button is not called Not Wrong';
     var miss = d.querySelectorAll('.pq-gph-miss');
     if (miss.length !== 1 || miss[0].textContent.indexOf('Back') < 0) return 'Back is not marked missing';
     if (d.querySelectorAll('.pq-tag-miss').length !== 1) return 'no Missing tag in the box';

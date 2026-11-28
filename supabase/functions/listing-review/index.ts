@@ -23,6 +23,7 @@
 //     GET  ?view=flags&weeks=8          lister flag rate                (spot key)
 //     POST {action:"mark-fixed"|"undo-fixed", store, productId}
 //     POST {action:"mark-sold", store, productId}   it sold before it was fixed (0213)
+//     POST {action:"mine-dismiss", store, productId, reason}   a lister's Not Wrong on their photo flag
 //     POST {action:"spot-agree"|"spot-grade", id, ticks?, note?}       (spot key)
 //     POST {action:"confirm"|"send-back", store, productId, note?}     (spot key)
 //   SCHEDULE, ?secret= :
@@ -1069,6 +1070,35 @@ async function handlePost(req: Request, scope: Scope) {
     }
     if (cardOpen) await patchCard(store, pid, { status: "done", confirmed_by: `${scope.name} (Sold)`, confirmed_at: now });
     return json({ ok: true, status: "sold" });
+  }
+
+  // NOT WRONG, FROM MY LISTING CORRECTIONS (Ethan, 2026-11-27: "all roles can
+  // dismiss photo stuff as well to leave a note like titles and categories, so I
+  // can take those notes and feed it to you so we can continue to improve the
+  // rules"). The Fix Queue's Not Wrong calls picture-quality, which a lister
+  // cannot reach — so the lister's own answer lands here, and writes exactly
+  // what picture-quality's dismiss writes ("dismissed: why" / "reorder denied:
+  // why"). That is the row Listing Health Notes reads, so the note reaches the
+  // same pile as a manager's. Their own photo flag only, like Mark Fixed; the
+  // note is required, as it is everywhere a rule can be called wrong.
+  // ⚠️ Like a manager's dismissal, it takes the line off the flag count (a
+  // dismissed photo row is not a flag in the morning ledger). The note is the
+  // check on that — every one reaches Ethan.
+  if (action === "mine-dismiss") {
+    if (!scope.mayFix && !scope.mayMine) return json({ error: "forbidden", detail: "The Fix Queue is not switched on for you." }, 403);
+    const store = String(body.store || "").toUpperCase(), pid = String(body.productId || "");
+    if (!scope.stores.includes(store) || !pid) return json({ error: "forbidden" }, 403);
+    const note = String(body.reason || "").trim().slice(0, 300);
+    if (!note) return json({ error: "reason required", detail: "Say why the photos are fine — that note is how a wrong rule gets fixed." }, 400);
+    const r = (await rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${enc(pid)}&status=eq.open`
+      + `&verdict=in.(retake,fix,reorder)&select=verdict,lister_name&limit=1`))?.[0];
+    if (!r) return json({ error: "conflict", detail: "Nothing on this listing's photos is waiting on a fix any more." }, 409);
+    if (!scope.mayFix && !sameName(r.lister_name, scope.name)) return json({ error: "forbidden", detail: "This listing was not sent to you." }, 403);
+    await sb(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${enc(pid)}&status=eq.open`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ status: "dismissed", decided_by: scope.name, decided_at: now,
+        decided_note: `${r.verdict === "reorder" ? "reorder denied" : "dismissed"}: ${note}` }) });
+    return json({ ok: true, dismissed: pid });
   }
 
   if (action === "full-review") {
